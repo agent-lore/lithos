@@ -7,7 +7,7 @@ services:
     container_name: exogram
     restart: unless-stopped
     volumes:
-      - exogram-data:/data
+      - ${EXOGRAM_DATA_PATH:-./data}:/data
     ports:
       - "8765:8765"
     environment:
@@ -20,7 +20,5 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-
-volumes:
-  exogram-data:
-    driver: local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
