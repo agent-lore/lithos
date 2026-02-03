@@ -1,0 +1,26 @@
+# Exogram Docker Compose configuration
+services:
+  exogram:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: exogram
+    restart: unless-stopped
+    volumes:
+      - exogram-data:/data
+    ports:
+      - "8765:8765"
+    environment:
+      - EXOGRAM_DATA_DIR=/data
+      - EXOGRAM_HOST=0.0.0.0
+      - EXOGRAM_PORT=8765
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 8765)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  exogram-data:
+    driver: local
