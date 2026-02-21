@@ -185,14 +185,16 @@ class TantivyIndex:
         writer.delete_documents("id", doc.id)
 
         # Add new document
-        writer.add_document(tantivy.Document(
-            id=doc.id,
-            title=doc.title,
-            content=doc.full_content,
-            path=str(doc.path),
-            author=doc.metadata.author,
-            tags=" ".join(doc.metadata.tags),
-        ))
+        writer.add_document(
+            tantivy.Document(
+                id=doc.id,
+                title=doc.title,
+                content=doc.full_content,
+                path=str(doc.path),
+                author=doc.metadata.author,
+                tags=" ".join(doc.metadata.tags),
+            )
+        )
 
         writer.commit()
         del writer  # Release lock
@@ -260,13 +262,15 @@ class TantivyIndex:
             content = doc.get_first("content") or ""
             snippet = self._generate_snippet(content, query)
 
-            search_results.append(SearchResult(
-                id=doc.get_first("id") or "",
-                title=doc.get_first("title") or "",
-                snippet=snippet,
-                score=score,
-                path=str(doc_path),
-            ))
+            search_results.append(
+                SearchResult(
+                    id=doc.get_first("id") or "",
+                    title=doc.get_first("title") or "",
+                    snippet=snippet,
+                    score=score,
+                    path=str(doc_path),
+                )
+            )
 
         return search_results
 
@@ -285,7 +289,11 @@ class TantivyIndex:
 
         if best_pos == len(content):
             # No term found, return beginning
-            return content[:context_chars * 2] + "..." if len(content) > context_chars * 2 else content
+            return (
+                content[: context_chars * 2] + "..."
+                if len(content) > context_chars * 2
+                else content
+            )
 
         # Extract context around match
         start = max(0, best_pos - context_chars)
@@ -484,13 +492,15 @@ class ChromaIndex:
                     continue
 
             seen_docs.add(doc_id)
-            semantic_results.append(SemanticResult(
-                id=doc_id,
-                title=metadata.get("title", ""),
-                snippet=results["documents"][0][i] if results["documents"] else "",
-                similarity=similarity,
-                path=metadata.get("path", ""),
-            ))
+            semantic_results.append(
+                SemanticResult(
+                    id=doc_id,
+                    title=metadata.get("title", ""),
+                    snippet=results["documents"][0][i] if results["documents"] else "",
+                    similarity=similarity,
+                    path=metadata.get("path", ""),
+                )
+            )
 
             if len(semantic_results) >= limit:
                 break

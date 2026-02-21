@@ -63,7 +63,9 @@ def knowledge_graph(test_config: ExogramConfig) -> KnowledgeGraph:
 
 
 @pytest_asyncio.fixture
-async def coordination_service(test_config: ExogramConfig) -> AsyncGenerator[CoordinationService, None]:
+async def coordination_service(
+    test_config: ExogramConfig,
+) -> AsyncGenerator[CoordinationService, None]:
     """Create coordination service for testing."""
     service = CoordinationService(test_config)
     await service.initialize()

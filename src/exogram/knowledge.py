@@ -17,6 +17,7 @@ WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\[|]*[a-zA-Z][^\]\[|]*)(?:\|([^\]]+))?
 @dataclass
 class WikiLink:
     """Represents a wiki-link in document content."""
+
     target: str
     display: str | None = None
 
@@ -29,6 +30,7 @@ class WikiLink:
 @dataclass
 class KnowledgeMetadata:
     """Document metadata stored in YAML frontmatter."""
+
     id: str
     title: str
     author: str
@@ -90,6 +92,7 @@ class KnowledgeMetadata:
 @dataclass
 class KnowledgeDocument:
     """A knowledge document with content and metadata."""
+
     id: str
     title: str
     content: str
@@ -155,7 +158,7 @@ def extract_title_from_content(content: str) -> tuple[str, str]:
         stripped = line.strip()
         if stripped.startswith("# "):
             title = stripped[2:].strip()
-            remaining = "\n".join(lines[i + 1:]).strip()
+            remaining = "\n".join(lines[i + 1 :]).strip()
             return title, remaining
         elif stripped and not stripped.startswith("#"):
             # Non-empty, non-header line found before H1
@@ -190,7 +193,7 @@ def truncate_content(content: str, max_length: int) -> tuple[str, bool]:
         truncated.rfind("? "),
     )
     if last_sentence > effective_max // 2:
-        result = content[:last_sentence + 1].strip()
+        result = content[: last_sentence + 1].strip()
         if len(result) <= max_length:
             return result, True
 

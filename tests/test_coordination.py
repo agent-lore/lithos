@@ -169,7 +169,9 @@ class TestTaskLifecycle:
         assert len(statuses[0].claims) == 0
 
     @pytest.mark.asyncio
-    async def test_complete_already_completed_fails(self, coordination_service: CoordinationService):
+    async def test_complete_already_completed_fails(
+        self, coordination_service: CoordinationService
+    ):
         """Cannot complete already completed task."""
         task_id = await coordination_service.create_task(
             title="Already Done",

@@ -79,9 +79,7 @@ class TestConfigPaths:
     def test_ensure_directories_creates_paths(self):
         """ensure_directories creates required directories."""
         with tempfile.TemporaryDirectory() as tmp:
-            config = ExogramConfig(
-                storage=StorageConfig(data_dir=Path(tmp))
-            )
+            config = ExogramConfig(storage=StorageConfig(data_dir=Path(tmp)))
 
             config.ensure_directories()
 
@@ -95,14 +93,17 @@ class TestConfigLoading:
     def test_load_from_yaml_file(self):
         """Load configuration from YAML file."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.dump({
-                "storage": {
-                    "data_dir": "/custom/path",
+            yaml.dump(
+                {
+                    "storage": {
+                        "data_dir": "/custom/path",
+                    },
+                    "server": {
+                        "port": 9999,
+                    },
                 },
-                "server": {
-                    "port": 9999,
-                },
-            }, f)
+                f,
+            )
             f.flush()
 
             config = load_config(f.name)
@@ -123,12 +124,15 @@ class TestConfigLoading:
     def test_partial_config_merges_with_defaults(self):
         """Partial config merges with defaults."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.dump({
-                "server": {
-                    "port": 8888,
+            yaml.dump(
+                {
+                    "server": {
+                        "port": 8888,
+                    },
+                    # storage, search, coordination not specified
                 },
-                # storage, search, coordination not specified
-            }, f)
+                f,
+            )
             f.flush()
 
             config = load_config(f.name)
@@ -175,9 +179,7 @@ class TestConfigSingleton:
 
     def test_set_and_get_config(self):
         """set_config and get_config work together."""
-        custom_config = ExogramConfig(
-            server=ServerConfig(port=5555)
-        )
+        custom_config = ExogramConfig(server=ServerConfig(port=5555))
 
         set_config(custom_config)
         retrieved = get_config()

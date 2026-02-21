@@ -177,7 +177,6 @@ class KnowledgeGraph:
             if nid == node_id:
                 del self._alias_to_node[alias]
 
-    
     def _resolve_pending_links(self, doc: KnowledgeDocument) -> None:
         """Resolve any unresolved links that now point to this document.
 
@@ -200,7 +199,9 @@ class KnowledgeGraph:
             if node.startswith("__unresolved__"):
                 link_text = node.replace("__unresolved__", "")
                 # Check if this unresolved link matches our document
-                if link_text.lower() in [t.lower() for t in possible_targets] or link_text.lower().replace(" ", "-") in [t.lower() for t in possible_targets]:
+                if link_text.lower() in [
+                    t.lower() for t in possible_targets
+                ] or link_text.lower().replace(" ", "-") in [t.lower() for t in possible_targets]:
                     placeholders_to_resolve.append((node, link_text))
 
         # Resolve each placeholder
@@ -345,10 +346,12 @@ class KnowledgeGraph:
 
                         node_data = self.graph.nodes.get(neighbor, {})
                         if not node_data.get("unresolved"):
-                            result.append(LinkedDocument(
-                                id=neighbor,
-                                title=node_data.get("title", ""),
-                            ))
+                            result.append(
+                                LinkedDocument(
+                                    id=neighbor,
+                                    title=node_data.get("title", ""),
+                                )
+                            )
 
             current_level = next_level
             if not current_level:
@@ -371,11 +374,13 @@ class KnowledgeGraph:
             node_data = self.graph.nodes[node]
             for _, target, edge_data in self.graph.out_edges(node, data=True):
                 if target.startswith("__unresolved__"):
-                    broken.append((
-                        node,
-                        node_data.get("title", ""),
-                        edge_data.get("link_text", target.replace("__unresolved__", "")),
-                    ))
+                    broken.append(
+                        (
+                            node,
+                            node_data.get("title", ""),
+                            edge_data.get("link_text", target.replace("__unresolved__", "")),
+                        )
+                    )
 
         return broken
 
@@ -389,11 +394,7 @@ class KnowledgeGraph:
 
         for filename, nodes in self._filename_to_nodes.items():
             if len(nodes) > 1:
-                paths = [
-                    self.graph.nodes[n].get("path", n)
-                    for n in nodes
-                    if n in self.graph.nodes
-                ]
+                paths = [self.graph.nodes[n].get("path", n) for n in nodes if n in self.graph.nodes]
                 ambiguous.append((filename, paths))
 
         return ambiguous
@@ -408,14 +409,12 @@ class KnowledgeGraph:
 
     def node_count(self) -> int:
         """Get number of document nodes (excluding unresolved)."""
-        return sum(
-            1 for n in self.graph.nodes()
-            if not n.startswith("__unresolved__")
-        )
+        return sum(1 for n in self.graph.nodes() if not n.startswith("__unresolved__"))
 
     def edge_count(self) -> int:
         """Get number of edges."""
         return self.graph.number_of_edges()
+
     def has_node(self, node_id: str) -> bool:
         """Check if a node exists in the graph.
 
@@ -557,11 +556,13 @@ class KnowledgeGraph:
 
             in_degree = self.graph.in_degree(node)
             node_data = self.graph.nodes[node]
-            results.append({
-                "id": node,
-                "title": node_data.get("title", ""),
-                "incoming_count": in_degree,
-            })
+            results.append(
+                {
+                    "id": node,
+                    "title": node_data.get("title", ""),
+                    "incoming_count": in_degree,
+                }
+            )
 
         # Sort by incoming count descending
         results.sort(key=lambda x: x["incoming_count"], reverse=True)
@@ -585,4 +586,3 @@ class KnowledgeGraph:
                     unresolved.append((node, link_text))
 
         return unresolved
-

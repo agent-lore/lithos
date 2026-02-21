@@ -10,7 +10,9 @@ class TestGraphBuilding:
     """Tests for building graph from documents."""
 
     @pytest.mark.asyncio
-    async def test_add_document_to_graph(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_add_document_to_graph(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Add document creates node in graph."""
         doc = await knowledge_manager.create(
             title="Graph Node Test",
@@ -23,7 +25,9 @@ class TestGraphBuilding:
         assert knowledge_graph.has_node(doc.id)
 
     @pytest.mark.asyncio
-    async def test_document_with_links_creates_edges(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_document_with_links_creates_edges(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Document with wiki-links creates edges."""
         # Create target document first
         target = await knowledge_manager.create(
@@ -45,7 +49,9 @@ class TestGraphBuilding:
         assert knowledge_graph.has_edge(source.id, target.id)
 
     @pytest.mark.asyncio
-    async def test_link_resolution_by_slug(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_link_resolution_by_slug(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Links are resolved by matching slugs."""
         # Create document with specific title
         api_doc = await knowledge_manager.create(
@@ -66,7 +72,9 @@ class TestGraphBuilding:
         assert knowledge_graph.has_edge(linking_doc.id, api_doc.id)
 
     @pytest.mark.asyncio
-    async def test_unresolved_links_tracked(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_unresolved_links_tracked(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Links to nonexistent documents are tracked."""
         doc = await knowledge_manager.create(
             title="Broken Links Doc",
@@ -80,7 +88,9 @@ class TestGraphBuilding:
         assert "nonexistent-doc" in unresolved or len(unresolved) > 0
 
     @pytest.mark.asyncio
-    async def test_remove_document_from_graph(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_remove_document_from_graph(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Remove document removes node and edges."""
         doc = await knowledge_manager.create(
             title="Removable Doc",
@@ -95,7 +105,9 @@ class TestGraphBuilding:
         assert not knowledge_graph.has_node(doc.id)
 
     @pytest.mark.asyncio
-    async def test_update_document_updates_edges(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_update_document_updates_edges(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Updating document updates its edges."""
         target1 = await knowledge_manager.create(
             title="Target One",
@@ -135,7 +147,9 @@ class TestGraphQueries:
     """Tests for querying the knowledge graph."""
 
     @pytest.mark.asyncio
-    async def test_get_outgoing_links(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_get_outgoing_links(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Get documents linked FROM a document."""
         target1 = await knowledge_manager.create(
             title="Linked Doc One",
@@ -165,7 +179,9 @@ class TestGraphQueries:
         assert target2.id in outgoing_ids
 
     @pytest.mark.asyncio
-    async def test_get_incoming_links(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_get_incoming_links(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Get documents linking TO a document (backlinks)."""
         target = await knowledge_manager.create(
             title="Popular Doc",
@@ -195,7 +211,9 @@ class TestGraphQueries:
         assert source2.id in incoming_ids
 
     @pytest.mark.asyncio
-    async def test_get_neighbors_both_directions(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_get_neighbors_both_directions(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Get all connected documents (both directions)."""
         center = await knowledge_manager.create(
             title="Center Doc",
@@ -224,7 +242,9 @@ class TestGraphQueries:
         assert incoming.id in neighbor_ids
 
     @pytest.mark.asyncio
-    async def test_find_path_between_documents(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_find_path_between_documents(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Find path between two documents."""
         # Create chain: A -> B -> C
         doc_a = await knowledge_manager.create(
@@ -256,7 +276,9 @@ class TestGraphQueries:
         assert path[2] == doc_c.id
 
     @pytest.mark.asyncio
-    async def test_no_path_returns_none(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_no_path_returns_none(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """No path between disconnected documents."""
         doc_a = await knowledge_manager.create(
             title="Isolated A",
@@ -281,7 +303,9 @@ class TestGraphAnalysis:
     """Tests for graph analysis features."""
 
     @pytest.mark.asyncio
-    async def test_find_orphans(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_find_orphans(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Find documents with no links in or out."""
         # Connected docs
         connected1 = await knowledge_manager.create(
@@ -313,7 +337,9 @@ class TestGraphAnalysis:
         assert connected2.id not in orphans
 
     @pytest.mark.asyncio
-    async def test_get_graph_stats(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_get_graph_stats(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Get graph statistics."""
         doc1 = await knowledge_manager.create(
             title="Stats Doc One",
@@ -337,7 +363,9 @@ class TestGraphAnalysis:
         assert stats["edges"] >= 1
 
     @pytest.mark.asyncio
-    async def test_most_linked_documents(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_most_linked_documents(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Find most frequently linked documents."""
         # Create a popular document
         popular = await knowledge_manager.create(
@@ -379,7 +407,9 @@ class TestGraphAnalysis:
         assert most_linked[0]["incoming_count"] == 5
 
     @pytest.mark.asyncio
-    async def test_clear_graph(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_clear_graph(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Clear removes all nodes and edges."""
         doc = await knowledge_manager.create(
             title="To Clear",
@@ -400,7 +430,9 @@ class TestGraphPersistence:
     """Tests for graph persistence."""
 
     @pytest.mark.asyncio
-    async def test_rebuild_from_documents(self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph):
+    async def test_rebuild_from_documents(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
         """Graph can be rebuilt from documents."""
         # Create documents
         doc1 = await knowledge_manager.create(

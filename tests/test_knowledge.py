@@ -1,6 +1,5 @@
 """Tests for knowledge module - document CRUD operations."""
 
-
 import pytest
 
 from exogram.knowledge import (
@@ -275,7 +274,9 @@ class TestKnowledgeManager:
         assert not success
 
     @pytest.mark.asyncio
-    async def test_list_documents(self, knowledge_manager: KnowledgeManager, sample_documents: list):
+    async def test_list_documents(
+        self, knowledge_manager: KnowledgeManager, sample_documents: list
+    ):
         """List all documents with pagination."""
         # Create sample documents
         for doc_data in sample_documents:
@@ -292,7 +293,9 @@ class TestKnowledgeManager:
         assert len(docs) == 3
 
     @pytest.mark.asyncio
-    async def test_list_filter_by_tags(self, knowledge_manager: KnowledgeManager, sample_documents: list):
+    async def test_list_filter_by_tags(
+        self, knowledge_manager: KnowledgeManager, sample_documents: list
+    ):
         """Filter documents by tags."""
         for doc_data in sample_documents:
             await knowledge_manager.create(

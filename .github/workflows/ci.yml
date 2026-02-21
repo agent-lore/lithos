@@ -63,6 +63,13 @@ jobs:
     name: Docker Build
     runs-on: ubuntu-latest
     steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx

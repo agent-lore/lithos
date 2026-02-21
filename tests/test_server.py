@@ -450,10 +450,22 @@ Based on [[api-research-notes]].
         # Create a knowledge base
         docs_data = [
             ("Python Basics", "Variables, functions, classes in Python.", ["python", "basics"]),
-            ("Python Testing", "Use pytest for testing. See [[python-basics]].", ["python", "testing"]),
-            ("FastAPI Guide", "Build APIs with FastAPI. Requires [[python-basics]].", ["python", "api"]),
+            (
+                "Python Testing",
+                "Use pytest for testing. See [[python-basics]].",
+                ["python", "testing"],
+            ),
+            (
+                "FastAPI Guide",
+                "Build APIs with FastAPI. Requires [[python-basics]].",
+                ["python", "api"],
+            ),
             ("Database Patterns", "ORM patterns and raw SQL.", ["database"]),
-            ("Full Stack App", "Combines [[fastapi-guide]] with [[database-patterns]].", ["fullstack"]),
+            (
+                "Full Stack App",
+                "Combines [[fastapi-guide]] with [[database-patterns]].",
+                ["fullstack"],
+            ),
         ]
 
         created_docs = {}

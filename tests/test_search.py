@@ -71,7 +71,9 @@ class TestTantivyIndex:
     """Tests for Tantivy full-text search."""
 
     @pytest.mark.asyncio
-    async def test_index_and_search(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_index_and_search(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Index document and find it via search."""
         doc = await knowledge_manager.create(
             title="Python Tutorial",
@@ -87,7 +89,9 @@ class TestTantivyIndex:
         assert any(r.id == doc.id for r in results)
 
     @pytest.mark.asyncio
-    async def test_search_by_title(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_search_by_title(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Search matches document titles."""
         doc = await knowledge_manager.create(
             title="Kubernetes Deployment Guide",
@@ -102,7 +106,9 @@ class TestTantivyIndex:
         assert results[0].title == "Kubernetes Deployment Guide"
 
     @pytest.mark.asyncio
-    async def test_search_by_content(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_search_by_content(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Search matches document content."""
         doc = await knowledge_manager.create(
             title="Generic Title",
@@ -117,7 +123,9 @@ class TestTantivyIndex:
         assert any(r.id == doc.id for r in results)
 
     @pytest.mark.asyncio
-    async def test_search_with_tag_filter(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_search_with_tag_filter(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Filter search results by tags."""
         doc1 = await knowledge_manager.create(
             title="Python Web Framework",
@@ -147,7 +155,9 @@ class TestTantivyIndex:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_search_result_has_snippet(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_search_result_has_snippet(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Search results include relevant snippets."""
         doc = await knowledge_manager.create(
             title="API Documentation",
@@ -162,7 +172,9 @@ class TestTantivyIndex:
         assert "REST" in results[0].snippet or "API" in results[0].snippet
 
     @pytest.mark.asyncio
-    async def test_document_update_in_index(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_document_update_in_index(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Updated document is re-indexed correctly."""
         doc = await knowledge_manager.create(
             title="Original Title",
@@ -188,7 +200,9 @@ class TestTantivyIndex:
         assert any(r.id == doc.id for r in new_results)
 
     @pytest.mark.asyncio
-    async def test_document_removal_from_index(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_document_removal_from_index(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Removed document no longer appears in search."""
         doc = await knowledge_manager.create(
             title="Temporary Doc",
@@ -213,7 +227,9 @@ class TestChromaIndex:
     """Tests for ChromaDB semantic search."""
 
     @pytest.mark.asyncio
-    async def test_semantic_search_similar_meaning(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_semantic_search_similar_meaning(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Semantic search finds documents with similar meaning."""
         doc = await knowledge_manager.create(
             title="Error Handling Best Practices",
@@ -229,7 +245,9 @@ class TestChromaIndex:
         # Should find the error handling doc even though "failures" != "exceptions"
 
     @pytest.mark.asyncio
-    async def test_semantic_search_threshold(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_semantic_search_threshold(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Semantic search respects similarity threshold."""
         doc = await knowledge_manager.create(
             title="Machine Learning Basics",
@@ -248,15 +266,19 @@ class TestChromaIndex:
         assert not any(r.id == doc.id for r in results) or results[0].similarity < 0.8
 
     @pytest.mark.asyncio
-    async def test_semantic_search_deduplication(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_semantic_search_deduplication(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Semantic search deduplicates results by document."""
         # Create document with content that will create multiple chunks
-        long_content = "\n\n".join([
-            "Paragraph about Python programming and best practices.",
-            "Another section discussing Python code quality.",
-            "More content related to Python development workflows.",
-            "Final thoughts on Python ecosystem and tools.",
-        ])
+        long_content = "\n\n".join(
+            [
+                "Paragraph about Python programming and best practices.",
+                "Another section discussing Python code quality.",
+                "More content related to Python development workflows.",
+                "Final thoughts on Python ecosystem and tools.",
+            ]
+        )
 
         doc = await knowledge_manager.create(
             title="Python Development",
@@ -272,7 +294,9 @@ class TestChromaIndex:
         assert doc_ids.count(doc.id) <= 1
 
     @pytest.mark.asyncio
-    async def test_semantic_search_returns_similarity_score(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_semantic_search_returns_similarity_score(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Semantic search results include similarity scores."""
         doc = await knowledge_manager.create(
             title="Database Optimization",
@@ -291,7 +315,12 @@ class TestSearchEngineIntegration:
     """Integration tests for combined search functionality."""
 
     @pytest.mark.asyncio
-    async def test_index_multiple_documents(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine, sample_documents: list):
+    async def test_index_multiple_documents(
+        self,
+        knowledge_manager: KnowledgeManager,
+        search_engine: SearchEngine,
+        sample_documents: list,
+    ):
         """Index and search across multiple documents."""
         created_docs = []
         for doc_data in sample_documents:
@@ -313,7 +342,9 @@ class TestSearchEngineIntegration:
         assert len(sem_results) >= 1
 
     @pytest.mark.asyncio
-    async def test_search_ranking(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_search_ranking(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """More relevant documents rank higher."""
         # Create docs with varying relevance to "Python testing"
         highly_relevant = await knowledge_manager.create(
@@ -343,7 +374,9 @@ class TestSearchEngineIntegration:
         assert results[0].id == highly_relevant.id
 
     @pytest.mark.asyncio
-    async def test_clear_all_indices(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_clear_all_indices(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Clear all removes all indexed documents."""
         doc = await knowledge_manager.create(
             title="To Be Cleared",
@@ -362,7 +395,9 @@ class TestSearchEngineIntegration:
         assert len(search_engine.full_text_search("cleared")) == 0
 
     @pytest.mark.asyncio
-    async def test_get_stats(self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine):
+    async def test_get_stats(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
         """Get search index statistics."""
         doc = await knowledge_manager.create(
             title="Stats Test",

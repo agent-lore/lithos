@@ -319,14 +319,16 @@ class CoordinationService:
                     with contextlib.suppress(json.JSONDecodeError):
                         metadata = json.loads(row["metadata"])
 
-                agents.append(Agent(
-                    id=row["id"],
-                    name=row["name"],
-                    type=row["type"],
-                    first_seen_at=_parse_datetime(row["first_seen_at"]),
-                    last_seen_at=_parse_datetime(row["last_seen_at"]),
-                    metadata=metadata,
-                ))
+                agents.append(
+                    Agent(
+                        id=row["id"],
+                        name=row["name"],
+                        type=row["type"],
+                        first_seen_at=_parse_datetime(row["first_seen_at"]),
+                        last_seen_at=_parse_datetime(row["last_seen_at"]),
+                        metadata=metadata,
+                    )
+                )
 
             return agents
 
@@ -468,12 +470,14 @@ class CoordinationService:
                     for row in claim_rows
                 ]
 
-                result.append(TaskStatus(
-                    id=task["id"],
-                    title=task["title"],
-                    status=task["status"],
-                    claims=claims,
-                ))
+                result.append(
+                    TaskStatus(
+                        id=task["id"],
+                        title=task["title"],
+                        status=task["status"],
+                        claims=claims,
+                    )
+                )
 
             return result
 
@@ -551,7 +555,13 @@ class CoordinationService:
                         UPDATE claims SET agent = ?, expires_at = ?, claimed_at = ?
                         WHERE task_id = ? AND aspect = ?
                         """,
-                        (agent, _format_datetime(expires_at), _format_datetime(now), task_id, aspect),
+                        (
+                            agent,
+                            _format_datetime(expires_at),
+                            _format_datetime(now),
+                            task_id,
+                            aspect,
+                        ),
                     )
                     await db.commit()
                     return True, expires_at
@@ -718,9 +728,7 @@ class CoordinationService:
             agents = (await cursor.fetchone())[0]
 
             # Count active tasks
-            cursor = await db.execute(
-                "SELECT COUNT(*) FROM tasks WHERE status = 'open'"
-            )
+            cursor = await db.execute("SELECT COUNT(*) FROM tasks WHERE status = 'open'")
             active_tasks = (await cursor.fetchone())[0]
 
             # Count active claims

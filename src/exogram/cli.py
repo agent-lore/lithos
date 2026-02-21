@@ -10,12 +10,14 @@ from exogram.config import ExogramConfig, load_config, set_config
 
 @click.group()
 @click.option(
-    "--config", "-c",
+    "--config",
+    "-c",
     type=click.Path(exists=True, path_type=Path),
     help="Path to config file (YAML)",
 )
 @click.option(
-    "--data-dir", "-d",
+    "--data-dir",
+    "-d",
     type=click.Path(path_type=Path),
     help="Data directory path",
 )
@@ -37,7 +39,8 @@ def cli(ctx: click.Context, config: Path | None, data_dir: Path | None) -> None:
 
 @cli.command()
 @click.option(
-    "--transport", "-t",
+    "--transport",
+    "-t",
     type=click.Choice(["stdio", "sse"]),
     default="stdio",
     help="Transport type (default: stdio)",
@@ -48,7 +51,8 @@ def cli(ctx: click.Context, config: Path | None, data_dir: Path | None) -> None:
     help="Host for SSE transport (default: 127.0.0.1)",
 )
 @click.option(
-    "--port", "-p",
+    "--port",
+    "-p",
     type=int,
     default=8765,
     help="Port for SSE transport (default: 8765)",
@@ -210,7 +214,9 @@ def validate(ctx: click.Context, fix: bool) -> None:
 
                 # Check for missing author
                 if not doc.metadata.author:
-                    issues.append((str(relative_path), "missing_author", "No author in frontmatter"))
+                    issues.append(
+                        (str(relative_path), "missing_author", "No author in frontmatter")
+                    )
 
                 # Add to graph for link checking
                 graph.add_document(doc)
@@ -335,7 +341,8 @@ def stats(ctx: click.Context) -> None:
     help="Use semantic search (default: fulltext)",
 )
 @click.option(
-    "--limit", "-n",
+    "--limit",
+    "-n",
     type=int,
     default=5,
     help="Number of results (default: 5)",
