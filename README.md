@@ -23,6 +23,12 @@ Exogram is an MCP server that provides a shared knowledge store for AI agents ru
 - **🔌 MCP interface**: Works with any MCP-compatible agent or tool
 - **🏠 Local & private**: No cloud dependencies, you own your data
 
+## Quickstart
+
+```bash
+claude mcp add --transport sse exogram http://localhost:8765/sse
+```
+
 ## Tech Stack
 
 | Component | Technology |
