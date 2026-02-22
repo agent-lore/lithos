@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "lithos"
+name = "lithos-mcp"
 version = "0.1.0"
 description = "Shared cognitive substrate for AI agents (local-first, Markdown-native, MCP)"
 readme = "README.md"
