@@ -119,7 +119,7 @@ jobs:
       - name: Run MCP client test
         run: |
           uv python install 3.11
-          uv pip install mcp
+          uv pip install --system mcp
           python << 'EOF'
           import asyncio
           from mcp import ClientSession
