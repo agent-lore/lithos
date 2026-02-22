@@ -51,6 +51,9 @@ packages = ["src/lithos"]
 [tool.hatch.envs.default]
 installer = "uv"
 
+[tool.hatch.envs.default.scripts]
+test = "pytest tests/ -v --tb=short"
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

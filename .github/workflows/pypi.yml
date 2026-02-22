@@ -68,8 +68,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Hatch
-        run: pip install hatch
+      - name: Install Hatch and uv
+        run: pip install hatch uv
 
       - name: Download distribution artifacts
         uses: actions/download-artifact@v4
