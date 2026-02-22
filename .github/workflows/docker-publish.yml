@@ -1,0 +1,211 @@
+name: Publish to Docker Hub
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag override (e.g. 0.1.0)"
+        required: false
+        type: string
+      push:
+        description: "Push image to Docker Hub"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-push:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      major_minor: ${{ steps.version.outputs.major_minor }}
+
+    steps:
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Install Hatch
+        run: pip install hatch
+
+      - name: Extract version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # Strip 'v' prefix from release tag
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            VERSION="${{ inputs.tag }}"
+          else
+            VERSION=$(hatch version)
+          fi
+          MAJOR_MINOR=$(echo "$VERSION" | sed 's/\.[^.]*$//')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "major_minor=$MAJOR_MINOR" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION (major.minor: $MAJOR_MINOR)"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: davesnowdon/lithos
+          tags: |
+            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.major_minor }},enable=${{ github.event_name == 'release' }}
+          labels: |
+            org.opencontainers.image.title=Lithos
+            org.opencontainers.image.description=Local, privacy-first MCP server providing a shared knowledge base for AI agents
+            org.opencontainers.image.vendor=davesnowdon
+            org.opencontainers.image.source=https://github.com/davesnowdon/lithos
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.push == true) }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+  smoke-test:
+    name: Smoke test
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image for testing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          tags: lithos:smoke-test
+          cache-from: type=gha
+
+      - name: Run container and health check
+        run: |
+          docker run -d --name lithos-smoke \
+            -p 8765:8765 \
+            lithos:smoke-test
+
+          echo "Waiting for container to become healthy..."
+          elapsed=0
+          while [ $elapsed -lt 120 ]; do
+            if python3 -c "import socket; s=socket.socket(); s.connect(('localhost', 8765)); s.close()" 2>/dev/null; then
+              echo "Server is accepting connections after ${elapsed}s"
+              break
+            fi
+            sleep 5
+            elapsed=$((elapsed + 5))
+          done
+
+          if [ $elapsed -ge 120 ]; then
+            echo "ERROR: Server did not start accepting connections within 120s"
+            docker logs lithos-smoke
+            exit 1
+          fi
+
+      - name: Show container logs
+        if: always()
+        run: docker logs lithos-smoke 2>&1 || true
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f lithos-smoke 2>/dev/null || true
+
+  update-release:
+    name: Update release notes
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    needs: [build-and-push, smoke-test]
+
+    steps:
+      - name: Add Docker info to release
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const version = "${{ needs.build-and-push.outputs.version }}";
+
+            const release = await github.rest.repos.getRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: context.payload.release.id
+            });
+
+            const dockerInfo = `\n\n---\n\n🐳 **Published to Docker Hub!**\n\nPull with:\n\`\`\`bash\ndocker pull davesnowdon/lithos:${version}\n\`\`\`\n\nOr run directly:\n\`\`\`bash\ndocker run -d -p 8765:8765 -v lithos-data:/data davesnowdon/lithos:${version}\n\`\`\``;
+
+            const updatedBody = (release.data.body || '') + dockerInfo;
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: context.payload.release.id,
+              body: updatedBody
+            });
+
+  notify-failure:
+    name: Notify on failure
+    if: failure()
+    needs: [build-and-push, smoke-test, update-release]
+    runs-on: ubuntu-latest
+
+    permissions:
+      issues: write
+
+    steps:
+      - name: Create issue on failure
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const title = "Docker Hub Publication Failed";
+            const body = `The Docker Hub publication workflow failed. Please check the [workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId}) for details.`;
+
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['bug', 'ci/cd']
+            });
