@@ -99,17 +99,29 @@ jobs:
         run: |
           cd docker
           docker compose up -d --build
-          sleep 10  # Wait for startup
 
-      - name: Check container health
+      - name: Wait for server to be healthy
         run: |
-          docker ps
-          docker compose -f docker/docker-compose.yml logs
+          echo "Waiting for exogram container to become healthy..."
+          elapsed=0
+          while [ $elapsed -lt 120 ]; do
+            status=$(docker inspect --format='{{.State.Health.Status}}' exogram 2>/dev/null || echo "not_found")
+            echo "  [$elapsed s] health=$status"
+            if [ "$status" = "healthy" ]; then
+              echo "Server is healthy after ${elapsed}s"
+              break
+            fi
+            sleep 5
+            elapsed=$((elapsed + 5))
+          done
+          if [ "$status" != "healthy" ]; then
+            echo "ERROR: Server did not become healthy within 120s"
+            docker compose -f docker/docker-compose.yml logs
+            exit 1
+          fi
 
-      - name: Test SSE endpoint
-        run: |
-          # Test that SSE endpoint responds
-          curl -s --max-time 5 http://localhost:8765/sse || true
+      - name: Show server logs
+        run: docker compose -f docker/docker-compose.yml logs
 
       - name: Install uv and test client
         uses: astral-sh/setup-uv@v4
@@ -118,7 +130,8 @@ jobs:
 
       - name: Run MCP client test
         run: |
-          uv python install 3.11
+          uv venv .venv
+          source .venv/bin/activate
           uv pip install mcp
           python << 'EOF'
           import asyncio

@@ -19,6 +19,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 60s
     extra_hosts:
       - "host.docker.internal:host-gateway"

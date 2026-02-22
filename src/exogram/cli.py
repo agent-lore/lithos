@@ -26,8 +26,8 @@ def cli(ctx: click.Context, config: Path | None, data_dir: Path | None) -> None:
     """Exogram - Local shared knowledge base for AI agents."""
     ctx.ensure_object(dict)
 
-    # Load configuration
-    cfg = load_config(config) if config else ExogramConfig()
+    # Load configuration (load_config reads EXOGRAM_* env vars)
+    cfg = load_config(str(config)) if config else load_config()
 
     # Override data directory if specified
     if data_dir:

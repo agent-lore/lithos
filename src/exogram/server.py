@@ -184,8 +184,7 @@ class ExogramServer:
                     tags=tags,
                     confidence=confidence,
                     path=path,
-                    source_task=source_task,
-                    derived_from=derived_from,
+                    source=source_task,
                 )
 
             # Update indices
