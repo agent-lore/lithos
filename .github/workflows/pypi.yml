@@ -1,0 +1,194 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      test_pypi:
+        description: "Publish to Test PyPI instead of PyPI"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Install Hatch
+        run: pip install hatch
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(hatch version)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Build package
+        run: hatch build
+
+      - name: Check build artifacts
+        run: |
+          ls -la dist/
+          echo "Built files:"
+          ls dist/
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+          retention-days: 7
+
+  test:
+    name: Test package
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      - name: Install Hatch
+        run: pip install hatch
+
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Test installation from wheel
+        run: |
+          python -m venv test-env
+          source test-env/bin/activate
+          pip install dist/*.whl
+          python -c "import lithos; print('Successfully imported lithos')"
+
+      - name: Run tests (if they exist)
+        run: |
+          if [ -d "tests" ]; then
+            echo "Running tests..."
+            hatch run test
+          else
+            echo "No tests directory found, skipping tests"
+          fi
+
+  publish-to-testpypi:
+    name: Publish to TestPyPI
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.test_pypi == 'true'
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/lithos-mcp
+
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+          print-hash: true
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/lithos-mcp
+
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          print-hash: true
+
+      - name: Update GitHub release with PyPI info
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const version = "${{ needs.build.outputs.version }}";
+
+            const release = await github.rest.repos.getRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: context.payload.release.id
+            });
+
+            const pypiInfo = `\n\n---\n\n🎉 **Published to PyPI!**\n\nInstall with:\n\`\`\`bash\npip install lithos-mcp==${version}\n\`\`\``;
+
+            const updatedBody = (release.data.body || '') + pypiInfo;
+
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: context.payload.release.id,
+              body: updatedBody
+            });
+
+  notify-failure:
+    name: Notify on failure
+    if: failure()
+    needs: [build, test, publish-to-pypi, publish-to-testpypi]
+    runs-on: ubuntu-latest
+
+    permissions:
+      issues: write
+
+    steps:
+      - name: Create issue on failure
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const title = "PyPI Publication Failed";
+            const body = `The PyPI publication workflow failed. Please check the [workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId}) for details.`;
+
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['bug', 'ci/cd']
+            });
