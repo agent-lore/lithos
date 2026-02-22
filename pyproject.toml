@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "exogram"
+name = "lithos"
 version = "0.1.0"
-description = "Local shared knowledge base for AI agents"
+description = "Shared cognitive substrate for AI agents (local-first, Markdown-native, MCP)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Exogram Team" }
+    { name = "Dave Snowdon" }
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -43,10 +43,10 @@ dev = [
 ]
 
 [project.scripts]
-exogram = "exogram.cli:main"
+lithos = "lithos.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/exogram"]
+packages = ["src/lithos"]
 
 [tool.hatch.envs.default]
 installer = "uv"
@@ -71,7 +71,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["exogram"]
+known-first-party = ["lithos"]
 
 [tool.ruff.format]
 quote-style = "double"
