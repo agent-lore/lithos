@@ -256,6 +256,26 @@ class TestKnowledgeManager:
         assert updated.metadata.author == "original-author"
 
     @pytest.mark.asyncio
+    async def test_update_title_refreshes_slug_index(self, knowledge_manager: KnowledgeManager):
+        """Changing title updates slug lookup index."""
+        created = await knowledge_manager.create(
+            title="Old Title",
+            content="Slug update test.",
+            agent="author",
+        )
+
+        assert knowledge_manager.get_id_by_slug("old-title") == created.id
+
+        await knowledge_manager.update(
+            id=created.id,
+            agent="editor",
+            title="New Title",
+        )
+
+        assert knowledge_manager.get_id_by_slug("new-title") == created.id
+        assert knowledge_manager.get_id_by_slug("old-title") is None
+
+    @pytest.mark.asyncio
     async def test_delete_document(self, knowledge_manager: KnowledgeManager):
         """Delete document removes file."""
         created = await knowledge_manager.create(

@@ -367,6 +367,7 @@ class KnowledgeManager:
     ) -> KnowledgeDocument:
         """Update an existing document."""
         doc, _ = await self.read(id=id)
+        old_slug = slugify(doc.metadata.title)
 
         # Update fields
         if content is not None:
@@ -388,6 +389,13 @@ class KnowledgeManager:
         # Write to disk
         _safe_path, full_path = self._resolve_safe_path(doc.path)
         full_path.write_text(doc.to_markdown())
+
+        # Keep slug index in sync when title changes.
+        new_slug = slugify(doc.metadata.title)
+        if new_slug != old_slug:
+            if self._slug_to_id.get(old_slug) == id:
+                del self._slug_to_id[old_slug]
+            self._slug_to_id[new_slug] = id
 
         return doc
 
@@ -464,6 +472,24 @@ class KnowledgeManager:
     def get_id_by_slug(self, slug: str) -> str | None:
         """Get document ID by slug."""
         return self._slug_to_id.get(slug)
+
+    def get_id_by_path(self, path: str | Path) -> str | None:
+        """Get document ID by relative/absolute path."""
+        candidate = Path(path)
+
+        if candidate.is_absolute():
+            try:
+                candidate = candidate.resolve().relative_to(self.knowledge_path.resolve())
+            except ValueError:
+                return None
+
+        if not candidate.suffix:
+            candidate = candidate.with_suffix(".md")
+
+        for doc_id, doc_path in self._id_to_path.items():
+            if doc_path == candidate:
+                return doc_id
+        return None
 
     def get_all_slugs(self) -> dict[str, str]:
         """Get mapping of all slugs to IDs."""

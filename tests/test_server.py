@@ -2,10 +2,11 @@
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
-from lithos.server import LithosServer
+from lithos.server import LithosServer, _FileChangeHandler
 
 
 class TestServerInitialization:
@@ -25,6 +26,25 @@ class TestServerInitialization:
         # The server should have registered tools
         # Check by verifying the mcp app has tools
         assert server.mcp is not None
+
+    @pytest.mark.asyncio
+    async def test_file_change_handler_schedules_on_loop(self):
+        """File change handler schedules work on provided event loop."""
+
+        class DummyServer:
+            def __init__(self):
+                self.calls: list[tuple[str, bool]] = []
+
+            async def handle_file_change(self, path, deleted=False):
+                self.calls.append((str(path), deleted))
+
+        dummy = DummyServer()
+        handler = _FileChangeHandler(dummy, asyncio.get_running_loop())
+
+        handler._schedule_update(path=Path("/tmp/handler-test.md"), deleted=True)
+        await asyncio.sleep(0.05)
+
+        assert dummy.calls == [("/tmp/handler-test.md", True)]
 
 
 class TestKnowledgeToolWorkflow:
@@ -140,6 +160,28 @@ class TestKnowledgeToolWorkflow:
         assert items[0]["id"] == new_doc.id
         assert items[0]["path"].startswith("procedures")
         assert isinstance(items[0]["updated"], str)
+
+    @pytest.mark.asyncio
+    async def test_handle_deleted_file_removes_indices(self, server: LithosServer):
+        """Delete file events remove knowledge/search/graph state."""
+        doc = await server.knowledge.create(
+            title="Delete Event Doc",
+            content="Will be deleted from indices.",
+            agent="agent",
+            path="watched",
+        )
+        server.search.index_document(doc)
+        server.graph.add_document(doc)
+
+        file_path = server.config.storage.knowledge_path / doc.path
+        file_path.unlink()
+
+        await server.handle_file_change(file_path, deleted=True)
+
+        with pytest.raises(FileNotFoundError):
+            await server.knowledge.read(id=doc.id)
+        assert not server.graph.has_node(doc.id)
+        assert not any(r.id == doc.id for r in server.search.full_text_search("Delete Event Doc"))
 
 
 class TestSearchToolWorkflow:
