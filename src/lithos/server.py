@@ -371,7 +371,7 @@ class LithosServer:
                         "id": d.id,
                         "title": d.title,
                         "path": str(d.path),
-                        "updated": d.metadata.updated.isoformat(),
+                        "updated": d.metadata.updated_at.isoformat(),
                         "tags": d.metadata.tags,
                     }
                     for d in docs

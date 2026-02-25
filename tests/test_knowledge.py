@@ -1,5 +1,8 @@
 """Tests for knowledge module - document CRUD operations."""
 
+import asyncio
+from datetime import datetime, timezone
+
 import pytest
 
 from lithos.knowledge import (
@@ -312,6 +315,53 @@ class TestKnowledgeManager:
             assert "python" in doc.metadata.tags
 
     @pytest.mark.asyncio
+    async def test_list_filter_by_path_prefix(self, knowledge_manager: KnowledgeManager):
+        """Filter documents by path prefix."""
+        procedures_doc = await knowledge_manager.create(
+            title="Deploy Procedure",
+            content="Deployment steps.",
+            agent="agent",
+            path="procedures",
+        )
+        await knowledge_manager.create(
+            title="API Guide",
+            content="API details.",
+            agent="agent",
+            path="guides",
+        )
+
+        docs, total = await knowledge_manager.list_all(path_prefix="procedures")
+
+        assert total == 1
+        assert len(docs) == 1
+        assert docs[0].id == procedures_doc.id
+        assert str(docs[0].path).startswith("procedures")
+
+    @pytest.mark.asyncio
+    async def test_list_filter_by_since(self, knowledge_manager: KnowledgeManager):
+        """Filter documents by updated timestamp."""
+        await knowledge_manager.create(
+            title="Old Note",
+            content="Created first.",
+            agent="agent",
+        )
+
+        cutoff = datetime.now(timezone.utc)
+        await asyncio.sleep(0.02)
+
+        new_doc = await knowledge_manager.create(
+            title="New Note",
+            content="Created later.",
+            agent="agent",
+        )
+
+        docs, total = await knowledge_manager.list_all(since=cutoff)
+
+        assert total == 1
+        assert len(docs) == 1
+        assert docs[0].id == new_doc.id
+
+    @pytest.mark.asyncio
     async def test_get_all_tags(self, knowledge_manager: KnowledgeManager, sample_documents: list):
         """Get all tags with counts."""
         for doc_data in sample_documents:
@@ -394,3 +444,20 @@ class TestDocumentPersistence:
         assert "[[other-doc]]" in doc.content
         assert "[[folder/nested|Nested Doc]]" in doc.content
         assert len(doc.links) == 2
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_path_traversal(self, knowledge_manager: KnowledgeManager):
+        """Create blocks path traversal outside knowledge directory."""
+        with pytest.raises(ValueError, match="within knowledge directory"):
+            await knowledge_manager.create(
+                title="Unsafe Path",
+                content="Should fail.",
+                agent="agent",
+                path="../outside",
+            )
+
+    @pytest.mark.asyncio
+    async def test_read_rejects_path_traversal(self, knowledge_manager: KnowledgeManager):
+        """Read blocks path traversal outside knowledge directory."""
+        with pytest.raises(ValueError, match="within knowledge directory"):
+            await knowledge_manager.read(path="../outside.md")

@@ -221,8 +221,12 @@ class KnowledgeManager:
         if not self.knowledge_path.exists():
             return
 
+        base_path = self.knowledge_path.resolve()
         for md_file in self.knowledge_path.rglob("*.md"):
             try:
+                # Ignore symlinked/escaped files outside knowledge root.
+                if not md_file.resolve().is_relative_to(base_path):
+                    continue
                 post = frontmatter.load(md_file)
                 doc_id = post.metadata.get("id")
                 title = post.metadata.get("title", "")
@@ -233,6 +237,18 @@ class KnowledgeManager:
                         self._slug_to_id[slugify(title)] = doc_id
             except Exception:
                 pass  # Skip invalid files
+
+    def _resolve_safe_path(self, path: Path) -> tuple[Path, Path]:
+        """Resolve a path under knowledge root and prevent traversal."""
+        if path.is_absolute():
+            raise ValueError("Path must be relative to knowledge directory")
+
+        full_path = (self.knowledge_path / path).resolve()
+        base_path = self.knowledge_path.resolve()
+        if not full_path.is_relative_to(base_path):
+            raise ValueError("Path must stay within knowledge directory")
+
+        return full_path.relative_to(base_path), full_path
 
     async def create(
         self,
@@ -263,6 +279,7 @@ class KnowledgeManager:
         # Determine file path
         slug = slugify(title)
         file_path = Path(path) / f"{slug}.md" if path else Path(f"{slug}.md")
+        file_path, full_path = self._resolve_safe_path(file_path)
 
         # Parse wiki-links
         links = parse_wiki_links(content)
@@ -277,7 +294,6 @@ class KnowledgeManager:
         )
 
         # Write to disk
-        full_path = self.knowledge_path / file_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(doc.to_markdown())
 
@@ -309,7 +325,7 @@ class KnowledgeManager:
         else:
             raise ValueError("Must provide id or path")
 
-        full_path = self.knowledge_path / file_path
+        file_path, full_path = self._resolve_safe_path(file_path)
         if not full_path.exists():
             raise FileNotFoundError(f"Document not found: {file_path}")
 
@@ -370,7 +386,7 @@ class KnowledgeManager:
             doc.metadata.contributors.append(agent)
 
         # Write to disk
-        full_path = self.knowledge_path / doc.path
+        _safe_path, full_path = self._resolve_safe_path(doc.path)
         full_path.write_text(doc.to_markdown())
 
         return doc
@@ -381,7 +397,7 @@ class KnowledgeManager:
             return False
 
         file_path = self._id_to_path[id]
-        full_path = self.knowledge_path / file_path
+        _safe_path, full_path = self._resolve_safe_path(file_path)
 
         if full_path.exists():
             full_path.unlink()
@@ -395,6 +411,8 @@ class KnowledgeManager:
 
     async def list_all(
         self,
+        path_prefix: str | None = None,
+        since: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
         tags: list[str] | None = None,
@@ -403,16 +421,23 @@ class KnowledgeManager:
         """List all documents with optional filtering."""
         docs = []
         total = 0
+        normalized_since = _normalize_datetime(since) if since else None
 
         for doc_id in self._id_to_path:
             try:
                 doc, _ = await self.read(id=doc_id)
 
                 # Apply filters
+                if path_prefix and not str(doc.path).startswith(path_prefix):
+                    continue
                 if tags and not any(t in doc.metadata.tags for t in tags):
                     continue
                 if author and doc.metadata.author != author:
                     continue
+                if normalized_since:
+                    doc_updated = _normalize_datetime(doc.metadata.updated_at)
+                    if doc_updated < normalized_since:
+                        continue
 
                 total += 1
                 if total > offset and len(docs) < limit:
@@ -443,3 +468,10 @@ class KnowledgeManager:
     def get_all_slugs(self) -> dict[str, str]:
         """Get mapping of all slugs to IDs."""
         return dict(self._slug_to_id)
+
+
+def _normalize_datetime(dt: datetime) -> datetime:
+    """Normalize datetime values for safe comparison."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)

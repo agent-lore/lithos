@@ -1,6 +1,7 @@
 """Integration tests for MCP server - full tool workflows."""
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 
@@ -94,6 +95,51 @@ class TestKnowledgeToolWorkflow:
         # Verify backlinks work
         incoming = server.graph.get_incoming_links(target.id)
         assert any(n["id"] == source.id for n in incoming)
+
+    @pytest.mark.asyncio
+    async def test_lithos_list_tool_filters_and_returns_updated(
+        self, server: LithosServer
+    ):
+        """lithos_list supports filters and returns updated timestamps."""
+        await server.knowledge.create(
+            title="Old Procedure",
+            content="Older procedure.",
+            agent="agent",
+            path="procedures",
+        )
+        await server.knowledge.create(
+            title="Other Guide",
+            content="Other path.",
+            agent="agent",
+            path="guides",
+        )
+
+        cutoff = datetime.now(timezone.utc).isoformat()
+        await asyncio.sleep(0.02)
+
+        new_doc = await server.knowledge.create(
+            title="New Procedure",
+            content="Newer procedure.",
+            agent="agent",
+            path="procedures",
+        )
+
+        result = await server.mcp.call_tool(
+            "lithos_list",
+            {
+                "path_prefix": "procedures",
+                "since": cutoff,
+                "limit": 50,
+                "offset": 0,
+            },
+        )
+        assert result.structured_content is not None
+
+        items = result.structured_content["items"]
+        assert len(items) == 1
+        assert items[0]["id"] == new_doc.id
+        assert items[0]["path"].startswith("procedures")
+        assert isinstance(items[0]["updated"], str)
 
 
 class TestSearchToolWorkflow:
