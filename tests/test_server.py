@@ -117,9 +117,7 @@ class TestKnowledgeToolWorkflow:
         assert any(n["id"] == source.id for n in incoming)
 
     @pytest.mark.asyncio
-    async def test_lithos_list_tool_filters_and_returns_updated(
-        self, server: LithosServer
-    ):
+    async def test_lithos_list_tool_filters_and_returns_updated(self, server: LithosServer):
         """lithos_list supports filters and returns updated timestamps."""
         await server.knowledge.create(
             title="Old Procedure",
