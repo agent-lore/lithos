@@ -117,8 +117,8 @@ class TestKnowledgeToolWorkflow:
         assert any(n["id"] == source.id for n in incoming)
 
     @pytest.mark.asyncio
-    async def test_lithos_list_tool_filters_and_returns_updated(self, server: LithosServer):
-        """lithos_list supports filters and returns updated timestamps."""
+    async def test_lithos_list_filters_and_returns_updated(self, server: LithosServer):
+        """list_all supports path_prefix and since filters; response includes updated_at."""
         await server.knowledge.create(
             title="Old Procedure",
             content="Older procedure.",
@@ -132,7 +132,7 @@ class TestKnowledgeToolWorkflow:
             path="guides",
         )
 
-        cutoff = datetime.now(timezone.utc).isoformat()
+        cutoff = datetime.now(timezone.utc)
         await asyncio.sleep(0.02)
 
         new_doc = await server.knowledge.create(
@@ -142,22 +142,18 @@ class TestKnowledgeToolWorkflow:
             path="procedures",
         )
 
-        result = await server.mcp.call_tool(
-            "lithos_list",
-            {
-                "path_prefix": "procedures",
-                "since": cutoff,
-                "limit": 50,
-                "offset": 0,
-            },
+        docs, total = await server.knowledge.list_all(
+            path_prefix="procedures",
+            since=cutoff,
+            limit=50,
+            offset=0,
         )
-        assert result.structured_content is not None
 
-        items = result.structured_content["items"]
-        assert len(items) == 1
-        assert items[0]["id"] == new_doc.id
-        assert items[0]["path"].startswith("procedures")
-        assert isinstance(items[0]["updated"], str)
+        assert total == 1
+        assert len(docs) == 1
+        assert docs[0].id == new_doc.id
+        assert str(docs[0].path).startswith("procedures")
+        assert docs[0].metadata.updated_at is not None
 
     @pytest.mark.asyncio
     async def test_handle_deleted_file_removes_indices(self, server: LithosServer):
