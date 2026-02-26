@@ -451,6 +451,27 @@ class TestClaimManagement:
         max_allowed = datetime.now(timezone.utc) + timedelta(minutes=481)
         assert expires_at < max_allowed
 
+    @pytest.mark.asyncio
+    async def test_negative_ttl_clamped_to_min(self, coordination_service: CoordinationService):
+        """Negative TTL is clamped to minimum positive duration."""
+        task_id = await coordination_service.create_task(
+            title="Negative TTL Task",
+            agent="creator",
+        )
+
+        success, expires_at = await coordination_service.claim_task(
+            task_id=task_id,
+            aspect="work",
+            agent="worker",
+            ttl_minutes=-10,
+        )
+
+        assert success
+        assert expires_at is not None
+        lower_bound = datetime.now(timezone.utc) + timedelta(seconds=30)
+        upper_bound = datetime.now(timezone.utc) + timedelta(minutes=2)
+        assert lower_bound < expires_at < upper_bound
+
 
 class TestFindings:
     """Tests for task findings."""

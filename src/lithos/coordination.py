@@ -505,7 +505,7 @@ class CoordinationService:
 
         # Clamp TTL
         max_ttl = self.config.coordination.claim_max_ttl_minutes
-        ttl_minutes = min(ttl_minutes, max_ttl)
+        ttl_minutes = max(1, min(ttl_minutes, max_ttl))
 
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(minutes=ttl_minutes)
@@ -596,7 +596,7 @@ class CoordinationService:
         await self.ensure_agent_known(agent)
 
         max_ttl = self.config.coordination.claim_max_ttl_minutes
-        ttl_minutes = min(ttl_minutes, max_ttl)
+        ttl_minutes = max(1, min(ttl_minutes, max_ttl))
 
         now = datetime.now(timezone.utc)
         new_expires = now + timedelta(minutes=ttl_minutes)

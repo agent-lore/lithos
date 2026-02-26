@@ -1,10 +1,12 @@
 """Integration tests for MCP server - full tool workflows."""
 
 import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
-from lithos.server import LithosServer
+from lithos.server import LithosServer, _FileChangeHandler
 
 
 class TestServerInitialization:
@@ -24,6 +26,25 @@ class TestServerInitialization:
         # The server should have registered tools
         # Check by verifying the mcp app has tools
         assert server.mcp is not None
+
+    @pytest.mark.asyncio
+    async def test_file_change_handler_schedules_on_loop(self):
+        """File change handler schedules work on provided event loop."""
+
+        class DummyServer:
+            def __init__(self):
+                self.calls: list[tuple[str, bool]] = []
+
+            async def handle_file_change(self, path, deleted=False):
+                self.calls.append((str(path), deleted))
+
+        dummy = DummyServer()
+        handler = _FileChangeHandler(dummy, asyncio.get_running_loop())
+
+        handler._schedule_update(path=Path("/tmp/handler-test.md"), deleted=True)
+        await asyncio.sleep(0.05)
+
+        assert dummy.calls == [("/tmp/handler-test.md", True)]
 
 
 class TestKnowledgeToolWorkflow:
@@ -94,6 +115,67 @@ class TestKnowledgeToolWorkflow:
         # Verify backlinks work
         incoming = server.graph.get_incoming_links(target.id)
         assert any(n["id"] == source.id for n in incoming)
+
+    @pytest.mark.asyncio
+    async def test_lithos_list_filters_and_returns_updated(self, server: LithosServer):
+        """list_all supports path_prefix and since filters; response includes updated_at."""
+        await server.knowledge.create(
+            title="Old Procedure",
+            content="Older procedure.",
+            agent="agent",
+            path="procedures",
+        )
+        await server.knowledge.create(
+            title="Other Guide",
+            content="Other path.",
+            agent="agent",
+            path="guides",
+        )
+
+        cutoff = datetime.now(timezone.utc)
+        await asyncio.sleep(0.02)
+
+        new_doc = await server.knowledge.create(
+            title="New Procedure",
+            content="Newer procedure.",
+            agent="agent",
+            path="procedures",
+        )
+
+        docs, total = await server.knowledge.list_all(
+            path_prefix="procedures",
+            since=cutoff,
+            limit=50,
+            offset=0,
+        )
+
+        assert total == 1
+        assert len(docs) == 1
+        assert docs[0].id == new_doc.id
+        assert str(docs[0].path).startswith("procedures")
+        assert docs[0].metadata.updated_at is not None
+
+    @pytest.mark.asyncio
+    async def test_handle_deleted_file_removes_indices(self, server: LithosServer):
+        """Delete file events remove knowledge/search/graph state."""
+        doc = await server.knowledge.create(
+            title="Delete Event Doc",
+            content="Will be deleted from indices.",
+            agent="agent",
+            path="watched",
+        )
+        server.search.index_document(doc)
+        server.graph.add_document(doc)
+
+        file_path = server.config.storage.knowledge_path / doc.path
+        file_path.unlink()
+
+        await server.handle_file_change(file_path, deleted=True)
+
+        with pytest.raises(FileNotFoundError):
+            await server.knowledge.read(id=doc.id)
+        assert not server.graph.has_node(doc.id)
+        assert not any(r.id == doc.id for r in server.search.full_text_search("Delete Event Doc"))
 
 
 class TestSearchToolWorkflow:

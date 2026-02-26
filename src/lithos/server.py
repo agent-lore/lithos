@@ -36,6 +36,7 @@ class LithosServer:
 
         # File watcher
         self._observer: Observer | None = None
+        self._watch_loop: asyncio.AbstractEventLoop | None = None
         self._pending_updates: set[Path] = set()
         self._update_lock = asyncio.Lock()
 
@@ -91,7 +92,12 @@ class LithosServer:
         if self._observer:
             return
 
-        handler = _FileChangeHandler(self)
+        try:
+            self._watch_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            raise RuntimeError("File watcher requires a running asyncio event loop") from None
+
+        handler = _FileChangeHandler(self, self._watch_loop)
         self._observer = Observer()
         self._observer.schedule(
             handler,
@@ -115,13 +121,18 @@ class LithosServer:
         async with self._update_lock:
             try:
                 knowledge_path = self.config.storage.knowledge_path
-                relative_path = path.relative_to(knowledge_path)
+                try:
+                    relative_path = path.relative_to(knowledge_path)
+                except ValueError:
+                    return
 
                 if deleted:
-                    # Try to find doc by path and remove
-                    # This is tricky since we don't have the ID
-                    # For now, we'll need to rebuild or track path->id mapping
-                    pass
+                    doc_id = self.knowledge.get_id_by_path(relative_path)
+                    if doc_id:
+                        await self.knowledge.delete(doc_id)
+                        self.search.remove_document(doc_id)
+                        self.graph.remove_document(doc_id)
+                        self.graph.save_cache()
                 else:
                     doc, _ = await self.knowledge.read(path=str(relative_path))
                     self.search.index_document(doc)
@@ -371,7 +382,7 @@ class LithosServer:
                         "id": d.id,
                         "title": d.title,
                         "path": str(d.path),
-                        "updated": d.metadata.updated.isoformat(),
+                        "updated": d.metadata.updated_at.isoformat(),
                         "tags": d.metadata.tags,
                     }
                     for d in docs
@@ -767,17 +778,9 @@ class LithosServer:
 class _FileChangeHandler(FileSystemEventHandler):
     """Handle file system events for index updates."""
 
-    def __init__(self, server: LithosServer):
+    def __init__(self, server: LithosServer, loop: asyncio.AbstractEventLoop):
         self.server = server
-        self._loop: asyncio.AbstractEventLoop | None = None
-
-    def _get_loop(self) -> asyncio.AbstractEventLoop:
-        if self._loop is None:
-            try:
-                self._loop = asyncio.get_running_loop()
-            except RuntimeError:
-                self._loop = asyncio.new_event_loop()
-        return self._loop
+        self._loop = loop
 
     def on_created(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
@@ -793,11 +796,20 @@ class _FileChangeHandler(FileSystemEventHandler):
 
     def _schedule_update(self, path: Path, deleted: bool = False) -> None:
         try:
-            loop = self._get_loop()
-            asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 self.server.handle_file_change(path, deleted),
-                loop,
+                self._loop,
             )
+            future.add_done_callback(self._log_future_exception)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _log_future_exception(future: asyncio.Future) -> None:
+        try:
+            exception = future.exception()
+            if exception:
+                print(f"Error processing file update: {exception}")
         except Exception:
             pass
 
