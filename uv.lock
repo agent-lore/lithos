@@ -1242,8 +1242,8 @@ wheels = [
 ]
 
 [[package]]
-name = "lithos"
-version = "0.1.0"
+name = "lithos-mcp"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
