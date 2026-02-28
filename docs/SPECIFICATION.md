@@ -1,8 +1,8 @@
 # Lithos - Specification
 
-Version: 0.3.0-draft  
-Date: 2026-02-03  
-Status: Implementation Ready
+Version: 0.3.1
+Date: 2026-02-28
+Status: Aligned with Implementation
 
 ---
 
@@ -133,8 +133,9 @@ Files use YAML frontmatter + Markdown body, compatible with Obsidian.
 ```markdown
 ---
 id: <uuid>                        # Required: Unique identifier
-created: <ISO 8601 datetime>      # Required: Creation timestamp
-updated: <ISO 8601 datetime>      # Required: Last update timestamp
+title: <string>                   # Required: Document title
+created_at: <ISO 8601 datetime>   # Required: Creation timestamp
+updated_at: <ISO 8601 datetime>   # Required: Last update timestamp
 author: <string>                  # Required: Original creator (immutable)
 contributors:                     # Optional: List of agents who edited
   - <agent-id-1>
@@ -145,10 +146,8 @@ tags:                             # Optional: List of tags
 confidence: <float 0-1>           # Optional: Confidence score (default: 1.0)
 aliases:                          # Optional: Alternative names (Obsidian compatible)
   - <alias1>
-source:                           # Optional: Provenance information
-  task: <task-id>                 # Task this was discovered in
-  derived_from:                   # IDs of source knowledge
-    - <uuid1>
+source: <string>                  # Optional: Task ID or provenance note
+supersedes: <uuid>                # Optional: ID of document this replaces
 ---
 
 # Title
@@ -184,7 +183,7 @@ Supports all standard Markdown:
 **Resolution precedence (first match wins):**
 
 1. **Exact path**: `[[folder/note]]` → `folder/note.md`
-2. **Filename**: `[[note]]` → `*/note.md` (error if ambiguous)
+2. **Filename**: `[[note]]` → `*/note.md` (unresolved if ambiguous)
 3. **UUID**: `[[550e8400-e29b-41d4-a716-446655440000]]` → file with that `id`
 4. **Alias**: `[[my-alias]]` → file with that alias in frontmatter
 
@@ -251,8 +250,7 @@ Create or update a knowledge file.
 | `confidence` | float | No | Confidence score 0-1 (default: 1.0) |
 | `path` | string | No | Subdirectory path (e.g., "procedures") |
 | `id` | string | No | UUID to update existing; omit to create new |
-| `source_task` | string | No | Task ID this knowledge came from |
-| `derived_from` | string[] | No | IDs of source knowledge items |
+| `source_task` | string | No | Task ID or provenance note (stored as `source` in frontmatter) |
 
 **Returns:** `{ id: string, path: string }`
 
@@ -309,7 +307,7 @@ Semantic similarity search.
 |------|------|----------|-------------|
 | `query` | string | Yes | Natural language query |
 | `limit` | int | No | Max results (default: 10) |
-| `threshold` | float | No | Minimum similarity 0-1 (default: 0.5) |
+| `threshold` | float | No | Minimum similarity 0-1 (default: from config, 0.3) |
 | `tags` | string[] | No | Filter by tags |
 
 **Returns:** `{ results: [{ id, title, snippet, similarity, path }] }`
@@ -350,14 +348,13 @@ Get links for a knowledge item.
 **Multi-hop behavior:** Returns flat lists regardless of depth. For `depth > 1`, results include all reachable nodes within N hops, deduplicated. Path information is not preserved.
 
 #### `lithos_tags`
-List all tags or items with specific tags.
+List all tags with document counts.
 
-**Arguments:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `tag` | string | No | Get items with this tag; omit to list all tags |
+**Arguments:** None
 
-**Returns:** `{ tags: [{ name, count }] }` or `{ items: [{ id, title }] }`
+**Returns:** `{ tags: { name: count, ... } }`
+
+**Note:** To find documents with a specific tag, use `lithos_list(tags=["tag-name"])`.
 
 ### 5.3 Agent Operations
 
@@ -501,7 +498,7 @@ List findings for a task.
 | `task_id` | string | Yes | Task ID |
 | `since` | string | No | Only findings after this time |
 
-**Returns:** `{ findings: [{ id, agent, summary, knowledge_id, timestamp }] }`
+**Returns:** `{ findings: [{ id, agent, summary, knowledge_id, created_at }] }`
 
 ### 5.5 System Operations
 
@@ -541,7 +538,7 @@ Get knowledge base statistics.
 5. Load coordination state from `coordination.db`
 6. Start file watcher
 
-**Full rebuild** only when forced via `lithos reindex --force`.
+**Full rebuild** only when forced via `lithos reindex --clear`.
 
 ### 6.2 File Change Handling
 
@@ -616,34 +613,39 @@ CREATE TABLE findings (
 
 ## 8. Configuration
 
-### 8.1 Configuration File
+### 8.1 Configuration
 
-Location: `config.yaml` in data directory or specified via `--config`.
+Configuration is managed via `pydantic-settings` (`LithosConfig`). Values are resolved in order:
+
+1. Defaults (hardcoded in `config.py`)
+2. YAML config file (`config.yaml` in data directory or specified via `--config`)
+3. Environment variables with `LITHOS_` prefix (e.g., `LITHOS_DATA_DIR`, `LITHOS_PORT`)
 
 ```yaml
 # Server configuration
 server:
   transport: stdio          # stdio | sse
-  host: 127.0.0.1          # For SSE transport
+  host: 0.0.0.0            # Bind address (all interfaces for Docker compatibility)
   port: 8765               # For SSE transport
+  watch_files: true         # Enable file watcher for index updates
 
 # Storage paths
 storage:
   data_dir: ./data         # Base data directory
-  knowledge_dir: knowledge # Relative to data_dir
+  knowledge_subdir: knowledge # Relative to data_dir
 
-# Search configuration  
+# Search configuration
 search:
   embedding_model: all-MiniLM-L6-v2  # sentence-transformers model
-  semantic_threshold: 0.5   # Default similarity threshold
+  semantic_threshold: 0.3   # Default similarity threshold
   max_results: 50           # Maximum search results
   chunk_size: 500           # Target chunk size in characters
   chunk_max: 1000           # Maximum chunk size
 
 # Coordination
 coordination:
-  claim_ttl_minutes: 60     # Default claim duration
-  claim_max_ttl_minutes: 480 # Maximum claim duration
+  claim_default_ttl_minutes: 60  # Default claim duration
+  claim_max_ttl_minutes: 480     # Maximum claim duration
 
 # Indexing
 index:
@@ -658,49 +660,50 @@ index:
 lithos serve --transport stdio --data-dir ./data
 
 # Run with SSE transport (for HTTP access)
-lithos serve --transport sse --host 127.0.0.1 --port 8765 --data-dir ./data
+lithos serve --transport sse --host 0.0.0.0 --port 8765 --data-dir ./data
+
+# Disable file watcher
+lithos serve --no-watch --data-dir ./data
 
 # Rebuild indices (incremental by default)
 lithos reindex --data-dir ./data
 
-# Force full rebuild
-lithos reindex --data-dir ./data --force
+# Clear and rebuild all indices from scratch
+lithos reindex --data-dir ./data --clear
 
 # Validate knowledge files
 lithos validate --data-dir ./data
 # Reports: broken [[wiki-links]], missing frontmatter, ambiguous links, stale references after renames
+
+# Show knowledge base statistics
+lithos stats --data-dir ./data
+
+# Search knowledge base from CLI
+lithos search "query text" --data-dir ./data
+lithos search "query text" --semantic --data-dir ./data
 ```
 
 ---
 
 ## 9. Error Handling
 
-### 9.1 MCP Error Responses
+### 9.1 Current Behavior
 
-All tools return errors in MCP-standard format:
+Tools indicate errors through their return values:
 
-```json
-{
-  "error": {
-    "code": "<error_code>",
-    "message": "<human readable message>"
-  }
-}
-```
+- **Boolean success fields**: Coordination tools return `{ success: false }` on failure (e.g., claim conflicts, missing tasks)
+- **Empty results**: Search/read operations return empty results or `null` fields when items are not found
+- **Exceptions**: Unexpected errors (file I/O, index corruption) propagate as MCP-level exceptions
 
-### 9.2 Error Codes
+### 9.2 Error Scenarios
 
-| Code | Description |
-|------|-------------|
-| `NOT_FOUND` | Knowledge item, task, or agent not found |
-| `ALREADY_EXISTS` | Item with same ID already exists |
-| `INVALID_FORMAT` | Invalid file format or frontmatter |
-| `CLAIM_CONFLICT` | Task aspect already claimed by another agent |
-| `CLAIM_NOT_FOUND` | No active claim to renew/release |
-| `CLAIM_NOT_OWNED` | Attempting to renew/release another agent's claim |
-| `VALIDATION_ERROR` | Invalid arguments |
-| `INDEX_ERROR` | Search index error |
-| `AMBIGUOUS_LINK` | Wiki-link matches multiple files |
+| Scenario | Behavior |
+|----------|----------|
+| Knowledge item not found | `lithos_read` returns error, `lithos_delete` returns `{ success: false }` |
+| Claim conflict (aspect taken) | `lithos_task_claim` returns `{ success: false }` |
+| Claim renewal by wrong agent | `lithos_task_renew` returns `{ success: false }` |
+| Invalid arguments | FastMCP validation rejects the call |
+| Ambiguous wiki-link | Link treated as unresolved (no error raised) |
 
 ---
 
@@ -748,6 +751,8 @@ pyyaml>=6.0              # YAML parsing
 python-frontmatter>=1.0.0 # Markdown frontmatter
 aiofiles>=23.0.0         # Async file operations
 aiosqlite>=0.17.0        # Async SQLite access
+click>=8.0.0             # CLI framework
+pydantic-settings>=2.0.0 # Configuration management
 ```
 
 ### 11.2 Python Version
@@ -775,14 +780,15 @@ lithos/
 │       └── cli.py             # CLI commands
 ├── tests/
 │   ├── conftest.py
+│   ├── test_config.py
 │   ├── test_knowledge.py
 │   ├── test_search.py
 │   ├── test_graph.py
 │   ├── test_coordination.py
-│   └── test_integration.py
+│   └── test_server.py
 ├── docker/
 │   ├── Dockerfile
-│   └── docker-compose.yml
+│   └── docker compose.yml
 ├── data/                      # Default data directory (gitignored)
 │   └── .gitkeep
 ├── pyproject.toml             # Build config, dependencies, tool config
@@ -811,14 +817,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "lithos"
-version = "0.1.0"
-description = "Local shared knowledge base for AI agents"
+name = "lithos-mcp"
+version = "0.1.1"
+description = "Shared cognitive substrate for AI agents (local-first, Markdown-native, MCP)"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Your Name", email = "you@example.com" }
+    { name = "Dave Snowdon" }
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -839,6 +845,8 @@ dependencies = [
     "python-frontmatter>=1.0.0",
     "aiofiles>=23.0.0",
     "aiosqlite>=0.17.0",
+    "click>=8.0.0",
+    "pydantic-settings>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -857,6 +865,7 @@ packages = ["src/lithos"]
 
 [tool.hatch.envs.default]
 installer = "uv"
+features = ["dev"]
 ```
 
 ### 12.3 Dependency Management: uv
@@ -874,18 +883,14 @@ Lithos uses [uv](https://github.com/astral-sh/uv) for fast dependency management
 # Install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create virtual environment and install dependencies
-uv venv
-uv pip install -e ".[dev]"
+# Install dependencies (creates venv automatically)
+uv sync --extra dev
 
 # Lock dependencies
-uv pip compile pyproject.toml -o uv.lock
+uv lock
 
-# Sync from lockfile
-uv pip sync uv.lock
-
-# Add a new dependency
-uv pip install <package>
+# Add a new dependency (edit pyproject.toml, then)
+uv sync
 ```
 
 ### 12.4 Code Quality: Ruff
@@ -930,16 +935,16 @@ skip-magic-trailing-comma = false
 
 ```bash
 # Check for lint errors
-ruff check src/ tests/
+uv run ruff check src/ tests/
 
 # Fix auto-fixable lint errors
-ruff check --fix src/ tests/
+uv run ruff check --fix src/ tests/
 
 # Format code
-ruff format src/ tests/
+uv run ruff format src/ tests/
 
 # Check formatting without changes
-ruff format --check src/ tests/
+uv run ruff format --check src/ tests/
 ```
 
 ### 12.5 Docker Deployment
@@ -949,45 +954,48 @@ Lithos runs in Docker for consistent deployment, matching Agent Zero's setup.
 **Dockerfile:**
 
 ```dockerfile
-# docker/Dockerfile
-FROM python:3.11-slim
+# docker/Dockerfile — Multi-stage build
+FROM python:3.11-slim AS builder
 
-# Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
-# Set working directory
 WORKDIR /app
 
-# Copy project files
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
-# Install dependencies
-RUN uv venv /opt/venv &&     . /opt/venv/bin/activate &&     uv pip sync uv.lock &&     uv pip install -e .
+RUN uv venv /app/.venv
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+RUN uv pip install -e .
 
-# Set environment
-ENV PATH="/opt/venv/bin:$PATH"
+FROM python:3.11-slim AS runtime
+WORKDIR /app
+
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/pyproject.toml /app/
+COPY --from=builder /app/README.md /app/
+
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
 ENV LITHOS_DATA_DIR=/data
+ENV LITHOS_HOST=0.0.0.0
+ENV LITHOS_PORT=8765
 
-# Create data directory
-RUN mkdir -p /data/knowledge
+RUN mkdir -p /data/knowledge /data/index /data/chroma /data/graph
 
-# Expose SSE port
 EXPOSE 8765
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import socket; s=socket.socket(); s.connect(('localhost', 8765)); s.close()" || exit 1
 
-# Run server
-CMD ["lithos", "serve", "--transport", "sse", "--host", "0.0.0.0", "--port", "8765"]
+CMD ["python", "-m", "lithos.cli", "serve", "--transport", "sse", "--host", "0.0.0.0", "--port", "8765"]
 ```
 
-**docker-compose.yml:**
+**docker compose.yml:**
 
 ```yaml
-# docker/docker-compose.yml
-version: "3.8"
-
+# docker/docker compose.yml
 services:
   lithos:
     build:
@@ -996,24 +1004,21 @@ services:
     container_name: lithos
     restart: unless-stopped
     volumes:
-      - lithos-data:/data
+      - ${LITHOS_DATA_PATH:-./data}:/data
     ports:
       - "8765:8765"
     environment:
       - LITHOS_DATA_DIR=/data
-      - LITHOS_TRANSPORT=sse
       - LITHOS_HOST=0.0.0.0
       - LITHOS_PORT=8765
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 8765)); s.close()"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
-
-volumes:
-  lithos-data:
-    driver: local
+      start_period: 60s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 ```
 
 **Usage:**
@@ -1021,16 +1026,16 @@ volumes:
 ```bash
 # Build and start
 cd docker
-docker-compose up -d --build
+docker compose up -d --build
 
 # View logs
-docker-compose logs -f lithos
+docker compose logs -f lithos
 
 # Stop
-docker-compose down
+docker compose down
 
 # Stop and remove data
-docker-compose down -v
+docker compose down -v
 ```
 
 ### 12.6 Integration with Agent Zero
@@ -1038,9 +1043,7 @@ docker-compose down -v
 To connect Lithos with Agent Zero running in Docker:
 
 ```yaml
-# docker-compose.yml (combined setup)
-version: "3.8"
-
+# docker compose.yml (combined setup)
 services:
   agent-zero:
     image: agent0ai/agent-zero
@@ -1079,7 +1082,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
     branches: [main]
 
@@ -1089,49 +1092,86 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
-        uses: astral-sh/setup-uv@v1
+        uses: astral-sh/setup-uv@v4
       - name: Set up Python
         run: uv python install 3.11
       - name: Install dependencies
-        run: uv pip install ruff
+        run: uv sync --extra dev
       - name: Lint
-        run: ruff check src/ tests/
+        run: uv run ruff check src/ tests/
       - name: Format check
-        run: ruff format --check src/ tests/
+        run: uv run ruff format --check src/ tests/
 
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
-        uses: astral-sh/setup-uv@v1
+        uses: astral-sh/setup-uv@v4
       - name: Set up Python
         run: uv python install 3.11
       - name: Install dependencies
-        run: |
-          uv venv
-          uv pip install -e ".[dev]"
-      - name: Run tests
-        run: |
-          source .venv/bin/activate
-          pytest tests/ -v --cov=lithos --cov-report=xml
+        run: uv sync --extra dev
+      - name: Run tests with coverage
+        run: uv run pytest tests/ --cov=lithos --cov-report=xml
       - name: Upload coverage
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v4
         with:
           files: coverage.xml
+          fail_ci_if_error: false
 
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Build Docker image
-        run: docker build -f docker/Dockerfile -t lithos:test .
-      - name: Test Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          tags: lithos:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: [lint, test, docker]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start Lithos
+        run: cd docker && docker compose up -d --build
+      - name: Wait for healthy
         run: |
-          docker run -d --name lithos-test -p 8765:8765 lithos:test
-          sleep 10
-          curl -f http://localhost:8765/health || exit 1
-          docker stop lithos-test
+          elapsed=0
+          while [ $elapsed -lt 120 ]; do
+            status=$(docker inspect --format='{{.State.Health.Status}}' lithos 2>/dev/null || echo "not_found")
+            [ "$status" = "healthy" ] && break
+            sleep 5; elapsed=$((elapsed + 5))
+          done
+          [ "$status" = "healthy" ] || exit 1
+      - name: Test MCP connectivity
+        run: |
+          uv venv .venv && source .venv/bin/activate
+          uv pip install mcp
+          python -c "
+          import asyncio
+          from mcp import ClientSession
+          from mcp.client.sse import sse_client
+          async def test():
+              async with sse_client('http://localhost:8765/sse') as (r, w):
+                  async with ClientSession(r, w) as s:
+                      await s.initialize()
+                      tools = await s.list_tools()
+                      assert len(tools.tools) >= 15
+                      print(f'Connected! {len(tools.tools)} tools')
+          asyncio.run(test())
+          "
+      - name: Cleanup
+        if: always()
+        run: cd docker && docker compose down -v
 ```
 
 ### 12.8 Development Workflow
@@ -1144,24 +1184,21 @@ cd lithos
 # 2. Install uv (if needed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# 3. Create environment and install
-uv venv
-source .venv/bin/activate  # or `.venv\Scripts\activate` on Windows
-uv pip install -e ".[dev]"
+# 3. Install dependencies
+uv sync --extra dev
 
 # 4. Run linting/formatting
-ruff check src/ tests/
-ruff format src/ tests/
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
 
 # 5. Run tests
-pytest tests/ -v
+uv run pytest tests/ -v
 
 # 6. Run locally
-lithos serve --transport stdio
+uv run lithos serve --transport stdio
 
 # 7. Run in Docker
-cd docker
-docker-compose up -d --build
+cd docker && docker compose up -d --build
 ```
 
 ---
@@ -1182,6 +1219,10 @@ These are explicitly not part of the initial implementation but may be considere
 - Full edit history / provenance log
 - `lithos_task_cancel` tool
 - Hierarchical multi-hop link results
+- Structured MCP error codes (`NOT_FOUND`, `CLAIM_CONFLICT`, `AMBIGUOUS_LINK`, etc.)
+- Structured `source` provenance with `derived_from` links to source knowledge items
+- `lithos_tags` filtering: accept a `tag` parameter to return documents with that tag
+- `lithos_delete` audit trail logging (record which agent deleted what)
 
 ---
 
