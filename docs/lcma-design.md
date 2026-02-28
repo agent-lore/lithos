@@ -24,41 +24,66 @@ LCMA turns Lithos from “notes + embeddings” into a **cognitive substrate**:
 
 ### Memory Node
 
-A Markdown note representing a unit of memory. Minimum fields:
+A `KnowledgeDocument` — an Obsidian-compatible Markdown note with YAML frontmatter. The existing Lithos schema defines these fields; LCMA extends them.
 
-- `id`, `path`
+**Existing fields (preserved):**
+
+- `id` (UUID), `path` (relative to `knowledge/` dir)
+- `title`, `author` (immutable creator)
 - `created_at`, `updated_at`
-- `content` (markdown)
-- `frontmatter` (tags, entities, project)
-- `summary_short` / `summary_long` (optional)
-- `salience` (float, default 0.5)
+- `content` (markdown body, without frontmatter)
+- `tags`, `aliases` (for wiki-link resolution)
+- `confidence` (float 0–1, default 1.0 — author's belief, not retrieval utility)
+- `contributors` (append-only list of editing agents)
+- `source` (task ID or provenance reference)
+- `supersedes` (UUID of document this replaces)
+- `links` (parsed `[[wiki-links]]` from content)
+
+**LCMA adds (optional, with defaults so existing notes remain valid):**
+
+- `schema_version` (int, default 1)
+- `namespace` (str, derived from path if absent, e.g. `"project/lithos"`)
+- `access_scope` (enum: `agent_private|task|project|shared|user_private`, default `shared`)
+- `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
+- `entities` (list of extracted entity names)
+- `status` (enum: `active|archived|quarantined`, default `active`)
+- `summaries.short` / `summaries.long` (optional)
+
+**Dynamic signals (stored in `stats.sqlite`, NOT in frontmatter):**
+
+- `salience` (float, default 0.5 — retrieval utility, complementary to `confidence`)
 - `usage_stats` (retrieval_count, last_used, coactivation counts)
-- embeddings (at least one content embedding)
+- embeddings managed by ChromaDB (see §4.5)
 
 ### Edge
 
-A typed relationship:
+LCMA introduces typed, weighted edges stored in `edges.sqlite`. These are **separate from** the existing wiki-link graph (NetworkX DiGraph), which continues to handle `[[wiki-link]]` relationships, link resolution, and the `lithos_links` tool.
+
+LCMA edge fields:
 
 - `from_id`, `to_id`
 - `type`: `related_to`, `supports`, `contradicts`, `is_example_of`, `depends_on`, `analogy_to`, etc.
 - `weight` (float)
-- `provenance` (who created it: user/agent/rule)
+- `provenance` (who created it: user/agent/rule — mirrors the `author`/`contributors` pattern on notes)
 - `evidence` (anchors/snippets)
 
 ### Concept Node (emergent)
 
-Special node that summarizes a cluster and links canonical examples.
+A regular `KnowledgeDocument` with `note_type: "concept"` — created via the standard `lithos_write` tool. Summarizes a cluster and links canonical examples via `is_example_of` edges in `edges.sqlite`.
 
 ## 1.2 Retrieval: PTS-lite
 
-**Scouts** (parallel candidate generators):
+PTS is exposed as a **new** `lithos_retrieve` tool. The existing `lithos_search` (Tantivy full-text) and `lithos_semantic` (ChromaDB) tools remain available for direct use by clients.
 
-- vector similarity top-k
-- lexical match
-- tags/metadata
-- graph neighbors
-- recency
-- random sampling
+**Scouts** (parallel candidate generators, mapped to existing infrastructure):
+
+- vector similarity top-k → `ChromaIndex.search()` (existing)
+- lexical match → `TantivyIndex.search()` (existing)
+- tags/metadata → `KnowledgeManager.list_documents()` with filters (existing)
+- graph neighbors → `KnowledgeGraph.get_links()` (NetworkX, existing) + `edges.sqlite` queries (new)
+- recency → sort by `updated_at` from knowledge manager (existing)
+- analogy → new (frame extraction, no existing equivalent)
+- exploration → new (novelty/random sampling)
 
 **Terraces**:
 
@@ -74,6 +99,8 @@ Special node that summarizes a cluster and links canonical examples.
 - aging/decay of unused nodes/edges
 
 ## 1.4 Agents (v1 roles)
+
+Lithos already has a full agent coordination system: agent registry, task creation, aspect-based claims with TTL, and findings. LCMA agent roles build on top of this — they are registered via the existing `lithos_agent_register` tool using the `type` field.
 
 - Retriever, Interpreter, Librarian, Cartographer, Auditor
 
@@ -95,6 +122,8 @@ Key rule: apply penalties **contextually first** (per query type / namespace) be
 Contradictions create structured “conflict objects” with states:
 
 - `unreviewed | accepted_dual | superseded | refuted | merged`
+
+This extends the existing `supersedes` frontmatter field. When a conflict is resolved as `superseded`, the winning note can set `supersedes` on the losing one.
 
 Policy:
 
@@ -129,11 +158,11 @@ Add a scout aimed at **structural similarity**, not semantic closeness:
 
 ### E) Multi-agent coordination is architectural
 
-Add:
+Lithos already provides: agent registry (`lithos_agent_register`), task lifecycle (`lithos_task_create/complete`), aspect-based claims with TTL (`lithos_task_claim/renew/release`), and findings (`lithos_finding_post/list`). LCMA extends this with:
 
-- namespaces and memory visibility
-- per-agent WM + per-task shared WM
-- write policies for reinforcement into shared memory
+- namespaces and memory visibility (new filtering layer on existing tools)
+- per-agent WM + per-task shared WM (linked to existing `task_id` from coordination)
+- write policies for reinforcement into shared memory (can gate via existing claim mechanics)
 
 ### F) Cold-start / bootstrap behavior
 
@@ -206,28 +235,31 @@ Add `schema_version` per note and a migration registry.
 
 ## 3.1 Layers
 
-1. **Storage layer (Lithos vault)**
-	- Markdown notes + frontmatter
-	- small stores for edges, embeddings, logs, stats
+1. **Storage layer (existing Lithos vault + new LCMA stores)**
+	- Markdown notes + frontmatter in `data/knowledge/` (existing `KnowledgeManager`)
+	- Coordination DB: `data/coordination.db` (existing — agents, tasks, claims, findings)
+	- New LCMA stores in `data/.lithos/`: edges, stats, receipts, migrations
 
-2. **Index layer**
-	- lexical index (BM25/trigram)
-	- embedding indexes (per embedding space)
-	- graph store queries
+2. **Index layer (existing engines + new stores)**
+	- Tantivy full-text index in `data/.tantivy/` (existing, English stemmer)
+	- ChromaDB embeddings in `data/.chroma/` (existing, `all-MiniLM-L6-v2`)
+	- NetworkX wiki-link graph in `data/.graph/` (existing, pickle-cached)
+	- LCMA typed edges in `data/.lithos/edges.sqlite` (new)
 
-3. **Retrieval layer (PTS)**
-	- scouts generate candidates 
-	- terraces re-rank and optionally interpret
+3. **Retrieval layer (PTS — new, alongside existing tools)**
+	- New `lithos_retrieve` tool orchestrates scouts
+	- Existing `lithos_search` and `lithos_semantic` remain as direct-access tools
+	- Terraces re-rank and optionally interpret
 
-4. **Learning layer**
-	- reinforcement/penalties
+4. **Learning layer (new)**
+	- reinforcement/penalties (via `stats.sqlite`)
 	- consolidation and decay
 	- concept formation
 
-5. **Governance layer**
-	- namespaces and access control
-	- contradiction workflow
-	- provenance and audit receipts
+5. **Governance layer (extends existing coordination)**
+	- namespaces and access control (new filtering on existing tools)
+	- contradiction workflow (new, extends existing `supersedes` field)
+	- provenance and audit receipts (`receipts.jsonl`)
 
 ---
 
@@ -237,50 +269,63 @@ This is intentionally “minimum viable” while supporting v1 + v2.
 
 ## 4.1 Directory Layout
 
+The existing Lithos directory structure is preserved. LCMA adds a `data/.lithos/` directory for new stores.
+
 ```
-lithos_vault/
-  notes/
-    shared/
-    project/<project_name>/
-    agent/<agent_id>/
-    task/<task_id>/            # optional task-shared WM snapshots
-  .lithos/
-    edges.sqlite               #
-    embeddings/
-      <embedding_space_id>.sqlite   # or faiss/chroma files, per space
-    lexical.sqlite             # optional; can be rebuilt
-    stats.sqlite               # usage stats, salience, decay
-    receipts.jsonl             # Auditor logs
+data/                              # configurable via StorageConfig.data_dir
+  knowledge/                       # existing: Markdown notes (subdirs allowed via `path` param)
+    shared/                        #   optional namespace convention
+    project/<project_name>/        #   optional namespace convention
+    agent/<agent_id>/              #   optional namespace convention
+  coordination.db                  # existing: SQLite (agents, tasks, claims, findings)
+  .tantivy/                        # existing: Tantivy full-text index
+  .chroma/                         # existing: ChromaDB embeddings (all-MiniLM-L6-v2)
+  .graph/                          # existing: NetworkX wiki-link graph (pickle)
+  .lithos/                         # NEW: LCMA stores
+    edges.sqlite                   #   typed weighted edges (separate from NetworkX)
+    stats.sqlite                   #   usage stats, salience, decay
+    receipts.jsonl                 #   Auditor logs
     migrations/
-      registry.json            # schema migrations
+      registry.json                #   schema migrations
 ```
 
-### Why sqlite?
+Note: namespace-based subdirectories under `knowledge/` are a **convention**, not enforced. The existing `lithos_write` `path` parameter already supports arbitrary subdirectories.
+
+### Why sqlite for new stores?
 
 - still local-first
 - fast updates for weights/stats
 - avoids rewriting large markdown files just to adjust edge weights
+- consistent with existing `coordination.db` pattern
 
 ## 4.2 Note Format (Markdown + frontmatter)
 
-Example: `notes/project/lithos/memory/LCMA.md`
+Notes use the existing `KnowledgeDocument` format with LCMA fields added as **optional extensions**. Existing notes without LCMA fields remain valid — defaults are applied at read time.
+
+Example: `knowledge/project/lithos/memory/LCMA.md`
 
 ```yaml
 ---
-id: "node_7f3a9c"
-schema_version: 2
-namespace: "project/lithos"
-access_scope: "project"   # enum: agent_private|task|project|shared|user_private
-note_type: "concept"      # observation|agent_finding|summary|concept|task_record|hypothesis
+# --- Existing Lithos fields (preserved) ---
+id: "7f3a9c12-4d5e-6f7a-8b9c-0d1e2f3a4b5c"   # UUID (existing format)
 title: "Lithos Cognitive Memory Architecture"
-tags: ["lithos", "memory", "pts", "agents"]
-entities: ["Lithos", "Parallel Terraced Scan", "Hofstadter"]
+author: "agent-cartographer"                     # immutable original creator
 created_at: "2026-02-26T18:00:00Z"
 updated_at: "2026-02-26T18:10:00Z"
-confidence: 0.7           # provenance-weighted confidence, not truth
-status: "active"          # active|archived|quarantined
-embedding_spaces:
-  - "emb_v1_2026-02"
+tags: ["lithos", "memory", "pts", "agents"]
+aliases: ["LCMA", "cognitive memory"]            # for wiki-link resolution
+confidence: 0.7                                  # author's belief (0-1)
+contributors: ["agent-librarian"]                # append-only edit trail
+source: "task_abc123"                            # originating task ID
+supersedes: null                                 # UUID of replaced document
+
+# --- LCMA extensions (optional, with defaults) ---
+schema_version: 2                                # default: 1
+namespace: "project/lithos"                      # default: derived from path
+access_scope: "project"                          # default: "shared"
+note_type: "concept"                             # default: "observation"
+entities: ["Lithos", "Parallel Terraced Scan", "Hofstadter"]
+status: "active"                                 # default: "active"
 summaries:
   short: "PTS-style retrieval and learning for Lithos."
   long: "..."
@@ -289,7 +334,16 @@ summaries:
 ...
 ```
 
+Note: `salience`, `usage_stats`, and `embedding_spaces` are stored in `stats.sqlite` and ChromaDB respectively, not in frontmatter. This avoids constant frontmatter rewrites from learning updates.
+
 ## 4.3 Edges Store Schema (sqlite)
+
+Stored in `data/.lithos/edges.sqlite`. This is **separate from** the existing NetworkX wiki-link graph (`data/.graph/graph.pickle`), which continues to power `lithos_links` and wiki-link resolution.
+
+The two systems complement each other:
+
+- **NetworkX**: structural `[[wiki-link]]` navigation, link resolution by path/filename/UUID/alias, broken link detection
+- **edges.sqlite**: semantic/learned relationships with weights, types, and provenance
 
 Table: `edges`
 
@@ -310,6 +364,13 @@ Indexes:
 
 - `(from_id)`, `(to_id)`, `(type)`, `(namespace)`
 - optionally `(from_id, type)` for speed
+
+New MCP tools for LCMA edges (do not modify existing `lithos_links`):
+
+- `lithos_edge_create` — create/update a typed edge
+- `lithos_edge_list` — query edges by node, type, or namespace
+- `lithos_edge_update` — adjust weight or conflict state
+- `lithos_conflict_resolve` — resolve a contradiction edge
 
 ## 4.4 Stats Store Schema (sqlite)
 
@@ -338,22 +399,20 @@ Table: `coactivation`
 
 ## 4.5 Embeddings Store
 
-Option A (simple): sqlite table `embeddings`
+Lithos already uses **ChromaDB** (`data/.chroma/`) with `all-MiniLM-L6-v2` (sentence-transformers) and cosine similarity. Documents are chunked (~500 char target, ~1000 max) and stored with metadata (`doc_id`, `chunk_index`, `title`, `path`, `author`, `tags`).
 
-- `node_id`
-- `embedding_space_id`
-- `vector` (BLOB)
-- `kind` (`content|summary|title|entities`)
-- `updated_at`
+LCMA extends this with embedding space versioning via **separate ChromaDB collections** per space:
 
-Option B: external ANN index per space (FAISS/Chroma/etc) with:
+- Current collection: `knowledge` (existing, preserved)
+- Versioned collections: `knowledge_<embedding_space_id>` (e.g., `knowledge_emb_v2_2026`)
+- Active spaces tracked in config (not per-note frontmatter — avoids churn on re-embedding)
+- During migration, the vector scout queries multiple collections and merges results
 
-- manifest mapping `node_id -> internal_id`
-- stored alongside in `.lithos/embeddings/<space>/...`
+This avoids introducing a separate SQLite or FAISS store — ChromaDB already handles ANN search, persistence, and cosine similarity.
 
 ## 4.6 Retrieval Receipts (Auditor)
 
-Append-only JSONL: `.lithos/receipts.jsonl`
+Append-only JSONL: `data/.lithos/receipts.jsonl`
 
 ```json
 {
@@ -407,24 +466,49 @@ class RetrievalResult:
 
 ## 5.2 Scout Interface
 
+Each scout wraps existing Lithos infrastructure where possible. Implementation notes in comments.
+
 ```python
-def scout_vector(q: QueryContext, k: int) -> list[Candidate]: ...
-def scout_lexical(q: QueryContext, k: int) -> list[Candidate]: ...
-def scout_tags_meta(q: QueryContext, k: int) -> list[Candidate]: ...
-def scout_graph(q: QueryContext, seed_nodes: list[str], k: int) -> list[Candidate]: ...
-def scout_recency(q: QueryContext, k: int) -> list[Candidate]: ...
-def scout_analogy(q: QueryContext, k: int) -> list[Candidate]: ...
-def scout_exploration(q: QueryContext, k: int, mode: str) -> list[Candidate]:
-    # mode in {"novelty","random","mixed"}
+def scout_vector(q: QueryContext, k: int) -> list[Candidate]:
+    # Wraps existing ChromaIndex.search(query, limit=k, threshold, tags)
+    # Queries active embedding spaces (multiple ChromaDB collections during migration)
     ...
+
+def scout_lexical(q: QueryContext, k: int) -> list[Candidate]:
+    # Wraps existing TantivyIndex.search(query, limit=k, tags, author, path_prefix)
+    ...
+
+def scout_tags_meta(q: QueryContext, k: int) -> list[Candidate]:
+    # Wraps existing KnowledgeManager.list_documents(tags, author, path_prefix)
+    ...
+
+def scout_graph(q: QueryContext, seed_nodes: list[str], k: int) -> list[Candidate]:
+    # Queries BOTH:
+    #   - existing KnowledgeGraph.get_links(id, direction, depth) for wiki-link neighbors
+    #   - new edges.sqlite for typed/weighted edge neighbors
+    ...
+
+def scout_recency(q: QueryContext, k: int) -> list[Candidate]:
+    # Wraps existing KnowledgeManager.list_documents(since=...) sorted by updated_at
+    ...
+
+def scout_analogy(q: QueryContext, k: int) -> list[Candidate]:
+    # NEW: no existing equivalent — frame extraction + structural matching
+    ...
+
+def scout_exploration(q: QueryContext, k: int, mode: str) -> list[Candidate]:
+    # NEW: mode in {"novelty","random","mixed"}
+    ...
+
 def scout_contradictions(q: QueryContext, seed_nodes: list[str]) -> list[str]:
-    # returns contradiction edge ids or conflicting node ids
+    # Queries edges.sqlite for type="contradicts" edges
     ...
 ```
 
 Notes:
 
-- all scouts must apply `namespace_filter` and `access_scope` gating **before returning** candidates.
+- All scouts must apply `namespace_filter` and `access_scope` gating **before returning** candidates.
+- Existing search tools (`lithos_search`, `lithos_semantic`) remain available for direct client use.
     
 
 ---
@@ -695,15 +779,18 @@ def weaken_edges_for_bad_context(retrieved_nodes: list[str], bad_nodes: set[str]
 
 ## 5.7 Consolidation (WM → LTM “rest period”)
 
+Consolidation hooks into the existing task lifecycle. A natural trigger is when `lithos_task_complete` is called — the coordination system already tracks `task_id` and `agent` for each task.
+
 Run:
 
-- at task boundaries
+- at task boundaries (triggered by `lithos_task_complete`)
 - on schedule
 - or when WM exceeds size threshold
 
 ```python
 def consolidate(task_id: str, agent_id: str):
-    wm_nodes = get_working_memory(task_id, agent_id)         # nodes touched/used in session
+    # WM = nodes retrieved/used during this task (tracked via receipts.jsonl)
+    wm_nodes = get_working_memory(task_id, agent_id)
     if not wm_nodes:
         return
 
@@ -725,12 +812,16 @@ def consolidate(task_id: str, agent_id: str):
 
 ## 5.8 Concept Formation + Damping
 
+Concept nodes are regular `KnowledgeDocument` notes with `note_type: "concept"`, created via `lithos_write`. Member links are `is_example_of` edges in `edges.sqlite`.
+
 ```python
 def maybe_update_concepts(namespace: str):
-    # identify clusters based on coactivation graph
+    # identify clusters based on coactivation graph (from stats.sqlite)
     clusters = detect_stable_clusters(namespace, min_size=5, min_coactivation=3)
     for cluster in clusters:
+        # find_or_create uses lithos_write with note_type="concept"
         concept_id = find_or_create_concept_node(cluster, namespace)
+        # link via edges.sqlite type="is_example_of"
         link_concept_to_members(concept_id, cluster)
 
         # Damping: cap concept salience and avoid repeated dominance
@@ -787,11 +878,20 @@ def resolve_conflict(edge_id: str, resolution: str, resolver: str):
 
 ## 5.10 Embedding Space Versioning / Migration
 
+Lithos currently uses a single ChromaDB collection `"knowledge"` with `all-MiniLM-L6-v2`. LCMA adds versioning via separate ChromaDB collections per embedding space.
+
 ```python
 def embed_node(node_id: str, embedding_space_id: str):
     text = read_note_text(node_id)
+    # Use the model associated with this space
     vec = embedding_model(embedding_space_id).embed(text)
-    store_embedding(node_id, embedding_space_id, kind="content", vec=vec)
+    # Store in ChromaDB collection "knowledge_{embedding_space_id}"
+    collection = chroma_client.get_or_create_collection(
+        f"knowledge_{embedding_space_id}",
+        metadata={"hnsw:space": "cosine"}
+    )
+    # Chunk and store as per existing ChromaIndex.add_document() pattern
+    store_chunks_in_collection(node_id, text, vec, collection)
 
 def migrate_embeddings(new_space: str, strategy: str):
     # strategy: "batch" | "lazy"
@@ -803,22 +903,23 @@ def migrate_embeddings(new_space: str, strategy: str):
         # embed on edit or on retrieval touch
 ```
 
-Retrieval queries multiple spaces during transition:
+Retrieval queries multiple ChromaDB collections during transition:
 
 ```python
 def scout_vector(q: QueryContext, k: int) -> list[Candidate]:
     spaces = active_embedding_spaces()  # e.g., ["emb_v2", "emb_v1"]
     results = []
     for space in spaces:
-        results += ann_search(space, q.query_text, k=k//len(spaces))
-    return normalize(results)
+        collection = chroma_client.get_collection(f"knowledge_{space}")
+        results += collection.query(query_texts=[q.query_text], n_results=k//len(spaces))
+    return normalize_and_deduplicate(results)  # deduplicate by doc_id as existing code does
 ```
 
 ---
 
 ## 5.11 Schema Versioning for Notes
 
-Each note has `schema_version`. A migration registry in `.lithos/migrations/registry.json`:
+Each note has `schema_version` (default: 1 for existing notes without it). A migration registry in `data/.lithos/migrations/registry.json`:
 
 ```json
 {
@@ -829,41 +930,51 @@ Each note has `schema_version`. A migration registry in `.lithos/migrations/regi
 }
 ```
 
-Migration runner:
+Migration runner (uses existing `KnowledgeManager` for file I/O):
 
 ```python
 def migrate_note(note_path: str):
-    meta, body = read_frontmatter(note_path)
-    v = meta.get("schema_version", 1)
+    meta, body = read_frontmatter(note_path)    # existing python-frontmatter parsing
+    v = meta.get("schema_version", 1)            # missing = version 1
     while v < CURRENT_SCHEMA_VERSION:
         meta, body = apply_migration(v, v+1, meta, body)
         v += 1
     write_note(note_path, meta, body)
 ```
 
+Migrations must be idempotent and never remove existing fields.
+
 ---
 
 # 6) MVP Roadmap (so this doesn’t explode)
 
-## MVP 1 (2–3 scouts + Terrace 1)
+Each MVP builds on the existing Lithos infrastructure. No existing tools or fields are modified.
 
-- lexical + tags + vector
-- basic rerank with note_type priors
-- receipts.jsonl logging
-- edges store (related_to) + basic reinforcement
+## MVP 1 (3 scouts + Terrace 1 — wraps existing engines)
+
+- `lithos_retrieve` tool orchestrating scouts internally
+- Scouts: vector (ChromaDB), lexical (Tantivy), tags/recency (KnowledgeManager)
+- Basic rerank with `note_type` priors (requires new optional frontmatter fields)
+- `data/.lithos/receipts.jsonl` logging
+- `data/.lithos/edges.sqlite` (related_to) + basic reinforcement
+- `data/.lithos/stats.sqlite` (node_stats, coactivation)
+- New tools: `lithos_edge_create`, `lithos_edge_list`, `lithos_node_stats`
+- Schema versioning: `schema_version` field + migration registry
 
 ## MVP 2 (v2 essentials)
 
-- negative reinforcement on ignored/misleading
-- contradiction edges with `unreviewed` state
-- namespaces + access filters
-- consolidation hook
+- Negative reinforcement on ignored/misleading (stats.sqlite updates)
+- Contradiction edges with `unreviewed` state + `lithos_conflict_resolve` tool
+- Namespace + access_scope filtering on scouts
+- Consolidation hook on `lithos_task_complete`
+- Graph scout querying both NetworkX and edges.sqlite
 
 ## MVP 3 (Hofstadter-flavored)
 
-- analogy scout (frame extraction)
-- temperature-based exploration depth
-- concept nodes + damping
+- Analogy scout (frame extraction — new, no existing equivalent)
+- Temperature-based exploration depth
+- Concept nodes (regular notes with `note_type: "concept"`) + damping
+- Embedding space versioning via ChromaDB collections
 
 ---
 
@@ -873,5 +984,45 @@ def migrate_note(note_path: str):
 - Keep sqlite stores as truth for _dynamic signals_ (weights, stats, receipts).
 - Make every agent write action policy-gated:
     - “agent can propose; librarian/auditor confirms” if you want strictness
+    - Can leverage existing claim mechanics (`lithos_task_claim`) for write gating
 - Treat **retrieval receipts** as a key product feature:
     - debugging, trust, and future auto-tuning all depend on them.
+
+## Alignment with Existing Lithos (preserving backward compatibility)
+
+### Existing tools preserved (19 tools, no renames or removals)
+
+- Knowledge: `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_semantic`, `lithos_list`
+- Graph: `lithos_links`, `lithos_tags`
+- Agents: `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list`
+- Coordination: `lithos_task_create`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_status`
+- Findings: `lithos_finding_post`, `lithos_finding_list`
+- System: `lithos_stats`
+
+### New LCMA tools (additive only)
+
+- `lithos_retrieve` — PTS-based retrieval orchestrating scouts
+- `lithos_edge_create`, `lithos_edge_list`, `lithos_edge_update` — typed edge CRUD
+- `lithos_conflict_resolve` — contradiction resolution
+- `lithos_node_stats` — view/query salience and usage stats
+- `lithos_receipts` — query retrieval audit history
+
+### Existing frontmatter fields preserved
+
+All existing `KnowledgeMetadata` fields (`id`, `title`, `author`, `created_at`, `updated_at`, `tags`, `aliases`, `confidence`, `contributors`, `source`, `supersedes`) are kept unchanged. LCMA adds optional fields with defaults.
+
+### Existing infrastructure preserved
+
+| Component | Location | Role in LCMA |
+| --- | --- | --- |
+| Tantivy | `data/.tantivy/` | Lexical scout backend |
+| ChromaDB | `data/.chroma/` | Vector scout backend, extended with collection-per-space versioning |
+| NetworkX | `data/.graph/` | Wiki-link graph scout (alongside new edges.sqlite) |
+| coordination.db | `data/coordination.db` | Agent registry, task lifecycle, WM integration point |
+
+### Key design decisions
+
+- **`confidence` vs `salience`**: `confidence` (frontmatter) = author's belief about accuracy. `salience` (stats.sqlite) = retrieval utility learned from usage. Both are 0–1 floats but serve different purposes.
+- **NetworkX vs edges.sqlite**: NetworkX handles structural `[[wiki-link]]` navigation and powers `lithos_links`. edges.sqlite handles semantic/learned relationships with weights and types. Both are queried by the graph scout.
+- **Frontmatter vs stats.sqlite**: Static metadata in frontmatter (author, tags, note_type). Dynamic signals in stats.sqlite (salience, retrieval_count, decay). This avoids constant file rewrites from learning updates.
+- **Concept nodes**: Regular `KnowledgeDocument` notes with `note_type: “concept”`, not a separate entity type. Created via standard `lithos_write`.
