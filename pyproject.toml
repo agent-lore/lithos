@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lithos-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Shared cognitive substrate for AI agents (local-first, Markdown-native, MCP)"
 readme = "README.md"
 license = "MIT"
