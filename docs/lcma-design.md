@@ -1,15 +1,10 @@
----
-tags:
-  - agents
-  - lithos
----
 # LCMA Design Doc
 
 ## 0. Summary
 
 LCMA turns Lithos from “notes + embeddings” into a **cognitive substrate**:
 
-- **Parallel Terraced Scan (PTS)** retrieval: many cheap probes → selective deepening    
+- **Parallel Terraced Scan (PTS)** retrieval: many cheap probes → selective deepening
 - **Typed, weighted graph edges** that strengthen _and weaken_ over time
 - **Working Memory (WM)** and **Long-Term Memory (LTM)** split
 - **Concept nodes** that emerge from stable clusters (with damping to avoid domination)
@@ -24,7 +19,6 @@ LCMA turns Lithos from “notes + embeddings” into a **cognitive substrate**:
 
 ---
 
-# 1) LCMA v1 (Baseline)
 
 ## 1.1 Core Objects
 
@@ -82,12 +76,6 @@ Special node that summarizes a cluster and links canonical examples.
 ## 1.4 Agents (v1 roles)
 
 - Retriever, Interpreter, Librarian, Cartographer, Auditor
-
----
-
-# 2) LCMA v2 (Review-driven upgrades)
-
-This section includes the review’s sensible changes plus explicit disagreements.
 
 ## 2.1 What v2 Adds
 
@@ -214,34 +202,6 @@ Add `schema_version` per note and a migration registry.
 
 ---
 
-## 2.2 Where I disagree (explicit)
-
-### 1) “Novelty scout and Random scout should be unified”
-
-**Agree on interface**, but internally I keep two modes for telemetry/learning:
-
-- **Novelty**: diverse-but-relevant (MMR-style)
-- **Random**: true serendipity
-
-They look similar superficially, but they behave differently and you’ll want to learn separate weights.
-
-### 2) “Low temperature → trigger LLM validation”
-
-I’d invert the default:
-
-- **High temperature** (low coherence) → go deeper / use LLM to resolve ambiguity
-- **Low temperature** → may skip LLM for simple queries
-
-LLM pass is a cost; coherence is your “do I need it?” indicator.
-
-### 3) “Newer wins” as a contradiction rule
-
-Timestamp is a signal, not a rule, except for a small set of operational notes (`task_record`, `status`).
-
-Default remains: **surface + provenance + workflow**.
-
----
-
 # 3) System Architecture
 
 ## 3.1 Layers
@@ -257,7 +217,7 @@ Default remains: **surface + provenance + workflow**.
 
 3. **Retrieval layer (PTS)**
 	- scouts generate candidates 
-	- terraces re-rank and optionally interpret    
+	- terraces re-rank and optionally interpret
 
 4. **Learning layer**
 	- reinforcement/penalties
@@ -267,7 +227,7 @@ Default remains: **surface + provenance + workflow**.
 5. **Governance layer**
 	- namespaces and access control
 	- contradiction workflow
-	- provenance and audit receipts    
+	- provenance and audit receipts
 
 ---
 
