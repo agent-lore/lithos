@@ -120,7 +120,8 @@ data/
 │   ├── <category>/              # Optional subdirectories for organization
 │   │   └── *.md                 # Knowledge files
 │   └── *.md                     # Knowledge files
-├── coordination.db              # SQLite database for tasks, claims, agents
+├── .lithos/                     # SQLite databases and persistent stores
+│   └── coordination.db          # SQLite database for tasks, claims, agents
 ├── .tantivy/                    # Tantivy index (auto-generated, persistent)
 ├── .chroma/                     # ChromaDB data (auto-generated, persistent)
 └── .graph/                      # NetworkX graph cache (auto-generated)
@@ -206,7 +207,7 @@ Lithos uses a **hybrid agent identity** scheme:
 
 ### 4.2 Agent Registry Schema
 
-Stored in `coordination.db`:
+Stored in `.lithos/coordination.db`:
 
 ```sql
 CREATE TABLE agents (
@@ -535,7 +536,7 @@ Get knowledge base statistics.
    - Add new files to indices
    - Update modified files in indices
    - Remove deleted files from indices
-5. Load coordination state from `coordination.db`
+5. Load coordination state from `.lithos/coordination.db`
 6. Start file watcher
 
 **Full rebuild** only when forced via `lithos reindex --clear`.
@@ -561,7 +562,7 @@ Get knowledge base statistics.
 
 ## 7. Coordination Database Schema
 
-Stored in `coordination.db` (SQLite, accessed via `aiosqlite` for async compatibility):
+Stored in `.lithos/coordination.db` (SQLite, accessed via `aiosqlite` for async compatibility):
 
 ```sql
 -- Agent registry
@@ -794,7 +795,7 @@ These are explicitly not part of the initial implementation but may be considere
 | Coordination | `lithos_task_create`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_status`, `lithos_finding_post`, `lithos_finding_list` |
 | System | `lithos_stats` |
 
-**Total: 19 MCP tools**
+**Total: 20 MCP tools**
 
 ---
 

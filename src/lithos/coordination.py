@@ -173,6 +173,12 @@ class CoordinationService:
     async def initialize(self) -> None:
         """Initialize database schema."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # One-time migration: move coordination.db from old root location to .lithos/
+        old_path = self.config.storage.data_dir / "coordination.db"
+        if old_path.exists() and not self.db_path.exists() and old_path != self.db_path:
+            old_path.rename(self.db_path)
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
             await db.commit()

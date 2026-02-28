@@ -45,9 +45,14 @@ class StorageConfig(BaseModel):
         return self.data_dir / ".graph"
 
     @property
+    def lithos_store_path(self) -> Path:
+        """Get path to .lithos/ store directory (SQLite DBs, receipts, migrations)."""
+        return self.data_dir / ".lithos"
+
+    @property
     def coordination_db_path(self) -> Path:
         """Get path to coordination database."""
-        return self.data_dir / "coordination.db"
+        return self.lithos_store_path / "coordination.db"
 
 
 class SearchConfig(BaseModel):
@@ -106,6 +111,7 @@ class LithosConfig(BaseSettings):
         self.storage.tantivy_path.mkdir(parents=True, exist_ok=True)
         self.storage.chroma_path.mkdir(parents=True, exist_ok=True)
         self.storage.graph_path.mkdir(parents=True, exist_ok=True)
+        self.storage.lithos_store_path.mkdir(parents=True, exist_ok=True)
 
 
 # Global config instance (set during startup)

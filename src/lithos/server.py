@@ -156,7 +156,6 @@ class LithosServer:
             path: str | None = None,
             id: str | None = None,
             source_task: str | None = None,
-            derived_from: list[str] | None = None,
         ) -> dict[str, str]:
             """Create or update a knowledge file.
 
@@ -169,7 +168,6 @@ class LithosServer:
                 path: Subdirectory path (e.g., "procedures")
                 id: UUID to update existing; omit to create new
                 source_task: Task ID this knowledge came from
-                derived_from: IDs of source knowledge items
 
             Returns:
                 Dict with id and path of the document
