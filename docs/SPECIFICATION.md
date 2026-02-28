@@ -116,16 +116,18 @@ Documents are chunked on ingest for better semantic search accuracy:
 
 ```
 data/
-├── knowledge/                    # All knowledge files
+├── knowledge/                    # Authoritative content (Markdown + frontmatter)
 │   ├── <category>/              # Optional subdirectories for organization
-│   │   └── *.md                 # Knowledge files
-│   └── *.md                     # Knowledge files
-├── .lithos/                     # SQLite databases and persistent stores
-│   └── coordination.db          # SQLite database for tasks, claims, agents
-├── .tantivy/                    # Tantivy index (auto-generated, persistent)
-├── .chroma/                     # ChromaDB data (auto-generated, persistent)
-└── .graph/                      # NetworkX graph cache (auto-generated)
+│   │   └── *.md
+│   └── *.md
+├── .lithos/                     # Authoritative state (cannot be rebuilt — back up)
+│   └── coordination.db          # SQLite: tasks, claims, agents, findings
+├── .tantivy/                    # Rebuildable index (full-text search)
+├── .chroma/                     # Rebuildable index (semantic embeddings)
+└── .graph/                      # Rebuildable cache (wiki-link graph)
 ```
+
+**Authoritative vs. rebuildable:** `knowledge/` and `.lithos/` contain data that cannot be regenerated — they must be backed up and preserved. The index directories (`.tantivy/`, `.chroma/`, `.graph/`) are derived from `knowledge/` files and can be rebuilt from scratch via `lithos reindex --clear`.
 
 ### 3.2 Knowledge File Format
 
