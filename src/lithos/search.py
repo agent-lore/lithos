@@ -171,8 +171,7 @@ class TantivyIndex:
         except Exception as exc:
             # Index is corrupted — remove it and start fresh.
             logger.warning(
-                "Tantivy index at %s appears corrupted (%s). "
-                "Deleting and recreating.",
+                "Tantivy index at %s appears corrupted (%s). Deleting and recreating.",
                 self.index_path,
                 exc,
             )
@@ -677,7 +676,7 @@ class SearchEngine:
         status: dict[str, str] = {}
 
         try:
-            self.tantivy.index  # triggers open_or_create if needed
+            _ = self.tantivy.index  # triggers open_or_create if needed
             status["tantivy"] = "ok"
         except Exception as exc:
             status["tantivy"] = f"unavailable: {exc}"

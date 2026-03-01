@@ -420,6 +420,7 @@ class TestSearchEngineResiliency:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """full_text_search returns [] rather than raising when Tantivy errors."""
+
         # Monkeypatch the underlying tantivy search to simulate a backend failure
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated tantivy failure")
@@ -434,6 +435,7 @@ class TestSearchEngineResiliency:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """semantic_search returns [] rather than raising when ChromaDB errors."""
+
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated chroma failure")
 
@@ -447,6 +449,7 @@ class TestSearchEngineResiliency:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """index_document logs and continues when one backend fails."""
+
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
@@ -462,9 +465,7 @@ class TestSearchEngineResiliency:
         # Chroma still works, so chunks > 0
         assert chunks >= 1
 
-    def test_health_returns_ok_when_backends_available(
-        self, search_engine: SearchEngine
-    ):
+    def test_health_returns_ok_when_backends_available(self, search_engine: SearchEngine):
         """health() reports ok for both backends when they are up."""
         status = search_engine.health()
         assert status.get("tantivy") == "ok"
