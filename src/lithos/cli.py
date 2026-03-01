@@ -391,7 +391,7 @@ def inspect_health(ctx: click.Context) -> None:
     status: dict[str, str] = {}
 
     try:
-        engine.tantivy.index  # triggers open_or_create if needed
+        _ = engine.tantivy.index  # triggers open_or_create if needed
         status["tantivy"] = "ok"
     except Exception as exc:
         status["tantivy"] = f"unavailable: {exc}"
@@ -434,9 +434,7 @@ def inspect_agents(ctx: click.Context) -> None:
 
         for agent in agents:
             last_seen = (
-                agent.last_seen_at.strftime("%Y-%m-%d %H:%M:%S")
-                if agent.last_seen_at
-                else "never"
+                agent.last_seen_at.strftime("%Y-%m-%d %H:%M:%S") if agent.last_seen_at else "never"
             )
             click.echo(f"  {agent.id}")
             click.echo(f"    name:      {agent.name or '—'}")
@@ -500,7 +498,7 @@ def inspect_doc(ctx: click.Context, identifier: str, content: bool) -> None:
                 doc, truncated = await knowledge.read(path=identifier)
         except Exception as exc:
             click.echo(f"Error: {exc}", err=True)
-            raise SystemExit(1)
+            raise SystemExit(1) from exc
 
         click.echo(f"Document: {doc.title}")
         click.echo("=" * 50)
