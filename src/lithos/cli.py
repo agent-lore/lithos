@@ -374,6 +374,154 @@ def search(ctx: click.Context, query: str, semantic: bool, limit: int) -> None:
         click.echo("No results found.")
 
 
+@cli.group()
+def inspect() -> None:
+    """Inspect agent state, tasks, documents, and backend health."""
+
+
+@inspect.command(name="health")
+@click.pass_context
+def inspect_health(ctx: click.Context) -> None:
+    """Show backend health (Tantivy, ChromaDB)."""
+    from lithos.search import SearchEngine
+
+    config: LithosConfig = ctx.obj["config"]
+    engine = SearchEngine(config)
+
+    status: dict[str, str] = {}
+
+    try:
+        _ = engine.tantivy.index  # triggers open_or_create if needed
+        status["tantivy"] = "ok"
+    except Exception as exc:
+        status["tantivy"] = f"unavailable: {exc}"
+
+    try:
+        _ = engine.chroma.collection.count()
+        status["chroma"] = "ok"
+    except Exception as exc:
+        status["chroma"] = f"unavailable: {exc}"
+
+    click.echo("Backend health")
+    click.echo("=" * 30)
+    all_ok = True
+    for backend, state in status.items():
+        icon = "✓" if state == "ok" else "✗"
+        click.echo(f"  {icon}  {backend}: {state}")
+        if state != "ok":
+            all_ok = False
+
+    raise SystemExit(0 if all_ok else 1)
+
+
+@inspect.command(name="agents")
+@click.pass_context
+def inspect_agents(ctx: click.Context) -> None:
+    """List registered agents and their last-seen time."""
+    from lithos.coordination import CoordinationService
+
+    config: LithosConfig = ctx.obj["config"]
+
+    async def run() -> None:
+        coord = CoordinationService(config)
+        await coord.initialize()
+        agents = await coord.list_agents()
+
+        click.echo(f"Agents ({len(agents)} total)\n{'=' * 50}")
+        if not agents:
+            click.echo("  No agents registered.")
+            return
+
+        for agent in agents:
+            last_seen = (
+                agent.last_seen_at.strftime("%Y-%m-%d %H:%M:%S") if agent.last_seen_at else "never"
+            )
+            click.echo(f"  {agent.id}")
+            click.echo(f"    name:      {agent.name or '—'}")
+            click.echo(f"    type:      {agent.type or '—'}")
+            click.echo(f"    last seen: {last_seen}")
+
+    asyncio.run(run())
+
+
+@inspect.command(name="tasks")
+@click.option(
+    "--all", "show_all", is_flag=True, default=False, help="Show all tasks, not just open ones"
+)
+@click.pass_context
+def inspect_tasks(ctx: click.Context, show_all: bool) -> None:
+    """List coordination tasks (open by default)."""
+    from lithos.coordination import CoordinationService
+
+    config: LithosConfig = ctx.obj["config"]
+
+    async def run() -> None:
+        coord = CoordinationService(config)
+        await coord.initialize()
+
+        # get_task_status(None) returns open tasks; pass a sentinel for all
+        task_statuses = await coord.get_task_status()
+
+        label = "all" if show_all else "open"
+        click.echo(f"Tasks ({len(task_statuses)} {label})\n{'=' * 50}")
+        if not task_statuses:
+            click.echo("  No tasks found.")
+            return
+
+        for ts in task_statuses:
+            click.echo(f"  [{ts.status.upper()}] {ts.title}")
+            click.echo(f"    id:     {ts.id}")
+            if ts.claims:
+                for claim in ts.claims:
+                    expires = claim.expires_at.strftime("%H:%M:%S")
+                    click.echo(f"    claim:  {claim.agent} → {claim.aspect} (expires {expires})")
+
+    asyncio.run(run())
+
+
+@inspect.command(name="doc")
+@click.argument("identifier")
+@click.option("--content/--no-content", default=False, help="Show full content (default: no)")
+@click.pass_context
+def inspect_doc(ctx: click.Context, identifier: str, content: bool) -> None:
+    """Inspect a knowledge document by ID or path."""
+    from lithos.knowledge import KnowledgeManager
+
+    async def run() -> None:
+        knowledge = KnowledgeManager()
+
+        # Try by ID first, then by path
+        try:
+            if len(identifier) == 36 and identifier.count("-") == 4:
+                doc, truncated = await knowledge.read(id=identifier)
+            else:
+                doc, truncated = await knowledge.read(path=identifier)
+        except Exception as exc:
+            click.echo(f"Error: {exc}", err=True)
+            raise SystemExit(1) from exc
+
+        click.echo(f"Document: {doc.title}")
+        click.echo("=" * 50)
+        click.echo(f"  id:      {doc.id}")
+        click.echo(f"  path:    {doc.path}")
+        click.echo(f"  author:  {doc.metadata.author or '—'}")
+        click.echo(f"  tags:    {', '.join(doc.metadata.tags) if doc.metadata.tags else '—'}")
+        created = doc.metadata.created.strftime("%Y-%m-%d %H:%M") if doc.metadata.created else "—"
+        updated = doc.metadata.updated.strftime("%Y-%m-%d %H:%M") if doc.metadata.updated else "—"
+        click.echo(f"  created: {created}")
+        click.echo(f"  updated: {updated}")
+        click.echo(f"  size:    {len(doc.content)} chars")
+
+        if content:
+            click.echo("\nContent:")
+            click.echo("-" * 50)
+            click.echo(doc.content)
+            if truncated:
+                click.echo("\n[content truncated]")
+
+    asyncio.run(run())
+
+
 def main() -> None:
     """Main entry point."""
     cli()
