@@ -410,3 +410,77 @@ class TestSearchEngineIntegration:
 
         assert "chunks" in stats
         assert stats["chunks"] >= 1
+
+
+class TestSearchEngineResiliency:
+    """Tests for graceful error handling in SearchEngine."""
+
+    @pytest.mark.asyncio
+    async def test_full_text_search_returns_empty_on_backend_error(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """full_text_search returns [] rather than raising when Tantivy errors."""
+        # Monkeypatch the underlying tantivy search to simulate a backend failure
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated tantivy failure")
+
+        search_engine.tantivy.search = _boom  # type: ignore[method-assign]
+
+        results = search_engine.full_text_search("anything")
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_returns_empty_on_backend_error(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """semantic_search returns [] rather than raising when ChromaDB errors."""
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated chroma failure")
+
+        search_engine.chroma.search = _boom  # type: ignore[method-assign]
+
+        results = search_engine.semantic_search("anything")
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_index_document_partial_failure_does_not_raise(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """index_document logs and continues when one backend fails."""
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated failure")
+
+        search_engine.tantivy.add_document = _boom  # type: ignore[method-assign]
+
+        doc = await knowledge_manager.create(
+            title="Resilience Test",
+            content="Testing partial backend failure during indexing.",
+            agent="test-agent",
+        )
+        # Should not raise even though Tantivy is broken
+        chunks = search_engine.index_document(doc)
+        # Chroma still works, so chunks > 0
+        assert chunks >= 1
+
+    def test_health_returns_ok_when_backends_available(
+        self, search_engine: SearchEngine
+    ):
+        """health() reports ok for both backends when they are up."""
+        status = search_engine.health()
+        assert status.get("tantivy") == "ok"
+        assert status.get("chroma") == "ok"
+
+    def test_tantivy_open_or_create_recovers_from_corruption(self, tmp_path):
+        """open_or_create recreates a corrupted index rather than raising."""
+        from lithos.search import TantivyIndex
+
+        index_path = tmp_path / "tantivy"
+        index_path.mkdir()
+
+        # Write junk to simulate a corrupted index
+        (index_path / "meta.json").write_text("not valid json {{{")
+
+        idx = TantivyIndex(index_path)
+        # Should not raise — should wipe and recreate
+        idx.open_or_create()
+        assert idx._index is not None
