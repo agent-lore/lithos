@@ -40,8 +40,10 @@ async def test_smoke_write_index_search(server: LithosServer):
 async def test_smoke_coordination_lifecycle(server: LithosServer):
     """Create a task, claim it, post a finding, complete it."""
     # Register agent
-    success, created = await server.coordination.register_agent(
-        "smoke-agent", name="Smoke Agent", agent_type="test",
+    success, _created = await server.coordination.register_agent(
+        "smoke-agent",
+        name="Smoke Agent",
+        agent_type="test",
     )
     assert success
 
@@ -56,14 +58,19 @@ async def test_smoke_coordination_lifecycle(server: LithosServer):
 
     # Claim an aspect
     claimed, expires_at = await server.coordination.claim_task(
-        task_id=task_id, aspect="verification", agent="smoke-agent", ttl_minutes=10,
+        task_id=task_id,
+        aspect="verification",
+        agent="smoke-agent",
+        ttl_minutes=10,
     )
     assert claimed
     assert expires_at is not None
 
     # Post a finding
     finding_id = await server.coordination.post_finding(
-        task_id=task_id, agent="smoke-agent", summary="Smoke check passed.",
+        task_id=task_id,
+        agent="smoke-agent",
+        summary="Smoke check passed.",
     )
     assert finding_id
 
