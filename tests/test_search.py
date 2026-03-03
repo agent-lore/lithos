@@ -2,8 +2,8 @@
 
 import pytest
 
-from lithos.knowledge import KnowledgeManager
 from lithos.errors import IndexingError, SearchBackendError
+from lithos.knowledge import KnowledgeManager
 from lithos.search import (
     SearchEngine,
     chunk_text,
@@ -459,9 +459,7 @@ class TestSearchEngineResiliency:
         assert isinstance(exc_info.value.backend_errors["chroma"], RuntimeError)
 
     @pytest.mark.asyncio
-    async def test_search_backend_error_is_lithos_error(
-        self, search_engine: SearchEngine
-    ):
+    async def test_search_backend_error_is_lithos_error(self, search_engine: SearchEngine):
         """SearchBackendError is a subclass of LithosError for broad catching."""
         from lithos.errors import LithosError
 

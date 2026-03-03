@@ -30,9 +30,7 @@ class SearchBackendError(LithosError):
         self.backend_errors: dict[str, Exception] = backend_errors
 
     def __str__(self) -> str:
-        detail = ", ".join(
-            f"{backend}: {exc}" for backend, exc in self.backend_errors.items()
-        )
+        detail = ", ".join(f"{backend}: {exc}" for backend, exc in self.backend_errors.items())
         return f"{super().__str__()} [{detail}]"
 
 
@@ -52,7 +50,5 @@ class IndexingError(LithosError):
         self.backend_errors: dict[str, Exception] = backend_errors
 
     def __str__(self) -> str:
-        detail = ", ".join(
-            f"{backend}: {exc}" for backend, exc in self.backend_errors.items()
-        )
+        detail = ", ".join(f"{backend}: {exc}" for backend, exc in self.backend_errors.items())
         return f"{super().__str__()} [{detail}]"
