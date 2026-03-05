@@ -741,6 +741,253 @@ class TestGraphEdgeConsistency:
         assert any(link["id"] == linker_id for link in beta_incoming["incoming"])
 
 
+class TestAgentAndCoordinationMCPTools:
+    """Integration coverage for MCP tools not previously exercised."""
+
+    @pytest.mark.asyncio
+    async def test_integration_mcp_agents_roundtrip(self, server: LithosServer):
+        created = await _call_tool(
+            server,
+            "lithos_agent_register",
+            {
+                "id": "agent-roundtrip",
+                "name": "Roundtrip Agent",
+                "type": "integration-test",
+                "metadata": {"team": "qa"},
+            },
+        )
+        assert created["success"] is True
+        assert created["created"] is True
+
+        updated = await _call_tool(
+            server,
+            "lithos_agent_register",
+            {
+                "id": "agent-roundtrip",
+                "name": "Roundtrip Agent v2",
+                "type": "integration-test",
+            },
+        )
+        assert updated["success"] is True
+        assert updated["created"] is False
+
+        info_response = await _call_tool(server, "lithos_agent_info", {"id": "agent-roundtrip"})
+        info = info_response.get("result", info_response)
+        assert info["id"] == "agent-roundtrip"
+        assert info["name"] == "Roundtrip Agent v2"
+        assert info["type"] == "integration-test"
+        assert info["first_seen_at"] is not None
+        assert info["last_seen_at"] is not None
+
+        listing = await _call_tool(
+            server, "lithos_agent_list", {"type": "integration-test"}
+        )
+        assert any(agent["id"] == "agent-roundtrip" for agent in listing["agents"])
+
+    @pytest.mark.asyncio
+    async def test_integration_mcp_task_lifecycle_full(self, server: LithosServer):
+        created = await _call_tool(
+            server,
+            "lithos_task_create",
+            {
+                "title": "Lifecycle Full Task",
+                "agent": "lifecycle-agent",
+                "description": "Exercise claim/renew/release/complete end-to-end.",
+            },
+        )
+        task_id = created["task_id"]
+
+        claim = await _call_tool(
+            server,
+            "lithos_task_claim",
+            {
+                "task_id": task_id,
+                "aspect": "implementation",
+                "agent": "worker-a",
+                "ttl_minutes": 10,
+            },
+        )
+        assert claim["success"] is True
+        first_expiry = claim["expires_at"]
+        assert first_expiry is not None
+
+        renew = await _call_tool(
+            server,
+            "lithos_task_renew",
+            {
+                "task_id": task_id,
+                "aspect": "implementation",
+                "agent": "worker-a",
+                "ttl_minutes": 20,
+            },
+        )
+        assert renew["success"] is True
+        assert renew["new_expires_at"] is not None
+        assert renew["new_expires_at"] != first_expiry
+
+        released = await _call_tool(
+            server,
+            "lithos_task_release",
+            {"task_id": task_id, "aspect": "implementation", "agent": "worker-a"},
+        )
+        assert released["success"] is True
+
+        # Releasing again should fail cleanly.
+        released_again = await _call_tool(
+            server,
+            "lithos_task_release",
+            {"task_id": task_id, "aspect": "implementation", "agent": "worker-a"},
+        )
+        assert released_again["success"] is False
+
+        completed = await _call_tool(
+            server, "lithos_task_complete", {"task_id": task_id, "agent": "worker-a"}
+        )
+        assert completed["success"] is True
+
+        # Completing an already-completed task should fail.
+        completed_again = await _call_tool(
+            server, "lithos_task_complete", {"task_id": task_id, "agent": "worker-a"}
+        )
+        assert completed_again["success"] is False
+
+        status = await _call_tool(server, "lithos_task_status", {"task_id": task_id})
+        assert len(status["tasks"]) == 1
+        assert status["tasks"][0]["status"] == "completed"
+        assert status["tasks"][0]["claims"] == []
+
+    @pytest.mark.asyncio
+    async def test_integration_mcp_findings_with_since_filter(self, server: LithosServer):
+        task = await _call_tool(
+            server,
+            "lithos_task_create",
+            {"title": "Findings Since Task", "agent": "finder-agent"},
+        )
+        task_id = task["task_id"]
+
+        knowledge = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Finding Linked Knowledge",
+                "content": "Knowledge linked from finding.",
+                "agent": "finder-agent",
+            },
+        )
+        knowledge_id = knowledge["id"]
+
+        first = await _call_tool(
+            server,
+            "lithos_finding_post",
+            {
+                "task_id": task_id,
+                "agent": "finder-agent",
+                "summary": "Initial finding",
+                "knowledge_id": knowledge_id,
+            },
+        )
+        assert first["finding_id"]
+
+        # Capture an exact boundary after the first finding.
+        all_findings = await _call_tool(server, "lithos_finding_list", {"task_id": task_id})
+        assert len(all_findings["findings"]) == 1
+        since_marker = all_findings["findings"][0]["created_at"]
+        assert all_findings["findings"][0]["knowledge_id"] == knowledge_id
+
+        await _call_tool(
+            server,
+            "lithos_finding_post",
+            {
+                "task_id": task_id,
+                "agent": "finder-agent",
+                "summary": "Follow-up finding",
+            },
+        )
+
+        filtered = await _call_tool(
+            server, "lithos_finding_list", {"task_id": task_id, "since": since_marker}
+        )
+        assert len(filtered["findings"]) == 1
+        assert filtered["findings"][0]["summary"] == "Follow-up finding"
+        assert filtered["findings"][0]["knowledge_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_integration_mcp_tags_and_stats_contract(self, server: LithosServer):
+        tags_before = await _call_tool(server, "lithos_tags", {})
+        stats_before = await _call_tool(server, "lithos_stats", {})
+
+        for key in ["documents", "chunks", "agents", "active_tasks", "open_claims", "tags"]:
+            assert key in stats_before
+            assert isinstance(stats_before[key], int)
+
+        await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Stats Contract Doc",
+                "content": "This contributes to tag and document stats.",
+                "agent": "stats-agent",
+                "tags": ["stats", "contract"],
+            },
+        )
+        task = await _call_tool(
+            server,
+            "lithos_task_create",
+            {"title": "Stats Contract Task", "agent": "stats-agent"},
+        )
+        await _call_tool(
+            server,
+            "lithos_task_claim",
+            {
+                "task_id": task["task_id"],
+                "aspect": "stats-check",
+                "agent": "stats-agent",
+                "ttl_minutes": 15,
+            },
+        )
+
+        tags_after = await _call_tool(server, "lithos_tags", {})
+        stats_after = await _call_tool(server, "lithos_stats", {})
+
+        assert "tags" in tags_after
+        assert tags_after["tags"].get("stats", 0) >= tags_before["tags"].get("stats", 0) + 1
+        assert stats_after["documents"] >= stats_before["documents"] + 1
+        assert stats_after["active_tasks"] >= stats_before["active_tasks"] + 1
+        assert stats_after["open_claims"] >= stats_before["open_claims"] + 1
+
+    @pytest.mark.asyncio
+    async def test_integration_mcp_invalid_datetime_inputs_fail_cleanly(
+        self, server: LithosServer
+    ):
+        task = await _call_tool(
+            server,
+            "lithos_task_create",
+            {"title": "Bad Date Task", "agent": "date-agent"},
+        )
+        await _call_tool(
+            server,
+            "lithos_finding_post",
+            {
+                "task_id": task["task_id"],
+                "agent": "date-agent",
+                "summary": "Date parsing test finding",
+            },
+        )
+
+        with pytest.raises(Exception):
+            await _call_tool(server, "lithos_list", {"since": "not-a-date"})
+
+        with pytest.raises(Exception):
+            await _call_tool(server, "lithos_agent_list", {"active_since": "still-not-a-date"})
+
+        with pytest.raises(Exception):
+            await _call_tool(
+                server,
+                "lithos_finding_list",
+                {"task_id": task["task_id"], "since": "definitely-not-a-date"},
+            )
+
+
 def test_conformance_module_exists():
     """Sanity check to keep this module discoverable in test listings."""
     assert Path(__file__).name == "test_integration_conformance.py"
