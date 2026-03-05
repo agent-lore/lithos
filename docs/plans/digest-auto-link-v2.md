@@ -23,6 +23,7 @@ Rules:
 - Values must be UUID strings.
 - Normalize by trimming, deduplicating, and sorting.
 - `None` is not persisted; stored value is always a list.
+- Titles, slugs, and paths are invalid in this field and must be rejected.
 
 Round-trip:
 - `KnowledgeMetadata.to_dict` / `from_dict`
@@ -44,6 +45,7 @@ Semantics:
 
 Validation:
 - Reject malformed UUID entries.
+- Reject non-UUID identifiers (including titles, slugs, and paths).
 - Reject self-reference (`id` contained in `derived_from_ids`) on update.
 - Missing source IDs do not fail the write; they produce warnings.
 
