@@ -108,12 +108,12 @@ class TestServerInitialization:
 
         file_path = server.config.storage.knowledge_path / doc.path
         file_path.write_text(
-            """---
-id: {id}
+            f"""---
+id: {doc.id}
 title: Watcher Modify Doc
 author: watcher-agent
-created_at: {created}
-updated_at: {updated}
+created_at: {doc.metadata.created_at.isoformat()}
+updated_at: {doc.metadata.updated_at.isoformat()}
 tags: []
 aliases: []
 confidence: 1.0
@@ -122,11 +122,7 @@ contributors: []
 # Watcher Modify Doc
 
 Updated watcher content with unique phrase.
-""".format(
-                id=doc.id,
-                created=doc.metadata.created_at.isoformat(),
-                updated=doc.metadata.updated_at.isoformat(),
-            )
+"""
         )
 
         await server.handle_file_change(file_path, deleted=False)

@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pytest
 
+from lithos.config import LithosConfig, StorageConfig
+from lithos.server import LithosServer
+
 mcp = pytest.importorskip("mcp", reason="mcp package is only installed in integration CI job")
 ClientSession = mcp.ClientSession
 sse_client = pytest.importorskip("mcp.client.sse").sse_client
-
-from lithos.config import LithosConfig, StorageConfig
-from lithos.server import LithosServer
 
 pytestmark = pytest.mark.integration
 
@@ -77,10 +77,13 @@ async def _resolve_endpoint(temp_dir: Path):
 @pytest.mark.asyncio
 async def test_mcp_sse_lists_tools(temp_dir):
     """Connect to Lithos MCP SSE endpoint and verify tool discovery."""
-    async with _resolve_endpoint(temp_dir) as endpoint:
-        async with sse_client(endpoint) as (reader, writer), ClientSession(reader, writer) as session:
-            await asyncio.wait_for(session.initialize(), timeout=20)
-            tools = await asyncio.wait_for(session.list_tools(), timeout=20)
+    async with (
+        _resolve_endpoint(temp_dir) as endpoint,
+        sse_client(endpoint) as (reader, writer),
+        ClientSession(reader, writer) as session,
+    ):
+        await asyncio.wait_for(session.initialize(), timeout=20)
+        tools = await asyncio.wait_for(session.list_tools(), timeout=20)
 
     assert len(tools.tools) >= 20
 
@@ -96,73 +99,74 @@ def _decode_call_result(result) -> dict:
 @pytest.mark.asyncio
 async def test_mcp_sse_remote_tool_roundtrip(temp_dir):
     """Run an end-to-end tool workflow through the SSE MCP boundary."""
-    async with _resolve_endpoint(temp_dir) as endpoint:
-        async with sse_client(endpoint) as (reader, writer), ClientSession(reader, writer) as session:
-            await asyncio.wait_for(session.initialize(), timeout=20)
+    async with (
+        _resolve_endpoint(temp_dir) as endpoint,
+        sse_client(endpoint) as (reader, writer),
+        ClientSession(reader, writer) as session,
+    ):
+        await asyncio.wait_for(session.initialize(), timeout=20)
 
-            write = await asyncio.wait_for(
-                session.call_tool(
-                    "lithos_write",
-                    {
-                        "title": "SSE Roundtrip Doc",
-                        "content": "Remote roundtrip content over SSE MCP boundary.",
-                        "agent": "sse-agent",
-                        "tags": ["sse", "roundtrip"],
-                    },
-                ),
-                timeout=30,
-            )
-            write_payload = _decode_call_result(write)
-            doc_id = write_payload["id"]
+        write = await asyncio.wait_for(
+            session.call_tool(
+                "lithos_write",
+                {
+                    "title": "SSE Roundtrip Doc",
+                    "content": "Remote roundtrip content over SSE MCP boundary.",
+                    "agent": "sse-agent",
+                    "tags": ["sse", "roundtrip"],
+                },
+            ),
+            timeout=30,
+        )
+        write_payload = _decode_call_result(write)
+        doc_id = write_payload["id"]
 
-            read = await asyncio.wait_for(
-                session.call_tool("lithos_read", {"id": doc_id}),
-                timeout=30,
-            )
-            read_payload = _decode_call_result(read)
-            assert read_payload["id"] == doc_id
-            assert read_payload["title"] == "SSE Roundtrip Doc"
+        read = await asyncio.wait_for(
+            session.call_tool("lithos_read", {"id": doc_id}),
+            timeout=30,
+        )
+        read_payload = _decode_call_result(read)
+        assert read_payload["id"] == doc_id
+        assert read_payload["title"] == "SSE Roundtrip Doc"
 
-            search = await asyncio.wait_for(
-                session.call_tool(
-                    "lithos_search", {"query": "roundtrip content over SSE", "limit": 10}
-                ),
-                timeout=30,
-            )
-            search_payload = _decode_call_result(search)
-            assert any(item["id"] == doc_id for item in search_payload["results"])
+        search = await asyncio.wait_for(
+            session.call_tool("lithos_search", {"query": "roundtrip content over SSE", "limit": 10}),
+            timeout=30,
+        )
+        search_payload = _decode_call_result(search)
+        assert any(item["id"] == doc_id for item in search_payload["results"])
 
-            task = await asyncio.wait_for(
-                session.call_tool(
-                    "lithos_task_create",
-                    {"title": "SSE Roundtrip Task", "agent": "sse-agent"},
-                ),
-                timeout=30,
-            )
-            task_payload = _decode_call_result(task)
-            task_id = task_payload["task_id"]
+        task = await asyncio.wait_for(
+            session.call_tool(
+                "lithos_task_create",
+                {"title": "SSE Roundtrip Task", "agent": "sse-agent"},
+            ),
+            timeout=30,
+        )
+        task_payload = _decode_call_result(task)
+        task_id = task_payload["task_id"]
 
-            finding = await asyncio.wait_for(
-                session.call_tool(
-                    "lithos_finding_post",
-                    {
-                        "task_id": task_id,
-                        "agent": "sse-agent",
-                        "summary": "SSE finding summary",
-                        "knowledge_id": doc_id,
-                    },
-                ),
-                timeout=30,
-            )
-            finding_payload = _decode_call_result(finding)
-            assert finding_payload["finding_id"]
+        finding = await asyncio.wait_for(
+            session.call_tool(
+                "lithos_finding_post",
+                {
+                    "task_id": task_id,
+                    "agent": "sse-agent",
+                    "summary": "SSE finding summary",
+                    "knowledge_id": doc_id,
+                },
+            ),
+            timeout=30,
+        )
+        finding_payload = _decode_call_result(finding)
+        assert finding_payload["finding_id"]
 
-            finding_list = await asyncio.wait_for(
-                session.call_tool("lithos_finding_list", {"task_id": task_id}),
-                timeout=30,
-            )
-            finding_list_payload = _decode_call_result(finding_list)
-            assert any(
-                f["summary"] == "SSE finding summary" and f["knowledge_id"] == doc_id
-                for f in finding_list_payload["findings"]
-            )
+        finding_list = await asyncio.wait_for(
+            session.call_tool("lithos_finding_list", {"task_id": task_id}),
+            timeout=30,
+        )
+        finding_list_payload = _decode_call_result(finding_list)
+        assert any(
+            f["summary"] == "SSE finding summary" and f["knowledge_id"] == doc_id
+            for f in finding_list_payload["findings"]
+        )
