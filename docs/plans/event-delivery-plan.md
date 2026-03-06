@@ -213,7 +213,7 @@ The file watcher already emits `note.updated` via the event bus (from `event-bus
 - event IDs are stable and unique and must be included in webhook payloads so consumers can dedupe
 - consumers must tolerate duplicates and occasional missed replay across full server restarts
 
-## Open Questions to Decide Before Building
+## Resolved Questions
 
 | Question | Options |
 | -------- | ------- |
