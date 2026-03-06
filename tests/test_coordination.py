@@ -215,7 +215,9 @@ class TestTaskLifecycle:
         assert task3 not in task_ids  # Completed, not active
 
     @pytest.mark.asyncio
-    async def test_get_all_tasks_when_include_all_true(self, coordination_service: CoordinationService):
+    async def test_get_all_tasks_when_include_all_true(
+        self, coordination_service: CoordinationService
+    ):
         """include_all returns open and completed tasks."""
         open_task = await coordination_service.create_task(title="Open Task", agent="agent")
         done_task = await coordination_service.create_task(title="Done Task", agent="agent")

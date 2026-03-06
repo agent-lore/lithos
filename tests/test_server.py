@@ -85,11 +85,15 @@ class TestServerInitialization:
         server.stop_file_watcher()
 
     @pytest.mark.asyncio
-    async def test_handle_file_change_ignores_non_markdown_and_outside_root(self, server: LithosServer):
+    async def test_handle_file_change_ignores_non_markdown_and_outside_root(
+        self, server: LithosServer
+    ):
         """Non-markdown and out-of-root file events are ignored safely."""
         original_nodes = server.graph.node_count()
 
-        await server.handle_file_change(server.config.storage.knowledge_path / "ignored.txt", deleted=False)
+        await server.handle_file_change(
+            server.config.storage.knowledge_path / "ignored.txt", deleted=False
+        )
         await server.handle_file_change(Path("/tmp/outside.md"), deleted=False)
 
         assert server.graph.node_count() == original_nodes

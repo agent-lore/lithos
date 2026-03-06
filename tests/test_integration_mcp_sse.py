@@ -130,7 +130,9 @@ async def test_mcp_sse_remote_tool_roundtrip(temp_dir):
         assert read_payload["title"] == "SSE Roundtrip Doc"
 
         search = await asyncio.wait_for(
-            session.call_tool("lithos_search", {"query": "roundtrip content over SSE", "limit": 10}),
+            session.call_tool(
+                "lithos_search", {"query": "roundtrip content over SSE", "limit": 10}
+            ),
             timeout=30,
         )
         search_payload = _decode_call_result(search)
