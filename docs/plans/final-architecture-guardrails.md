@@ -109,7 +109,9 @@ Maintain a single cross-plan conformance suite covering:
 5. freshness fields and stale lookup behavior
 6. schema mismatch recreate + full rebuild path
 7. reconcile repair correctness and idempotency
-8. OTEL span/metric emission for critical paths
+8. event emission only after successful commits, with subscriber failure isolation
+9. webhook/SSE delivery semantics (at-least-once delivery, duplicate-safe `event.id`, restart-safe webhook retries)
+10. OTEL span/metric emission for critical paths
 
 No major feature should be considered complete without passing this suite.
 
@@ -120,6 +122,9 @@ Until explicit auth exists, enforce conservative defaults:
 - default `access_scope` remains `shared` unless caller provides narrower scope
 - namespace and scope filters are always applied in retrieval/ranking paths
 - telemetry redaction is on by default
+- external event delivery surfaces inherit the same auth boundary as MCP when auth exists
+
+Note: `access_scope` is a retrieval scoping mechanism to avoid search pollution across agents and namespaces, not a security boundary. All agents operate in the same trust domain per `SPECIFICATION.md` section 1.2 (Non-Goals).
 
 ## 9) Target Search Schema Registry
 

@@ -123,7 +123,7 @@ If a referenced source ID is absent:
 - warning is returned
 - unresolved reference is tracked in `_unresolved_provenance`
 
-When source doc later appears, index maintenance moves relationships from unresolved to resolved automatically.
+When a source document is later created, the `create()` method in `KnowledgeManager` must check `_unresolved_provenance` for entries referencing the new document's ID. For each referencing document found, the relationship is moved: removed from `_unresolved_provenance` and added to `_source_to_derived`. This check occurs at the end of `create()`, after the new document's own provenance indexes are updated. No frontmatter mutation is required — only in-memory indexes change.
 
 ### Deletions
 

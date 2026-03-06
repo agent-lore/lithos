@@ -2,12 +2,16 @@
 
 This checklist defines the preferred execution order across the active plans:
 
+- `otel-plan.md`
 - `source_url-dedup.md`
+- `event-bus-plan.md`
 - `digest-auto-link-v2.md`
 - `research-cache-plan.md`
-- `otel-plan.md`
 - `bulk-write-v3.md`
+- `reconcile-plan.md`
+- `event-delivery-plan.md`
 - `lcma-design.md`
+- `cli-extension-plan.md`
 
 Normative references:
 
@@ -51,7 +55,7 @@ Exit criteria:
 
 ---
 
-## Phase 2 - Source URL Dedup + Provenance Surface
+## Phase 2a - Source URL Dedup + Provenance Surface
 
 - [ ] Add `source_url` metadata field and normalization
 - [ ] Add manager-owned dedup map and write-time invariants
@@ -74,6 +78,25 @@ Exit criteria:
 
 ---
 
+## Phase 2b - Internal Event Bus
+
+- [ ] Add `events.py` with `EventBus` class, `LithosEvent` dataclass, and in-memory ring buffer
+- [ ] Add `EventsConfig` to `config.py` (enabled flag, buffer size)
+- [ ] Wire `EventBus` into `LithosServer` lifecycle
+- [ ] Emit events from write/delete/task/finding/agent-register success paths in `server.py`
+- [ ] Emit events from file watcher `handle_file_change`
+
+Dependencies:
+
+- Phase 0 complete
+- Phase 1 recommended (for event-path observability)
+
+Exit criteria:
+
+- Internal event bus emits on all write/task success paths (no delivery surface yet)
+
+---
+
 ## Phase 3 - Digest Provenance v2 (`derived_from_ids`)
 
 - [ ] Add `derived_from_ids` frontmatter field + validation/normalization
@@ -86,7 +109,7 @@ Exit criteria:
 Dependencies:
 
 - Phase 0 complete
-- Phase 2 recommended (shared provenance fields already surfaced)
+- Phase 2a recommended (shared provenance fields already surfaced)
 
 Exit criteria:
 
@@ -101,13 +124,12 @@ Exit criteria:
 - [ ] Extend `lithos_write` with `ttl_hours`/`expires_at` per unified contract
 - [ ] Add `lithos_cache_lookup`
 - [ ] Add freshness fields (`updated_at`, `is_stale`) to search/semantic responses
-- [ ] Align any search schema changes with rebuild framework
-- [ ] If feasible, batch Phase 2 + Phase 4 Tantivy schema changes into one rebuild window
+- [ ] Align search schema changes with rebuild framework using the single batched Tantivy schema jump decided in `target-search-schema.md`
 
 Dependencies:
 
 - Phase 0 complete
-- Phase 2/3 recommended (provenance + dedup stability improves cache quality)
+- Phase 2a/3 recommended (provenance + dedup stability improves cache quality)
 
 Exit criteria:
 
@@ -123,13 +145,15 @@ Exit criteria:
 - [ ] Enforce shared single/batch write contract and status envelope per item
 - [ ] Implement best-effort and all-or-nothing apply behavior
 - [ ] Add projection retries/dead-letter behavior
+- [ ] Emit internal batch lifecycle events (`batch.queued`/`batch.applying`/`batch.projecting`/`batch.completed`/`batch.failed`) from durable status transitions
 - [ ] Emit OTEL batch metrics/spans using telemetry foundation
 
 Dependencies:
 
 - Phase 0 complete
 - Phase 1 complete
-- Phase 2 and 3 complete (shared invariants are reused by batch)
+- Phase 2a and 3 complete (shared invariants are reused by batch)
+- Phase 2b recommended (batch lifecycle events can emit immediately)
 - Phase 4 recommended (freshness fields in unified payload)
 
 Exit criteria:
@@ -141,6 +165,7 @@ Exit criteria:
 
 ## Phase 6 - Reconcile/Repair Tooling
 
+- [ ] Complete dedicated implementation plan (`reconcile-plan.md`) review before coding starts
 - [ ] Implement `lithos_reconcile` core scopes (`indices`/`graph`/`all`)
 - [ ] Implement deterministic no-op behavior for `provenance_projection` when projection store is not enabled
 - [ ] Add dry-run mode and repair reporting
@@ -148,11 +173,32 @@ Exit criteria:
 
 Dependencies:
 
-- Phases 2 through 5 complete
+- Phases 2a through 5 complete
 
 Exit criteria:
 
 - System can repair projection drift without touching authoritative markdown content
+
+---
+
+## Phase 6.5 - Event Delivery Surface
+
+- [ ] Add SSE endpoint (`GET /events`) with type/tag filtering and replay-from-ID
+- [ ] Add webhook registry, durable outbox, and delivery history tables to `coordination.db`
+- [ ] Implement webhook dispatcher with HMAC signing, retries, duplicate-safe `event.id` payloads, and restart-safe outbox processing
+- [ ] Make SSE inherit the MCP auth boundary when auth exists
+- [ ] Add MCP tools: `lithos_webhook_register`, `lithos_webhook_list`, `lithos_webhook_delete`, `lithos_webhook_deliveries`
+- [ ] Add event delivery tests (SSE integration, webhook delivery)
+
+Dependencies:
+
+- Phase 2b internal event bus complete
+- Phase 6 recommended (reconcile may emit events)
+
+Exit criteria:
+
+- Agents can subscribe to real-time events via SSE or webhooks
+- Webhook delivery survives server restart via SQLite-backed outbox
 
 ---
 
@@ -182,7 +228,7 @@ Exit criteria:
 
 Dependencies:
 
-- Phases 0 through 6 complete
+- Phases 0 through 6.5 complete
 
 Exit criteria:
 
@@ -191,7 +237,40 @@ Exit criteria:
 
 ---
 
+## Phase 8 - API Ergonomics Cleanup
+
+- [ ] Replace the flat `lithos_write` option surface with grouped request objects (`provenance`, `freshness`, `lcma`) at the MCP boundary
+- [ ] Preserve the canonical on-disk semantics and outcome envelope from `unified-write-contract.md`
+- [ ] Add compatibility notes in `docs/SPECIFICATION.md` for the cleaned-up pre-1.0 interface
+- [ ] Extend single-write and batch conformance coverage to grouped input objects
+
+Dependencies:
+
+- Phase 7 MVP 1 complete (LCMA write fields are present and stable enough to group)
+
+Exit criteria:
+
+- Single and batch write APIs are materially easier to use without changing manager-layer semantics
+- Grouped request objects have conformance tests proving parity with canonical field semantics
+
+---
+
+## Phase 9 - Deferred Integration: CLI Extension
+
+- [ ] Revisit `cli-extension-plan.md` after the write and retrieval surfaces stabilize
+- [ ] Prioritize CLI phases 1-3 first (JSON output, read/list, CRUD), then graph/coordination/polish
+
+Dependencies:
+
+- Phases 0 through 8 complete
+
+Exit criteria:
+
+- CLI surfaces are built on top of the stabilized core contracts
+
+---
+
 ## Cross-Phase Conformance (Run Continuously)
 
-- [ ] Maintain one conformance suite across single write, batch write, dedup, provenance, freshness, migration/rebuild, reconcile, and OTEL instrumentation
+- [ ] Maintain one conformance suite across single write, batch write, dedup, provenance, freshness, migration/rebuild, reconcile, event emission/delivery, and OTEL instrumentation
 - [ ] Block milestone completion if conformance suite regresses
