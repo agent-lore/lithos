@@ -52,20 +52,23 @@ claude mcp add --transport sse lithos http://localhost:8765/sse
 # Install dependencies (uses uv)
 uv sync --extra dev
 
-# Run tests
-uv run pytest tests/ -v --tb=short
+# Run unit tests
+uv run --extra dev pytest -m "not integration" tests/ -q
 
-# Run tests with coverage
-uv run pytest tests/ --cov=lithos --cov-report=xml
+# Run integration tests
+uv run --extra dev pytest -m integration tests/ -q
+
+# Run all tests with coverage
+uv run --extra dev pytest tests/ --cov=lithos --cov-report=xml
 
 # Lint
-uv run ruff check src/ tests/
+uv run --extra dev ruff check .
 
 # Format check
-uv run ruff format --check src/ tests/
+uv run --extra dev ruff format --check src/ tests/
 
 # Auto-fix lint + format
-uv run ruff check --fix src/ tests/ && uv run ruff format src/ tests/
+uv run --extra dev ruff check --fix . && uv run --extra dev ruff format src/ tests/
 
 # Start server (stdio)
 uv run lithos serve
