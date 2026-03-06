@@ -20,6 +20,8 @@ note.created      note.updated      note.deleted
 task.created      task.claimed      task.released      task.completed
 finding.posted
 agent.registered
+batch.queued      batch.applying    batch.projecting
+batch.completed   batch.failed
 ```
 
 Each event carries:
@@ -52,6 +54,20 @@ The bus is purely in-memory. No persistence, no HTTP, no SQLite. Subscribers are
 
 `subscribe()` accepts an optional filter (event types and/or tags). The bus only enqueues events that match the filter into that subscriber's queue. This keeps consumers from having to filter themselves.
 
+#### Backpressure and failure isolation
+
+The event bus must not turn subscriber slowness into write-path instability.
+
+Required semantics:
+
+- each subscriber queue is bounded (`EventsConfig.subscriber_queue_size`)
+- `emit()` never blocks indefinitely on a slow subscriber
+- if a subscriber queue is full, the bus drops the event for that subscriber, increments a drop counter, and continues fan-out
+- subscriber failures never fail the underlying write/task/batch operation that produced the event
+- event emission is best-effort infrastructure, not part of the authoritative commit contract
+
+This keeps writes, task completion, and batch transitions responsive even when an internal consumer is stalled or buggy.
+
 ### Config: `EventsConfig` in `config.py`
 
 ```python
@@ -60,6 +76,7 @@ class EventsConfig(BaseModel):
 
     enabled: bool = True
     event_buffer_size: int = 500      # in-memory ring buffer size
+    subscriber_queue_size: int = 100
 ```
 
 Only bus-relevant config. SSE and webhook config are added later by `event-delivery-plan.md`.
@@ -100,11 +117,29 @@ await self.event_bus.emit(LithosEvent(
 ))
 ```
 
+Phase 5 extends emission points with batch workflow events:
+
+| Producer | Event type | Payload |
+| ---- | ---------- | ------- |
+| `lithos_write_batch` ingest | `batch.queued` | `batch_id`, `requested`, `mode`, `priority` |
+| batch worker apply start | `batch.applying` | `batch_id` |
+| batch worker projection start | `batch.projecting` | `batch_id`, `write_ok` |
+| batch worker success | `batch.completed` | `batch_id`, `summary`, `status` |
+| batch worker terminal failure | `batch.failed` | `batch_id`, `status`, `error_code` |
+
+Batch events are emitted from the durable workflow transitions in `bulk-write-v3.md`, not inferred from ad-hoc logging.
+
 ### Lifecycle
 
 `EventBus` is created in `LithosServer.__init__` and stored as `self.event_bus`. No explicit shutdown is needed at this stage (in-memory only, no background workers).
 
 If `EventsConfig.enabled` is `False`, the bus is still created but `emit()` is a no-op (same pattern as OTEL no-op mode).
+
+Ordering and delivery semantics:
+
+- event emission happens only after the authoritative operation succeeds
+- event order is best-effort process-local order, not a transactional cross-subsystem guarantee
+- consumers must treat `event.id` as the stable deduplication key
 
 ## Files
 
@@ -113,6 +148,7 @@ If `EventsConfig.enabled` is `False`, the bus is still created but `emit()` is a
 | `src/lithos/events.py` | New: `LithosEvent`, `EventBus` with ring buffer and subscriber management |
 | `src/lithos/config.py` | Add `EventsConfig` (bus fields only) to `LithosConfig` |
 | `src/lithos/server.py` | Create `EventBus` in `__init__`, add `emit()` calls in all tool handlers and file watcher |
+| `src/lithos/batch.py` or worker module | Emit batch lifecycle events from durable status transitions |
 | `tests/test_event_bus.py` | New: emit/subscribe/filter/ring-buffer/no-op-when-disabled tests |
 
 ## Out of Scope

@@ -2,13 +2,13 @@
 
 This checklist defines the preferred execution order across the active plans:
 
+- `otel-plan.md`
 - `source_url-dedup.md`
+- `event-bus-plan.md`
 - `digest-auto-link-v2.md`
 - `research-cache-plan.md`
-- `otel-plan.md`
 - `bulk-write-v3.md`
 - `reconcile-plan.md`
-- `event-bus-plan.md`
 - `event-delivery-plan.md`
 - `lcma-design.md`
 - `cli-extension-plan.md`
@@ -132,6 +132,7 @@ Exit criteria:
 - [ ] Enforce shared single/batch write contract and status envelope per item
 - [ ] Implement best-effort and all-or-nothing apply behavior
 - [ ] Add projection retries/dead-letter behavior
+- [ ] Emit internal batch lifecycle events (`batch.queued`/`batch.applying`/`batch.projecting`/`batch.completed`/`batch.failed`) from durable status transitions
 - [ ] Emit OTEL batch metrics/spans using telemetry foundation
 
 Dependencies:
@@ -169,8 +170,9 @@ Exit criteria:
 ## Phase 6.5 - Event Delivery Surface
 
 - [ ] Add SSE endpoint (`GET /events`) with type/tag filtering and replay-from-ID
-- [ ] Add webhook registry tables to `coordination.db` (`webhooks`, `webhook_deliveries`)
-- [ ] Implement webhook dispatcher with HMAC signing, retries, and delivery logging
+- [ ] Add webhook registry, durable outbox, and delivery history tables to `coordination.db`
+- [ ] Implement webhook dispatcher with HMAC signing, retries, duplicate-safe `event.id` payloads, and restart-safe outbox processing
+- [ ] Make SSE inherit the MCP auth boundary when auth exists
 - [ ] Add MCP tools: `lithos_webhook_register`, `lithos_webhook_list`, `lithos_webhook_delete`, `lithos_webhook_deliveries`
 - [ ] Add event delivery tests (SSE integration, webhook delivery)
 
@@ -182,7 +184,7 @@ Dependencies:
 Exit criteria:
 
 - Agents can subscribe to real-time events via SSE or webhooks
-- Webhook delivery survives server restart via SQLite-backed queue
+- Webhook delivery survives server restart via SQLite-backed outbox
 
 ---
 
@@ -256,5 +258,5 @@ Exit criteria:
 
 ## Cross-Phase Conformance (Run Continuously)
 
-- [ ] Maintain one conformance suite across single write, batch write, dedup, provenance, freshness, migration/rebuild, reconcile, and OTEL instrumentation
+- [ ] Maintain one conformance suite across single write, batch write, dedup, provenance, freshness, migration/rebuild, reconcile, event emission/delivery, and OTEL instrumentation
 - [ ] Block milestone completion if conformance suite regresses
