@@ -45,3 +45,37 @@ claude mcp add --transport sse lithos http://localhost:8765/sse
 | Knowledge graph | NetworkX |
 | Agent interface | MCP (FastMCP) |
 | File sync | watchdog |
+
+## Development Commands
+
+```bash
+# Install dependencies (uses uv)
+uv sync --extra dev
+
+# Run unit tests
+uv run --extra dev pytest -m "not integration" tests/ -q
+
+# Run integration tests
+uv run --extra dev pytest -m integration tests/ -q
+
+# Run all tests with coverage
+uv run --extra dev pytest tests/ --cov=lithos --cov-report=xml
+
+# Lint
+uv run --extra dev ruff check .
+
+# Format check
+uv run --extra dev ruff format --check src/ tests/
+
+# Auto-fix lint + format
+uv run --extra dev ruff check --fix . && uv run --extra dev ruff format src/ tests/
+
+# Start server (stdio)
+uv run lithos serve
+
+# Start server (SSE)
+uv run lithos serve --transport sse --port 8765
+
+# Docker
+cd docker && docker compose up -d --build
+```

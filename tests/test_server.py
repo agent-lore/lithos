@@ -3,10 +3,14 @@
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from lithos.server import LithosServer, _FileChangeHandler
+from lithos.server import LithosServer, _FileChangeHandler, create_server, get_server
+
+pytestmark = pytest.mark.integration
 
 
 class TestServerInitialization:
@@ -45,6 +49,155 @@ class TestServerInitialization:
         await asyncio.sleep(0.05)
 
         assert dummy.calls == [("/tmp/handler-test.md", True)]
+
+    @pytest.mark.asyncio
+    async def test_initialize_rebuilds_when_configured(self, test_config):
+        """Initialization should force rebuild when rebuild_on_start is enabled."""
+        test_config.index.rebuild_on_start = True
+        server = LithosServer(test_config)
+        rebuild = AsyncMock()
+        server._rebuild_indices = rebuild  # type: ignore[assignment]
+
+        await server.initialize()
+        rebuild.assert_awaited_once()
+
+    def test_start_file_watcher_requires_running_loop(self, test_config):
+        """Watcher startup without a running loop raises a clear RuntimeError."""
+        server = LithosServer(test_config)
+        with pytest.raises(RuntimeError, match="running asyncio event loop"):
+            server.start_file_watcher()
+
+    @pytest.mark.asyncio
+    async def test_start_and_stop_file_watcher_is_idempotent(self, server: LithosServer):
+        """Starting twice and stopping twice should not raise."""
+        server.start_file_watcher()
+        first_observer = server._observer
+        assert first_observer is not None
+
+        # No-op when already started.
+        server.start_file_watcher()
+        assert server._observer is first_observer
+
+        server.stop_file_watcher()
+        assert server._observer is None
+
+        # No-op when already stopped.
+        server.stop_file_watcher()
+
+    @pytest.mark.asyncio
+    async def test_handle_file_change_ignores_non_markdown_and_outside_root(
+        self, server: LithosServer
+    ):
+        """Non-markdown and out-of-root file events are ignored safely."""
+        original_nodes = server.graph.node_count()
+
+        await server.handle_file_change(
+            server.config.storage.knowledge_path / "ignored.txt", deleted=False
+        )
+        await server.handle_file_change(Path("/tmp/outside.md"), deleted=False)
+
+        assert server.graph.node_count() == original_nodes
+
+    @pytest.mark.asyncio
+    async def test_handle_file_change_modified_markdown_reindexes(self, server: LithosServer):
+        """A markdown modification event reindexes search and graph projections."""
+        doc = await server.knowledge.create(
+            title="Watcher Modify Doc",
+            content="Original watcher content.",
+            agent="watcher-agent",
+            path="watched",
+        )
+        server.search.index_document(doc)
+        server.graph.add_document(doc)
+
+        file_path = server.config.storage.knowledge_path / doc.path
+        file_path.write_text(
+            f"""---
+id: {doc.id}
+title: Watcher Modify Doc
+author: watcher-agent
+created_at: {doc.metadata.created_at.isoformat()}
+updated_at: {doc.metadata.updated_at.isoformat()}
+tags: []
+aliases: []
+confidence: 1.0
+contributors: []
+---
+# Watcher Modify Doc
+
+Updated watcher content with unique phrase.
+"""
+        )
+
+        await server.handle_file_change(file_path, deleted=False)
+
+        results = server.search.full_text_search("unique phrase", limit=10)
+        assert any(r.id == doc.id for r in results)
+        assert server.graph.has_node(doc.id)
+
+    @pytest.mark.asyncio
+    async def test_file_change_handler_event_methods_route_events(self):
+        """Event callbacks dispatch to schedule method with expected deleted flag."""
+
+        class DummyServer:
+            async def handle_file_change(self, path, deleted=False):
+                return None
+
+        handler = _FileChangeHandler(DummyServer(), asyncio.get_running_loop())
+        calls: list[tuple[str, bool]] = []
+
+        def _capture(path: Path, deleted: bool = False):
+            calls.append((str(path), deleted))
+
+        handler._schedule_update = _capture  # type: ignore[assignment]
+
+        handler.on_created(SimpleNamespace(is_directory=False, src_path="/tmp/a.md"))
+        handler.on_modified(SimpleNamespace(is_directory=False, src_path="/tmp/b.md"))
+        handler.on_deleted(SimpleNamespace(is_directory=False, src_path="/tmp/c.md"))
+        handler.on_created(SimpleNamespace(is_directory=True, src_path="/tmp/ignored_dir"))
+
+        assert calls == [
+            ("/tmp/a.md", False),
+            ("/tmp/b.md", False),
+            ("/tmp/c.md", True),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_file_change_handler_schedule_exception_is_swallowed(self, monkeypatch):
+        """Scheduling failures should be swallowed rather than crash file watcher thread."""
+
+        class DummyServer:
+            async def handle_file_change(self, path, deleted=False):
+                return None
+
+        handler = _FileChangeHandler(DummyServer(), asyncio.get_running_loop())
+
+        def _boom(coro, *_args, **_kwargs):
+            coro.close()
+            raise RuntimeError("schedule boom")
+
+        monkeypatch.setattr("lithos.server.asyncio.run_coroutine_threadsafe", _boom)
+        handler._schedule_update(Path("/tmp/fail.md"), deleted=False)
+
+    def test_file_change_handler_logs_future_exception(self):
+        """Future callback handles exceptional and callback-failure futures safely."""
+
+        class _FutureWithException:
+            def exception(self):
+                return RuntimeError("background failure")
+
+        class _FutureExceptionRaises:
+            def exception(self):
+                raise RuntimeError("cannot fetch exception")
+
+        _FileChangeHandler._log_future_exception(_FutureWithException())
+        _FileChangeHandler._log_future_exception(_FutureExceptionRaises())
+
+    def test_global_server_singleton_helpers(self, test_config):
+        """create_server installs global instance and get_server returns same object."""
+        created = create_server(test_config)
+        fetched = get_server()
+        assert fetched is created
 
 
 class TestKnowledgeToolWorkflow:

@@ -459,8 +459,7 @@ def inspect_tasks(ctx: click.Context, show_all: bool) -> None:
         coord = CoordinationService(config)
         await coord.initialize()
 
-        # get_task_status(None) returns open tasks; pass a sentinel for all
-        task_statuses = await coord.get_task_status()
+        task_statuses = await coord.get_task_status(include_all=show_all)
 
         label = "all" if show_all else "open"
         click.echo(f"Tasks ({len(task_statuses)} {label})\n{'=' * 50}")

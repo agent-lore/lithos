@@ -430,11 +430,13 @@ class CoordinationService:
     async def get_task_status(
         self,
         task_id: str | None = None,
+        include_all: bool = False,
     ) -> list[TaskStatus]:
         """Get task status with active claims.
 
         Args:
             task_id: Specific task ID, or None for all active tasks
+            include_all: When True and task_id is None, include non-open tasks
         """
         now = _format_datetime(datetime.now(timezone.utc))
 
@@ -447,9 +449,10 @@ class CoordinationService:
                     (task_id,),
                 )
             else:
-                cursor = await db.execute(
-                    "SELECT * FROM tasks WHERE status = 'open'",
-                )
+                if include_all:
+                    cursor = await db.execute("SELECT * FROM tasks")
+                else:
+                    cursor = await db.execute("SELECT * FROM tasks WHERE status = 'open'")
 
             tasks = await cursor.fetchall()
             result: list[TaskStatus] = []

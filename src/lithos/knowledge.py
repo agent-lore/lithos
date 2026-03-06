@@ -27,6 +27,23 @@ class WikiLink:
         return self.display or self.target
 
 
+_KNOWN_METADATA_KEYS = frozenset(
+    {
+        "id",
+        "title",
+        "author",
+        "created_at",
+        "updated_at",
+        "tags",
+        "aliases",
+        "confidence",
+        "contributors",
+        "source",
+        "supersedes",
+    }
+)
+
+
 @dataclass
 class KnowledgeMetadata:
     """Document metadata stored in YAML frontmatter."""
@@ -42,10 +59,16 @@ class KnowledgeMetadata:
     contributors: list[str] = field(default_factory=list)
     source: str | None = None
     supersedes: str | None = None
+    extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        """Convert to dictionary for frontmatter."""
-        return {
+        """Convert to dictionary for frontmatter.
+
+        Unknown fields stored in ``extra`` are merged back so they
+        survive read-write cycles (important for forward compatibility
+        with extension plans that add new metadata fields).
+        """
+        result = {
             "id": self.id,
             "title": self.title,
             "author": self.author,
@@ -58,10 +81,19 @@ class KnowledgeMetadata:
             "source": self.source,
             "supersedes": self.supersedes,
         }
+        # Merge unknown fields — known keys always take precedence.
+        for key, value in self.extra.items():
+            if key not in result:
+                result[key] = value
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> "KnowledgeMetadata":
-        """Create from dictionary."""
+        """Create from dictionary.
+
+        Keys not recognised as known metadata are captured in ``extra``
+        so they are preserved through read-write cycles.
+        """
         created_at = data.get("created_at")
         if isinstance(created_at, str):
             created_at = datetime.fromisoformat(created_at)
@@ -73,6 +105,8 @@ class KnowledgeMetadata:
             updated_at = datetime.fromisoformat(updated_at)
         elif updated_at is None:
             updated_at = datetime.now(timezone.utc)
+
+        extra = {k: v for k, v in data.items() if k not in _KNOWN_METADATA_KEYS}
 
         return cls(
             id=data.get("id", str(uuid.uuid4())),
@@ -86,6 +120,7 @@ class KnowledgeMetadata:
             contributors=data.get("contributors", []),
             source=data.get("source"),
             supersedes=data.get("supersedes"),
+            extra=extra,
         )
 
 

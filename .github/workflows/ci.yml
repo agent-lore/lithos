@@ -48,10 +48,10 @@ jobs:
         run: uv sync --extra dev
 
       - name: Run tests
-        run: uv run pytest tests/ -v --tb=short
+        run: uv run pytest tests/ -m "not integration" -v --tb=short
 
       - name: Run tests with coverage
-        run: uv run pytest tests/ --cov=lithos --cov-report=xml
+        run: uv run pytest tests/ -m "not integration" --cov=lithos --cov-report=xml
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -128,27 +128,24 @@ jobs:
         with:
           version: "latest"
 
-      - name: Run MCP client test
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install integration test dependencies
         run: |
-          uv venv .venv
-          source .venv/bin/activate
+          uv sync --extra dev
           uv pip install mcp
-          python << 'EOF'
-          import asyncio
-          from mcp import ClientSession
-          from mcp.client.sse import sse_client
 
-          async def test():
-              async with sse_client('http://localhost:8765/sse') as (r, w):
-                  async with ClientSession(r, w) as s:
-                      await s.initialize()
-                      tools = await s.list_tools()
-                      print(f'Connected! Found {len(tools.tools)} tools')
-                      assert len(tools.tools) >= 15, 'Expected at least 15 tools'
-                      print('Integration test passed!')
-
-          asyncio.run(test())
-          EOF
+      - name: Run integration pytest suite
+        env:
+          LITHOS_MCP_URL: http://localhost:8765/sse
+        run: |
+          uv run pytest \
+            -m integration \
+            tests/test_integration_mcp_sse.py \
+            tests/test_integration_conformance.py \
+            tests/test_cli_contract.py \
+            -v --tb=short
 
       - name: Cleanup
         if: always()

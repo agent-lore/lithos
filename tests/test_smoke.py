@@ -7,6 +7,8 @@ import pytest
 
 from lithos.server import LithosServer
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.mark.asyncio
 async def test_smoke_write_index_search(server: LithosServer):

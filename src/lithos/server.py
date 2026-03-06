@@ -152,7 +152,7 @@ class LithosServer:
             content: str,
             agent: str,
             tags: list[str] | None = None,
-            confidence: float = 1.0,
+            confidence: float | None = None,
             path: str | None = None,
             id: str | None = None,
             source_task: str | None = None,
@@ -164,7 +164,7 @@ class LithosServer:
                 content: Markdown content (without frontmatter)
                 agent: Your agent identifier
                 tags: List of tags
-                confidence: Confidence score 0-1 (default: 1.0)
+                confidence: Confidence score 0-1 (default: 1.0 on create, preserved on update)
                 path: Subdirectory path (e.g., "procedures")
                 id: UUID to update existing; omit to create new
                 source_task: Task ID this knowledge came from
@@ -185,13 +185,13 @@ class LithosServer:
                     confidence=confidence,
                 )
             else:
-                # Create new
+                # Create new — default confidence to 1.0 when not specified
                 doc = await self.knowledge.create(
                     title=title,
                     content=content,
                     agent=agent,
                     tags=tags,
-                    confidence=confidence,
+                    confidence=confidence if confidence is not None else 1.0,
                     path=path,
                     source=source_task,
                 )
