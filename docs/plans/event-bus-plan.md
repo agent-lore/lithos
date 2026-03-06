@@ -106,6 +106,8 @@ After each successful operation, emit an event. Events are emitted **after** the
 | `lithos_agent_register` | `agent.registered` | `agent_id`, `name` |
 | `handle_file_change` (watcher) | `note.updated` / `note.deleted` | `path` |
 
+**Thread-safety note for `handle_file_change`:** The watchdog observer runs `FileSystemEventHandler` callbacks on OS threads, not in the asyncio event loop. `EventBus.emit()` is a coroutine and cannot be called directly from a thread context. The file watcher must bridge to the event loop using `asyncio.run_coroutine_threadsafe(self.event_bus.emit(...), self._watch_loop)`, where `self._watch_loop` is the event loop reference already stored on `LithosServer` (line 39 of `server.py`).
+
 Example emission in `lithos_write`:
 
 ```python

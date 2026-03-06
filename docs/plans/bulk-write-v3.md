@@ -12,7 +12,7 @@ v3 treats batch ingestion as a durable workflow, not a synchronous loop over `li
 
 1. **Write plane (source of truth):** Markdown/frontmatter files.
 2. **Projection plane (derived):** Tantivy, ChromaDB, and graph cache.
-3. **Durable workflow state:** Batch journal in SQLite (`data/.lithos/batch.db` or existing store).
+3. **Durable workflow state:** Batch journal in a dedicated `data/.lithos/batch.db` SQLite file, consistent with the LCMA pattern of separate SQLite files per concern (`edges.db`, `stats.db`).
 
 Writes must be durable and queryable even when projections are temporarily behind.
 
@@ -187,6 +187,7 @@ Human-readable `message` accompanies each code.
 - Workers are single-writer for apply phase (or partitioned with strict keying).
 - Projection can be parallelized per backend after write phase, with bounded worker pools.
 - Dedup invariants remain manager-owned.
+- Workers are asyncio tasks (not threads or subprocesses), since all Lithos I/O is async-native and workers need access to the manager's async `_write_lock`. `worker_count` in `BatchConfig` controls concurrent asyncio task workers; for the apply phase (Phase B), only one worker per manager instance executes at a time to enforce single-writer semantics.
 
 ## Config
 

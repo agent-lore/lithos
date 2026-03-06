@@ -63,6 +63,21 @@ Behavior:
 - Update with omitted `source_url` (`_UNSET`): preserve existing value
 - Update with `source_url=None`: clear existing value and remove from map
 
+### 2b. `find_by_source_url()` lookup helper
+
+Add `async find_by_source_url(self, url: str) -> KnowledgeDocument | None` to `KnowledgeManager`.
+
+Behavior:
+
+1. Normalize the input URL via `normalize_url()`.
+2. Look up the normalized URL in `_source_url_to_id`.
+3. If found, call `self.read(id=doc_id)` and return the document.
+4. If not found, return `None`.
+
+This is the fast-path lookup used by `lithos_cache_lookup` in `research-cache-plan.md` when the caller provides a `source_url`. It skips full-text and semantic search entirely.
+
+This method is read-only on `_source_url_to_id` and does not need to acquire the write lock; the dict is only mutated under the write lock in create/update/delete operations.
+
 ### 3. Duplicate handling and `lithos_write` contract
 
 Since breaking contract is acceptable, make response shape explicit and status-based:
@@ -132,7 +147,7 @@ Include `source_url` in:
 
 | File | Changes |
 |------|---------|
-| `knowledge.py` | Add `source_url` to `KnowledgeMetadata`; add `normalize_url`; add `_source_url_to_id`; add write lock; enforce dedup in manager create/update; update `_scan_existing` with duplicate audit logging; keep indices in sync on delete. |
+| `knowledge.py` | Add `source_url` to `KnowledgeMetadata`; add `normalize_url`; add `_source_url_to_id`; add write lock; enforce dedup in manager create/update; update `_scan_existing` with duplicate audit logging; keep indices in sync on delete; add `find_by_source_url()` async lookup helper (normalizes input, looks up in `_source_url_to_id` map, returns document or None). |
 | `search.py` | Add Tantivy `source_url` field; include in indexed docs; include in Chroma metadata; add `source_url` on `SearchResult`/`SemanticResult`; populate in search methods. |
 | `server.py` | Add `source_url` param to `lithos_write`; use status-based return contract (`created`/`updated`/`duplicate`); include `source_url` in read/search/semantic/list responses. |
 | `tests/` | Add normalization tests; invalid URL tests; dedup tests for create/update/self-update/clear; concurrent create collision test; existing duplicate-at-startup audit test; search result provenance test; schema migration + immediate rebuild test. |

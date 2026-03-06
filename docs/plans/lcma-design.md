@@ -1016,6 +1016,20 @@ Each MVP builds on the existing Lithos infrastructure. Existing tools are extend
 - `lithos_node_stats` — view/query salience and usage stats
 - `lithos_receipts` — query retrieval audit history
 
+  ```python
+  lithos_receipts(
+      agent: str | None = None,
+      task_id: str | None = None,
+      since: str | None = None,   # ISO datetime
+      limit: int = 50
+  ) -> {
+      "receipts": [{ "ts", "query", "agent", "task_id", "temperature",
+                      "terrace_reached", "final_nodes", "conflicts_surfaced" }]
+  }
+  ```
+
+  Reads from `receipts.jsonl` with optional filtering. Read-only query tool; does not affect retrieval behavior or stats.
+
 Provenance query policy:
 
 - Canonical lineage queries use `lithos_provenance` (frontmatter/index based).
@@ -1043,3 +1057,11 @@ LCMA is also compatible with cross-plan metadata additions: `source_url`, `deriv
 - **Declared provenance vs learned edges**: `derived_from_ids` is the source of truth for declared lineage. `edges.db` can carry mirrored `derived_from` edges as an accelerator only.
 - **Frontmatter vs stats.db**: Static metadata in frontmatter (author, tags, note_type). Dynamic signals in stats.db (salience, retrieval_count, decay). This avoids constant file rewrites from learning updates.
 - **Concept nodes**: Regular `KnowledgeDocument` notes with `note_type: “concept”`, not a separate entity type. Created via standard `lithos_write`.
+
+### LLM integration scope
+
+`should_use_llm_pass()` and `llm_interpretive_select()` require an external LLM provider. This is deferred to MVP 2+. MVP 1 stops at Terrace 1 (fast re-rank only) — no local model is bundled and no external LLM call is made.
+
+When `should_use_llm_pass()` returns `True` in MVP 1, the implementation should fall through to `final_nodes = top[:q.max_context_nodes]` as if Terrace 1 was the terminal decision, and log a debug note that Terrace 2 is not yet configured.
+
+The external LLM provider will be configured via a new `LithosConfig` field (provisionally `LithosConfig.lcma.llm_provider`) when MVP 2 ships.

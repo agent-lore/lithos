@@ -53,6 +53,13 @@ GET /events
   ?since=<event-id>                    (replay from event ID)
 ```
 
+Reconnection protocol: Standard SSE clients automatically send a `Last-Event-ID` header on reconnect (per the SSE spec). The implementation should support both:
+
+- `Last-Event-ID` header (primary, per spec): read on connect to determine replay start position
+- `?since=<event-id>` query param (secondary): for manual replay or clients that don't support the header
+
+When both are present, `Last-Event-ID` takes precedence. Both paths replay from the same ring buffer using `event.id`-based lookup.
+
 Returns `text/event-stream`. Each event:
 
 ```

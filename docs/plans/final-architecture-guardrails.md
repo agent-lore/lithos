@@ -124,6 +124,8 @@ Until explicit auth exists, enforce conservative defaults:
 - telemetry redaction is on by default
 - external event delivery surfaces inherit the same auth boundary as MCP when auth exists
 
+Note: `access_scope` is a retrieval scoping mechanism to avoid search pollution across agents and namespaces, not a security boundary. All agents operate in the same trust domain per `SPECIFICATION.md` section 1.2 (Non-Goals).
+
 ## 9) Target Search Schema Registry
 
 Maintain one explicit target search schema registry in docs (`target-search-schema.md`), and update it whenever schema-affecting fields are added.

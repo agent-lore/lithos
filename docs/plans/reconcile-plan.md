@@ -189,6 +189,16 @@ Recommended implementation pattern:
 
 No repair step should depend on in-memory assumptions from a previous failed run.
 
+## Batch Write Coordination
+
+Reconcile must not run concurrently with an active batch apply phase (Phase B of `bulk-write-v3.md`). A reconcile during apply may observe partially-applied batches: some files written but manager indexes not yet fully updated, causing false drift detections and unnecessary rebuilds.
+
+Coordination rule: before running any non-dry-run repair, check `batch.db` for any batch with status `applying`. If found, return a `deferred_due_to_active_batch` status rather than proceeding with repair.
+
+Dry-run is exempt from this constraint — it produces a point-in-time snapshot and performs no mutations.
+
+This constraint is unidirectional: batch writes do not need to check for or block reconcile, since reconcile never mutates write-plane content.
+
 ## Observability
 
 Reconcile uses the OTEL foundation.
