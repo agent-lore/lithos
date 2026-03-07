@@ -1,5 +1,6 @@
 """Knowledge module - Markdown document CRUD with frontmatter."""
 
+import asyncio
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -305,6 +306,10 @@ def truncate_content(content: str, max_length: int) -> tuple[str, bool]:
     return content[:effective_max] + "...", True
 
 
+_UNSET = object()
+"""Sentinel for omit-vs-clear distinction on optional fields."""
+
+
 class KnowledgeManager:
     """Manages knowledge documents - CRUD operations."""
 
@@ -314,6 +319,8 @@ class KnowledgeManager:
         self.knowledge_path = self.config.storage.knowledge_path
         self._id_to_path: dict[str, Path] = {}
         self._slug_to_id: dict[str, str] = {}
+        self._source_url_to_id: dict[str, str] = {}
+        self._write_lock = asyncio.Lock()
         self._scan_existing()
 
     def _scan_existing(self) -> None:
@@ -322,19 +329,34 @@ class KnowledgeManager:
             return
 
         base_path = self.knowledge_path.resolve()
+        # Collect candidates in sorted order for deterministic first-seen-wins.
+        candidates: list[tuple[Path, Path]] = []
         for md_file in self.knowledge_path.rglob("*.md"):
+            resolved = md_file.resolve()
+            if not resolved.is_relative_to(base_path):
+                continue
+            candidates.append((md_file.relative_to(self.knowledge_path), md_file))
+        candidates.sort(key=lambda t: t[0])
+
+        for rel_path, md_file in candidates:
             try:
-                # Ignore symlinked/escaped files outside knowledge root.
-                if not md_file.resolve().is_relative_to(base_path):
-                    continue
                 post = frontmatter.load(md_file)
                 doc_id = post.metadata.get("id")
                 title = post.metadata.get("title", "")
                 if doc_id:
-                    rel_path = md_file.relative_to(self.knowledge_path)
                     self._id_to_path[doc_id] = rel_path
                     if title:
                         self._slug_to_id[slugify(title)] = doc_id
+
+                    # Populate source_url -> id map
+                    raw_url = post.metadata.get("source_url")
+                    if raw_url:
+                        try:
+                            norm = normalize_url(raw_url)
+                            if norm not in self._source_url_to_id:
+                                self._source_url_to_id[norm] = doc_id
+                        except ValueError:
+                            pass  # Skip invalid URLs on load
             except Exception:
                 pass  # Skip invalid files
 

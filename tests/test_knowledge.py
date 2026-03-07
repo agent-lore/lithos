@@ -676,3 +676,71 @@ class TestSourceUrlField:
 
         doc, _ = await knowledge_manager.read(id=created.id)
         assert doc.metadata.source_url is None
+
+
+class TestDedupMapAndLock:
+    """Tests for US-003: _source_url_to_id map, _write_lock, and _UNSET sentinel."""
+
+    def test_unset_sentinel_exists(self):
+        """Module-level _UNSET sentinel exists."""
+        from lithos.knowledge import _UNSET
+
+        assert _UNSET is not None
+        # It should be a unique object, not True/False/None
+        assert _UNSET is not True
+        assert _UNSET is not False
+
+    def test_manager_has_source_url_map(self, knowledge_manager: KnowledgeManager):
+        """KnowledgeManager has _source_url_to_id dict."""
+        assert hasattr(knowledge_manager, "_source_url_to_id")
+        assert isinstance(knowledge_manager._source_url_to_id, dict)
+
+    def test_manager_has_write_lock(self, knowledge_manager: KnowledgeManager):
+        """KnowledgeManager has _write_lock asyncio.Lock."""
+        assert hasattr(knowledge_manager, "_write_lock")
+        assert isinstance(knowledge_manager._write_lock, asyncio.Lock)
+
+    @pytest.mark.asyncio
+    async def test_scan_populates_source_url_map(self, test_config):
+        """_scan_existing populates _source_url_to_id from on-disk documents."""
+        # Create a doc with source_url using a first manager
+        mgr1 = KnowledgeManager()
+        await mgr1.create(
+            title="Scanned Doc",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/scanned",
+        )
+
+        # Create a new manager that scans on init
+        mgr2 = KnowledgeManager()
+        norm = normalize_url("https://example.com/scanned")
+        assert norm in mgr2._source_url_to_id
+
+    @pytest.mark.asyncio
+    async def test_scan_normalizes_urls_on_load(self, test_config):
+        """_scan_existing normalizes URLs when building the map."""
+        mgr1 = KnowledgeManager()
+        await mgr1.create(
+            title="Case Doc",
+            content="Content.",
+            agent="agent",
+            source_url="https://EXAMPLE.COM/Page",
+        )
+
+        mgr2 = KnowledgeManager()
+        # Should be stored with normalized URL
+        assert "https://example.com/Page" in mgr2._source_url_to_id
+
+    @pytest.mark.asyncio
+    async def test_scan_skips_docs_without_source_url(self, test_config):
+        """_scan_existing doesn't add entries for docs without source_url."""
+        mgr1 = KnowledgeManager()
+        await mgr1.create(
+            title="No URL",
+            content="No source URL.",
+            agent="agent",
+        )
+
+        mgr2 = KnowledgeManager()
+        assert len(mgr2._source_url_to_id) == 0
