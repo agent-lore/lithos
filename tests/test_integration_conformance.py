@@ -98,10 +98,12 @@ class TestMCPToolContracts:
                 "path": "conformance",
             },
         )
-        assert set(write_payload) == {"id", "path"}
+        assert set(write_payload) >= {"status", "id", "path", "warnings"}
+        assert write_payload["status"] == "created"
         assert isinstance(write_payload["id"], str)
         assert write_payload["path"].endswith(".md")
         assert write_payload["path"].startswith("conformance/")
+        assert isinstance(write_payload["warnings"], list)
 
         doc_id = write_payload["id"]
         read_payload = await _call_tool(server, "lithos_read", {"id": doc_id})
@@ -524,13 +526,13 @@ class TestFrontmatterPreservation:
 
         # Manually inject unknown fields into the raw frontmatter on disk.
         post = frontmatter.load(file_path)
-        post.metadata["source_url"] = "https://example.com/article"
+        post.metadata["custom_vendor"] = "acme-corp"
         post.metadata["custom_score"] = 42
         file_path.write_text(frontmatter.dumps(post))
 
         # Verify the fields are on disk before the update.
         reloaded = frontmatter.load(file_path)
-        assert reloaded.metadata["source_url"] == "https://example.com/article"
+        assert reloaded.metadata["custom_vendor"] == "acme-corp"
         assert reloaded.metadata["custom_score"] == 42
 
         # Update the document through MCP (changes content but not the extra fields).
@@ -547,7 +549,7 @@ class TestFrontmatterPreservation:
 
         # Re-read the raw file — extra fields should still be present.
         after_update = frontmatter.load(file_path)
-        assert after_update.metadata.get("source_url") == "https://example.com/article"
+        assert after_update.metadata.get("custom_vendor") == "acme-corp"
         assert after_update.metadata.get("custom_score") == 42
 
 
@@ -1775,6 +1777,226 @@ class TestCrossConcernMutationAssertions:
 
         tags_after = await _call_tool(server, "lithos_tags", {})
         assert tags_after["tags"].get(unique_tag, 0) == 0
+
+
+class TestSourceUrlMCPResponses:
+    """Integration tests for source_url in MCP tool responses and write status envelopes."""
+
+    @pytest.mark.asyncio
+    async def test_write_created_status_with_source_url(self, server: LithosServer):
+        """lithos_write returns status=created with source_url stored."""
+        payload = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Source URL Created Doc",
+                "content": "Document with provenance URL.",
+                "agent": "source-url-agent",
+                "source_url": "https://example.com/article?utm_source=test",
+            },
+        )
+        assert payload["status"] == "created"
+        assert "id" in payload
+        assert "path" in payload
+        assert isinstance(payload["warnings"], list)
+
+        # Verify the normalized URL is stored (tracking param stripped)
+        read = await _call_tool(server, "lithos_read", {"id": payload["id"]})
+        assert read["metadata"]["source_url"] == "https://example.com/article"
+
+    @pytest.mark.asyncio
+    async def test_write_updated_status(self, server: LithosServer):
+        """lithos_write returns status=updated when updating an existing doc."""
+        created = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Update Status Doc",
+                "content": "Original content.",
+                "agent": "source-url-agent",
+                "source_url": "https://example.com/update-test",
+            },
+        )
+        assert created["status"] == "created"
+        doc_id = created["id"]
+
+        updated = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "id": doc_id,
+                "title": "Update Status Doc",
+                "content": "Revised content.",
+                "agent": "source-url-agent",
+            },
+        )
+        assert updated["status"] == "updated"
+        assert updated["id"] == doc_id
+        assert isinstance(updated["warnings"], list)
+
+    @pytest.mark.asyncio
+    async def test_write_duplicate_status(self, server: LithosServer):
+        """lithos_write returns status=duplicate when URL collides with existing doc."""
+        first = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Original URL Doc",
+                "content": "First document with this URL.",
+                "agent": "source-url-agent",
+                "source_url": "https://example.com/unique-dedup-test",
+            },
+        )
+        assert first["status"] == "created"
+
+        dup = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Duplicate URL Doc",
+                "content": "Second document trying same URL.",
+                "agent": "source-url-agent",
+                "source_url": "https://example.com/unique-dedup-test",
+            },
+        )
+        assert dup["status"] == "duplicate"
+        assert "duplicate_of" in dup
+        assert dup["duplicate_of"]["id"] == first["id"]
+        assert dup["duplicate_of"]["title"] == "Original URL Doc"
+        assert dup["duplicate_of"]["source_url"] == "https://example.com/unique-dedup-test"
+        assert "message" in dup
+        assert isinstance(dup["warnings"], list)
+
+    @pytest.mark.asyncio
+    async def test_write_invalid_source_url(self, server: LithosServer):
+        """lithos_write returns error status for invalid source_url."""
+        result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Invalid URL Doc",
+                "content": "Should fail.",
+                "agent": "source-url-agent",
+                "source_url": "ftp://not-http.example.com/file",
+            },
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+        assert "message" in result
+        assert isinstance(result["warnings"], list)
+
+    @pytest.mark.asyncio
+    async def test_read_includes_source_url(self, server: LithosServer):
+        """lithos_read metadata includes source_url."""
+        created = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Read Source URL Doc",
+                "content": "Content with URL provenance.",
+                "agent": "source-url-agent",
+                "source_url": "https://example.com/read-test",
+            },
+        )
+        read = await _call_tool(server, "lithos_read", {"id": created["id"]})
+        assert read["metadata"]["source_url"] == "https://example.com/read-test"
+
+    @pytest.mark.asyncio
+    async def test_read_null_source_url(self, server: LithosServer):
+        """lithos_read returns null source_url for docs without one."""
+        created = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "No URL Doc",
+                "content": "No source_url set.",
+                "agent": "source-url-agent",
+            },
+        )
+        read = await _call_tool(server, "lithos_read", {"id": created["id"]})
+        assert read["metadata"]["source_url"] is None
+
+    @pytest.mark.asyncio
+    async def test_search_includes_source_url_and_staleness(self, server: LithosServer):
+        """lithos_search results include source_url, updated_at, and is_stale."""
+        created = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Search Provenance Doc",
+                "content": "Unique magnetohydrodynamic plasma containment research.",
+                "agent": "source-url-agent",
+                "source_url": "https://example.com/search-provenance",
+            },
+        )
+        doc_id = created["id"]
+        await _wait_for_full_text_hit(server, "magnetohydrodynamic plasma", doc_id)
+
+        search = await _call_tool(
+            server, "lithos_search", {"query": "magnetohydrodynamic plasma", "limit": 10}
+        )
+        matched = [r for r in search["results"] if r["id"] == doc_id]
+        assert len(matched) == 1
+        assert matched[0]["source_url"] == "https://example.com/search-provenance"
+        assert "updated_at" in matched[0]
+        assert "is_stale" in matched[0]
+        assert isinstance(matched[0]["is_stale"], bool)
+
+    @pytest.mark.asyncio
+    async def test_semantic_includes_source_url_and_staleness(self, server: LithosServer):
+        """lithos_semantic results include source_url, updated_at, and is_stale."""
+        created = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Semantic Provenance Doc",
+                "content": "Cryogenic turbopump engineering for orbital launch vehicles.",
+                "agent": "source-url-agent",
+                "source_url": "https://example.com/semantic-provenance",
+            },
+        )
+        doc_id = created["id"]
+        await _wait_for_semantic_hit(server, "cryogenic turbopump launch vehicles", doc_id)
+
+        semantic = await _call_tool(
+            server, "lithos_semantic", {"query": "cryogenic turbopump launch vehicles", "limit": 10}
+        )
+        matched = [r for r in semantic["results"] if r["id"] == doc_id]
+        assert len(matched) == 1
+        assert matched[0]["source_url"] == "https://example.com/semantic-provenance"
+        assert "updated_at" in matched[0]
+        assert "is_stale" in matched[0]
+        assert isinstance(matched[0]["is_stale"], bool)
+
+    @pytest.mark.asyncio
+    async def test_list_includes_source_url(self, server: LithosServer):
+        """lithos_list items include source_url."""
+        created = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "List Provenance Doc",
+                "content": "Listed document with URL.",
+                "agent": "source-url-agent",
+                "tags": ["list-provenance-test"],
+                "source_url": "https://example.com/list-provenance",
+            },
+        )
+        doc_id = created["id"]
+
+        listing = await _call_tool(
+            server, "lithos_list", {"tags": ["list-provenance-test"], "limit": 50}
+        )
+        matched = [item for item in listing["items"] if item["id"] == doc_id]
+        assert len(matched) == 1
+        assert matched[0]["source_url"] == "https://example.com/list-provenance"
+
+    @pytest.mark.asyncio
+    async def test_stats_includes_duplicate_urls(self, server: LithosServer):
+        """lithos_stats includes duplicate_urls count."""
+        stats = await _call_tool(server, "lithos_stats", {})
+        assert "duplicate_urls" in stats
+        assert isinstance(stats["duplicate_urls"], int)
 
 
 def test_conformance_module_exists():

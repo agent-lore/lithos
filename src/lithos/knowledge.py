@@ -100,9 +100,7 @@ def normalize_url(raw: str) -> str:
 
     # Sort query params, removing tracking params
     query_params = parse_qs(parsed.query, keep_blank_values=True)
-    filtered = {
-        k: v for k, v in sorted(query_params.items()) if k not in _TRACKING_PARAMS
-    }
+    filtered = {k: v for k, v in sorted(query_params.items()) if k not in _TRACKING_PARAMS}
     query = urlencode(filtered, doseq=True)
 
     # No fragment
@@ -374,8 +372,7 @@ class KnowledgeManager:
             self.duplicate_url_count = len(collisions)
             for norm_url, first_id, dup_id in collisions:
                 logger.warning(
-                    "Duplicate source_url at startup: %s owned by %s, "
-                    "duplicate in %s (skipped)",
+                    "Duplicate source_url at startup: %s owned by %s, duplicate in %s (skipped)",
                     norm_url,
                     first_id,
                     dup_id,
@@ -433,9 +430,7 @@ class KnowledgeManager:
                                 "title": existing_doc.title,
                                 "source_url": norm_url,
                             },
-                            "message": (
-                                f"URL already exists in document '{existing_doc.title}'"
-                            ),
+                            "message": (f"URL already exists in document '{existing_doc.title}'"),
                         }
                     except FileNotFoundError:
                         # Stale map entry; allow create
@@ -596,8 +591,7 @@ class KnowledgeManager:
                                     "source_url": new_norm,
                                 },
                                 "message": (
-                                    f"URL already exists in document "
-                                    f"'{existing_doc.title}'"
+                                    f"URL already exists in document '{existing_doc.title}'"
                                 ),
                             }
                         except FileNotFoundError:

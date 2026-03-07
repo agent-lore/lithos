@@ -564,9 +564,7 @@ class TestNormalizeUrl:
 
     def test_combined_normalization(self):
         """Multiple rules applied together."""
-        result = normalize_url(
-            "HTTPS://Example.COM:443/page/?utm_source=x&b=2&a=1#frag"
-        )
+        result = normalize_url("HTTPS://Example.COM:443/page/?utm_source=x&b=2&a=1#frag")
         assert result == "https://example.com/page?a=1&b=2"
 
     def test_preserves_path_case(self):
@@ -951,9 +949,7 @@ class TestDedupOnUpdate:
             agent="agent",
             source_url="https://example.com/keep",
         )
-        updated = await knowledge_manager.update(
-            id=doc.id, agent="editor", content="New content."
-        )
+        updated = await knowledge_manager.update(id=doc.id, agent="editor", content="New content.")
         assert isinstance(updated, KnowledgeDocument)
         assert updated.metadata.source_url == "https://example.com/keep"
 
@@ -969,9 +965,7 @@ class TestDedupOnUpdate:
         norm = normalize_url("https://example.com/clear")
         assert norm in knowledge_manager._source_url_to_id
 
-        updated = await knowledge_manager.update(
-            id=doc.id, agent="editor", source_url=None
-        )
+        updated = await knowledge_manager.update(id=doc.id, agent="editor", source_url=None)
         assert isinstance(updated, KnowledgeDocument)
         assert updated.metadata.source_url is None
         assert norm not in knowledge_manager._source_url_to_id
@@ -992,9 +986,7 @@ class TestDedupOnUpdate:
         assert updated.metadata.source_url == "https://example.com/same"
 
     @pytest.mark.asyncio
-    async def test_cross_doc_collision_returns_duplicate(
-        self, knowledge_manager: KnowledgeManager
-    ):
+    async def test_cross_doc_collision_returns_duplicate(self, knowledge_manager: KnowledgeManager):
         """Updating doc A's URL to one owned by doc B returns duplicate."""
         doc_a = await knowledge_manager.create(
             title="Doc A",
@@ -1036,9 +1028,7 @@ class TestDedupOnUpdate:
         assert old_norm not in knowledge_manager._source_url_to_id
 
     @pytest.mark.asyncio
-    async def test_invalid_url_on_update_returns_error(
-        self, knowledge_manager: KnowledgeManager
-    ):
+    async def test_invalid_url_on_update_returns_error(self, knowledge_manager: KnowledgeManager):
         """Invalid URL on update returns invalid_input error."""
         doc = await knowledge_manager.create(
             title="Invalid Update",
