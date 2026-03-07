@@ -28,6 +28,9 @@ class SearchResult:
     snippet: str
     score: float
     path: str
+    source_url: str = ""
+    updated_at: str = ""
+    is_stale: bool = False
 
 
 @dataclass
@@ -39,6 +42,9 @@ class SemanticResult:
     snippet: str
     similarity: float
     path: str
+    source_url: str = ""
+    updated_at: str = ""
+    is_stale: bool = False
 
 
 def chunk_text(text: str, chunk_size: int = 500, chunk_max: int = 1000) -> list[str]:
@@ -331,6 +337,8 @@ class TantivyIndex:
                     snippet=snippet,
                     score=score,
                     path=str(doc_path),
+                    source_url=doc.get_first("source_url") or "",
+                    updated_at=doc.get_first("updated_at") or "",
                 )
             )
 
@@ -565,6 +573,8 @@ class ChromaIndex:
                     snippet=results["documents"][0][i] if results["documents"] else "",
                     similarity=similarity,
                     path=metadata.get("path", ""),
+                    source_url=metadata.get("source_url", ""),
+                    updated_at=metadata.get("updated_at", ""),
                 )
             )
 
