@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import frontmatter
 
@@ -44,6 +45,64 @@ _KNOWN_METADATA_KEYS = frozenset(
         "supersedes",
     }
 )
+
+
+_TRACKING_PARAMS = frozenset(
+    {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid"}
+)
+
+_DEFAULT_PORTS = {"https": 443, "http": 80}
+
+
+def normalize_url(raw: str) -> str:
+    """Canonicalize a URL for dedup comparison.
+
+    Rules:
+    - Lowercase scheme and host
+    - Remove fragment
+    - Remove default ports (:443 for https, :80 for http)
+    - Strip trailing slash on non-root paths
+    - Sort query params alphabetically
+    - Remove tracking params (utm_*, fbclid)
+    - Preserve ref param
+    - Reject non-http/https schemes (raises ValueError)
+    - Reject empty/whitespace-only input (raises ValueError)
+    """
+    if not raw or not raw.strip():
+        raise ValueError("URL must not be empty or whitespace-only")
+
+    parsed = urlparse(raw.strip())
+
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"Only http/https URLs are supported, got: {scheme!r}")
+
+    host = parsed.hostname or ""
+    host = host.lower()
+
+    # Remove default port
+    port = parsed.port
+    if port and port == _DEFAULT_PORTS.get(scheme):
+        port = None
+
+    netloc = host
+    if port:
+        netloc = f"{host}:{port}"
+
+    # Strip trailing slash on non-root paths
+    path = parsed.path
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+
+    # Sort query params, removing tracking params
+    query_params = parse_qs(parsed.query, keep_blank_values=True)
+    filtered = {
+        k: v for k, v in sorted(query_params.items()) if k not in _TRACKING_PARAMS
+    }
+    query = urlencode(filtered, doseq=True)
+
+    # No fragment
+    return urlunparse((scheme, netloc, path, "", query, ""))
 
 
 @dataclass

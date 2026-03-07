@@ -9,6 +9,7 @@ from lithos.knowledge import (
     KnowledgeManager,
     KnowledgeMetadata,
     generate_slug,
+    normalize_url,
     parse_wiki_links,
 )
 
@@ -482,6 +483,99 @@ class TestDocumentPersistence:
         """Read blocks path traversal outside knowledge directory."""
         with pytest.raises(ValueError, match="within knowledge directory"):
             await knowledge_manager.read(path="../outside.md")
+
+
+class TestNormalizeUrl:
+    """Tests for normalize_url() canonicalization."""
+
+    def test_lowercases_scheme_and_host(self):
+        assert normalize_url("HTTPS://Example.COM/Path") == "https://example.com/Path"
+
+    def test_removes_fragment(self):
+        assert normalize_url("https://example.com/page#section") == "https://example.com/page"
+
+    def test_removes_default_https_port(self):
+        assert normalize_url("https://example.com:443/page") == "https://example.com/page"
+
+    def test_removes_default_http_port(self):
+        assert normalize_url("http://example.com:80/page") == "http://example.com/page"
+
+    def test_preserves_non_default_port(self):
+        assert normalize_url("https://example.com:8080/page") == "https://example.com:8080/page"
+
+    def test_strips_trailing_slash_non_root(self):
+        assert normalize_url("https://example.com/page/") == "https://example.com/page"
+
+    def test_preserves_root_trailing_slash(self):
+        assert normalize_url("https://example.com/") == "https://example.com/"
+
+    def test_sorts_query_params(self):
+        result = normalize_url("https://example.com/search?z=1&a=2")
+        assert result == "https://example.com/search?a=2&z=1"
+
+    def test_removes_utm_source(self):
+        result = normalize_url("https://example.com/page?utm_source=twitter&ref=123")
+        assert result == "https://example.com/page?ref=123"
+
+    def test_removes_utm_medium(self):
+        result = normalize_url("https://example.com/page?utm_medium=email")
+        assert result == "https://example.com/page"
+
+    def test_removes_utm_campaign(self):
+        result = normalize_url("https://example.com/page?utm_campaign=launch")
+        assert result == "https://example.com/page"
+
+    def test_removes_utm_term(self):
+        result = normalize_url("https://example.com/page?utm_term=test")
+        assert result == "https://example.com/page"
+
+    def test_removes_utm_content(self):
+        result = normalize_url("https://example.com/page?utm_content=btn")
+        assert result == "https://example.com/page"
+
+    def test_removes_fbclid(self):
+        result = normalize_url("https://example.com/page?fbclid=abc123")
+        assert result == "https://example.com/page"
+
+    def test_preserves_ref_param(self):
+        result = normalize_url("https://example.com/page?ref=abc")
+        assert result == "https://example.com/page?ref=abc"
+
+    def test_rejects_ftp_scheme(self):
+        with pytest.raises(ValueError, match="Only http/https"):
+            normalize_url("ftp://example.com/file")
+
+    def test_rejects_empty_string(self):
+        with pytest.raises(ValueError, match="empty or whitespace"):
+            normalize_url("")
+
+    def test_rejects_whitespace_only(self):
+        with pytest.raises(ValueError, match="empty or whitespace"):
+            normalize_url("   ")
+
+    def test_rejects_no_scheme(self):
+        with pytest.raises(ValueError, match="Only http/https"):
+            normalize_url("example.com/page")
+
+    def test_strips_surrounding_whitespace(self):
+        result = normalize_url("  https://example.com/page  ")
+        assert result == "https://example.com/page"
+
+    def test_combined_normalization(self):
+        """Multiple rules applied together."""
+        result = normalize_url(
+            "HTTPS://Example.COM:443/page/?utm_source=x&b=2&a=1#frag"
+        )
+        assert result == "https://example.com/page?a=1&b=2"
+
+    def test_preserves_path_case(self):
+        """Path is case-sensitive (unlike host)."""
+        result = normalize_url("https://example.com/CamelCase/Path")
+        assert result == "https://example.com/CamelCase/Path"
+
+    def test_preserves_query_value_case(self):
+        result = normalize_url("https://example.com/page?key=CamelValue")
+        assert result == "https://example.com/page?key=CamelValue"
 
 
 class TestSourceUrlField:
