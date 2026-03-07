@@ -57,13 +57,13 @@ Exit criteria:
 
 ## Phase 2a - Source URL Dedup + Provenance Surface
 
-- [ ] Add `source_url` metadata field and normalization
-- [ ] Add manager-owned dedup map and write-time invariants
-- [ ] Add create/update duplicate behavior using status envelope
-- [ ] Index `source_url` in Tantivy and Chroma metadata
-- [ ] Add startup duplicate audit and deterministic logging
-- [ ] Implement index schema mismatch recreate + full rebuild path
-- [ ] Return `source_url` in read/search/semantic/list responses
+- [x] Add `source_url` metadata field and normalization
+- [x] Add manager-owned dedup map and write-time invariants
+- [x] Add create/update duplicate behavior using status envelope
+- [x] Index `source_url` in Tantivy and Chroma metadata
+- [x] Add startup duplicate audit and deterministic logging
+- [x] Implement index schema mismatch recreate + full rebuild path
+- [x] Return `source_url` in read/search/semantic/list responses
 
 Dependencies:
 

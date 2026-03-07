@@ -1,15 +1,20 @@
 """Knowledge module - Markdown document CRUD with frontmatter."""
 
+import asyncio
+import logging
 import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import frontmatter
 
 from lithos.config import get_config
 from lithos.telemetry import lithos_metrics, traced
+
+logger = logging.getLogger(__name__)
 
 # Wiki-link pattern: [[target]] or [[target|display]]
 WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\[|]*[a-zA-Z][^\]\[|]*)(?:\|([^\]]+))?\]\]")
@@ -40,9 +45,66 @@ _KNOWN_METADATA_KEYS = frozenset(
         "confidence",
         "contributors",
         "source",
+        "source_url",
         "supersedes",
     }
 )
+
+
+_TRACKING_PARAMS = frozenset(
+    {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid"}
+)
+
+_DEFAULT_PORTS = {"https": 443, "http": 80}
+
+
+def normalize_url(raw: str) -> str:
+    """Canonicalize a URL for dedup comparison.
+
+    Rules:
+    - Lowercase scheme and host
+    - Remove fragment
+    - Remove default ports (:443 for https, :80 for http)
+    - Strip trailing slash on non-root paths
+    - Sort query params alphabetically
+    - Remove tracking params (utm_*, fbclid)
+    - Preserve ref param
+    - Reject non-http/https schemes (raises ValueError)
+    - Reject empty/whitespace-only input (raises ValueError)
+    """
+    if not raw or not raw.strip():
+        raise ValueError("URL must not be empty or whitespace-only")
+
+    parsed = urlparse(raw.strip())
+
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"Only http/https URLs are supported, got: {scheme!r}")
+
+    host = parsed.hostname or ""
+    host = host.lower()
+
+    # Remove default port
+    port = parsed.port
+    if port and port == _DEFAULT_PORTS.get(scheme):
+        port = None
+
+    netloc = host
+    if port:
+        netloc = f"{host}:{port}"
+
+    # Strip trailing slash on non-root paths
+    path = parsed.path
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+
+    # Sort query params, removing tracking params
+    query_params = parse_qs(parsed.query, keep_blank_values=True)
+    filtered = {k: v for k, v in sorted(query_params.items()) if k not in _TRACKING_PARAMS}
+    query = urlencode(filtered, doseq=True)
+
+    # No fragment
+    return urlunparse((scheme, netloc, path, "", query, ""))
 
 
 @dataclass
@@ -59,6 +121,7 @@ class KnowledgeMetadata:
     confidence: float = 1.0
     contributors: list[str] = field(default_factory=list)
     source: str | None = None
+    source_url: str | None = None
     supersedes: str | None = None
     extra: dict = field(default_factory=dict)
 
@@ -82,6 +145,8 @@ class KnowledgeMetadata:
             "source": self.source,
             "supersedes": self.supersedes,
         }
+        if self.source_url is not None:
+            result["source_url"] = self.source_url
         # Merge unknown fields — known keys always take precedence.
         for key, value in self.extra.items():
             if key not in result:
@@ -120,6 +185,7 @@ class KnowledgeMetadata:
             confidence=data.get("confidence", 1.0),
             contributors=data.get("contributors", []),
             source=data.get("source"),
+            source_url=data.get("source_url"),
             supersedes=data.get("supersedes"),
             extra=extra,
         )
@@ -241,6 +307,10 @@ def truncate_content(content: str, max_length: int) -> tuple[str, bool]:
     return content[:effective_max] + "...", True
 
 
+_UNSET = object()
+"""Sentinel for omit-vs-clear distinction on optional fields."""
+
+
 class KnowledgeManager:
     """Manages knowledge documents - CRUD operations."""
 
@@ -250,6 +320,9 @@ class KnowledgeManager:
         self.knowledge_path = self.config.storage.knowledge_path
         self._id_to_path: dict[str, Path] = {}
         self._slug_to_id: dict[str, str] = {}
+        self._source_url_to_id: dict[str, str] = {}
+        self._write_lock = asyncio.Lock()
+        self.duplicate_url_count: int = 0
         self._scan_existing()
 
     def _scan_existing(self) -> None:
@@ -258,21 +331,52 @@ class KnowledgeManager:
             return
 
         base_path = self.knowledge_path.resolve()
+        # Collect candidates in sorted order for deterministic first-seen-wins.
+        candidates: list[tuple[Path, Path]] = []
         for md_file in self.knowledge_path.rglob("*.md"):
+            resolved = md_file.resolve()
+            if not resolved.is_relative_to(base_path):
+                continue
+            candidates.append((md_file.relative_to(self.knowledge_path), md_file))
+        candidates.sort(key=lambda t: t[0])
+        collisions: list[tuple[str, str, str]] = []  # (norm_url, first_id, dup_id)
+
+        for rel_path, md_file in candidates:
             try:
-                # Ignore symlinked/escaped files outside knowledge root.
-                if not md_file.resolve().is_relative_to(base_path):
-                    continue
                 post = frontmatter.load(md_file)
                 doc_id = post.metadata.get("id")
                 title = post.metadata.get("title", "")
                 if doc_id:
-                    rel_path = md_file.relative_to(self.knowledge_path)
                     self._id_to_path[doc_id] = rel_path
                     if title:
                         self._slug_to_id[slugify(title)] = doc_id
+
+                    # Populate source_url -> id map
+                    raw_url = post.metadata.get("source_url")
+                    if raw_url:
+                        try:
+                            norm = normalize_url(raw_url)
+                            if norm not in self._source_url_to_id:
+                                self._source_url_to_id[norm] = doc_id
+                            else:
+                                existing_id = self._source_url_to_id[norm]
+                                collisions.append((norm, existing_id, doc_id))
+                        except ValueError:
+                            pass  # Skip invalid URLs on load
             except Exception:
                 pass  # Skip invalid files
+
+        # Report collisions deterministically (sorted by normalized URL).
+        if collisions:
+            collisions.sort(key=lambda t: t[0])
+            self.duplicate_url_count = len(collisions)
+            for norm_url, first_id, dup_id in collisions:
+                logger.warning(
+                    "Duplicate source_url at startup: %s owned by %s, duplicate in %s (skipped)",
+                    norm_url,
+                    first_id,
+                    dup_id,
+                )
 
     def _resolve_safe_path(self, path: Path) -> tuple[Path, Path]:
         """Resolve a path under knowledge root and prevent traversal."""
@@ -296,50 +400,86 @@ class KnowledgeManager:
         confidence: float = 1.0,
         path: str | None = None,
         source: str | None = None,
-    ) -> KnowledgeDocument:
-        """Create a new knowledge document."""
-        lithos_metrics.knowledge_ops.add(1, {"op": "create"})
-        doc_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
+        source_url: str | None = None,
+    ) -> KnowledgeDocument | dict:
+        """Create a new knowledge document.
 
-        metadata = KnowledgeMetadata(
-            id=doc_id,
-            title=title,
-            author=agent,
-            created_at=now,
-            updated_at=now,
-            tags=tags or [],
-            confidence=confidence,
-            contributors=[],
-            source=source,
-        )
+        Returns KnowledgeDocument on success, or a dict with status info on
+        duplicate/invalid_input.
+        """
+        async with self._write_lock:
+            lithos_metrics.knowledge_ops.add(1, {"op": "create"})
 
-        # Determine file path
-        slug = slugify(title)
-        file_path = Path(path) / f"{slug}.md" if path else Path(f"{slug}.md")
-        file_path, full_path = self._resolve_safe_path(file_path)
+            # Validate and normalize source_url
+            norm_url: str | None = None
+            if source_url is not None:
+                try:
+                    norm_url = normalize_url(source_url)
+                except ValueError as e:
+                    return {"status": "invalid_input", "message": str(e)}
 
-        # Parse wiki-links
-        links = parse_wiki_links(content)
+                # Check dedup map
+                existing_id = self._source_url_to_id.get(norm_url)
+                if existing_id is not None:
+                    try:
+                        existing_doc, _ = await self.read(id=existing_id)
+                        return {
+                            "status": "duplicate",
+                            "duplicate_of": {
+                                "id": existing_id,
+                                "title": existing_doc.title,
+                                "source_url": norm_url,
+                            },
+                            "message": (f"URL already exists in document '{existing_doc.title}'"),
+                        }
+                    except FileNotFoundError:
+                        # Stale map entry; allow create
+                        del self._source_url_to_id[norm_url]
 
-        doc = KnowledgeDocument(
-            id=doc_id,
-            title=title,
-            content=content,
-            metadata=metadata,
-            path=file_path,
-            links=links,
-        )
+            doc_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc)
 
-        # Write to disk
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_text(doc.to_markdown())
+            metadata = KnowledgeMetadata(
+                id=doc_id,
+                title=title,
+                author=agent,
+                created_at=now,
+                updated_at=now,
+                tags=tags or [],
+                confidence=confidence,
+                contributors=[],
+                source=source,
+                source_url=norm_url,
+            )
 
-        # Update indices
-        self._id_to_path[doc_id] = file_path
-        self._slug_to_id[slug] = doc_id
+            # Determine file path
+            slug = slugify(title)
+            file_path = Path(path) / f"{slug}.md" if path else Path(f"{slug}.md")
+            file_path, full_path = self._resolve_safe_path(file_path)
 
-        return doc
+            # Parse wiki-links
+            links = parse_wiki_links(content)
+
+            doc = KnowledgeDocument(
+                id=doc_id,
+                title=title,
+                content=content,
+                metadata=metadata,
+                path=file_path,
+                links=links,
+            )
+
+            # Write to disk
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(doc.to_markdown())
+
+            # Update indices
+            self._id_to_path[doc_id] = file_path
+            self._slug_to_id[slug] = doc_id
+            if norm_url is not None:
+                self._source_url_to_id[norm_url] = doc_id
+
+            return doc
 
     @traced("lithos.knowledge.read")
     async def read(
@@ -405,61 +545,133 @@ class KnowledgeManager:
         title: str | None = None,
         tags: list[str] | None = None,
         confidence: float | None = None,
-    ) -> KnowledgeDocument:
-        """Update an existing document."""
-        lithos_metrics.knowledge_ops.add(1, {"op": "update"})
-        doc, _ = await self.read(id=id)
-        old_slug = slugify(doc.metadata.title)
+        source_url: str | None | object = _UNSET,
+    ) -> KnowledgeDocument | dict:
+        """Update an existing document.
 
-        # Update fields
-        if content is not None:
-            doc.content = content
-            doc.links = parse_wiki_links(content)
-        if title is not None:
-            doc.title = title
-            doc.metadata.title = title
-        if tags is not None:
-            doc.metadata.tags = tags
-        if confidence is not None:
-            doc.metadata.confidence = confidence
+        source_url semantics:
+        - _UNSET (default): preserve existing source_url, no map change
+        - None: clear existing source_url, remove from map
+        - str: normalize, allow if same doc owns it, reject if different doc owns it
+        """
+        async with self._write_lock:
+            lithos_metrics.knowledge_ops.add(1, {"op": "update"})
+            doc, _ = await self.read(id=id)
+            old_slug = slugify(doc.metadata.title)
+            old_source_url = doc.metadata.source_url
 
-        # Update metadata
-        doc.metadata.updated_at = datetime.now(timezone.utc)
-        if agent not in doc.metadata.contributors and agent != doc.metadata.author:
-            doc.metadata.contributors.append(agent)
+            # Handle source_url update
+            if source_url is not _UNSET:
+                if source_url is None:
+                    # Clear source_url
+                    if old_source_url:
+                        try:
+                            old_norm = normalize_url(old_source_url)
+                            if self._source_url_to_id.get(old_norm) == id:
+                                del self._source_url_to_id[old_norm]
+                        except ValueError:
+                            pass
+                    doc.metadata.source_url = None
+                else:
+                    # Set/change source_url
+                    try:
+                        new_norm = normalize_url(source_url)
+                    except ValueError as e:
+                        return {"status": "invalid_input", "message": str(e)}
 
-        # Write to disk
-        _safe_path, full_path = self._resolve_safe_path(doc.path)
-        full_path.write_text(doc.to_markdown())
+                    existing_owner = self._source_url_to_id.get(new_norm)
+                    if existing_owner is not None and existing_owner != id:
+                        try:
+                            existing_doc, _ = await self.read(id=existing_owner)
+                            return {
+                                "status": "duplicate",
+                                "duplicate_of": {
+                                    "id": existing_owner,
+                                    "title": existing_doc.title,
+                                    "source_url": new_norm,
+                                },
+                                "message": (
+                                    f"URL already exists in document '{existing_doc.title}'"
+                                ),
+                            }
+                        except FileNotFoundError:
+                            del self._source_url_to_id[new_norm]
 
-        # Keep slug index in sync when title changes.
-        new_slug = slugify(doc.metadata.title)
-        if new_slug != old_slug:
-            if self._slug_to_id.get(old_slug) == id:
-                del self._slug_to_id[old_slug]
-            self._slug_to_id[new_slug] = id
+                    # Remove old mapping if URL changed
+                    if old_source_url:
+                        try:
+                            old_norm = normalize_url(old_source_url)
+                            if old_norm != new_norm and self._source_url_to_id.get(old_norm) == id:
+                                del self._source_url_to_id[old_norm]
+                        except ValueError:
+                            pass
 
-        return doc
+                    doc.metadata.source_url = new_norm
+                    self._source_url_to_id[new_norm] = id
+
+            # Update fields
+            if content is not None:
+                doc.content = content
+                doc.links = parse_wiki_links(content)
+            if title is not None:
+                doc.title = title
+                doc.metadata.title = title
+            if tags is not None:
+                doc.metadata.tags = tags
+            if confidence is not None:
+                doc.metadata.confidence = confidence
+
+            # Update metadata
+            doc.metadata.updated_at = datetime.now(timezone.utc)
+            if agent not in doc.metadata.contributors and agent != doc.metadata.author:
+                doc.metadata.contributors.append(agent)
+
+            # Write to disk
+            _safe_path, full_path = self._resolve_safe_path(doc.path)
+            full_path.write_text(doc.to_markdown())
+
+            # Keep slug index in sync when title changes.
+            new_slug = slugify(doc.metadata.title)
+            if new_slug != old_slug:
+                if self._slug_to_id.get(old_slug) == id:
+                    del self._slug_to_id[old_slug]
+                self._slug_to_id[new_slug] = id
+
+            return doc
 
     @traced("lithos.knowledge.delete")
     async def delete(self, id: str) -> bool:
         """Delete a document."""
-        lithos_metrics.knowledge_ops.add(1, {"op": "delete"})
-        if id not in self._id_to_path:
-            return False
+        async with self._write_lock:
+            lithos_metrics.knowledge_ops.add(1, {"op": "delete"})
+            if id not in self._id_to_path:
+                return False
 
-        file_path = self._id_to_path[id]
-        _safe_path, full_path = self._resolve_safe_path(file_path)
+            # Read doc to get source_url before deleting
+            try:
+                doc, _ = await self.read(id=id)
+                if doc.metadata.source_url:
+                    try:
+                        norm = normalize_url(doc.metadata.source_url)
+                        if self._source_url_to_id.get(norm) == id:
+                            del self._source_url_to_id[norm]
+                    except ValueError:
+                        pass
+            except FileNotFoundError:
+                pass
 
-        if full_path.exists():
-            full_path.unlink()
+            file_path = self._id_to_path[id]
+            _safe_path, full_path = self._resolve_safe_path(file_path)
 
-        # Update indices
-        del self._id_to_path[id]
-        # Remove from slug index
-        self._slug_to_id = {k: v for k, v in self._slug_to_id.items() if v != id}
+            if full_path.exists():
+                full_path.unlink()
 
-        return True
+            # Update indices
+            del self._id_to_path[id]
+            # Remove from slug index
+            self._slug_to_id = {k: v for k, v in self._slug_to_id.items() if v != id}
+
+            return True
 
     async def list_all(
         self,
@@ -512,6 +724,27 @@ class KnowledgeManager:
                 pass
 
         return tag_counts
+
+    async def find_by_source_url(self, url: str) -> KnowledgeDocument | None:
+        """Look up a document by source URL (internal only, not MCP-exposed).
+
+        Normalizes the input URL before lookup. Does not acquire _write_lock
+        (read-only on the map).
+        """
+        try:
+            norm = normalize_url(url)
+        except ValueError:
+            return None
+
+        doc_id = self._source_url_to_id.get(norm)
+        if doc_id is None:
+            return None
+
+        try:
+            doc, _ = await self.read(id=doc_id)
+            return doc
+        except FileNotFoundError:
+            return None
 
     def get_id_by_slug(self, slug: str) -> str | None:
         """Get document ID by slug."""

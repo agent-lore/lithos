@@ -172,14 +172,24 @@ Batch-only projection/workflow codes may add:
 
 ## MCP Boundary Semantics
 
-Omit-vs-clear behavior is normative at the MCP JSON boundary:
+Omit-vs-clear behavior is normative at the manager layer:
 
-- field omitted in request JSON -> preserve existing value on update
-- field present with `null` -> clear (for fields that support clear)
+- field omitted (sentinel `_UNSET`) -> preserve existing value on update
+- field set to `None` -> clear (for fields that support clear)
+- field set to a value -> normalize and apply
+
+FastMCP limitation: FastMCP uses Pydantic `TypeAdapter` on plain function signatures, which does not track `model_fields_set`. Both "field omitted from JSON" and "field present with `null`" deliver `None` to the Python function. The MCP tool boundary therefore cannot distinguish omit from null natively.
+
+Convention at the MCP tool boundary:
+
+- field omitted or `null` in request JSON -> preserve existing value on update
+- field set to `""` (empty string) -> clear (for clearable string fields: `source_url`)
+- field set to a value -> normalize and apply
 
 Implementation requirement:
 
-- Tool layer and manager layer must have conformance tests proving omitted and `null` are distinguishable for `source_url`, `expires_at`, and `derived_from_ids`.
+- Manager layer must have conformance tests proving `_UNSET`, `None`, and value are distinguishable for `source_url`, `expires_at`, and `derived_from_ids`.
+- Tool layer must have conformance tests proving omit (preserve), `""` (clear), and value (set) work correctly for `source_url`.
 
 ## Index and Migration Rules
 

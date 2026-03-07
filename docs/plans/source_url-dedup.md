@@ -57,11 +57,16 @@ Then signature becomes `source_url: str | None | object = _UNSET`. At call sites
 - `None` → clear existing value, remove from map
 - `str` → normalize and apply dedup check
 
-Behavior:
+Manager-layer behavior:
 - Create with `source_url`: normalize, check map, reject if mapped to another doc
 - Update with `source_url` (str): normalize, allow same-doc URL, reject if mapped to different doc
 - Update with omitted `source_url` (`_UNSET`): preserve existing value
 - Update with `source_url=None`: clear existing value and remove from map
+
+MCP tool-layer convention (FastMCP limitation): FastMCP cannot distinguish "field omitted" from "field = null" — both deliver `None` to the Python function. At the `lithos_write` MCP boundary:
+- `source_url` omitted or `null` → `_UNSET` (preserve)
+- `source_url: ""` (empty string) → `None` (clear)
+- `source_url: "<url>"` → pass through to manager
 
 ### 2b. `find_by_source_url()` lookup helper
 

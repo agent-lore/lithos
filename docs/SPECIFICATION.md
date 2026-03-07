@@ -156,6 +156,7 @@ confidence: <float 0-1>           # Optional: Confidence score (default: 1.0)
 aliases:                          # Optional: Alternative names (Obsidian compatible)
   - <alias1>
 source: <string>                  # Optional: Task ID or provenance note
+source_url: <string>              # Optional: Canonical URL provenance (normalized on write)
 supersedes: <uuid>                # Optional: ID of document this replaces
 ---
 
@@ -266,7 +267,7 @@ Create or update a knowledge file.
 | `path` | string | No | Subdirectory path (e.g., "procedures") |
 | `id` | string | No | UUID to update existing; omit to create new |
 | `source_task` | string | No | Task ID or provenance note (stored as `source` in frontmatter) |
-| `source_url` | string | No | Canonical URL provenance (http/https), dedup key after normalization |
+| `source_url` | string | No | Canonical URL provenance (http/https), dedup key after normalization. Pass `""` to clear on update. |
 | `derived_from_ids` | string[] | No | Canonical declared lineage (UUIDs) |
 | `ttl_hours` | float | No | Relative freshness window; converted to `expires_at` |
 | `expires_at` | string | No | Absolute ISO datetime freshness deadline |
@@ -287,7 +288,7 @@ Create or update a knowledge file.
 
 **Behavior on update:** If `id` is provided and exists, the agent is added to `contributors` if not already present.
 
-**Update semantics:** Omitted optional fields preserve existing values. Some fields support explicit clear (for example `source_url: null`, `expires_at: null`, and `derived_from_ids: []`).
+**Update semantics:** Omitted optional fields preserve existing values. Some fields support explicit clear. At the MCP boundary, FastMCP cannot distinguish omitted from `null`, so clearable string fields use `""` (empty string) as the clear signal (e.g., `source_url: ""`). See `unified-write-contract.md` for the full MCP boundary convention.
 
 #### `lithos_read`
 Read a knowledge file by ID or path.
@@ -362,7 +363,7 @@ List knowledge items with filters.
 | `limit` | int | No | Max results (default: 50) |
 | `offset` | int | No | Pagination offset |
 
-**Returns:** `{ items: [{ id, title, path, updated, tags }], total: int }`
+**Returns:** `{ items: [{ id, title, path, updated, tags, source_url }], total: int }`
 
 ### 5.2 Graph Operations
 
@@ -548,7 +549,8 @@ Get knowledge base statistics.
   "agents": 5,
   "active_tasks": 12,
   "open_claims": 8,
-  "tags": 89
+  "tags": 89,
+  "duplicate_urls": 0
 }
 ```
 
