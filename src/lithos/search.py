@@ -137,7 +137,7 @@ def chunk_text(text: str, chunk_size: int = 500, chunk_max: int = 1000) -> list[
 class TantivyIndex:
     """Tantivy full-text search index."""
 
-    SCHEMA_VERSION = "2"
+    SCHEMA_VERSION = "3"
     """Bumped when fields are added/removed. Triggers automatic rebuild."""
 
     def __init__(self, index_path: Path):
@@ -176,6 +176,9 @@ class TantivyIndex:
         builder.add_text_field("path", stored=True, tokenizer_name="raw")
         builder.add_text_field("author", stored=True, tokenizer_name="raw")
         builder.add_text_field("tags", stored=True, tokenizer_name="en_stem")
+        builder.add_text_field("source_url", stored=True, tokenizer_name="raw")
+        builder.add_text_field("updated_at", stored=True, tokenizer_name="raw")
+        builder.add_text_field("expires_at", stored=True, tokenizer_name="raw")
         return builder.build()
 
     def open_or_create(self) -> None:
@@ -249,6 +252,9 @@ class TantivyIndex:
                 path=str(doc.path),
                 author=doc.metadata.author,
                 tags=" ".join(doc.metadata.tags),
+                source_url=doc.metadata.source_url or "",
+                updated_at=doc.metadata.updated_at.isoformat() if doc.metadata.updated_at else "",
+                expires_at="",
             )
         )
 
