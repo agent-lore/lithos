@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from lithos.knowledge import (
+    KnowledgeDocument,
     KnowledgeManager,
     KnowledgeMetadata,
     generate_slug,
@@ -761,13 +762,12 @@ class TestStartupDuplicateAudit:
             agent="agent",
             source_url="https://example.com/dup",
         )
+        # Create second doc WITHOUT source_url, then inject on disk to bypass dedup
         doc2 = await mgr1.create(
             title="Second Doc",
             content="Second.",
             agent="agent",
-            source_url="https://example.com/dup",
         )
-        # Manually write source_url to second doc (bypasses future dedup enforcement)
         file2 = test_config.storage.knowledge_path / doc2.path
         raw = file2.read_text()
         raw = raw.replace("---\n", "---\nsource_url: https://example.com/dup\n", 1)
@@ -790,13 +790,12 @@ class TestStartupDuplicateAudit:
             agent="agent",
             source_url="https://example.com/collision",
         )
+        # Create second doc without source_url, then inject on disk
         doc_z = await mgr1.create(
             title="ZZZ Doc",
             content="Second by path.",
             agent="agent",
-            source_url="https://example.com/collision",
         )
-        # Force source_url onto second doc on disk
         file_z = test_config.storage.knowledge_path / doc_z.path
         raw = file_z.read_text()
         raw = raw.replace("---\n", "---\nsource_url: https://example.com/collision\n", 1)
@@ -817,12 +816,12 @@ class TestStartupDuplicateAudit:
             agent="agent",
             source_url="https://example.com/same",
         )
+        # Create second doc without source_url, then inject on disk
         doc2 = await mgr1.create(
             title="Doc Two",
             content="Content.",
             agent="agent",
         )
-        # Force same source_url onto second doc on disk
         file2 = test_config.storage.knowledge_path / doc2.path
         raw = file2.read_text()
         raw = raw.replace("---\n", "---\nsource_url: https://example.com/same\n", 1)
@@ -841,3 +840,100 @@ class TestStartupDuplicateAudit:
         """With no duplicates, duplicate_url_count is 0."""
         mgr = KnowledgeManager()
         assert mgr.duplicate_url_count == 0
+
+
+class TestDedupOnCreate:
+    """Tests for US-005: Dedup enforcement on create."""
+
+    @pytest.mark.asyncio
+    async def test_create_with_url_succeeds(self, knowledge_manager: KnowledgeManager):
+        """create() with source_url succeeds and stores normalized URL."""
+        doc = await knowledge_manager.create(
+            title="URL Doc",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/page",
+        )
+        assert isinstance(doc, KnowledgeDocument)
+        assert doc.metadata.source_url == "https://example.com/page"
+
+    @pytest.mark.asyncio
+    async def test_create_normalizes_url(self, knowledge_manager: KnowledgeManager):
+        """create() writes normalized URL to frontmatter."""
+        doc = await knowledge_manager.create(
+            title="Normalized URL",
+            content="Content.",
+            agent="agent",
+            source_url="HTTPS://Example.COM:443/Page/",
+        )
+        assert isinstance(doc, KnowledgeDocument)
+        assert doc.metadata.source_url == "https://example.com/Page"
+
+    @pytest.mark.asyncio
+    async def test_create_duplicate_returns_dict(self, knowledge_manager: KnowledgeManager):
+        """create() with duplicate source_url returns duplicate result."""
+        doc1 = await knowledge_manager.create(
+            title="First",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/dup",
+        )
+        result = await knowledge_manager.create(
+            title="Second",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/dup",
+        )
+        assert isinstance(result, dict)
+        assert result["status"] == "duplicate"
+        assert result["duplicate_of"]["id"] == doc1.id
+        assert result["duplicate_of"]["title"] == "First"
+        assert result["duplicate_of"]["source_url"] == "https://example.com/dup"
+        assert "message" in result
+
+    @pytest.mark.asyncio
+    async def test_create_without_url_succeeds(self, knowledge_manager: KnowledgeManager):
+        """create() without source_url succeeds normally."""
+        doc = await knowledge_manager.create(
+            title="No URL",
+            content="Content.",
+            agent="agent",
+        )
+        assert isinstance(doc, KnowledgeDocument)
+        assert doc.metadata.source_url is None
+
+    @pytest.mark.asyncio
+    async def test_create_invalid_url_returns_error(self, knowledge_manager: KnowledgeManager):
+        """create() with invalid source_url returns invalid_input."""
+        result = await knowledge_manager.create(
+            title="Bad URL",
+            content="Content.",
+            agent="agent",
+            source_url="ftp://not-http.com",
+        )
+        assert isinstance(result, dict)
+        assert result["status"] == "invalid_input"
+
+    @pytest.mark.asyncio
+    async def test_create_empty_url_returns_error(self, knowledge_manager: KnowledgeManager):
+        """create() with empty/whitespace source_url returns invalid_input."""
+        result = await knowledge_manager.create(
+            title="Empty URL",
+            content="Content.",
+            agent="agent",
+            source_url="   ",
+        )
+        assert isinstance(result, dict)
+        assert result["status"] == "invalid_input"
+
+    @pytest.mark.asyncio
+    async def test_create_updates_map(self, knowledge_manager: KnowledgeManager):
+        """create() with URL updates _source_url_to_id map."""
+        doc = await knowledge_manager.create(
+            title="Mapped",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/mapped",
+        )
+        norm = normalize_url("https://example.com/mapped")
+        assert knowledge_manager._source_url_to_id[norm] == doc.id

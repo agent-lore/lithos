@@ -404,51 +404,87 @@ class KnowledgeManager:
         path: str | None = None,
         source: str | None = None,
         source_url: str | None = None,
-    ) -> KnowledgeDocument:
-        """Create a new knowledge document."""
-        lithos_metrics.knowledge_ops.add(1, {"op": "create"})
-        doc_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
+    ) -> KnowledgeDocument | dict:
+        """Create a new knowledge document.
 
-        metadata = KnowledgeMetadata(
-            id=doc_id,
-            title=title,
-            author=agent,
-            created_at=now,
-            updated_at=now,
-            tags=tags or [],
-            confidence=confidence,
-            contributors=[],
-            source=source,
-            source_url=source_url,
-        )
+        Returns KnowledgeDocument on success, or a dict with status info on
+        duplicate/invalid_input.
+        """
+        async with self._write_lock:
+            lithos_metrics.knowledge_ops.add(1, {"op": "create"})
 
-        # Determine file path
-        slug = slugify(title)
-        file_path = Path(path) / f"{slug}.md" if path else Path(f"{slug}.md")
-        file_path, full_path = self._resolve_safe_path(file_path)
+            # Validate and normalize source_url
+            norm_url: str | None = None
+            if source_url is not None:
+                try:
+                    norm_url = normalize_url(source_url)
+                except ValueError as e:
+                    return {"status": "invalid_input", "message": str(e)}
 
-        # Parse wiki-links
-        links = parse_wiki_links(content)
+                # Check dedup map
+                existing_id = self._source_url_to_id.get(norm_url)
+                if existing_id is not None:
+                    try:
+                        existing_doc, _ = await self.read(id=existing_id)
+                        return {
+                            "status": "duplicate",
+                            "duplicate_of": {
+                                "id": existing_id,
+                                "title": existing_doc.title,
+                                "source_url": norm_url,
+                            },
+                            "message": (
+                                f"URL already exists in document '{existing_doc.title}'"
+                            ),
+                        }
+                    except FileNotFoundError:
+                        # Stale map entry; allow create
+                        del self._source_url_to_id[norm_url]
 
-        doc = KnowledgeDocument(
-            id=doc_id,
-            title=title,
-            content=content,
-            metadata=metadata,
-            path=file_path,
-            links=links,
-        )
+            doc_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc)
 
-        # Write to disk
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_text(doc.to_markdown())
+            metadata = KnowledgeMetadata(
+                id=doc_id,
+                title=title,
+                author=agent,
+                created_at=now,
+                updated_at=now,
+                tags=tags or [],
+                confidence=confidence,
+                contributors=[],
+                source=source,
+                source_url=norm_url,
+            )
 
-        # Update indices
-        self._id_to_path[doc_id] = file_path
-        self._slug_to_id[slug] = doc_id
+            # Determine file path
+            slug = slugify(title)
+            file_path = Path(path) / f"{slug}.md" if path else Path(f"{slug}.md")
+            file_path, full_path = self._resolve_safe_path(file_path)
 
-        return doc
+            # Parse wiki-links
+            links = parse_wiki_links(content)
+
+            doc = KnowledgeDocument(
+                id=doc_id,
+                title=title,
+                content=content,
+                metadata=metadata,
+                path=file_path,
+                links=links,
+            )
+
+            # Write to disk
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(doc.to_markdown())
+
+            # Update indices
+            self._id_to_path[doc_id] = file_path
+            self._slug_to_id[slug] = doc_id
+            if norm_url is not None:
+                self._source_url_to_id[norm_url] = doc_id
+
+            return doc
 
     @traced("lithos.knowledge.read")
     async def read(
