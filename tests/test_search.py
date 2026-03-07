@@ -575,3 +575,101 @@ class TestSearchEngineResiliency:
         # Should not raise — should wipe and recreate
         idx.open_or_create()
         assert idx._index is not None
+
+
+class TestSchemaVersionDetection:
+    """Tests for US-010: Schema mismatch detection and automatic rebuild."""
+
+    def test_new_index_writes_schema_version(self, tmp_path):
+        """Creating a new index writes schema version marker."""
+        from lithos.search import TantivyIndex
+
+        index_path = tmp_path / "tantivy"
+        idx = TantivyIndex(index_path)
+        idx.open_or_create()
+
+        version_file = index_path / ".schema_version"
+        assert version_file.exists()
+        assert version_file.read_text().strip() == TantivyIndex.SCHEMA_VERSION
+
+    def test_matching_version_no_rebuild(self, tmp_path):
+        """Matching version: no rebuild needed."""
+        from lithos.search import TantivyIndex
+
+        index_path = tmp_path / "tantivy"
+        idx1 = TantivyIndex(index_path)
+        idx1.open_or_create()
+        assert idx1.needs_rebuild is True  # First time = new index
+
+        idx2 = TantivyIndex(index_path)
+        idx2.open_or_create()
+        assert idx2.needs_rebuild is False  # Same version, no rebuild
+
+    def test_mismatched_version_triggers_rebuild(self, tmp_path):
+        """Mismatched version marker triggers rebuild."""
+        from lithos.search import TantivyIndex
+
+        index_path = tmp_path / "tantivy"
+        idx1 = TantivyIndex(index_path)
+        idx1.open_or_create()
+
+        # Tamper with the version marker
+        (index_path / ".schema_version").write_text("old_version")
+
+        idx2 = TantivyIndex(index_path)
+        idx2.open_or_create()
+        assert idx2.needs_rebuild is True
+        # Version marker should be updated
+        assert (index_path / ".schema_version").read_text().strip() == TantivyIndex.SCHEMA_VERSION
+
+    def test_missing_version_triggers_rebuild(self, tmp_path):
+        """Missing version marker triggers rebuild."""
+        from lithos.search import TantivyIndex
+
+        index_path = tmp_path / "tantivy"
+        idx1 = TantivyIndex(index_path)
+        idx1.open_or_create()
+
+        # Remove the version marker
+        (index_path / ".schema_version").unlink()
+
+        idx2 = TantivyIndex(index_path)
+        idx2.open_or_create()
+        assert idx2.needs_rebuild is True
+
+    def test_rebuild_index_still_functional(self, tmp_path):
+        """After schema version rebuild, index is still functional."""
+        from lithos.knowledge import KnowledgeDocument, KnowledgeMetadata
+        from lithos.search import TantivyIndex
+
+        index_path = tmp_path / "tantivy"
+        idx = TantivyIndex(index_path)
+        idx.open_or_create()
+
+        # Simulate old schema by tampering
+        (index_path / ".schema_version").write_text("1")
+
+        idx2 = TantivyIndex(index_path)
+        idx2.open_or_create()
+        assert idx2.needs_rebuild is True
+
+        # Index should work after rebuild
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        doc = KnowledgeDocument(
+            id="test-id",
+            title="Test",
+            content="Test content.",
+            metadata=KnowledgeMetadata(
+                id="test-id",
+                title="Test",
+                author="agent",
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            ),
+            path=Path("test.md"),
+        )
+        idx2.add_document(doc)
+        results = idx2.search("test")
+        assert len(results) >= 1

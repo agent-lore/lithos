@@ -73,8 +73,10 @@ class LithosServer:
         # Register active claims gauge observer
         register_active_claims_observer(lambda: self._cached_active_claims)
 
-        # Load or build indices
-        if self.config.index.rebuild_on_start:
+        # Load or build indices.
+        # Force access to the tantivy property so schema version check runs.
+        tantivy_needs_rebuild = self.search.tantivy.needs_rebuild
+        if self.config.index.rebuild_on_start or tantivy_needs_rebuild:
             await self._rebuild_indices()
         else:
             # Try to load cached graph

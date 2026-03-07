@@ -137,6 +137,9 @@ def chunk_text(text: str, chunk_size: int = 500, chunk_max: int = 1000) -> list[
 class TantivyIndex:
     """Tantivy full-text search index."""
 
+    SCHEMA_VERSION = "2"
+    """Bumped when fields are added/removed. Triggers automatic rebuild."""
+
     def __init__(self, index_path: Path):
         """Initialize Tantivy index.
 
@@ -146,6 +149,22 @@ class TantivyIndex:
         self.index_path = index_path
         self._index: tantivy.Index | None = None
         self._schema: tantivy.Schema | None = None
+        self.needs_rebuild: bool = False
+
+    @property
+    def _schema_version_path(self) -> Path:
+        return self.index_path / ".schema_version"
+
+    def _read_schema_version(self) -> str | None:
+        """Read stored schema version, or None if missing."""
+        try:
+            return self._schema_version_path.read_text().strip()
+        except (FileNotFoundError, OSError):
+            return None
+
+    def _write_schema_version(self) -> None:
+        """Write current schema version to marker file."""
+        self._schema_version_path.write_text(self.SCHEMA_VERSION)
 
     def _build_schema(self) -> tantivy.Schema:
         """Build Tantivy schema."""
@@ -162,25 +181,43 @@ class TantivyIndex:
     def open_or_create(self) -> None:
         """Open existing index or create new one.
 
-        If the index is corrupted, it is deleted and recreated from scratch.
-        Data loss is acceptable here — the index is a cache that can be rebuilt
-        from the source-of-truth Markdown files.
+        Schema version is checked first (fast path). If the marker is missing
+        or mismatched, the index is deleted and recreated. An exception from
+        ``tantivy.Index.open()`` serves as fallback for corruption or a
+        skipped/corrupted marker.
         """
         self._schema = self._build_schema()
         self.index_path.mkdir(parents=True, exist_ok=True)
 
-        try:
-            self._index = tantivy.Index(self._schema, path=str(self.index_path))
-        except Exception as exc:
-            # Index is corrupted — remove it and start fresh.
-            logger.warning(
-                "Tantivy index at %s appears corrupted (%s). Deleting and recreating.",
-                self.index_path,
-                exc,
+        stored_version = self._read_schema_version()
+        if stored_version is not None and stored_version == self.SCHEMA_VERSION:
+            # Fast path: version matches, try to open existing index
+            try:
+                self._index = tantivy.Index(self._schema, path=str(self.index_path))
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Tantivy index at %s appears corrupted (%s). Recreating.",
+                    self.index_path,
+                    exc,
+                )
+        elif stored_version is not None:
+            logger.info(
+                "Schema version mismatch (stored=%s, current=%s). Rebuilding index.",
+                stored_version,
+                self.SCHEMA_VERSION,
             )
-            shutil.rmtree(self.index_path, ignore_errors=True)
-            self.index_path.mkdir(parents=True, exist_ok=True)
-            self._index = tantivy.Index(self._schema, path=str(self.index_path))
+        else:
+            logger.info(
+                "No schema version marker found. Rebuilding index.",
+            )
+
+        # Recreate from scratch
+        shutil.rmtree(self.index_path, ignore_errors=True)
+        self.index_path.mkdir(parents=True, exist_ok=True)
+        self._index = tantivy.Index(self._schema, path=str(self.index_path))
+        self._write_schema_version()
+        self.needs_rebuild = True
 
     @property
     def index(self) -> tantivy.Index:
