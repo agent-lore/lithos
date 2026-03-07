@@ -731,6 +731,27 @@ class KnowledgeManager:
 
         return tag_counts
 
+    async def find_by_source_url(self, url: str) -> KnowledgeDocument | None:
+        """Look up a document by source URL (internal only, not MCP-exposed).
+
+        Normalizes the input URL before lookup. Does not acquire _write_lock
+        (read-only on the map).
+        """
+        try:
+            norm = normalize_url(url)
+        except ValueError:
+            return None
+
+        doc_id = self._source_url_to_id.get(norm)
+        if doc_id is None:
+            return None
+
+        try:
+            doc, _ = await self.read(id=doc_id)
+            return doc
+        except FileNotFoundError:
+            return None
+
     def get_id_by_slug(self, slug: str) -> str | None:
         """Get document ID by slug."""
         return self._slug_to_id.get(slug)

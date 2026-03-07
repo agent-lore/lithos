@@ -1130,3 +1130,45 @@ class TestConcurrentWriteDedup:
 
         assert len(docs) == 1, f"Expected 1 success, got {len(docs)}"
         assert len(dups) == 1, f"Expected 1 duplicate, got {len(dups)}"
+
+
+class TestFindBySourceUrl:
+    """Tests for US-009: find_by_source_url() lookup helper."""
+
+    @pytest.mark.asyncio
+    async def test_find_existing_url(self, knowledge_manager: KnowledgeManager):
+        """Lookup existing URL returns the document."""
+        doc = await knowledge_manager.create(
+            title="Findable",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/findable",
+        )
+        found = await knowledge_manager.find_by_source_url("https://example.com/findable")
+        assert found is not None
+        assert found.id == doc.id
+
+    @pytest.mark.asyncio
+    async def test_find_missing_url(self, knowledge_manager: KnowledgeManager):
+        """Lookup missing URL returns None."""
+        found = await knowledge_manager.find_by_source_url("https://example.com/missing")
+        assert found is None
+
+    @pytest.mark.asyncio
+    async def test_find_normalizes_input(self, knowledge_manager: KnowledgeManager):
+        """Input URL is normalized before lookup."""
+        doc = await knowledge_manager.create(
+            title="Normalizable",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/norm",
+        )
+        found = await knowledge_manager.find_by_source_url("HTTPS://Example.COM/norm")
+        assert found is not None
+        assert found.id == doc.id
+
+    @pytest.mark.asyncio
+    async def test_find_invalid_url_returns_none(self, knowledge_manager: KnowledgeManager):
+        """Invalid URL returns None (not an exception)."""
+        found = await knowledge_manager.find_by_source_url("not-a-url")
+        assert found is None
