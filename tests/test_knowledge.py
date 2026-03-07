@@ -1050,3 +1050,53 @@ class TestDedupOnUpdate:
         )
         assert isinstance(result, dict)
         assert result["status"] == "invalid_input"
+
+
+class TestDeleteRemovesUrl:
+    """Tests for US-007: delete() cleans up dedup map."""
+
+    @pytest.mark.asyncio
+    async def test_delete_removes_url_from_map(self, knowledge_manager: KnowledgeManager):
+        """delete() removes source_url from _source_url_to_id."""
+        doc = await knowledge_manager.create(
+            title="Delete Me",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/deletable",
+        )
+        norm = normalize_url("https://example.com/deletable")
+        assert norm in knowledge_manager._source_url_to_id
+
+        await knowledge_manager.delete(doc.id)
+        assert norm not in knowledge_manager._source_url_to_id
+
+    @pytest.mark.asyncio
+    async def test_delete_then_create_same_url(self, knowledge_manager: KnowledgeManager):
+        """After deletion, create with same URL succeeds."""
+        doc = await knowledge_manager.create(
+            title="First",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/reusable",
+        )
+        await knowledge_manager.delete(doc.id)
+
+        new_doc = await knowledge_manager.create(
+            title="Second",
+            content="Content.",
+            agent="agent",
+            source_url="https://example.com/reusable",
+        )
+        assert isinstance(new_doc, KnowledgeDocument)
+        assert new_doc.metadata.source_url == "https://example.com/reusable"
+
+    @pytest.mark.asyncio
+    async def test_delete_without_url_ok(self, knowledge_manager: KnowledgeManager):
+        """delete() on doc without source_url works fine."""
+        doc = await knowledge_manager.create(
+            title="No URL",
+            content="Content.",
+            agent="agent",
+        )
+        result = await knowledge_manager.delete(doc.id)
+        assert result is True

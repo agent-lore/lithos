@@ -648,22 +648,36 @@ class KnowledgeManager:
     @traced("lithos.knowledge.delete")
     async def delete(self, id: str) -> bool:
         """Delete a document."""
-        lithos_metrics.knowledge_ops.add(1, {"op": "delete"})
-        if id not in self._id_to_path:
-            return False
+        async with self._write_lock:
+            lithos_metrics.knowledge_ops.add(1, {"op": "delete"})
+            if id not in self._id_to_path:
+                return False
 
-        file_path = self._id_to_path[id]
-        _safe_path, full_path = self._resolve_safe_path(file_path)
+            # Read doc to get source_url before deleting
+            try:
+                doc, _ = await self.read(id=id)
+                if doc.metadata.source_url:
+                    try:
+                        norm = normalize_url(doc.metadata.source_url)
+                        if self._source_url_to_id.get(norm) == id:
+                            del self._source_url_to_id[norm]
+                    except ValueError:
+                        pass
+            except FileNotFoundError:
+                pass
 
-        if full_path.exists():
-            full_path.unlink()
+            file_path = self._id_to_path[id]
+            _safe_path, full_path = self._resolve_safe_path(file_path)
 
-        # Update indices
-        del self._id_to_path[id]
-        # Remove from slug index
-        self._slug_to_id = {k: v for k, v in self._slug_to_id.items() if v != id}
+            if full_path.exists():
+                full_path.unlink()
 
-        return True
+            # Update indices
+            del self._id_to_path[id]
+            # Remove from slug index
+            self._slug_to_id = {k: v for k, v in self._slug_to_id.items() if v != id}
+
+            return True
 
     async def list_all(
         self,
