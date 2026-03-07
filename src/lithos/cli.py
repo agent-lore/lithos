@@ -125,8 +125,12 @@ def serve(
                             },
                         },
                         "loggers": {
-                            "uvicorn": {"handlers": ["default"], "level": "INFO"},
-                            "uvicorn.error": {"level": "INFO"},
+                            "uvicorn": {
+                                "handlers": ["default"],
+                                "level": "INFO",
+                                "propagate": False,
+                            },
+                            "uvicorn.error": {"level": "INFO", "propagate": False},
                             "uvicorn.access": {
                                 "handlers": ["access"],
                                 "level": "INFO",
