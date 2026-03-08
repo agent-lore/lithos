@@ -2790,6 +2790,108 @@ class TestLithosProvenance:
         assert c_id in derived_ids
 
 
+class TestDerivedFromIdsInResponses:
+    """Tests for US-012: derived_from_ids in read/search/list responses."""
+
+    async def test_lithos_read_includes_derived_from_ids(self, server: LithosServer):
+        """lithos_read response metadata includes derived_from_ids."""
+        source_result = await _call_tool(
+            server,
+            "lithos_write",
+            {"title": "Read Source", "content": "Source.", "agent": "resp-agent"},
+        )
+        source_id = source_result["id"]
+
+        derived_result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Read Derived",
+                "content": "Derived.",
+                "agent": "resp-agent",
+                "derived_from_ids": [source_id],
+            },
+        )
+        derived_id = derived_result["id"]
+
+        # Read derived doc
+        read_result = await _call_tool(server, "lithos_read", {"id": derived_id})
+        assert read_result["metadata"]["derived_from_ids"] == [source_id]
+
+        # Read source doc (no provenance)
+        read_result = await _call_tool(server, "lithos_read", {"id": source_id})
+        assert read_result["metadata"]["derived_from_ids"] == []
+
+    async def test_lithos_search_includes_derived_from_ids(self, server: LithosServer):
+        """lithos_search result items include derived_from_ids."""
+        source_result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Search Prov Source",
+                "content": "Unique provenance search content zyx987.",
+                "agent": "resp-agent",
+            },
+        )
+        source_id = source_result["id"]
+
+        derived_result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Search Prov Derived",
+                "content": "Unique provenance search derived zyx987.",
+                "agent": "resp-agent",
+                "derived_from_ids": [source_id],
+            },
+        )
+        derived_id = derived_result["id"]
+
+        await _wait_for_full_text_hit(server, "zyx987", derived_id)
+
+        search_result = await _call_tool(server, "lithos_search", {"query": "zyx987", "limit": 10})
+        found = [r for r in search_result["results"] if r["id"] == derived_id]
+        assert len(found) == 1
+        assert found[0]["derived_from_ids"] == [source_id]
+
+        # Source doc should have empty derived_from_ids
+        source_found = [r for r in search_result["results"] if r["id"] == source_id]
+        if source_found:
+            assert source_found[0]["derived_from_ids"] == []
+
+    async def test_lithos_list_includes_derived_from_ids(self, server: LithosServer):
+        """lithos_list result items include derived_from_ids."""
+        source_result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "List Prov Source",
+                "content": "Source.",
+                "agent": "resp-agent",
+                "tags": ["list-prov-test"],
+            },
+        )
+        source_id = source_result["id"]
+
+        derived_result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "List Prov Derived",
+                "content": "Derived.",
+                "agent": "resp-agent",
+                "tags": ["list-prov-test"],
+                "derived_from_ids": [source_id],
+            },
+        )
+        derived_id = derived_result["id"]
+
+        list_result = await _call_tool(server, "lithos_list", {"tags": ["list-prov-test"]})
+        items = {i["id"]: i for i in list_result["items"]}
+        assert items[derived_id]["derived_from_ids"] == [source_id]
+        assert items[source_id]["derived_from_ids"] == []
+
+
 def test_conformance_module_exists():
     """Sanity check to keep this module discoverable in test listings."""
     assert Path(__file__).name == "test_integration_conformance.py"
