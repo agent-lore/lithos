@@ -1,0 +1,139 @@
+## Codebase Patterns
+- KnowledgeMetadata fields: add to dataclass, `_KNOWN_METADATA_KEYS`, `to_dict()`, and `from_dict()` — all four must stay in sync
+- Conditional serialization: use `if self.field` for list fields (omit empty), `if self.field is not None` for optional str fields
+- Follow `source_url` as the pattern for adding new metadata fields (conditional serialization, from_dict default, round-trip tests)
+- Tests use `knowledge_manager` fixture from conftest.py; `test_config` gives access to temp storage paths
+- `WriteResult` is the standard return type for create/update — always check `result.status` and `result.document`
+- `validate_derived_from_ids()` uses `uuid.UUID()` for validation/normalization — returns sorted, deduplicated, lowercased list
+- Ruff B904: always use `raise ... from err` in except clauses
+- Provenance indexes: `_doc_to_sources` (forward), `_source_to_derived` (reverse), `_unresolved_provenance` (missing refs), `_id_to_title` (title cache)
+- Two-pass scan: pass 1 collects all doc IDs + provenance pairs into `deferred_provenance`, pass 2 classifies resolved/unresolved — avoids scan-order artifacts
+- For tests creating raw docs on disk, use `frontmatter.Post()` + `fm.dumps()` to write valid markdown files with frontmatter
+- `create()` accepts `derived_from_ids: list[str] | None = None` — validates before any side effects, updates all provenance indexes, auto-resolves previously-unresolved refs, returns warnings for missing sources
+- `update()` derived_from_ids semantics: `_UNSET`=preserve, `None`/`[]`=clear, non-empty list=replace — uses `_remove_provenance_entries()` helper to clean up old reverse indexes before applying new ones
+- `_remove_provenance_entries(doc_id)` is a helper that removes a doc from `_source_to_derived` and `_unresolved_provenance` based on its `_doc_to_sources` — reusable for update and delete paths
+- MCP boundary mapping for `derived_from_ids` in `lithos_write`: `None`=preserve (→`_UNSET`), `[]`=clear, non-empty=replace — follows same pattern as `source_url`
+- `to_dict()` omits empty `derived_from_ids` — integration tests checking cleared provenance should use `.get("derived_from_ids", [])` not direct key access
+- `sync_from_disk(path)` is the manager-owned API for external file changes — handles new + modified uniformly, updates all indexes including provenance, auto-resolves unresolved refs
+- `handle_file_change` in server.py: delete → `manager.delete()`, non-delete → `manager.sync_from_disk()` then pass doc to search/graph
+
+---
+
+## 2026-03-08 - US-002
+- Implemented `derived_from_ids: list[str]` field on `KnowledgeMetadata` with default `[]`
+- Added `"derived_from_ids"` to `_KNOWN_METADATA_KEYS` frozenset
+- `to_dict()` serializes `derived_from_ids` only when non-empty (omits empty list from YAML)
+- `from_dict()` deserializes `derived_from_ids`, defaulting to `[]` when absent
+- Files changed: `src/lithos/knowledge.py`, `tests/test_knowledge.py`
+- **Learnings for future iterations:**
+  - Follow the `source_url` pattern in `to_dict()`/`from_dict()` for new metadata fields
+  - `_KNOWN_METADATA_KEYS` must be updated or the field ends up in `extra` dict
+  - Round-trip tests should verify both the object and raw YAML on disk
+  - ruff format may need to be run after adding tests (auto-formatting)
+---
+
+## 2026-03-08 - US-003
+- Added `validate_derived_from_ids(ids, self_id=None)` function in knowledge.py after `normalize_url()`
+- Validates entries are valid UUIDs via `uuid.UUID()`, rejects non-UUIDs (titles, slugs, paths, empty, whitespace)
+- Normalizes: strip whitespace, lowercase, deduplicate, sort
+- Self-reference detection when `self_id` is provided
+- 14 unit tests in `TestValidateDerivedFromIds` class
+- Files changed: `src/lithos/knowledge.py`, `tests/test_knowledge.py`
+- **Learnings for future iterations:**
+  - Follow `normalize_url()` as the pattern for standalone validation functions (pure function, raises ValueError)
+  - `uuid.UUID()` constructor handles validation + normalization (lowercases, validates format)
+  - `str(uuid.UUID(...))` gives canonical lowercase hyphenated form
+  - Ruff B904 requires `raise ... from err` inside except clauses — catch this early
+---
+
+## 2026-03-08 - US-004
+- Added four provenance indexes to `KnowledgeManager.__init__`: `_doc_to_sources`, `_source_to_derived`, `_unresolved_provenance`, `_id_to_title`
+- Refactored `_scan_existing()` to two-pass approach: pass 1 walks files and collects provenance pairs into `deferred_provenance`, pass 2 classifies each source ID as resolved or unresolved
+- `_scan_existing()` clears all indexes (including provenance) before rebuilding
+- Added log message with resolved/unresolved reference counts
+- 7 unit tests in `TestProvenanceIndexes` class covering: index initialization, resolved provenance, forward references, unresolved references, repeated scan idempotency, no-provenance docs, stale index clearing
+- Files changed: `src/lithos/knowledge.py`, `tests/test_knowledge.py`
+- **Learnings for future iterations:**
+  - Two-pass scan is essential to avoid scan-order artifacts with forward references
+  - Use `frontmatter.Post()` + `fm.dumps()` to create raw docs on disk for scan tests (bypasses manager create)
+  - `_scan_existing()` must clear ALL indexes before rebuilding — including new ones added in this story
+  - `deferred_provenance: list[tuple[str, list[str]]]` pattern collects pairs for batch processing after full walk
+---
+
+## 2026-03-08 - US-005
+- Added `derived_from_ids: list[str] | None = None` parameter to `create()`
+- On create with None/omitted: stores `[]` in metadata, sets `_doc_to_sources[doc_id] = []`
+- On create with non-empty list: validates via `validate_derived_from_ids()`, normalizes, stores in metadata; updates `_doc_to_sources`, `_source_to_derived`, `_unresolved_provenance`
+- On create with invalid entries: returns `WriteResult(status='error', error_code='invalid_input')` — no doc created
+- Auto-resolve: after creating a doc, checks `_unresolved_provenance` for existing docs that referenced the new doc's ID; moves them from `_unresolved_provenance` to `_source_to_derived`
+- Updates `_id_to_title` with new doc's title
+- Warnings include `'derived_from_ids contains missing document: <uuid>'` for unresolved source IDs
+- 12 unit tests in `TestCreateProvenance` class covering: no provenance, valid provenance, unresolved refs, auto-resolve via scan, auto-resolve via create path, invalid UUIDs, empty string UUID, uppercase normalization, deduplication, mixed resolved/unresolved, disk persistence + reload, explicit None
+- Files changed: `src/lithos/knowledge.py`, `tests/test_knowledge.py`
+- **Learnings for future iterations:**
+  - `create()` mints random UUIDs, so auto-resolve via `create()` is primarily exercised when doc ID coincidentally matches an unresolved key (e.g., externally restored file with original UUID); scan-based auto-resolve is the primary path
+  - Validation must happen before any side effects (file write, index updates) — early return on error
+  - Follow the `source_url` validation pattern: try/except ValueError → return `WriteResult(status='error')`
+  - Provenance indexes must be updated in the same `_write_lock` scope as the file write to maintain consistency
+---
+
+## 2026-03-08 - US-006
+- Added `derived_from_ids: list[str] | None | _UnsetType = _UNSET` parameter to `update()`
+- Three-way semantics: `_UNSET`=preserve, `None`/`[]`=clear, non-empty list=replace
+- Added `_remove_provenance_entries(doc_id)` helper to clean reverse indexes before applying changes
+- Self-reference detection: passing doc's own ID in derived_from_ids returns error
+- Updates `_id_to_title` when title changes
+- Returns warnings for unresolved source IDs
+- 9 unit tests in `TestUpdateProvenance` class covering: preserve, clear via [], clear via None, replace, unresolved refs, self-reference rejection, invalid UUID rejection, title update, conformance (UNSET vs [] vs non-empty)
+- Files changed: `src/lithos/knowledge.py`, `tests/test_knowledge.py`
+- **Learnings for future iterations:**
+  - `_remove_provenance_entries()` helper is reusable for delete path (US-007)
+  - Must clean up reverse indexes before applying new provenance — prevents stale entries
+  - `validate_derived_from_ids(ids, self_id=id)` handles self-reference detection at the validation layer
+  - `None` and `[]` are treated identically for derived_from_ids (both mean "clear"), unlike source_url where only `None` means clear
+---
+
+## 2026-03-08 - US-007
+- Added provenance cleanup to `delete()` in knowledge.py
+- On delete: (1) `_remove_provenance_entries(id)` cleans reverse indexes where this doc is a derived doc, (2) removes `_doc_to_sources[id]`, (3) moves `_source_to_derived[id]` entries to `_unresolved_provenance[id]` (derived docs now have unresolved refs), (4) removes `_id_to_title[id]`
+- Does NOT mutate any other document's frontmatter on disk
+- 6 unit tests in `TestDeleteProvenance` class covering: delete source (marks derived as unresolved), delete derived (cleans source reverse index), delete with no provenance, no frontmatter mutation, multiple derived docs, multiple sources
+- Files changed: `src/lithos/knowledge.py`, `tests/test_knowledge.py`
+- **Learnings for future iterations:**
+  - `_remove_provenance_entries()` helper (from US-006) is reusable for delete — handles cleaning reverse indexes based on `_doc_to_sources`
+  - Key insight for delete: when a source doc is deleted, its `_source_to_derived` entries become unresolved (move to `_unresolved_provenance`), not removed
+  - Ruff RUF059: unpacked variables that are unused must be prefixed with `_` (e.g., `success, _path = ...`)
+  - Use `dict.pop(key, default)` for safe removal from provenance indexes
+---
+
+## 2026-03-08 - US-008
+- Added `derived_from_ids: list[str] | None = None` parameter to `lithos_write` MCP tool
+- On create: passes `derived_from_ids` through to `manager.create()`
+- On update: maps MCP boundary semantics — `None` (omitted) → `_UNSET` (preserve); `[]` → `[]` (clear); non-empty list → pass through
+- Warnings from WriteResult are included in the response envelope
+- 6 integration tests in `TestDerivedFromIdsMCPBoundary` class covering: create with provenance, update preserve (omit), update clear ([]), update replace, unresolved warnings, invalid UUID error
+- Files changed: `src/lithos/server.py`, `tests/test_integration_conformance.py`
+- **Learnings for future iterations:**
+  - MCP boundary mapping for derived_from_ids: `None` at MCP = "omitted" (preserve), `[]` = "clear", non-empty = "replace" — same pattern as source_url but with list vs string
+  - Ruff SIM108: if/else blocks with simple assignment should use ternary
+  - `to_dict()` omits empty `derived_from_ids`, so integration tests checking cleared provenance should use `.get("derived_from_ids", [])` not direct key access
+  - Follow the `source_url` boundary mapping pattern in `lithos_write` for new provenance fields
+---
+
+## 2026-03-08 - US-009
+- Added `sync_from_disk(path: Path) -> KnowledgeDocument` method to `KnowledgeManager`
+- Handles both new files (create) and modified files (update) uniformly: reads file, diffs against current index state, applies changes
+- For new files: populates all indexes, checks `_unresolved_provenance` for auto-resolution
+- For modified files: diffs `derived_from_ids` against `_doc_to_sources`, removes stale entries, adds new ones, reclassifies resolved/unresolved
+- Updates `_id_to_title` for external title changes, `_slug_to_id` for slug changes, `_source_url_to_id` for URL changes
+- Refactored `handle_file_change` in `server.py` to call `sync_from_disk()` for non-delete events instead of directly calling `knowledge.read()`
+- Delete path unchanged — already uses `manager.delete()` which handles provenance cleanup (US-007)
+- 7 integration tests in `TestSyncFromDisk` class covering: external create with derived_from_ids, external modify derived_from_ids, external title change, external delete source (marks unresolved), auto-resolve unresolved refs, error handling (malformed files don't crash watcher)
+- Files changed: `src/lithos/knowledge.py`, `src/lithos/server.py`, `tests/test_integration_conformance.py`
+- **Learnings for future iterations:**
+  - `sync_from_disk()` is synchronous (no async) — reads file directly, updates indexes in-place. Concurrency is protected by the server's `_update_lock`
+  - For modified files, must diff provenance (old vs new `derived_from_ids`) before removing/adding reverse index entries — use `_remove_provenance_entries()` helper then re-add new entries
+  - Ruff SIM102: nested `if` statements should be combined with `and` — catch early
+  - The `_source_url_to_id` cleanup on sync needs to scan for old mappings by doc_id since we don't cache the old normalized URL
+  - Auto-resolve in `sync_from_disk` is the primary path for resolving unresolved provenance (vs `create()` which mints random UUIDs)
+---

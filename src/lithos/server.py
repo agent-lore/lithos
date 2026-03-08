@@ -176,7 +176,7 @@ class LithosServer:
                     if deleted:
                         doc_id = self.knowledge.get_id_by_path(relative_path)
                         if doc_id:
-                            await self.knowledge.delete(doc_id)  # path unused; watcher has it
+                            await self.knowledge.delete(doc_id)
                             self.search.remove_document(doc_id)
                             self.graph.remove_document(doc_id)
                             self.graph.save_cache()
@@ -188,7 +188,7 @@ class LithosServer:
                                 )
                             )
                     else:
-                        doc, _ = await self.knowledge.read(path=str(relative_path))
+                        doc = self.knowledge.sync_from_disk(relative_path)
                         self.search.index_document(doc)
                         self.graph.add_document(doc)
                         self.graph.save_cache()

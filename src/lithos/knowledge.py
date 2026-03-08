@@ -993,6 +993,122 @@ class KnowledgeManager:
         except FileNotFoundError:
             return None
 
+    def sync_from_disk(self, path: Path) -> KnowledgeDocument:
+        """Re-read a file from disk and update all manager indexes.
+
+        Handles both new files and modified files uniformly.
+        Returns the parsed document for downstream search/graph indexing.
+
+        Args:
+            path: Relative path under knowledge_path (e.g. Path("my-note.md"))
+
+        Raises:
+            FileNotFoundError: If the file does not exist on disk.
+            ValueError: If the file cannot be parsed.
+        """
+        file_path, full_path = self._resolve_safe_path(path)
+        if not full_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        post = frontmatter.load(str(full_path))
+        metadata = KnowledgeMetadata.from_dict(post.metadata)
+
+        # Extract title and content from body
+        title, content = extract_title_from_content(post.content)
+        if not title:
+            title = metadata.title
+
+        links = parse_wiki_links(content)
+
+        doc = KnowledgeDocument(
+            id=metadata.id,
+            title=title,
+            content=content,
+            metadata=metadata,
+            path=file_path,
+            links=links,
+        )
+
+        doc_id = doc.id
+        is_new = doc_id not in self._id_to_path
+
+        # Update core indexes
+        self._id_to_path[doc_id] = file_path
+        old_slug = None
+        if not is_new:
+            # Find the old slug for this doc to clean it up
+            for s, sid in self._slug_to_id.items():
+                if sid == doc_id:
+                    old_slug = s
+                    break
+        new_slug = slugify(title)
+        if old_slug and old_slug != new_slug and self._slug_to_id.get(old_slug) == doc_id:
+            del self._slug_to_id[old_slug]
+        self._slug_to_id[new_slug] = doc_id
+
+        # Update source_url index
+        raw_url = metadata.source_url
+        if raw_url:
+            try:
+                norm = normalize_url(raw_url)
+                # Remove any old mapping for this doc
+                old_urls_to_remove = [k for k, v in self._source_url_to_id.items() if v == doc_id]
+                for k in old_urls_to_remove:
+                    del self._source_url_to_id[k]
+                self._source_url_to_id[norm] = doc_id
+            except ValueError:
+                pass
+        else:
+            # Clear any old source_url mapping for this doc
+            old_urls_to_remove = [k for k, v in self._source_url_to_id.items() if v == doc_id]
+            for k in old_urls_to_remove:
+                del self._source_url_to_id[k]
+
+        # Update _id_to_title
+        self._id_to_title[doc_id] = title
+
+        # Update provenance indexes
+        new_sources = metadata.derived_from_ids or []
+
+        if not is_new:
+            # Modified file: diff against current state
+            old_sources = self._doc_to_sources.get(doc_id, [])
+            if old_sources != new_sources:
+                # Remove old reverse index entries
+                self._remove_provenance_entries(doc_id)
+                # Add new entries
+                self._doc_to_sources[doc_id] = list(new_sources)
+                for source_id in new_sources:
+                    if source_id in self._id_to_path:
+                        if source_id not in self._source_to_derived:
+                            self._source_to_derived[source_id] = set()
+                        self._source_to_derived[source_id].add(doc_id)
+                    else:
+                        if source_id not in self._unresolved_provenance:
+                            self._unresolved_provenance[source_id] = set()
+                        self._unresolved_provenance[source_id].add(doc_id)
+        else:
+            # New file: add provenance entries
+            self._doc_to_sources[doc_id] = list(new_sources)
+            for source_id in new_sources:
+                if source_id in self._id_to_path:
+                    if source_id not in self._source_to_derived:
+                        self._source_to_derived[source_id] = set()
+                    self._source_to_derived[source_id].add(doc_id)
+                else:
+                    if source_id not in self._unresolved_provenance:
+                        self._unresolved_provenance[source_id] = set()
+                    self._unresolved_provenance[source_id].add(doc_id)
+
+            # Auto-resolve: check if any existing docs had unresolved refs to this new doc
+            if doc_id in self._unresolved_provenance:
+                resolved_docs = self._unresolved_provenance.pop(doc_id)
+                if doc_id not in self._source_to_derived:
+                    self._source_to_derived[doc_id] = set()
+                self._source_to_derived[doc_id].update(resolved_docs)
+
+        return doc
+
     def get_id_by_slug(self, slug: str) -> str | None:
         """Get document ID by slug."""
         return self._slug_to_id.get(slug)

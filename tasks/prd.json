@@ -1,0 +1,313 @@
+{
+  "project": "Lithos",
+  "branchName": "ralph/phase3-digest-provenance",
+  "description": "Phase 3 — Digest Provenance v2: Add derived_from_ids metadata field, manager-level provenance indexes, lithos_provenance MCP tool, and surface lineage in all read/search responses",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Introduce structured WriteResult type",
+      "description": "As a developer, I need manager methods to return a structured result type instead of KnowledgeDocument | dict unions, so the server layer can extract warnings, status, and document data without fragile isinstance checks.",
+      "acceptanceCriteria": [
+        "Define a WriteResult dataclass in knowledge.py with fields: status: Literal['created', 'updated', 'duplicate', 'error'], document: KnowledgeDocument | None, warnings: list[str], error_code: str | None, message: str | None, and duplicate_of: DuplicateInfo | None",
+        "Define DuplicateInfo as a TypedDict or dataclass with id: str, title: str, source_url: str | None",
+        "create() returns WriteResult instead of KnowledgeDocument | dict",
+        "update() returns WriteResult instead of KnowledgeDocument | dict",
+        "Server layer (server.py) maps WriteResult fields to the MCP response envelope — no more isinstance dispatch on dict vs document",
+        "Existing tests updated to use WriteResult accessors",
+        "Pyright type check passes",
+        "Ruff lint and format pass",
+        "All existing tests pass (uv run --extra dev pytest -m 'not integration' tests/ -q)"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "This is foundational — all subsequent stories depend on WriteResult. Follow the existing return patterns in create() and update() in knowledge.py. The server.py tool handlers currently do isinstance checks on dict vs KnowledgeDocument; replace with WriteResult attribute access. See src/lithos/knowledge.py lines 310-322 for existing _UnsetType pattern as a model for singleton/sentinel design."
+    },
+    {
+      "id": "US-002",
+      "title": "Add derived_from_ids to KnowledgeMetadata",
+      "description": "As a developer, I need to store declared lineage in frontmatter so it persists on disk and survives read-write cycles.",
+      "acceptanceCriteria": [
+        "KnowledgeMetadata has field derived_from_ids: list[str] defaulting to []",
+        "to_dict() serializes derived_from_ids only when non-empty (omit empty list from YAML)",
+        "from_dict() deserializes derived_from_ids from frontmatter, defaulting to [] when absent",
+        "derived_from_ids added to _KNOWN_METADATA_KEYS set",
+        "Round-trip test: write a doc with derived_from_ids, read it back, values match",
+        "Round-trip test: existing doc without derived_from_ids reads back as []",
+        "Pyright type check passes",
+        "Ruff lint and format pass",
+        "All existing tests pass"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Follow the source_url pattern in KnowledgeMetadata.to_dict() / from_dict() — conditional serialization when non-empty. See knowledge.py lines 128-154 (to_dict) and 156-191 (from_dict). The field is list[str] not str|None, so serialization condition is 'if self.derived_from_ids' (truthy non-empty list)."
+    },
+    {
+      "id": "US-003",
+      "title": "Add provenance validation and normalization helpers",
+      "description": "As a developer, I need validation logic that rejects invalid derived_from_ids entries and normalizes valid ones, so invariants are enforced at the manager layer.",
+      "acceptanceCriteria": [
+        "Add validate_derived_from_ids(ids: list[str], self_id: str | None = None) function in knowledge.py that returns normalized list or raises ValueError",
+        "Validation rejects non-UUID strings (titles, slugs, paths, empty strings, whitespace)",
+        "Validation rejects malformed UUIDs (wrong format, wrong length)",
+        "Normalization trims whitespace, lowercases, deduplicates, and sorts the list",
+        "Uppercase UUIDs are normalized to lowercase (not rejected)",
+        "Self-reference detection: if self_id is provided and appears in the list, raise ValueError",
+        "Valid UUIDs (any UUID version, lowercase hex with hyphens) are accepted",
+        "Unit tests cover: valid UUIDs, uppercase UUIDs normalized to lowercase, malformed UUIDs, non-UUID strings, self-reference, empty list, duplicates, whitespace trimming, sort order",
+        "Pyright type check passes",
+        "Ruff lint and format pass"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Follow the normalize_url() pattern (knowledge.py lines 61-107) as a model for standalone validation function. Use uuid.UUID() constructor for validation — catch ValueError. Normalize by: strip whitespace, lowercase, parse with uuid.UUID to validate format, convert back to str, then sorted(set(results))."
+    },
+    {
+      "id": "US-004",
+      "title": "Add manager-level provenance indexes and two-pass startup scan",
+      "description": "As a developer, I need in-memory provenance indexes in KnowledgeManager so lineage queries are fast without scanning all documents.",
+      "acceptanceCriteria": [
+        "KnowledgeManager.__init__ initializes _doc_to_sources: dict[str, list[str]] = {}",
+        "KnowledgeManager.__init__ initializes _source_to_derived: dict[str, set[str]] = {}",
+        "KnowledgeManager.__init__ initializes _unresolved_provenance: dict[str, set[str]] = {}",
+        "KnowledgeManager.__init__ initializes _id_to_title: dict[str, str] = {}",
+        "_scan_existing() clears all four new indexes before rebuilding (prevents stale accumulation on repeated scans)",
+        "_scan_existing() uses a two-pass approach: pass 1 walks files and populates _id_to_path, _slug_to_id, _source_url_to_id, _id_to_title, and collects each doc's derived_from_ids into a temporary list; pass 2 iterates collected provenance pairs and classifies each source ID as resolved (exists in _id_to_path) or unresolved",
+        "Unit test: after scanning a directory with provenance relationships, all three provenance indexes are correct — including forward references (doc A references doc B, but B's file sorts alphabetically after A)",
+        "Unit test: unresolved references are correctly identified only for genuinely missing IDs, not for scan-order artifacts",
+        "Unit test: repeated _scan_existing() calls produce identical index state",
+        "Pyright type check passes",
+        "Ruff lint and format pass"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "The key insight is the two-pass scan. Current _scan_existing() (knowledge.py lines 339-390) does a single walk populating _id_to_path etc. Refactor to: (1) keep existing pass 1 logic but also read derived_from_ids from each doc's metadata into a temp list like deferred_provenance: list[tuple[str, list[str]]] = []; (2) after the walk completes, iterate deferred_provenance and for each (doc_id, source_ids) pair, classify each source_id by checking _id_to_path."
+    },
+    {
+      "id": "US-005",
+      "title": "Maintain provenance indexes on create",
+      "description": "As a developer, I need create() to update provenance indexes so newly created documents and their lineage are immediately queryable.",
+      "acceptanceCriteria": [
+        "create() accepts derived_from_ids: list[str] | None = None parameter",
+        "On create with None or omitted: store [] in metadata, set _doc_to_sources[doc_id] = []",
+        "On create with non-empty list: validate via validate_derived_from_ids(), normalize, store in metadata; update _doc_to_sources and _source_to_derived; put unresolved refs in _unresolved_provenance",
+        "On create with invalid entries (non-UUID): return WriteResult with status='error', error_code='invalid_input' — do not create the document",
+        "After creating a doc, check _unresolved_provenance for any existing documents that reference the new doc's ID; move those entries from _unresolved_provenance to _source_to_derived (no frontmatter mutation)",
+        "Update _id_to_title with the new doc's title",
+        "Warnings list includes 'derived_from_ids contains missing document: <uuid>' for each unresolved source ID",
+        "create() returns WriteResult that includes warnings",
+        "Unit tests: create with no provenance, create with valid provenance, create with unresolved refs, create resolving previously-unresolved refs, create with invalid UUIDs",
+        "Pyright type check passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "The auto-resolve path (checking _unresolved_provenance after create) is primarily exercised by file-watcher ingestion or startup scan of externally-created files (e.g., git-restored notes with their original UUID), not by normal MCP lithos_write create which always mints a fresh UUID. Still must be implemented and tested."
+    },
+    {
+      "id": "US-006",
+      "title": "Maintain provenance indexes on update",
+      "description": "As a developer, I need update() to handle omit-vs-clear-vs-replace semantics for derived_from_ids following the unified write contract.",
+      "acceptanceCriteria": [
+        "update() accepts derived_from_ids: list[str] | None | _UnsetType = _UNSET parameter",
+        "_UNSET (omitted): preserve existing derived_from_ids — no index changes",
+        "[] (empty list via None): clear existing provenance — remove from all provenance indexes, store [] in metadata",
+        "Non-empty list: validate via validate_derived_from_ids(ids, self_id=doc_id), normalize, replace entire set — remove old index entries, add new ones",
+        "Self-reference rejected: if the document's own ID is in the new derived_from_ids, return WriteResult with status='error', error_code='invalid_input'",
+        "Invalid UUIDs rejected with WriteResult status='error', error_code='invalid_input'",
+        "Update _id_to_title if title changed",
+        "Warnings returned for unresolved source IDs",
+        "Unit tests: omit (preserve), clear ([]), replace with valid IDs, replace with unresolved IDs, self-reference rejection, invalid UUID rejection",
+        "Conformance test: _UNSET, []/None, and non-empty list are distinguishable for derived_from_ids",
+        "Pyright type check passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Follow the source_url omit-vs-clear pattern in update() (knowledge.py lines 550-651). For derived_from_ids the semantics differ slightly: _UNSET=preserve, []=clear (not None=clear like source_url), non-empty list=replace. The MCP boundary mapping (US-008) will handle converting None->_UNSET."
+    },
+    {
+      "id": "US-007",
+      "title": "Maintain provenance indexes on delete",
+      "description": "As a developer, I need delete() to clean up provenance indexes without mutating other documents' frontmatter.",
+      "acceptanceCriteria": [
+        "When a document is deleted, remove its entry from _doc_to_sources",
+        "Remove the deleted doc's ID from all _source_to_derived values where it appears as a derived doc",
+        "For documents that declared the deleted doc as a source: move those relationships from _source_to_derived[deleted_id] to _unresolved_provenance[deleted_id]",
+        "Remove the deleted doc from _id_to_title",
+        "Do NOT mutate any other document's frontmatter",
+        "Unit test: delete a source doc, verify derived docs now show unresolved provenance in _unresolved_provenance",
+        "Unit test: delete a derived doc, verify source doc's _source_to_derived entry is cleaned up",
+        "Pyright type check passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "delete() is at knowledge.py lines 653-689. It currently removes from _id_to_path, _slug_to_id, _source_url_to_id. Add provenance cleanup in the same method. Key: when deleting doc X, if _source_to_derived[X] has entries (docs derived FROM X), those relationships become unresolved. Also remove X from _source_to_derived[s] for each s in _doc_to_sources[X]."
+    },
+    {
+      "id": "US-008",
+      "title": "Wire derived_from_ids into lithos_write MCP tool",
+      "description": "As an agent, I want to pass derived_from_ids to lithos_write so I can declare lineage when creating or updating notes.",
+      "acceptanceCriteria": [
+        "lithos_write tool signature includes derived_from_ids: list[str] | None = None",
+        "On create: pass derived_from_ids to manager.create()",
+        "On update: map MCP boundary semantics to manager semantics: None (omitted) -> _UNSET (preserve); [] -> [] (clear); non-empty list -> pass through (replace)",
+        "Warnings from the WriteResult are included in the response envelope warnings field",
+        "Integration test: create via tool with derived_from_ids, read back, values match",
+        "Integration test: update via tool preserving (None), clearing ([]), and replacing derived_from_ids",
+        "Pyright type check passes",
+        "All tests pass (uv run --extra dev pytest tests/ -q)"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Follow the source_url MCP boundary mapping pattern in server.py lines 250-280. For derived_from_ids: None at MCP boundary means omitted (preserve on update); [] means clear; non-empty list means replace. The create path is simpler — just pass through (None becomes [] in manager)."
+    },
+    {
+      "id": "US-009",
+      "title": "Add manager-owned sync_from_disk API for external file changes",
+      "description": "As a developer, I need KnowledgeManager to own provenance index maintenance for external file changes, so the server/watcher layer does not mutate manager-owned state indirectly.",
+      "acceptanceCriteria": [
+        "KnowledgeManager exposes sync_from_disk(path: Path) -> KnowledgeDocument that re-reads a file from disk, updates all manager indexes (_id_to_path, _slug_to_id, _source_url_to_id, _id_to_title, and all three provenance indexes), and returns the parsed document for downstream search/graph indexing",
+        "sync_from_disk handles both new files (create) and modified files (update) uniformly: read the file, diff against current index state, apply changes — the current watcher sends deleted=False for both cases with no create vs modify distinction",
+        "sync_from_disk for a new file checks _unresolved_provenance for auto-resolution",
+        "sync_from_disk for a modified file diffs derived_from_ids against _doc_to_sources, removes stale entries, adds new ones, reclassifies resolved/unresolved",
+        "sync_from_disk updates _id_to_title (handles external title changes)",
+        "handle_file_change in server.py calls sync_from_disk for non-delete events instead of directly mutating manager state",
+        "handle_file_change in server.py delegates delete to manager.delete() which already handles provenance cleanup (US-007)",
+        "File watcher provenance errors are caught and logged, never crash the watcher",
+        "Integration test: externally create a file with derived_from_ids, verify provenance indexes update",
+        "Integration test: externally modify derived_from_ids in a file, verify indexes update",
+        "Integration test: externally change a file's title, verify _id_to_title updates",
+        "Integration test: externally delete a file that is a provenance source, verify indexes mark relationships as unresolved",
+        "Pyright type check passes"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Current handle_file_change (server.py lines 160-203) directly calls knowledge.read() and search.index_document() etc. Refactor the non-delete path to call knowledge.sync_from_disk(path) which returns the doc, then pass that doc to search/graph. The delete path already calls knowledge.delete(). This follows the 'manager owns invariants' rule from digest-auto-link-v2.md design principles."
+    },
+    {
+      "id": "US-010",
+      "title": "Add _rebuild_indices provenance support",
+      "description": "As a developer, I need _rebuild_indices() to include provenance index rebuilding so full rebuilds leave provenance consistent.",
+      "acceptanceCriteria": [
+        "_rebuild_indices() in server.py clears and rebuilds provenance indexes as part of the full rebuild path",
+        "This can be achieved by calling _scan_existing() which already clears and rebuilds provenance indexes (US-004), or by an explicit provenance rebuild step",
+        "Integration test: after _rebuild_indices(), provenance indexes match on-disk state",
+        "Pyright type check passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "See server.py lines 108-155 for _rebuild_indices(). It currently iterates docs and calls search.index_document() and graph.add_document(). Since _scan_existing() already builds provenance indexes (US-004), and _rebuild_indices() calls knowledge scan paths, this may already work. Verify and add explicit test."
+    },
+    {
+      "id": "US-011",
+      "title": "Add lithos_provenance MCP tool — core BFS traversal",
+      "description": "As an agent, I want to query document lineage so I can understand what a digest was derived from or what documents cite a given source.",
+      "acceptanceCriteria": [
+        "New MCP tool lithos_provenance registered with signature: lithos_provenance(id: str, direction: str = 'both', depth: int = 1, include_unresolved: bool = True) -> dict",
+        "direction='sources': returns documents this doc is derived from",
+        "direction='derived': returns documents derived from this doc",
+        "direction='both': returns both sources and derived",
+        "Each node in results is { id, title } with title resolved from _id_to_title cache — no per-node file I/O",
+        "depth is clamped to range 1-3",
+        "BFS traversal over provenance indexes only (NOT wiki-link graph), tracking visited nodes to handle cycles",
+        "sources, derived, and unresolved_sources lists are sorted by ID for deterministic output",
+        "When include_unresolved=True, response includes unresolved_sources list of UUID strings",
+        "When include_unresolved=False, unresolved sources are omitted",
+        "If id does not exist in _id_to_path, return error: {status: 'error', code: 'doc_not_found', message: '...'}",
+        "Response shape: { id, sources: [{id, title}], derived: [{id, title}], unresolved_sources: [uuid_str] }",
+        "Integration test: single-depth sources query",
+        "Integration test: single-depth derived query",
+        "Integration test: multi-depth BFS (depth=2) with chain A->B->C",
+        "Integration test: cycle handling (A derives from B, B derives from A)",
+        "Integration test: unresolved sources included/excluded",
+        "Integration test: unknown ID returns doc_not_found",
+        "Pyright type check passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "Register via @self.mcp.tool() inside _register_tools(). BFS implementation: use collections.deque for the frontier, set for visited. For direction='sources' walk _doc_to_sources; for 'derived' walk _source_to_derived. At each depth level, expand all current-level nodes before incrementing depth. Clamp depth with min(max(depth, 1), 3). Sort final lists by node ID."
+    },
+    {
+      "id": "US-012",
+      "title": "Surface derived_from_ids in read/search/list responses",
+      "description": "As an agent, I want to see derived_from_ids in read, search, semantic, and list responses so I can discover lineage without a separate provenance call.",
+      "acceptanceCriteria": [
+        "lithos_read response metadata dict includes derived_from_ids (list, possibly empty)",
+        "lithos_search result items include derived_from_ids field",
+        "lithos_semantic result items include derived_from_ids field",
+        "lithos_list result items include derived_from_ids field",
+        "For lithos_read: derived_from_ids comes from the already-loaded document metadata (no extra I/O)",
+        "For lithos_search and lithos_semantic: derived_from_ids is resolved from the manager's _doc_to_sources in-memory index (keyed by doc ID from search results), not from per-result file reads",
+        "For lithos_list: derived_from_ids comes from already-loaded document metadata",
+        "Integration test: create doc with provenance, verify lithos_read includes it",
+        "Integration test: create doc with provenance, verify it appears in lithos_search results with derived_from_ids",
+        "Pyright type check passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "For lithos_read (server.py ~line 362): add meta['derived_from_ids'] = doc.metadata.derived_from_ids similar to how source_url is added. For lithos_search/semantic (server.py ~lines 455-523): look up self.knowledge._doc_to_sources.get(r.id, []) for each result. For lithos_list (server.py ~lines 568-581): use d.metadata.derived_from_ids directly."
+    },
+    {
+      "id": "US-013",
+      "title": "OTEL instrumentation for provenance paths",
+      "description": "As an operator, I need provenance operations to emit spans and metrics via the existing telemetry foundation, per the architecture guardrails.",
+      "acceptanceCriteria": [
+        "lithos_provenance tool handler emits a span consistent with existing tool handlers (manual tracer spans in server.py)",
+        "Provenance validation/normalization in write paths is covered by the existing write span (provenance warnings recorded as span events or attributes)",
+        "Provenance index rebuild during _scan_existing() emits a log with count of resolved/unresolved references",
+        "No raw content or full ID lists in span attributes (per guardrails sensitive-data policy) — use counts instead",
+        "Pyright type check passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "Follow existing tool handler span pattern in server.py — e.g., tracer = get_tracer(); with tracer.start_as_current_span('lithos.provenance') as span. For scan stats, a logger.info with resolved/unresolved counts is sufficient."
+    },
+    {
+      "id": "US-014",
+      "title": "Conformance test suite for provenance",
+      "description": "As a developer, I need a conformance test suite proving provenance behavior aligns with the unified write contract and architecture guardrails.",
+      "acceptanceCriteria": [
+        "Conformance test: create with derived_from_ids=None stores []",
+        "Conformance test: create with valid UUIDs stores normalized list",
+        "Conformance test: update with _UNSET preserves existing provenance",
+        "Conformance test: update with [] clears provenance",
+        "Conformance test: update with new list replaces provenance",
+        "Conformance test: self-reference on update is rejected with invalid_input",
+        "Conformance test: malformed UUIDs rejected with invalid_input",
+        "Conformance test: non-UUID identifiers (titles, slugs, paths) rejected",
+        "Conformance test: uppercase UUIDs normalized to lowercase",
+        "Conformance test: unresolved source IDs produce warnings, not errors",
+        "Conformance test: file-watcher ingestion of a source doc auto-resolves previously-unresolved provenance",
+        "Conformance test: deleting a source doc marks provenance as unresolved",
+        "Conformance test: provenance cycles don't cause infinite traversal",
+        "Conformance test: single-write contract parity (create/update/duplicate/warnings envelope)",
+        "Conformance test: two-pass scan correctly resolves forward references at startup",
+        "Conformance test: repeated _scan_existing() calls produce identical index state",
+        "Conformance test: external title change via file watcher updates _id_to_title",
+        "All tests pass in CI (unit + integration + lint + format + type check)",
+        "Pyright type check passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "Create tests/test_provenance_conformance.py. This is the cross-cutting conformance suite from final-architecture-guardrails.md section 7. Tests should exercise both manager-level and MCP-tool-level paths. Use the existing test_config fixture for temp directories."
+    },
+    {
+      "id": "US-015",
+      "title": "Update docs/SPECIFICATION.md for Phase 3",
+      "description": "As a user of the Lithos specification, I need the spec to document derived_from_ids and lithos_provenance so the spec matches the implementation.",
+      "acceptanceCriteria": [
+        "Section 3.2 (Knowledge File Format): derived_from_ids listed in frontmatter example with description",
+        "Section 5.1 (lithos_write): derived_from_ids parameter description matches implementation",
+        "New section within or after Graph Operations: lithos_provenance tool fully documented (arguments table, returns, behavior notes for BFS/depth/cycles/unresolved)",
+        "Tool count in Appendix B updated (20 -> 21)",
+        "Appendix B tool summary table updated to include lithos_provenance under Graph or Provenance category",
+        "lithos_read return type documents derived_from_ids in metadata",
+        "lithos_search, lithos_semantic, lithos_list return types document derived_from_ids field",
+        "No contradictions with unified-write-contract.md or final-architecture-guardrails.md",
+        "Pyright type check passes",
+        "Ruff lint and format pass"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "docs/SPECIFICATION.md already lists derived_from_ids on lithos_write (line 271) but the code didn't support it until this phase. Verify the existing spec text matches the implementation, then add lithos_provenance as a new tool section and update response shapes for read/search/semantic/list."
+    }
+  ]
+}

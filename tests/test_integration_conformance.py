@@ -2235,6 +2235,246 @@ class TestDerivedFromIdsMCPBoundary:
         assert result["code"] == "invalid_input"
 
 
+class TestSyncFromDisk:
+    """Integration tests for US-009: sync_from_disk provenance index maintenance."""
+
+    @pytest.mark.asyncio
+    async def test_external_create_with_derived_from_ids(self, server: LithosServer):
+        """Externally created file with derived_from_ids updates provenance indexes."""
+        import uuid
+
+        # Create a source doc via MCP
+        src = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Sync Source",
+                "content": "Source document.",
+                "agent": "sync-agent",
+            },
+        )
+        src_id = src["id"]
+
+        # Externally create a file on disk with derived_from_ids
+        doc_id = str(uuid.uuid4())
+        post = frontmatter.Post(
+            "# External Derived\n\nDerived from source via external file.",
+            id=doc_id,
+            title="External Derived",
+            author="external",
+            created_at="2026-03-08T00:00:00+00:00",
+            updated_at="2026-03-08T00:00:00+00:00",
+            tags=[],
+            aliases=[],
+            confidence=1.0,
+            contributors=[],
+            source=None,
+            supersedes=None,
+            derived_from_ids=[src_id],
+        )
+        knowledge_path = server.config.storage.knowledge_path
+        file_path = knowledge_path / "external-derived.md"
+        file_path.write_text(frontmatter.dumps(post))
+
+        # Call handle_file_change to simulate watcher
+        await server.handle_file_change(file_path, deleted=False)
+
+        # Verify provenance indexes are updated
+        assert doc_id in server.knowledge._doc_to_sources
+        assert server.knowledge._doc_to_sources[doc_id] == [src_id]
+        assert doc_id in server.knowledge._source_to_derived.get(src_id, set())
+        assert server.knowledge._id_to_title[doc_id] == "External Derived"
+
+    @pytest.mark.asyncio
+    async def test_external_modify_derived_from_ids(self, server: LithosServer):
+        """Externally modifying derived_from_ids in a file updates indexes."""
+        # Create source docs and a derived doc via MCP
+        s1 = await _call_tool(
+            server,
+            "lithos_write",
+            {"title": "Modify Source 1", "content": "S1.", "agent": "sync-agent"},
+        )
+        s2 = await _call_tool(
+            server,
+            "lithos_write",
+            {"title": "Modify Source 2", "content": "S2.", "agent": "sync-agent"},
+        )
+        derived = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Modifiable Derived",
+                "content": "Derived from S1.",
+                "agent": "sync-agent",
+                "derived_from_ids": [s1["id"]],
+            },
+        )
+        derived_id = derived["id"]
+        derived_path_str = derived["path"]
+
+        # Verify initial provenance
+        assert server.knowledge._doc_to_sources[derived_id] == [s1["id"]]
+        assert derived_id in server.knowledge._source_to_derived.get(s1["id"], set())
+
+        # Externally modify the file's derived_from_ids on disk
+        knowledge_path = server.config.storage.knowledge_path
+        file_path = knowledge_path / derived_path_str
+        post = frontmatter.load(str(file_path))
+        post.metadata["derived_from_ids"] = [s2["id"]]
+        file_path.write_text(frontmatter.dumps(post))
+
+        # Simulate watcher event
+        await server.handle_file_change(file_path, deleted=False)
+
+        # Verify indexes updated: s1 removed, s2 added
+        assert server.knowledge._doc_to_sources[derived_id] == [s2["id"]]
+        assert derived_id not in server.knowledge._source_to_derived.get(s1["id"], set())
+        assert derived_id in server.knowledge._source_to_derived.get(s2["id"], set())
+
+    @pytest.mark.asyncio
+    async def test_external_title_change_updates_id_to_title(self, server: LithosServer):
+        """Externally changing a file's title updates _id_to_title."""
+        doc = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Original Title",
+                "content": "Content.",
+                "agent": "sync-agent",
+            },
+        )
+        doc_id = doc["id"]
+        doc_path_str = doc["path"]
+
+        assert server.knowledge._id_to_title[doc_id] == "Original Title"
+
+        # Externally modify the title on disk
+        knowledge_path = server.config.storage.knowledge_path
+        file_path = knowledge_path / doc_path_str
+        post = frontmatter.load(str(file_path))
+        post.metadata["title"] = "Changed Title"
+        # Also update H1 to match
+        post.content = "# Changed Title\n\nContent."
+        file_path.write_text(frontmatter.dumps(post))
+
+        await server.handle_file_change(file_path, deleted=False)
+
+        assert server.knowledge._id_to_title[doc_id] == "Changed Title"
+
+    @pytest.mark.asyncio
+    async def test_external_delete_source_marks_unresolved(self, server: LithosServer):
+        """Externally deleting a source doc marks provenance as unresolved."""
+        # Create source + derived via MCP
+        src = await _call_tool(
+            server,
+            "lithos_write",
+            {"title": "Deletable Source", "content": "Source.", "agent": "sync-agent"},
+        )
+        src_id = src["id"]
+        src_path_str = src["path"]
+
+        derived = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Orphanable Derived",
+                "content": "Derived from deletable source.",
+                "agent": "sync-agent",
+                "derived_from_ids": [src_id],
+            },
+        )
+        derived_id = derived["id"]
+
+        # Verify initial state
+        assert derived_id in server.knowledge._source_to_derived.get(src_id, set())
+
+        # Externally delete the source file
+        knowledge_path = server.config.storage.knowledge_path
+        src_file = knowledge_path / src_path_str
+        src_file.unlink()
+
+        await server.handle_file_change(src_file, deleted=True)
+
+        # Source should be removed from indexes
+        assert src_id not in server.knowledge._id_to_path
+        assert src_id not in server.knowledge._id_to_title
+
+        # Derived doc's provenance should now be unresolved
+        assert derived_id in server.knowledge._unresolved_provenance.get(src_id, set())
+        assert src_id not in server.knowledge._source_to_derived
+
+    @pytest.mark.asyncio
+    async def test_sync_from_disk_auto_resolves_unresolved(self, server: LithosServer):
+        """Externally creating a file that matches an unresolved ref auto-resolves it."""
+        import uuid
+
+        # Create a derived doc that references a not-yet-existing source
+        future_source_id = str(uuid.uuid4())
+        derived = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Waiting Derived",
+                "content": "Waiting for source to appear.",
+                "agent": "sync-agent",
+                "derived_from_ids": [future_source_id],
+            },
+        )
+        derived_id = derived["id"]
+
+        # Verify unresolved
+        assert derived_id in server.knowledge._unresolved_provenance.get(future_source_id, set())
+
+        # Now externally create the source file with the matching ID
+        post = frontmatter.Post(
+            "# Future Source\n\nNow exists on disk.",
+            id=future_source_id,
+            title="Future Source",
+            author="external",
+            created_at="2026-03-08T00:00:00+00:00",
+            updated_at="2026-03-08T00:00:00+00:00",
+            tags=[],
+            aliases=[],
+            confidence=1.0,
+            contributors=[],
+            source=None,
+            supersedes=None,
+        )
+        knowledge_path = server.config.storage.knowledge_path
+        file_path = knowledge_path / "future-source.md"
+        file_path.write_text(frontmatter.dumps(post))
+
+        await server.handle_file_change(file_path, deleted=False)
+
+        # Unresolved should now be resolved
+        assert future_source_id not in server.knowledge._unresolved_provenance
+        assert derived_id in server.knowledge._source_to_derived.get(future_source_id, set())
+
+    @pytest.mark.asyncio
+    async def test_sync_from_disk_error_does_not_crash_watcher(self, server: LithosServer):
+        """File watcher provenance errors are caught and logged, never crash."""
+        knowledge_path = server.config.storage.knowledge_path
+
+        # Create a malformed file
+        bad_file = knowledge_path / "malformed-sync.md"
+        bad_file.write_bytes(b"\x00\x01\x02\xff\xfe")
+
+        # Should not raise
+        await server.handle_file_change(bad_file, deleted=False)
+
+        # Verify server is still functional
+        result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Post Error Doc",
+                "content": "Server still works.",
+                "agent": "sync-agent",
+            },
+        )
+        assert result["status"] == "created"
+
+
 def test_conformance_module_exists():
     """Sanity check to keep this module discoverable in test listings."""
     assert Path(__file__).name == "test_integration_conformance.py"
