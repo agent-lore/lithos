@@ -41,7 +41,7 @@ Agent Zero running inside docker on the same machine running lithos
 
 ### OpenClaw
 
-Update `mcporter.sjon` Probably in `~/.openclaw/workspace/config/mcporter.json`
+Update `mcporter.json` Probably in `~/.openclaw/workspace/config/mcporter.json`
 
 Use `localhost` if running on the same machine as OpenClaw, otherwise the name or IP address of the server.
 
