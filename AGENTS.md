@@ -26,7 +26,7 @@ A change is **not done** unless all five are green:
 
 ## Code Conventions
 
-- **Pyright** for type checking (basic mode)
+- **Pyright** for type checking (standard mode)
 - **Ruff** for linting and formatting (line-length 100, double quotes, spaces)
 - Lint rules: E, F, I (isort), UP, B, SIM, RUF
 - Async throughout: tests use `pytest-asyncio` with `asyncio_mode = "auto"`

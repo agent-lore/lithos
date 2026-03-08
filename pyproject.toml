@@ -98,7 +98,7 @@ skip-magic-trailing-comma = false
 [tool.pyright]
 pythonVersion = "3.10"
 pythonPlatform = "Linux"
-typeCheckingMode = "basic"
+typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
 

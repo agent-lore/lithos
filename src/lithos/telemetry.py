@@ -1,3 +1,4 @@
+# pyright: reportPossiblyUnboundVariable=false
 """OpenTelemetry instrumentation for Lithos.
 
 Provides tracing and metrics when opentelemetry-sdk is installed and
