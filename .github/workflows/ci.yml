@@ -13,13 +13,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
-
-      - name: Set up Python
-        run: uv python install 3.11
 
       - name: Install dependencies
         run: uv sync --extra dev
@@ -39,22 +41,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
 
-      - name: Set up Python
-        run: uv python install 3.11
-
       - name: Install dependencies
         run: uv sync --extra dev
 
-      - name: Run tests
-        run: uv run pytest tests/ -m "not integration" -v --tb=short
-
       - name: Run tests with coverage
-        run: uv run pytest tests/ -m "not integration" --cov=lithos --cov-report=xml
+        run: uv run pytest tests/ -m "not integration" --cov=lithos --cov-report=xml -v --tb=short
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -62,9 +63,10 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false
 
-  docker:
-    name: Docker Build
+  integration:
+    name: Integration Test
     runs-on: ubuntu-latest
+    needs: [lint, test]
     steps:
       - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
@@ -73,37 +75,28 @@ jobs:
           dotnet: true
           haskell: true
           large-packages: true
+
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
-          push: false
-          tags: lithos:test
+          load: true
+          tags: lithos:test-ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  integration:
-    name: Integration Test
-    runs-on: ubuntu-latest
-    needs: [lint, test, docker]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and start Lithos
+      - name: Start Lithos
         run: |
           cd docker
-          LITHOS_OTEL_ENABLED=false docker compose up -d --build
+          LITHOS_IMAGE=lithos:test-ci LITHOS_OTEL_ENABLED=false docker compose up -d --no-build
 
-      - name: Wait for server to be healthy
+      - name: Wait for server to become healthy
         run: |
           echo "Waiting for lithos container to become healthy..."
           elapsed=0
@@ -126,13 +119,15 @@ jobs:
       - name: Show server logs
         run: docker compose -f docker/docker-compose.yml logs
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install uv and test client
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
-
-      - name: Set up Python
-        run: uv python install 3.11
 
       - name: Install integration test dependencies
         run: |
@@ -152,6 +147,4 @@ jobs:
 
       - name: Cleanup
         if: always()
-        run: |
-          cd docker
-          docker compose down -v
+        run: docker compose -f docker/docker-compose.yml down -v

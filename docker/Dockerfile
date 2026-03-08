@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Lithos - Local shared knowledge base for AI agents
 # Multi-stage build for smaller image
 
@@ -9,31 +10,29 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Copy dependency files and README (required by pyproject.toml)
-COPY pyproject.toml README.md ./
-COPY src/ ./src/
-
 # Create virtual environment and install dependencies
 RUN uv venv /app/.venv
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
+ENV UV_LINK_MODE=copy
 
-# Install the package (production only, no dev deps for smaller image)
-RUN uv pip install -e ".[otel]"
+# Copy dependency metadata first so source changes do not invalidate the dependency layer.
+COPY pyproject.toml uv.lock README.md ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --extra otel --no-install-project
+
+# Install the project separately so normal code changes reuse the cached dependency layer.
+COPY src/ ./src/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install .
 
 # Stage 2: Runtime image
 FROM python:3.11-slim AS runtime
-
-# Install runtime dependencies (none needed currently)
-RUN apt-get update && apt-get install -y --no-install-recommends     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /app/src /app/src
-COPY --from=builder /app/pyproject.toml /app/
-COPY --from=builder /app/README.md /app/
 
 # Set environment
 ENV VIRTUAL_ENV=/app/.venv

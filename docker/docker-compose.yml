@@ -1,6 +1,8 @@
 # Lithos Docker Compose configuration
 services:
   lithos:
+    image: ${LITHOS_IMAGE:-lithos:local}
+    pull_policy: never
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -18,7 +20,7 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 8765)); s.close()"]
-      interval: 30s
+      interval: 10s
       timeout: 10s
       retries: 3
       start_period: 60s
