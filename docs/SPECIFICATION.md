@@ -53,10 +53,10 @@ Status: Aligned with Implementation
 │  │  │ Knowledge   │  │   Search    │  │  Coordination   │    │  │
 │  │  │  Manager    │  │   Engine    │  │    Service      │    │  │
 │  │  └─────────────┘  └─────────────┘  └─────────────────┘    │  │
-│  │                   ┌─────────────┐                          │  │
-│  │                   │   Agent     │                          │  │
-│  │                   │  Registry   │                          │  │
-│  │                   └─────────────┘                          │  │
+│  │  ┌─────────────┐  ┌─────────────┐                          │  │
+│  │  │   Agent     │  │  Event Bus  │                          │  │
+│  │  │  Registry   │  │ (in-memory) │                          │  │
+│  │  └─────────────┘  └─────────────┘                          │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                              │                                   │
 │  ┌───────────────────────────┼───────────────────────────────┐  │
@@ -646,9 +646,69 @@ CREATE TABLE findings (
 
 ---
 
-## 8. Configuration
+## 8. Internal Event Bus
 
-### 8.1 Configuration
+Lithos includes an in-memory event bus that emits `LithosEvent` on all write, delete, task, finding, and agent-register success paths, as well as from the file watcher. This is purely internal infrastructure — no new MCP tools, no SSE, no webhooks.
+
+### 8.1 LithosEvent Schema
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string (UUID) | Auto-generated unique event identifier; stable dedup key |
+| `type` | string | Event type constant (see table below) |
+| `timestamp` | datetime (UTC) | Defaults to `datetime.now(UTC)` |
+| `agent` | string | Agent that triggered the event (empty string if unknown, e.g. file watcher) |
+| `payload` | dict | Event-specific key-value data |
+| `tags` | list[str] | Tags from the affected entity (e.g. document tags for note events; empty for non-note events) |
+
+### 8.2 Event Types
+
+| Type Constant | Emitted By | Payload Fields |
+|---------------|-----------|----------------|
+| `note.created` | `lithos_write` (create) | `id`, `title`, `path` |
+| `note.updated` | `lithos_write` (update), file watcher (create/modify) | `id`, `title`, `path` (tool); `path` (watcher) |
+| `note.deleted` | `lithos_delete`, file watcher (delete) | `id`, `path` (tool); `path` (watcher) |
+| `task.created` | `lithos_task_create` | `task_id`, `title` |
+| `task.claimed` | `lithos_task_claim` | `task_id`, `agent`, `aspect` |
+| `task.released` | `lithos_task_release` | `task_id`, `agent`, `aspect` |
+| `task.completed` | `lithos_task_complete` | `task_id`, `agent` |
+| `finding.posted` | `lithos_finding_post` | `finding_id`, `task_id`, `agent` |
+| `agent.registered` | `lithos_agent_register` | `agent_id`, `name` |
+| `batch.queued` | *(future — Phase 5)* | — |
+| `batch.applying` | *(future — Phase 5)* | — |
+| `batch.projecting` | *(future — Phase 5)* | — |
+| `batch.completed` | *(future — Phase 5)* | — |
+| `batch.failed` | *(future — Phase 5)* | — |
+
+### 8.3 Emission Points
+
+- **Tool handlers**: Events are emitted after the operation succeeds but before returning to the caller. Each emission is wrapped in `try/except` so event bus failures never propagate to the caller.
+- **File watcher**: `handle_file_change` emits `note.updated` on file create/modify and `note.deleted` on file delete. The watchdog observer runs on OS threads; `asyncio.run_coroutine_threadsafe` bridges to the event loop. Emission failures never crash the file watcher.
+- **No-event cases**: `lithos_write` with `status=duplicate` or `status=invalid_input` emits no event. Failed `lithos_delete` (item not found) emits no event.
+
+### 8.4 Subscriber Semantics
+
+- **Subscribe**: `EventBus.subscribe(event_types=None, tags=None)` returns a bounded `asyncio.Queue`. Optional filters match by event type list and/or tag list.
+- **Unsubscribe**: `EventBus.unsubscribe(queue)` removes the subscriber.
+- **Backpressure**: If a subscriber queue is full, the event is dropped for that subscriber and a per-subscriber drop counter is incremented (`get_drop_count(queue)`).
+- **Disabled mode**: When `EventsConfig.enabled=False`, `emit()` is a no-op — no fan-out, no buffer append.
+
+### 8.5 Best-Effort Contract
+
+- `emit()` never raises — all exceptions are caught and logged.
+- Emission failures are isolated: a broken subscriber cannot affect other subscribers or the underlying operation.
+- Events are delivered in process-local best-effort order for sequential same-loop emits.
+- `event.id` (UUID) serves as a stable dedup key for consumers.
+
+### 8.6 Ring Buffer
+
+The event bus maintains an in-memory ring buffer of the last N events using `collections.deque(maxlen=N)`. The buffer is subscribe-only with no public read API. Buffer size is configurable via `events.event_buffer_size` (default: 500).
+
+---
+
+## 9. Configuration
+
+### 9.1 Configuration
 
 Configuration is managed via `pydantic-settings` (`LithosConfig`). Values are resolved in order:
 
@@ -686,9 +746,15 @@ coordination:
 index:
   rebuild_on_start: false   # Force rebuild indices on startup
   watch_debounce_ms: 500    # Debounce file changes
+
+# Event Bus
+events:
+  enabled: true              # Enable/disable event bus (no-op when false)
+  event_buffer_size: 500     # Ring buffer capacity (last N events)
+  subscriber_queue_size: 100 # Max queued events per subscriber
 ```
 
-### 8.2 Command Line Interface
+### 9.2 Command Line Interface
 
 ```bash
 # Run with stdio transport (for MCP)
@@ -720,9 +786,9 @@ lithos search "query text" --semantic --data-dir ./data
 
 ---
 
-## 9. Error Handling
+## 10. Error Handling
 
-### 9.1 Current Behavior
+### 10.1 Current Behavior
 
 Tools indicate errors through their return values:
 
@@ -730,7 +796,7 @@ Tools indicate errors through their return values:
 - **Empty results**: Search/read operations return empty results or `null` fields when items are not found
 - **Exceptions**: Unexpected errors (file I/O, index corruption) propagate as MCP-level exceptions
 
-### 9.2 Error Scenarios
+### 10.2 Error Scenarios
 
 | Scenario | Behavior |
 |----------|----------|
@@ -742,7 +808,7 @@ Tools indicate errors through their return values:
 
 ---
 
-## 10. Future Considerations (Out of Scope for v0.1)
+## 11. Future Considerations (Out of Scope for v0.1)
 
 These are explicitly not part of the initial implementation but may be considered later:
 
