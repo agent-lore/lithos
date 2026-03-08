@@ -14,6 +14,7 @@ from watchdog.observers import Observer
 
 from lithos.config import LithosConfig, get_config, set_config
 from lithos.coordination import CoordinationService
+from lithos.events import EventBus
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import _UNSET, KnowledgeDocument, KnowledgeManager, _UnsetType
 from lithos.search import SearchEngine
@@ -39,6 +40,7 @@ class LithosServer:
         self.search = SearchEngine(self._config)
         self.graph = KnowledgeGraph(self._config)
         self.coordination = CoordinationService(self._config)
+        self.event_bus = EventBus(self._config.events)
 
         # Cached active claims count for the OTEL observable gauge callback
         self._cached_active_claims: int = 0
