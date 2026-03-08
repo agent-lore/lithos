@@ -906,6 +906,18 @@ class KnowledgeManager:
             # Remove from slug index
             self._slug_to_id = {k: v for k, v in self._slug_to_id.items() if v != id}
 
+            # Provenance cleanup
+            # 1. Remove this doc as a "derived" doc from reverse indexes
+            self._remove_provenance_entries(id)
+            # 2. Remove forward index entry
+            self._doc_to_sources.pop(id, None)
+            # 3. If this doc was a source for others, move those to unresolved
+            derived_docs = self._source_to_derived.pop(id, set())
+            if derived_docs:
+                self._unresolved_provenance[id] = derived_docs
+            # 4. Remove from title cache
+            self._id_to_title.pop(id, None)
+
             return True, str(file_path)
 
     async def list_all(

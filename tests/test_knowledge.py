@@ -2278,3 +2278,161 @@ class TestUpdateProvenance:
         # non-empty replaces
         r3 = await knowledge_manager.update(id=doc.id, agent="e", derived_from_ids=[src2.id])
         assert r3.document.metadata.derived_from_ids == [src2.id]
+
+
+class TestDeleteProvenance:
+    """Tests for US-007: Maintain provenance indexes on delete."""
+
+    @pytest.mark.asyncio
+    async def test_delete_source_marks_derived_as_unresolved(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Deleting a source doc moves derived docs to unresolved provenance."""
+        src = (
+            await knowledge_manager.create(title="Source", content="Source.", agent="agent")
+        ).document
+        derived = (
+            await knowledge_manager.create(
+                title="Derived",
+                content="Derived.",
+                agent="agent",
+                derived_from_ids=[src.id],
+            )
+        ).document
+
+        # Verify initial state
+        assert derived.id in knowledge_manager._source_to_derived[src.id]
+        assert src.id not in knowledge_manager._unresolved_provenance
+
+        # Delete source
+        success, _path = await knowledge_manager.delete(id=src.id)
+        assert success
+
+        # Source removed from all provenance indexes
+        assert src.id not in knowledge_manager._doc_to_sources
+        assert src.id not in knowledge_manager._source_to_derived
+        assert src.id not in knowledge_manager._id_to_title
+
+        # Derived doc's relationship is now unresolved
+        assert src.id in knowledge_manager._unresolved_provenance
+        assert derived.id in knowledge_manager._unresolved_provenance[src.id]
+
+        # Derived doc's forward index still exists (frontmatter not mutated)
+        assert knowledge_manager._doc_to_sources[derived.id] == [src.id]
+
+    @pytest.mark.asyncio
+    async def test_delete_derived_cleans_source_reverse_index(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Deleting a derived doc removes it from source's _source_to_derived."""
+        src = (
+            await knowledge_manager.create(title="Source", content="Source.", agent="agent")
+        ).document
+        derived = (
+            await knowledge_manager.create(
+                title="Derived",
+                content="Derived.",
+                agent="agent",
+                derived_from_ids=[src.id],
+            )
+        ).document
+
+        # Verify initial state
+        assert derived.id in knowledge_manager._source_to_derived[src.id]
+
+        # Delete derived
+        success, _path = await knowledge_manager.delete(id=derived.id)
+        assert success
+
+        # Derived removed from all provenance indexes
+        assert derived.id not in knowledge_manager._doc_to_sources
+        assert derived.id not in knowledge_manager._id_to_title
+
+        # Source's _source_to_derived no longer has the deleted derived doc
+        assert src.id not in knowledge_manager._source_to_derived or (
+            derived.id not in knowledge_manager._source_to_derived.get(src.id, set())
+        )
+
+    @pytest.mark.asyncio
+    async def test_delete_doc_no_provenance(self, knowledge_manager: KnowledgeManager):
+        """Deleting a doc with no provenance relationships works cleanly."""
+        doc = (
+            await knowledge_manager.create(title="Standalone", content="No refs.", agent="agent")
+        ).document
+
+        success, _path = await knowledge_manager.delete(id=doc.id)
+        assert success
+        assert doc.id not in knowledge_manager._doc_to_sources
+        assert doc.id not in knowledge_manager._id_to_title
+        assert doc.id not in knowledge_manager._source_to_derived
+
+    @pytest.mark.asyncio
+    async def test_delete_does_not_mutate_other_frontmatter(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Deleting a source doc does NOT change other docs' frontmatter on disk."""
+        src = (
+            await knowledge_manager.create(title="Source", content="Source.", agent="agent")
+        ).document
+        derived = (
+            await knowledge_manager.create(
+                title="Derived",
+                content="Derived.",
+                agent="agent",
+                derived_from_ids=[src.id],
+            )
+        ).document
+
+        # Delete source
+        await knowledge_manager.delete(id=src.id)
+
+        # Read derived doc from disk — frontmatter should still reference deleted source
+        re_read, _ = await knowledge_manager.read(id=derived.id)
+        assert re_read.metadata.derived_from_ids == [src.id]
+
+    @pytest.mark.asyncio
+    async def test_delete_source_with_multiple_derived(self, knowledge_manager: KnowledgeManager):
+        """Deleting a source with multiple derived docs moves all to unresolved."""
+        src = (
+            await knowledge_manager.create(title="Source", content="Source.", agent="agent")
+        ).document
+        d1 = (
+            await knowledge_manager.create(
+                title="D1", content="D1.", agent="agent", derived_from_ids=[src.id]
+            )
+        ).document
+        d2 = (
+            await knowledge_manager.create(
+                title="D2", content="D2.", agent="agent", derived_from_ids=[src.id]
+            )
+        ).document
+
+        await knowledge_manager.delete(id=src.id)
+
+        assert src.id in knowledge_manager._unresolved_provenance
+        assert d1.id in knowledge_manager._unresolved_provenance[src.id]
+        assert d2.id in knowledge_manager._unresolved_provenance[src.id]
+
+    @pytest.mark.asyncio
+    async def test_delete_derived_with_multiple_sources(self, knowledge_manager: KnowledgeManager):
+        """Deleting a derived doc cleans up all its source reverse entries."""
+        s1 = (await knowledge_manager.create(title="S1", content="S1.", agent="agent")).document
+        s2 = (await knowledge_manager.create(title="S2", content="S2.", agent="agent")).document
+        derived = (
+            await knowledge_manager.create(
+                title="Derived",
+                content="Derived.",
+                agent="agent",
+                derived_from_ids=[s1.id, s2.id],
+            )
+        ).document
+
+        await knowledge_manager.delete(id=derived.id)
+
+        # Neither source should reference the deleted derived doc
+        assert s1.id not in knowledge_manager._source_to_derived or (
+            derived.id not in knowledge_manager._source_to_derived.get(s1.id, set())
+        )
+        assert s2.id not in knowledge_manager._source_to_derived or (
+            derived.id not in knowledge_manager._source_to_derived.get(s2.id, set())
+        )
