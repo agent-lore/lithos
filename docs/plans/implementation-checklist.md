@@ -80,11 +80,11 @@ Exit criteria:
 
 ## Phase 2b - Internal Event Bus
 
-- [ ] Add `events.py` with `EventBus` class, `LithosEvent` dataclass, and in-memory ring buffer
-- [ ] Add `EventsConfig` to `config.py` (enabled flag, buffer size)
-- [ ] Wire `EventBus` into `LithosServer` lifecycle
-- [ ] Emit events from write/delete/task/finding/agent-register success paths in `server.py`
-- [ ] Emit events from file watcher `handle_file_change`
+- [x] Add `events.py` with `EventBus` class, `LithosEvent` dataclass, and in-memory ring buffer
+- [x] Add `EventsConfig` to `config.py` (enabled flag, buffer size)
+- [x] Wire `EventBus` into `LithosServer` lifecycle
+- [x] Emit events from write/delete/task/finding/agent-register success paths in `server.py`
+- [x] Emit events from file watcher `handle_file_change`
 
 Dependencies:
 
