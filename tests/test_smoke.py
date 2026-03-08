@@ -14,12 +14,14 @@ pytestmark = pytest.mark.integration
 async def test_smoke_write_index_search(server: LithosServer):
     """Create a doc, index it, find it via full-text and semantic search."""
     # Write
-    doc = await server.knowledge.create(
-        title="Smoke Test Entry",
-        content="Lithos is a shared memory substrate for AI agents.",
-        agent="smoke-agent",
-        tags=["smoke", "test"],
-    )
+    doc = (
+        await server.knowledge.create(
+            title="Smoke Test Entry",
+            content="Lithos is a shared memory substrate for AI agents.",
+            agent="smoke-agent",
+            tags=["smoke", "test"],
+        )
+    ).document
     server.search.index_document(doc)
     server.graph.add_document(doc)
 
@@ -92,18 +94,22 @@ async def test_smoke_coordination_lifecycle(server: LithosServer):
 @pytest.mark.asyncio
 async def test_smoke_graph_links(server: LithosServer):
     """Create two linked docs and verify the graph connects them."""
-    target = await server.knowledge.create(
-        title="Smoke Target",
-        content="This document is the link target.",
-        agent="smoke-agent",
-    )
+    target = (
+        await server.knowledge.create(
+            title="Smoke Target",
+            content="This document is the link target.",
+            agent="smoke-agent",
+        )
+    ).document
     server.graph.add_document(target)
 
-    source = await server.knowledge.create(
-        title="Smoke Source",
-        content="Refers to [[smoke-target]] for details.",
-        agent="smoke-agent",
-    )
+    source = (
+        await server.knowledge.create(
+            title="Smoke Source",
+            content="Refers to [[smoke-target]] for details.",
+            agent="smoke-agent",
+        )
+    ).document
     server.graph.add_document(source)
 
     # Verify edge exists

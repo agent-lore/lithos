@@ -101,12 +101,14 @@ class TestServerInitialization:
     @pytest.mark.asyncio
     async def test_handle_file_change_modified_markdown_reindexes(self, server: LithosServer):
         """A markdown modification event reindexes search and graph projections."""
-        doc = await server.knowledge.create(
-            title="Watcher Modify Doc",
-            content="Original watcher content.",
-            agent="watcher-agent",
-            path="watched",
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Watcher Modify Doc",
+                content="Original watcher content.",
+                agent="watcher-agent",
+                path="watched",
+            )
+        ).document
         server.search.index_document(doc)
         server.graph.add_document(doc)
 
@@ -207,12 +209,14 @@ class TestKnowledgeToolWorkflow:
     async def test_create_read_update_delete_workflow(self, server: LithosServer):
         """Complete CRUD workflow through server."""
         # Create
-        doc = await server.knowledge.create(
-            title="Integration Test Doc",
-            content="Initial content for testing.",
-            agent="test-agent",
-            tags=["test", "integration"],
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Integration Test Doc",
+                content="Initial content for testing.",
+                agent="test-agent",
+                tags=["test", "integration"],
+            )
+        ).document
         doc_id = doc.id
 
         # Verify indexed
@@ -224,12 +228,14 @@ class TestKnowledgeToolWorkflow:
         assert read_doc.content == "Initial content for testing."
 
         # Update
-        updated = await server.knowledge.update(
-            id=doc_id,
-            agent="editor-agent",
-            content="Updated content.",
-            tags=["test", "integration", "updated"],
-        )
+        updated = (
+            await server.knowledge.update(
+                id=doc_id,
+                agent="editor-agent",
+                content="Updated content.",
+                tags=["test", "integration", "updated"],
+            )
+        ).document
         assert updated.content == "Updated content."
         assert "updated" in updated.metadata.tags
 
@@ -245,20 +251,24 @@ class TestKnowledgeToolWorkflow:
     async def test_create_with_wiki_links_updates_graph(self, server: LithosServer):
         """Creating document with links updates knowledge graph."""
         # Create target first
-        target = await server.knowledge.create(
-            title="Link Target",
-            content="This is the target document.",
-            agent="agent",
-        )
+        target = (
+            await server.knowledge.create(
+                title="Link Target",
+                content="This is the target document.",
+                agent="agent",
+            )
+        ).document
         server.search.index_document(target)
         server.graph.add_document(target)
 
         # Create source with link
-        source = await server.knowledge.create(
-            title="Link Source",
-            content="See [[link-target]] for details.",
-            agent="agent",
-        )
+        source = (
+            await server.knowledge.create(
+                title="Link Source",
+                content="See [[link-target]] for details.",
+                agent="agent",
+            )
+        ).document
         server.search.index_document(source)
         server.graph.add_document(source)
 
@@ -288,12 +298,14 @@ class TestKnowledgeToolWorkflow:
         cutoff = datetime.now(timezone.utc)
         await asyncio.sleep(0.02)
 
-        new_doc = await server.knowledge.create(
-            title="New Procedure",
-            content="Newer procedure.",
-            agent="agent",
-            path="procedures",
-        )
+        new_doc = (
+            await server.knowledge.create(
+                title="New Procedure",
+                content="Newer procedure.",
+                agent="agent",
+                path="procedures",
+            )
+        ).document
 
         docs, total = await server.knowledge.list_all(
             path_prefix="procedures",
@@ -311,12 +323,14 @@ class TestKnowledgeToolWorkflow:
     @pytest.mark.asyncio
     async def test_handle_deleted_file_removes_indices(self, server: LithosServer):
         """Delete file events remove knowledge/search/graph state."""
-        doc = await server.knowledge.create(
-            title="Delete Event Doc",
-            content="Will be deleted from indices.",
-            agent="agent",
-            path="watched",
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Delete Event Doc",
+                content="Will be deleted from indices.",
+                agent="agent",
+                path="watched",
+            )
+        ).document
         server.search.index_document(doc)
         server.graph.add_document(doc)
 
@@ -338,12 +352,14 @@ class TestSearchToolWorkflow:
     async def test_full_text_search_finds_created_docs(self, server: LithosServer):
         """Full-text search finds newly created documents."""
         # Create searchable document
-        doc = await server.knowledge.create(
-            title="Kubernetes Deployment",
-            content="Deploy applications to Kubernetes clusters using kubectl.",
-            agent="agent",
-            tags=["kubernetes", "deployment"],
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Kubernetes Deployment",
+                content="Deploy applications to Kubernetes clusters using kubectl.",
+                agent="agent",
+                tags=["kubernetes", "deployment"],
+            )
+        ).document
         server.search.index_document(doc)
 
         # Search should find it
@@ -356,11 +372,13 @@ class TestSearchToolWorkflow:
     async def test_semantic_search_finds_related_content(self, server: LithosServer):
         """Semantic search finds conceptually related documents."""
         # Create document about error handling
-        doc = await server.knowledge.create(
-            title="Exception Handling",
-            content="Catch exceptions and handle errors gracefully in your code.",
-            agent="agent",
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Exception Handling",
+                content="Catch exceptions and handle errors gracefully in your code.",
+                agent="agent",
+            )
+        ).document
         server.search.index_document(doc)
 
         # Search with related but different terms
@@ -373,18 +391,22 @@ class TestSearchToolWorkflow:
     async def test_search_respects_tag_filters(self, server: LithosServer):
         """Search filters by tags correctly."""
         # Create docs with different tags
-        python_doc = await server.knowledge.create(
-            title="Python Guide",
-            content="Programming in Python.",
-            agent="agent",
-            tags=["python"],
-        )
-        java_doc = await server.knowledge.create(
-            title="Java Guide",
-            content="Programming in Java.",
-            agent="agent",
-            tags=["java"],
-        )
+        python_doc = (
+            await server.knowledge.create(
+                title="Python Guide",
+                content="Programming in Python.",
+                agent="agent",
+                tags=["python"],
+            )
+        ).document
+        java_doc = (
+            await server.knowledge.create(
+                title="Java Guide",
+                content="Programming in Java.",
+                agent="agent",
+                tags=["java"],
+            )
+        ).document
         server.search.index_document(python_doc)
         server.search.index_document(java_doc)
 
@@ -507,21 +529,27 @@ class TestGraphToolWorkflow:
     async def test_build_and_query_knowledge_graph(self, server: LithosServer):
         """Build knowledge graph and query relationships."""
         # Create interconnected documents
-        overview = await server.knowledge.create(
-            title="System Overview",
-            content="See [[api-design]] and [[database-schema]] for details.",
-            agent="agent",
-        )
-        api = await server.knowledge.create(
-            title="API Design",
-            content="REST API design. See [[database-schema]] for data model.",
-            agent="agent",
-        )
-        db = await server.knowledge.create(
-            title="Database Schema",
-            content="PostgreSQL schema definition.",
-            agent="agent",
-        )
+        overview = (
+            await server.knowledge.create(
+                title="System Overview",
+                content="See [[api-design]] and [[database-schema]] for details.",
+                agent="agent",
+            )
+        ).document
+        api = (
+            await server.knowledge.create(
+                title="API Design",
+                content="REST API design. See [[database-schema]] for data model.",
+                agent="agent",
+            )
+        ).document
+        db = (
+            await server.knowledge.create(
+                title="Database Schema",
+                content="PostgreSQL schema definition.",
+                agent="agent",
+            )
+        ).document
 
         # Add to graph
         server.graph.add_document(overview)
@@ -546,23 +574,29 @@ class TestGraphToolWorkflow:
     async def test_orphan_detection(self, server: LithosServer):
         """Detect orphaned documents."""
         # Create connected docs
-        connected = await server.knowledge.create(
-            title="Connected Doc",
-            content="Links to [[other-connected]].",
-            agent="agent",
-        )
-        other = await server.knowledge.create(
-            title="Other Connected",
-            content="Linked from connected.",
-            agent="agent",
-        )
+        connected = (
+            await server.knowledge.create(
+                title="Connected Doc",
+                content="Links to [[other-connected]].",
+                agent="agent",
+            )
+        ).document
+        other = (
+            await server.knowledge.create(
+                title="Other Connected",
+                content="Linked from connected.",
+                agent="agent",
+            )
+        ).document
 
         # Create orphan
-        orphan = await server.knowledge.create(
-            title="Orphan Document",
-            content="No links anywhere.",
-            agent="agent",
-        )
+        orphan = (
+            await server.knowledge.create(
+                title="Orphan Document",
+                content="No links anywhere.",
+                agent="agent",
+            )
+        ).document
 
         server.graph.add_document(connected)
         server.graph.add_document(other)
@@ -613,12 +647,14 @@ class TestEndToEndScenarios:
         )
 
         # Step 3: Researcher creates knowledge document
-        research_doc = await server.knowledge.create(
-            title="API Research Notes",
-            content="The API uses REST with JSON. Endpoints: /users, /items, /orders.",
-            agent="researcher",
-            tags=["research", "api"],
-        )
+        research_doc = (
+            await server.knowledge.create(
+                title="API Research Notes",
+                content="The API uses REST with JSON. Endpoints: /users, /items, /orders.",
+                agent="researcher",
+                tags=["research", "api"],
+            )
+        ).document
         server.search.index_document(research_doc)
         server.graph.add_document(research_doc)
 
@@ -649,9 +685,10 @@ class TestEndToEndScenarios:
         assert any(r.id == research_doc.id for r in results)
 
         # Step 8: Writer creates documentation
-        docs = await server.knowledge.create(
-            title="API Documentation",
-            content="""# API Documentation
+        docs = (
+            await server.knowledge.create(
+                title="API Documentation",
+                content="""# API Documentation
 
 Based on [[api-research-notes]].
 
@@ -660,9 +697,10 @@ Based on [[api-research-notes]].
 - GET /items - List items
 - GET /orders - List orders
 """,
-            agent="writer",
-            tags=["documentation", "api"],
-        )
+                agent="writer",
+                tags=["documentation", "api"],
+            )
+        ).document
         server.search.index_document(docs)
         server.graph.add_document(docs)
 
@@ -705,12 +743,14 @@ Based on [[api-research-notes]].
 
         created_docs = {}
         for title, content, tags in docs_data:
-            doc = await server.knowledge.create(
-                title=title,
-                content=content,
-                agent="knowledge-builder",
-                tags=tags,
-            )
+            doc = (
+                await server.knowledge.create(
+                    title=title,
+                    content=content,
+                    agent="knowledge-builder",
+                    tags=tags,
+                )
+            ).document
             server.search.index_document(doc)
             server.graph.add_document(doc)
             created_docs[title] = doc
@@ -736,12 +776,14 @@ Based on [[api-research-notes]].
         """Get comprehensive system statistics."""
         # Create some data
         for i in range(3):
-            doc = await server.knowledge.create(
-                title=f"Stats Doc {i}",
-                content=f"Content for document {i}.",
-                agent="stats-agent",
-                tags=["stats"],
-            )
+            doc = (
+                await server.knowledge.create(
+                    title=f"Stats Doc {i}",
+                    content=f"Content for document {i}.",
+                    agent="stats-agent",
+                    tags=["stats"],
+                )
+            ).document
             server.search.index_document(doc)
             server.graph.add_document(doc)
 

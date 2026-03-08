@@ -17,7 +17,7 @@ def test_inspect_doc_shows_created_and_updated_timestamps(test_config):
             content="A document for CLI timestamp regression coverage.",
             agent="cli-test",
         )
-    )
+    ).document
 
     runner = CliRunner()
     result = runner.invoke(

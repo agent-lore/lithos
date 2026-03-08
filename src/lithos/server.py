@@ -28,7 +28,7 @@ from lithos.events import (
     LithosEvent,
 )
 from lithos.graph import KnowledgeGraph
-from lithos.knowledge import _UNSET, KnowledgeDocument, KnowledgeManager, _UnsetType
+from lithos.knowledge import _UNSET, KnowledgeManager, _UnsetType
 from lithos.search import SearchEngine
 from lithos.telemetry import get_tracer, register_active_claims_observer
 
@@ -279,29 +279,34 @@ class LithosServer:
                         source_url=source_url or None,
                     )
 
-                # Handle dict results (duplicate or invalid_input)
-                if isinstance(result, dict):
-                    status = result.get("status", "error")
-                    if status == "duplicate":
-                        span.set_attribute("lithos.write_status", "duplicate")
-                        return {
-                            "status": "duplicate",
-                            "duplicate_of": result["duplicate_of"],
-                            "message": result["message"],
-                            "warnings": warnings,
+                # Handle non-success results via WriteResult fields
+                if result.status == "duplicate":
+                    span.set_attribute("lithos.write_status", "duplicate")
+                    dup = result.duplicate_of
+                    return {
+                        "status": "duplicate",
+                        "duplicate_of": {
+                            "id": dup.id,
+                            "title": dup.title,
+                            "source_url": dup.source_url,
                         }
-                    elif status == "invalid_input":
-                        span.set_attribute("lithos.write_status", "invalid_input")
-                        return {
-                            "status": "error",
-                            "code": "invalid_input",
-                            "message": result["message"],
-                            "warnings": warnings,
-                        }
+                        if dup
+                        else None,
+                        "message": result.message,
+                        "warnings": warnings + result.warnings,
+                    }
+                elif result.status == "error":
+                    span.set_attribute("lithos.write_status", "error")
+                    return {
+                        "status": "error",
+                        "code": result.error_code,
+                        "message": result.message,
+                        "warnings": warnings + result.warnings,
+                    }
 
-                assert isinstance(result, KnowledgeDocument)
-                doc = result
-                status_label = "updated" if id else "created"
+                doc = result.document
+                assert doc is not None
+                warnings.extend(result.warnings)
 
                 # Update indices
                 self.search.index_document(doc)
@@ -309,8 +314,8 @@ class LithosServer:
                 self.graph.save_cache()
 
                 span.set_attribute("lithos.doc_id", doc.id)
-                span.set_attribute("lithos.write_status", status_label)
-                logger.info("lithos_write completed doc_id=%s status=%s", doc.id, status_label)
+                span.set_attribute("lithos.write_status", result.status)
+                logger.info("lithos_write completed doc_id=%s status=%s", doc.id, result.status)
 
                 await self._emit(
                     LithosEvent(
@@ -322,7 +327,7 @@ class LithosServer:
                 )
 
                 return {
-                    "status": status_label,
+                    "status": result.status,
                     "id": doc.id,
                     "path": str(doc.path),
                     "warnings": warnings,

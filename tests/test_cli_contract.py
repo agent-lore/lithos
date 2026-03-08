@@ -68,12 +68,14 @@ class TestCLIContracts:
         knowledge = KnowledgeManager()
 
         async def _seed():
-            return await knowledge.create(
-                title="Inspect Contract Doc",
-                content="Inspect output shape contract.",
-                agent="cli-test",
-                tags=["contract", "inspect"],
-            )
+            return (
+                await knowledge.create(
+                    title="Inspect Contract Doc",
+                    content="Inspect output shape contract.",
+                    agent="cli-test",
+                    tags=["contract", "inspect"],
+                )
+            ).document
 
         doc = asyncio.run(_seed())
 

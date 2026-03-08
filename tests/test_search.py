@@ -76,12 +76,14 @@ class TestTantivyIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Index document and find it via search."""
-        doc = await knowledge_manager.create(
-            title="Python Tutorial",
-            content="Learn Python programming with examples and exercises.",
-            agent="agent",
-            tags=["python", "tutorial"],
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Python Tutorial",
+                content="Learn Python programming with examples and exercises.",
+                agent="agent",
+                tags=["python", "tutorial"],
+            )
+        ).document
         search_engine.index_document(doc)
 
         results = search_engine.full_text_search("Python programming")
@@ -94,11 +96,13 @@ class TestTantivyIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Search matches document titles."""
-        doc = await knowledge_manager.create(
-            title="Kubernetes Deployment Guide",
-            content="Steps to deploy applications.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Kubernetes Deployment Guide",
+                content="Steps to deploy applications.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         results = search_engine.full_text_search("Kubernetes")
@@ -111,11 +115,13 @@ class TestTantivyIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Search matches document content."""
-        doc = await knowledge_manager.create(
-            title="Generic Title",
-            content="This document discusses microservices architecture patterns.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Generic Title",
+                content="This document discusses microservices architecture patterns.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         results = search_engine.full_text_search("microservices architecture")
@@ -128,18 +134,22 @@ class TestTantivyIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Filter search results by tags."""
-        doc1 = await knowledge_manager.create(
-            title="Python Web Framework",
-            content="Building web apps with Python.",
-            agent="agent",
-            tags=["python", "web"],
-        )
-        doc2 = await knowledge_manager.create(
-            title="Python Data Science",
-            content="Data analysis with Python.",
-            agent="agent",
-            tags=["python", "data"],
-        )
+        doc1 = (
+            await knowledge_manager.create(
+                title="Python Web Framework",
+                content="Building web apps with Python.",
+                agent="agent",
+                tags=["python", "web"],
+            )
+        ).document
+        doc2 = (
+            await knowledge_manager.create(
+                title="Python Data Science",
+                content="Data analysis with Python.",
+                agent="agent",
+                tags=["python", "data"],
+            )
+        ).document
         search_engine.index_document(doc1)
         search_engine.index_document(doc2)
 
@@ -160,11 +170,13 @@ class TestTantivyIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Search results include relevant snippets."""
-        doc = await knowledge_manager.create(
-            title="API Documentation",
-            content="The REST API supports GET, POST, PUT, and DELETE methods for resource manipulation.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="API Documentation",
+                content="The REST API supports GET, POST, PUT, and DELETE methods for resource manipulation.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         results = search_engine.full_text_search("REST API")
@@ -177,19 +189,23 @@ class TestTantivyIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Updated document is re-indexed correctly."""
-        doc = await knowledge_manager.create(
-            title="Original Title",
-            content="Original content about databases.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Original Title",
+                content="Original content about databases.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         # Update document
-        updated = await knowledge_manager.update(
-            id=doc.id,
-            agent="agent",
-            content="Updated content about caching strategies.",
-        )
+        updated = (
+            await knowledge_manager.update(
+                id=doc.id,
+                agent="agent",
+                content="Updated content about caching strategies.",
+            )
+        ).document
         search_engine.index_document(updated)
 
         # Old content should not match
@@ -205,11 +221,13 @@ class TestTantivyIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Removed document no longer appears in search."""
-        doc = await knowledge_manager.create(
-            title="Temporary Doc",
-            content="This will be removed from the index.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Temporary Doc",
+                content="This will be removed from the index.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         # Verify it's searchable
@@ -232,11 +250,13 @@ class TestChromaIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Semantic search finds documents with similar meaning."""
-        doc = await knowledge_manager.create(
-            title="Error Handling Best Practices",
-            content="Always catch exceptions and provide meaningful error messages to users.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Error Handling Best Practices",
+                content="Always catch exceptions and provide meaningful error messages to users.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         # Search with semantically similar but different words
@@ -250,11 +270,13 @@ class TestChromaIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Semantic search respects similarity threshold."""
-        doc = await knowledge_manager.create(
-            title="Machine Learning Basics",
-            content="Neural networks learn patterns from training data.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Machine Learning Basics",
+                content="Neural networks learn patterns from training data.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         # High threshold should filter out weak matches
@@ -281,11 +303,13 @@ class TestChromaIndex:
             ]
         )
 
-        doc = await knowledge_manager.create(
-            title="Python Development",
-            content=long_content,
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Python Development",
+                content=long_content,
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         results = search_engine.semantic_search("Python programming", limit=10)
@@ -299,11 +323,13 @@ class TestChromaIndex:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Semantic search results include similarity scores."""
-        doc = await knowledge_manager.create(
-            title="Database Optimization",
-            content="Index your database tables for faster queries.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Database Optimization",
+                content="Index your database tables for faster queries.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         results = search_engine.semantic_search("database performance tuning")
@@ -325,12 +351,14 @@ class TestSearchEngineIntegration:
         """Index and search across multiple documents."""
         created_docs = []
         for doc_data in sample_documents:
-            doc = await knowledge_manager.create(
-                title=doc_data["title"],
-                content=doc_data["content"],
-                agent="test-agent",
-                tags=doc_data["tags"],
-            )
+            doc = (
+                await knowledge_manager.create(
+                    title=doc_data["title"],
+                    content=doc_data["content"],
+                    agent="test-agent",
+                    tags=doc_data["tags"],
+                )
+            ).document
             search_engine.index_document(doc)
             created_docs.append(doc)
 
@@ -348,21 +376,27 @@ class TestSearchEngineIntegration:
     ):
         """More relevant documents rank higher."""
         # Create docs with varying relevance to "Python testing"
-        highly_relevant = await knowledge_manager.create(
-            title="Python Testing with Pytest",
-            content="Comprehensive guide to testing Python applications using pytest framework.",
-            agent="agent",
-        )
-        somewhat_relevant = await knowledge_manager.create(
-            title="Python Basics",
-            content="Introduction to Python programming. Testing is mentioned briefly.",
-            agent="agent",
-        )
-        not_relevant = await knowledge_manager.create(
-            title="JavaScript Guide",
-            content="Learn JavaScript for web development.",
-            agent="agent",
-        )
+        highly_relevant = (
+            await knowledge_manager.create(
+                title="Python Testing with Pytest",
+                content="Comprehensive guide to testing Python applications using pytest framework.",
+                agent="agent",
+            )
+        ).document
+        somewhat_relevant = (
+            await knowledge_manager.create(
+                title="Python Basics",
+                content="Introduction to Python programming. Testing is mentioned briefly.",
+                agent="agent",
+            )
+        ).document
+        not_relevant = (
+            await knowledge_manager.create(
+                title="JavaScript Guide",
+                content="Learn JavaScript for web development.",
+                agent="agent",
+            )
+        ).document
 
         search_engine.index_document(highly_relevant)
         search_engine.index_document(somewhat_relevant)
@@ -379,11 +413,13 @@ class TestSearchEngineIntegration:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Clear all removes all indexed documents."""
-        doc = await knowledge_manager.create(
-            title="To Be Cleared",
-            content="This will be cleared from indices.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="To Be Cleared",
+                content="This will be cleared from indices.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         # Verify indexed
@@ -400,11 +436,13 @@ class TestSearchEngineIntegration:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Get search index statistics."""
-        doc = await knowledge_manager.create(
-            title="Stats Test",
-            content="Document for testing statistics.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Stats Test",
+                content="Document for testing statistics.",
+                agent="agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         stats = search_engine.get_stats()
@@ -482,11 +520,13 @@ class TestSearchEngineResiliency:
 
         search_engine.tantivy.add_document = _boom  # type: ignore[method-assign]
 
-        doc = await knowledge_manager.create(
-            title="Resilience Test",
-            content="Testing partial backend failure during indexing.",
-            agent="test-agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Resilience Test",
+                content="Testing partial backend failure during indexing.",
+                agent="test-agent",
+            )
+        ).document
         # Should not raise even though Tantivy is broken
         chunks = search_engine.index_document(doc)
         # Chroma still works, so chunks > 0
@@ -504,11 +544,13 @@ class TestSearchEngineResiliency:
         search_engine.tantivy.add_document = _boom  # type: ignore[method-assign]
         search_engine.chroma.add_document = _boom  # type: ignore[method-assign]
 
-        doc = await knowledge_manager.create(
-            title="Total Failure Test",
-            content="Both backends will fail for this document.",
-            agent="test-agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Total Failure Test",
+                content="Both backends will fail for this document.",
+                agent="test-agent",
+            )
+        ).document
 
         with pytest.raises(IndexingError) as exc_info:
             search_engine.index_document(doc)
@@ -527,11 +569,13 @@ class TestSearchEngineResiliency:
 
         search_engine.tantivy.remove_document = _boom  # type: ignore[method-assign]
 
-        doc = await knowledge_manager.create(
-            title="Remove Partial Failure",
-            content="One backend will fail during removal.",
-            agent="test-agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Remove Partial Failure",
+                content="One backend will fail during removal.",
+                agent="test-agent",
+            )
+        ).document
         search_engine.index_document(doc)
 
         # Should not raise even though Tantivy remove is broken

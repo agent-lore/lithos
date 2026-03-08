@@ -16,12 +16,14 @@ class TestFileWatcherEventEmission:
 
     async def test_file_modify_emits_note_updated(self, server: LithosServer) -> None:
         """A file create/modify triggers note.updated event."""
-        doc = await server.knowledge.create(
-            title="Watcher Event Doc",
-            content="Content for watcher event test.",
-            agent="test-agent",
-            path="watched",
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Watcher Event Doc",
+                content="Content for watcher event test.",
+                agent="test-agent",
+                path="watched",
+            )
+        ).document
         server.search.index_document(doc)
         server.graph.add_document(doc)
 
@@ -36,12 +38,14 @@ class TestFileWatcherEventEmission:
 
     async def test_file_delete_emits_note_deleted(self, server: LithosServer) -> None:
         """A file deletion triggers note.deleted event."""
-        doc = await server.knowledge.create(
-            title="Watcher Delete Doc",
-            content="Content to be deleted.",
-            agent="test-agent",
-            path="watched",
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Watcher Delete Doc",
+                content="Content to be deleted.",
+                agent="test-agent",
+                path="watched",
+            )
+        ).document
         server.search.index_document(doc)
         server.graph.add_document(doc)
 
@@ -78,12 +82,14 @@ class TestFileWatcherEventEmission:
         self, server: LithosServer
     ) -> None:
         """If event emission raises, handle_file_change still succeeds."""
-        doc = await server.knowledge.create(
-            title="Watcher Resilience Doc",
-            content="Content for resilience test.",
-            agent="test-agent",
-            path="watched",
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Watcher Resilience Doc",
+                content="Content for resilience test.",
+                agent="test-agent",
+                path="watched",
+            )
+        ).document
         server.search.index_document(doc)
         server.graph.add_document(doc)
 
@@ -98,12 +104,14 @@ class TestFileWatcherEventEmission:
         self, server: LithosServer
     ) -> None:
         """If event emission raises on delete, handle_file_change still succeeds."""
-        doc = await server.knowledge.create(
-            title="Watcher Delete Resilience",
-            content="Content for delete resilience test.",
-            agent="test-agent",
-            path="watched",
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Watcher Delete Resilience",
+                content="Content for delete resilience test.",
+                agent="test-agent",
+                path="watched",
+            )
+        ).document
         server.search.index_document(doc)
         server.graph.add_document(doc)
 

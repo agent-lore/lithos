@@ -378,12 +378,14 @@ class TestFileWatcherRace:
 
     @pytest.mark.asyncio
     async def test_rapid_update_then_delete_keeps_indices_consistent(self, server: LithosServer):
-        doc = await server.knowledge.create(
-            title="Watcher Race Doc",
-            content="initial",
-            agent="race-agent",
-            path="watched",
-        )
+        doc = (
+            await server.knowledge.create(
+                title="Watcher Race Doc",
+                content="initial",
+                agent="race-agent",
+                path="watched",
+            )
+        ).document
         server.search.index_document(doc)
         server.graph.add_document(doc)
 

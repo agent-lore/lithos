@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import frontmatter
@@ -218,6 +219,27 @@ class KnowledgeDocument:
         return frontmatter.dumps(post)
 
 
+@dataclass
+class DuplicateInfo:
+    """Information about a duplicate document."""
+
+    id: str
+    title: str
+    source_url: str | None = None
+
+
+@dataclass
+class WriteResult:
+    """Structured result type for create/update operations."""
+
+    status: Literal["created", "updated", "duplicate", "error"]
+    document: KnowledgeDocument | None = None
+    warnings: list[str] = field(default_factory=list)
+    error_code: str | None = None
+    message: str | None = None
+    duplicate_of: DuplicateInfo | None = None
+
+
 def slugify(text: str) -> str:
     """Convert text to URL-safe slug."""
     # Convert to lowercase
@@ -412,11 +434,10 @@ class KnowledgeManager:
         path: str | None = None,
         source: str | None = None,
         source_url: str | None = None,
-    ) -> KnowledgeDocument | dict:
+    ) -> WriteResult:
         """Create a new knowledge document.
 
-        Returns KnowledgeDocument on success, or a dict with status info on
-        duplicate/invalid_input.
+        Returns WriteResult with status 'created', 'duplicate', or 'error'.
         """
         async with self._write_lock:
             lithos_metrics.knowledge_ops.add(1, {"op": "create"})
@@ -427,22 +448,26 @@ class KnowledgeManager:
                 try:
                     norm_url = normalize_url(source_url)
                 except ValueError as e:
-                    return {"status": "invalid_input", "message": str(e)}
+                    return WriteResult(
+                        status="error",
+                        error_code="invalid_input",
+                        message=str(e),
+                    )
 
                 # Check dedup map
                 existing_id = self._source_url_to_id.get(norm_url)
                 if existing_id is not None:
                     try:
                         existing_doc, _ = await self.read(id=existing_id)
-                        return {
-                            "status": "duplicate",
-                            "duplicate_of": {
-                                "id": existing_id,
-                                "title": existing_doc.title,
-                                "source_url": norm_url,
-                            },
-                            "message": (f"URL already exists in document '{existing_doc.title}'"),
-                        }
+                        return WriteResult(
+                            status="duplicate",
+                            duplicate_of=DuplicateInfo(
+                                id=existing_id,
+                                title=existing_doc.title,
+                                source_url=norm_url,
+                            ),
+                            message=f"URL already exists in document '{existing_doc.title}'",
+                        )
                     except FileNotFoundError:
                         # Stale map entry; allow create
                         del self._source_url_to_id[norm_url]
@@ -490,7 +515,7 @@ class KnowledgeManager:
             if norm_url is not None:
                 self._source_url_to_id[norm_url] = doc_id
 
-            return doc
+            return WriteResult(status="created", document=doc)
 
     @traced("lithos.knowledge.read")
     async def read(
@@ -557,7 +582,7 @@ class KnowledgeManager:
         tags: list[str] | None = None,
         confidence: float | None = None,
         source_url: str | None | _UnsetType = _UNSET,
-    ) -> KnowledgeDocument | dict:
+    ) -> WriteResult:
         """Update an existing document.
 
         source_url semantics:
@@ -588,23 +613,25 @@ class KnowledgeManager:
                     try:
                         new_norm = normalize_url(source_url)
                     except ValueError as e:
-                        return {"status": "invalid_input", "message": str(e)}
+                        return WriteResult(
+                            status="error",
+                            error_code="invalid_input",
+                            message=str(e),
+                        )
 
                     existing_owner = self._source_url_to_id.get(new_norm)
                     if existing_owner is not None and existing_owner != id:
                         try:
                             existing_doc, _ = await self.read(id=existing_owner)
-                            return {
-                                "status": "duplicate",
-                                "duplicate_of": {
-                                    "id": existing_owner,
-                                    "title": existing_doc.title,
-                                    "source_url": new_norm,
-                                },
-                                "message": (
-                                    f"URL already exists in document '{existing_doc.title}'"
+                            return WriteResult(
+                                status="duplicate",
+                                duplicate_of=DuplicateInfo(
+                                    id=existing_owner,
+                                    title=existing_doc.title,
+                                    source_url=new_norm,
                                 ),
-                            }
+                                message=f"URL already exists in document '{existing_doc.title}'",
+                            )
                         except FileNotFoundError:
                             del self._source_url_to_id[new_norm]
 
@@ -648,7 +675,7 @@ class KnowledgeManager:
                     del self._slug_to_id[old_slug]
                 self._slug_to_id[new_slug] = id
 
-            return doc
+            return WriteResult(status="updated", document=doc)
 
     @traced("lithos.knowledge.delete")
     async def delete(self, id: str) -> tuple[bool, str]:

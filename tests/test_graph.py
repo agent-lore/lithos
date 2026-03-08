@@ -14,11 +14,13 @@ class TestGraphBuilding:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """Add document creates node in graph."""
-        doc = await knowledge_manager.create(
-            title="Graph Node Test",
-            content="Simple document without links.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Graph Node Test",
+                content="Simple document without links.",
+                agent="agent",
+            )
+        ).document
 
         knowledge_graph.add_document(doc)
 
@@ -30,19 +32,23 @@ class TestGraphBuilding:
     ):
         """Document with wiki-links creates edges."""
         # Create target document first
-        target = await knowledge_manager.create(
-            title="Target Document",
-            content="This is the target.",
-            agent="agent",
-        )
+        target = (
+            await knowledge_manager.create(
+                title="Target Document",
+                content="This is the target.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(target)
 
         # Create source with link to target
-        source = await knowledge_manager.create(
-            title="Source Document",
-            content="See [[target-document]] for more info.",
-            agent="agent",
-        )
+        source = (
+            await knowledge_manager.create(
+                title="Source Document",
+                content="See [[target-document]] for more info.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(source)
 
         # Should have edge from source to target
@@ -54,19 +60,23 @@ class TestGraphBuilding:
     ):
         """Links are resolved by matching slugs."""
         # Create document with specific title
-        api_doc = await knowledge_manager.create(
-            title="API Design Guide",
-            content="Guidelines for API design.",
-            agent="agent",
-        )
+        api_doc = (
+            await knowledge_manager.create(
+                title="API Design Guide",
+                content="Guidelines for API design.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(api_doc)
 
         # Link using slug
-        linking_doc = await knowledge_manager.create(
-            title="Development Docs",
-            content="Follow the [[api-design-guide]] for APIs.",
-            agent="agent",
-        )
+        linking_doc = (
+            await knowledge_manager.create(
+                title="Development Docs",
+                content="Follow the [[api-design-guide]] for APIs.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(linking_doc)
 
         assert knowledge_graph.has_edge(linking_doc.id, api_doc.id)
@@ -76,11 +86,13 @@ class TestGraphBuilding:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """Links to nonexistent documents are tracked."""
-        doc = await knowledge_manager.create(
-            title="Broken Links Doc",
-            content="See [[nonexistent-doc]] for details.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Broken Links Doc",
+                content="See [[nonexistent-doc]] for details.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(doc)
 
         # Should have placeholder node for unresolved link
@@ -92,11 +104,13 @@ class TestGraphBuilding:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """Remove document removes node and edges."""
-        doc = await knowledge_manager.create(
-            title="Removable Doc",
-            content="Will be removed.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="Removable Doc",
+                content="Will be removed.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(doc)
         assert knowledge_graph.has_node(doc.id)
 
@@ -109,34 +123,42 @@ class TestGraphBuilding:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """Updating document updates its edges."""
-        target1 = await knowledge_manager.create(
-            title="Target One",
-            content="First target.",
-            agent="agent",
-        )
-        target2 = await knowledge_manager.create(
-            title="Target Two",
-            content="Second target.",
-            agent="agent",
-        )
+        target1 = (
+            await knowledge_manager.create(
+                title="Target One",
+                content="First target.",
+                agent="agent",
+            )
+        ).document
+        target2 = (
+            await knowledge_manager.create(
+                title="Target Two",
+                content="Second target.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(target1)
         knowledge_graph.add_document(target2)
 
         # Create doc linking to target1
-        source = await knowledge_manager.create(
-            title="Source",
-            content="Link to [[target-one]].",
-            agent="agent",
-        )
+        source = (
+            await knowledge_manager.create(
+                title="Source",
+                content="Link to [[target-one]].",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(source)
         assert knowledge_graph.has_edge(source.id, target1.id)
 
         # Update to link to target2 instead
-        updated = await knowledge_manager.update(
-            id=source.id,
-            agent="agent",
-            content="Now links to [[target-two]].",
-        )
+        updated = (
+            await knowledge_manager.update(
+                id=source.id,
+                agent="agent",
+                content="Now links to [[target-two]].",
+            )
+        ).document
         knowledge_graph.add_document(updated)  # Re-add updates
 
         assert not knowledge_graph.has_edge(source.id, target1.id)
@@ -151,24 +173,30 @@ class TestGraphQueries:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """Get documents linked FROM a document."""
-        target1 = await knowledge_manager.create(
-            title="Linked Doc One",
-            content="Target one.",
-            agent="agent",
-        )
-        target2 = await knowledge_manager.create(
-            title="Linked Doc Two",
-            content="Target two.",
-            agent="agent",
-        )
+        target1 = (
+            await knowledge_manager.create(
+                title="Linked Doc One",
+                content="Target one.",
+                agent="agent",
+            )
+        ).document
+        target2 = (
+            await knowledge_manager.create(
+                title="Linked Doc Two",
+                content="Target two.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(target1)
         knowledge_graph.add_document(target2)
 
-        source = await knowledge_manager.create(
-            title="Hub Document",
-            content="Links to [[linked-doc-one]] and [[linked-doc-two]].",
-            agent="agent",
-        )
+        source = (
+            await knowledge_manager.create(
+                title="Hub Document",
+                content="Links to [[linked-doc-one]] and [[linked-doc-two]].",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(source)
 
         outgoing = knowledge_graph.get_outgoing_links(source.id)
@@ -183,23 +211,29 @@ class TestGraphQueries:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """Get documents linking TO a document (backlinks)."""
-        target = await knowledge_manager.create(
-            title="Popular Doc",
-            content="Many docs link here.",
-            agent="agent",
-        )
+        target = (
+            await knowledge_manager.create(
+                title="Popular Doc",
+                content="Many docs link here.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(target)
 
-        source1 = await knowledge_manager.create(
-            title="Linker One",
-            content="See [[popular-doc]].",
-            agent="agent",
-        )
-        source2 = await knowledge_manager.create(
-            title="Linker Two",
-            content="Also see [[popular-doc]].",
-            agent="agent",
-        )
+        source1 = (
+            await knowledge_manager.create(
+                title="Linker One",
+                content="See [[popular-doc]].",
+                agent="agent",
+            )
+        ).document
+        source2 = (
+            await knowledge_manager.create(
+                title="Linker Two",
+                content="Also see [[popular-doc]].",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(source1)
         knowledge_graph.add_document(source2)
 
@@ -215,21 +249,27 @@ class TestGraphQueries:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """Get all connected documents (both directions)."""
-        center = await knowledge_manager.create(
-            title="Center Doc",
-            content="Links to [[outgoing-doc]].",
-            agent="agent",
-        )
-        outgoing = await knowledge_manager.create(
-            title="Outgoing Doc",
-            content="Linked from center.",
-            agent="agent",
-        )
-        incoming = await knowledge_manager.create(
-            title="Incoming Doc",
-            content="Links to [[center-doc]].",
-            agent="agent",
-        )
+        center = (
+            await knowledge_manager.create(
+                title="Center Doc",
+                content="Links to [[outgoing-doc]].",
+                agent="agent",
+            )
+        ).document
+        outgoing = (
+            await knowledge_manager.create(
+                title="Outgoing Doc",
+                content="Linked from center.",
+                agent="agent",
+            )
+        ).document
+        incoming = (
+            await knowledge_manager.create(
+                title="Incoming Doc",
+                content="Links to [[center-doc]].",
+                agent="agent",
+            )
+        ).document
 
         knowledge_graph.add_document(center)
         knowledge_graph.add_document(outgoing)
@@ -247,21 +287,27 @@ class TestGraphQueries:
     ):
         """Find path between two documents."""
         # Create chain: A -> B -> C
-        doc_a = await knowledge_manager.create(
-            title="Doc A",
-            content="Links to [[doc-b]].",
-            agent="agent",
-        )
-        doc_b = await knowledge_manager.create(
-            title="Doc B",
-            content="Links to [[doc-c]].",
-            agent="agent",
-        )
-        doc_c = await knowledge_manager.create(
-            title="Doc C",
-            content="End of chain.",
-            agent="agent",
-        )
+        doc_a = (
+            await knowledge_manager.create(
+                title="Doc A",
+                content="Links to [[doc-b]].",
+                agent="agent",
+            )
+        ).document
+        doc_b = (
+            await knowledge_manager.create(
+                title="Doc B",
+                content="Links to [[doc-c]].",
+                agent="agent",
+            )
+        ).document
+        doc_c = (
+            await knowledge_manager.create(
+                title="Doc C",
+                content="End of chain.",
+                agent="agent",
+            )
+        ).document
 
         knowledge_graph.add_document(doc_a)
         knowledge_graph.add_document(doc_b)
@@ -280,16 +326,20 @@ class TestGraphQueries:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """No path between disconnected documents."""
-        doc_a = await knowledge_manager.create(
-            title="Isolated A",
-            content="No links.",
-            agent="agent",
-        )
-        doc_b = await knowledge_manager.create(
-            title="Isolated B",
-            content="Also no links.",
-            agent="agent",
-        )
+        doc_a = (
+            await knowledge_manager.create(
+                title="Isolated A",
+                content="No links.",
+                agent="agent",
+            )
+        ).document
+        doc_b = (
+            await knowledge_manager.create(
+                title="Isolated B",
+                content="Also no links.",
+                agent="agent",
+            )
+        ).document
 
         knowledge_graph.add_document(doc_a)
         knowledge_graph.add_document(doc_b)
@@ -308,23 +358,29 @@ class TestGraphAnalysis:
     ):
         """Find documents with no links in or out."""
         # Connected docs
-        connected1 = await knowledge_manager.create(
-            title="Connected One",
-            content="Links to [[connected-two]].",
-            agent="agent",
-        )
-        connected2 = await knowledge_manager.create(
-            title="Connected Two",
-            content="Linked from one.",
-            agent="agent",
-        )
+        connected1 = (
+            await knowledge_manager.create(
+                title="Connected One",
+                content="Links to [[connected-two]].",
+                agent="agent",
+            )
+        ).document
+        connected2 = (
+            await knowledge_manager.create(
+                title="Connected Two",
+                content="Linked from one.",
+                agent="agent",
+            )
+        ).document
 
         # Orphan doc
-        orphan = await knowledge_manager.create(
-            title="Orphan Doc",
-            content="No links at all.",
-            agent="agent",
-        )
+        orphan = (
+            await knowledge_manager.create(
+                title="Orphan Doc",
+                content="No links at all.",
+                agent="agent",
+            )
+        ).document
 
         knowledge_graph.add_document(connected1)
         knowledge_graph.add_document(connected2)
@@ -341,16 +397,20 @@ class TestGraphAnalysis:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """Get graph statistics."""
-        doc1 = await knowledge_manager.create(
-            title="Stats Doc One",
-            content="Links to [[stats-doc-two]].",
-            agent="agent",
-        )
-        doc2 = await knowledge_manager.create(
-            title="Stats Doc Two",
-            content="Target.",
-            agent="agent",
-        )
+        doc1 = (
+            await knowledge_manager.create(
+                title="Stats Doc One",
+                content="Links to [[stats-doc-two]].",
+                agent="agent",
+            )
+        ).document
+        doc2 = (
+            await knowledge_manager.create(
+                title="Stats Doc Two",
+                content="Target.",
+                agent="agent",
+            )
+        ).document
 
         knowledge_graph.add_document(doc1)
         knowledge_graph.add_document(doc2)
@@ -368,35 +428,43 @@ class TestGraphAnalysis:
     ):
         """Find most frequently linked documents."""
         # Create a popular document
-        popular = await knowledge_manager.create(
-            title="Popular Reference",
-            content="Everyone links here.",
-            agent="agent",
-        )
+        popular = (
+            await knowledge_manager.create(
+                title="Popular Reference",
+                content="Everyone links here.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(popular)
 
         # Create multiple docs linking to it
         for i in range(5):
-            linker = await knowledge_manager.create(
-                title=f"Linker {i}",
-                content="See [[popular-reference]] for info.",
-                agent="agent",
-            )
+            linker = (
+                await knowledge_manager.create(
+                    title=f"Linker {i}",
+                    content="See [[popular-reference]] for info.",
+                    agent="agent",
+                )
+            ).document
             knowledge_graph.add_document(linker)
 
         # Create less popular doc
-        less_popular = await knowledge_manager.create(
-            title="Less Popular",
-            content="Fewer links.",
-            agent="agent",
-        )
+        less_popular = (
+            await knowledge_manager.create(
+                title="Less Popular",
+                content="Fewer links.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(less_popular)
 
-        linker_to_less = await knowledge_manager.create(
-            title="Single Linker",
-            content="See [[less-popular]].",
-            agent="agent",
-        )
+        linker_to_less = (
+            await knowledge_manager.create(
+                title="Single Linker",
+                content="See [[less-popular]].",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(linker_to_less)
 
         most_linked = knowledge_graph.get_most_linked(limit=3)
@@ -411,11 +479,13 @@ class TestGraphAnalysis:
         self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
     ):
         """Clear removes all nodes and edges."""
-        doc = await knowledge_manager.create(
-            title="To Clear",
-            content="Will be cleared.",
-            agent="agent",
-        )
+        doc = (
+            await knowledge_manager.create(
+                title="To Clear",
+                content="Will be cleared.",
+                agent="agent",
+            )
+        ).document
         knowledge_graph.add_document(doc)
 
         assert knowledge_graph.get_stats()["nodes"] >= 1
@@ -435,16 +505,20 @@ class TestGraphPersistence:
     ):
         """Graph can be rebuilt from documents."""
         # Create documents
-        doc1 = await knowledge_manager.create(
-            title="Rebuild One",
-            content="Links to [[rebuild-two]].",
-            agent="agent",
-        )
-        doc2 = await knowledge_manager.create(
-            title="Rebuild Two",
-            content="Target.",
-            agent="agent",
-        )
+        doc1 = (
+            await knowledge_manager.create(
+                title="Rebuild One",
+                content="Links to [[rebuild-two]].",
+                agent="agent",
+            )
+        ).document
+        doc2 = (
+            await knowledge_manager.create(
+                title="Rebuild Two",
+                content="Target.",
+                agent="agent",
+            )
+        ).document
 
         # Build graph
         knowledge_graph.add_document(doc1)
