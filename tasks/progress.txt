@@ -206,3 +206,18 @@
   - For conformance tests, prefer MCP-tool-level assertions (through `_call_tool`) over manager-level — they test the full stack
   - `frontmatter.Post()` + `fm.dumps()` is the standard way to create raw docs on disk for scan tests
 ---
+
+## 2026-03-08 - US-015
+- Updated `docs/SPECIFICATION.md` version 0.4.0 → 0.5.0
+- Added `derived_from_ids` to frontmatter example in Section 3.2
+- Expanded `derived_from_ids` parameter docs on `lithos_write` with create/update/clear semantics
+- Added `lithos_provenance` tool section in Section 5.2 (Graph Operations) with full BFS behavior docs
+- Added `derived_from_ids` to return types: `lithos_read` (metadata), `lithos_search`, `lithos_semantic`, `lithos_list`
+- Updated Appendix B: tool count 20→21, added `lithos_provenance` to Graph category
+- Marked provenance as implemented in future considerations (Section 11)
+- Files changed: `docs/SPECIFICATION.md`
+- **Learnings for future iterations:**
+  - When updating SPECIFICATION.md, update the version number and date at the top
+  - Future considerations section should be updated to mark implemented items with strikethrough
+  - Return type shapes in the spec must match what the actual MCP tools return
+---

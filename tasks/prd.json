@@ -306,7 +306,7 @@
         "Ruff lint and format pass"
       ],
       "priority": 15,
-      "passes": false,
+      "passes": true,
       "notes": "docs/SPECIFICATION.md already lists derived_from_ids on lithos_write (line 271) but the code didn't support it until this phase. Verify the existing spec text matches the implementation, then add lithos_provenance as a new tool section and update response shapes for read/search/semantic/list."
     }
   ]
