@@ -391,6 +391,12 @@ class LithosServer:
 
                 span.set_attribute("lithos.doc_id", doc.id)
                 span.set_attribute("lithos.write_status", result.status)
+                span.set_attribute(
+                    "lithos.provenance.source_count",
+                    len(doc.metadata.derived_from_ids),
+                )
+                if result.warnings:
+                    span.set_attribute("lithos.provenance.warning_count", len(result.warnings))
                 logger.info("lithos_write completed doc_id=%s status=%s", doc.id, result.status)
 
                 await self._emit(

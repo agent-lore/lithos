@@ -2,10 +2,29 @@
 
 import asyncio
 import json
+from typing import Any
 
 import pytest
 
 from lithos.server import LithosServer
+
+
+def _extract_id(mcp_result: Any) -> str:
+    """Extract doc ID from an MCP tool result."""
+    # Handle tuple form (some FastMCP versions)
+    if isinstance(mcp_result, tuple):
+        payload = mcp_result[1]
+        if isinstance(payload, dict):
+            return payload["id"]
+
+    # Handle content-list form
+    content = getattr(mcp_result, "content", []) if hasattr(mcp_result, "content") else mcp_result
+    if isinstance(content, list) and content:
+        text = getattr(content[0], "text", None)
+        if isinstance(text, str):
+            return json.loads(text)["id"]
+
+    raise AssertionError(f"Unable to extract ID from MCP result: {mcp_result!r}")
 
 
 def _has_otel_packages() -> bool:
@@ -223,3 +242,71 @@ class TestTelemetryIntegration:
         tool_span = next(s for s in spans if s.name == "lithos.tool.write")
         tool_attrs = dict(tool_span.attributes)
         assert tool_attrs.get("lithos.tool") == "lithos_write"
+
+    async def test_write_with_provenance_records_span_attributes(self, otel_server):
+        """Write with derived_from_ids records provenance counts on span."""
+        server, exporter = otel_server
+
+        # Create a source doc first
+        source_result = await server.mcp._call_tool_mcp(
+            "lithos_write",
+            {
+                "title": "OTEL Source",
+                "content": "Source doc.",
+                "agent": "test-agent",
+            },
+        )
+        source_id = _extract_id(source_result)
+
+        exporter.clear()
+
+        # Create a derived doc referencing the source
+        await server.mcp._call_tool_mcp(
+            "lithos_write",
+            {
+                "title": "OTEL Derived",
+                "content": "Derived doc.",
+                "agent": "test-agent",
+                "derived_from_ids": [source_id],
+            },
+        )
+
+        spans = exporter.get_finished_spans()
+        tool_span = next(s for s in spans if s.name == "lithos.tool.write")
+        tool_attrs = dict(tool_span.attributes)
+        assert tool_attrs.get("lithos.provenance.source_count") == 1
+
+    async def test_provenance_tool_emits_span(self, otel_server):
+        """lithos_provenance emits a span with direction and depth."""
+        server, exporter = otel_server
+
+        # Create a doc
+        result = await server.mcp._call_tool_mcp(
+            "lithos_write",
+            {
+                "title": "OTEL Prov Query",
+                "content": "Test.",
+                "agent": "test-agent",
+            },
+        )
+        doc_id = _extract_id(result)
+
+        exporter.clear()
+
+        # Call lithos_provenance
+        await server.mcp._call_tool_mcp(
+            "lithos_provenance",
+            {"id": doc_id, "direction": "both", "depth": 1},
+        )
+
+        spans = exporter.get_finished_spans()
+        span_names = [s.name for s in spans]
+        assert "lithos.tool.provenance" in span_names
+
+        prov_span = next(s for s in spans if s.name == "lithos.tool.provenance")
+        prov_attrs = dict(prov_span.attributes)
+        assert prov_attrs.get("lithos.tool") == "lithos_provenance"
+        assert prov_attrs.get("lithos.direction") == "both"
+        assert prov_attrs.get("lithos.depth") == 1
+        assert "lithos.sources_count" in prov_attrs
+        assert "lithos.derived_count" in prov_attrs
