@@ -2475,6 +2475,123 @@ class TestSyncFromDisk:
         assert result["status"] == "created"
 
 
+class TestRebuildIndicesProvenance:
+    """Tests for US-010: _rebuild_indices provenance support."""
+
+    async def test_rebuild_indices_restores_provenance_indexes(self, server: LithosServer):
+        """After _rebuild_indices(), provenance indexes match on-disk state."""
+        # Create source doc
+        source_result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Rebuild Source",
+                "content": "Source content.",
+                "agent": "rebuild-agent",
+            },
+        )
+        assert source_result["status"] == "created"
+        source_id = source_result["id"]
+
+        # Create derived doc referencing the source
+        derived_result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Rebuild Derived",
+                "content": "Derived content.",
+                "agent": "rebuild-agent",
+                "derived_from_ids": [source_id],
+            },
+        )
+        assert derived_result["status"] == "created"
+        derived_id = derived_result["id"]
+
+        # Verify provenance indexes before rebuild
+        mgr = server.knowledge
+        assert mgr._doc_to_sources.get(derived_id) == [source_id]
+        assert derived_id in mgr._source_to_derived.get(source_id, set())
+        assert mgr._id_to_title.get(source_id) == "Rebuild Source"
+        assert mgr._id_to_title.get(derived_id) == "Rebuild Derived"
+
+        # Rebuild indices
+        await server._rebuild_indices()
+
+        # Verify provenance indexes are restored after rebuild
+        assert mgr._doc_to_sources.get(derived_id) == [source_id]
+        assert derived_id in mgr._source_to_derived.get(source_id, set())
+        assert mgr._id_to_title.get(source_id) == "Rebuild Source"
+        assert mgr._id_to_title.get(derived_id) == "Rebuild Derived"
+        assert not mgr._unresolved_provenance  # no unresolved refs
+
+    async def test_rebuild_indices_detects_unresolved_provenance(self, server: LithosServer):
+        """After _rebuild_indices(), unresolved references are correctly detected."""
+        missing_id = "00000000-0000-0000-0000-000000000099"
+
+        # Create a doc referencing a non-existent source
+        result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Unresolved After Rebuild",
+                "content": "References a missing doc.",
+                "agent": "rebuild-agent",
+                "derived_from_ids": [missing_id],
+            },
+        )
+        assert result["status"] == "created"
+        doc_id = result["id"]
+
+        # Rebuild indices
+        await server._rebuild_indices()
+
+        # Verify unresolved provenance is detected
+        mgr = server.knowledge
+        assert mgr._doc_to_sources.get(doc_id) == [missing_id]
+        assert doc_id in mgr._unresolved_provenance.get(missing_id, set())
+        assert missing_id not in mgr._source_to_derived
+
+    async def test_rebuild_indices_clears_stale_provenance(self, server: LithosServer):
+        """_rebuild_indices() clears stale provenance from a previous rebuild."""
+        # Create a doc with provenance
+        source_result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Stale Source",
+                "content": "Source.",
+                "agent": "rebuild-agent",
+            },
+        )
+        source_id = source_result["id"]
+
+        derived_result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Stale Derived",
+                "content": "Derived.",
+                "agent": "rebuild-agent",
+                "derived_from_ids": [source_id],
+            },
+        )
+        derived_id = derived_result["id"]
+
+        # Delete the derived doc from disk (simulating external deletion)
+        mgr = server.knowledge
+        derived_path = mgr._id_to_path[derived_id]
+        full_path = mgr.knowledge_path / derived_path
+        full_path.unlink()
+
+        # Rebuild — should not have stale provenance entries for deleted doc
+        await server._rebuild_indices()
+
+        # The derived doc should no longer be in any indexes
+        assert derived_id not in mgr._doc_to_sources
+        assert derived_id not in mgr._source_to_derived.get(source_id, set())
+        assert derived_id not in mgr._id_to_title
+
+
 def test_conformance_module_exists():
     """Sanity check to keep this module discoverable in test listings."""
     assert Path(__file__).name == "test_integration_conformance.py"

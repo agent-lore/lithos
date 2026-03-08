@@ -111,6 +111,7 @@ class LithosServer:
         with tracer.start_as_current_span("lithos.index.rebuild") as span:
             self.search.clear_all()
             self.graph.clear()
+            self.knowledge._scan_existing()
 
             knowledge_path = self.config.storage.knowledge_path
             file_count = 0
