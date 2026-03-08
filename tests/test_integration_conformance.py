@@ -2048,6 +2048,193 @@ class TestSourceUrlMCPResponses:
         assert isinstance(stats["duplicate_urls"], int)
 
 
+class TestDerivedFromIdsMCPBoundary:
+    """Integration tests for US-008: derived_from_ids through lithos_write MCP tool."""
+
+    @pytest.mark.asyncio
+    async def test_create_with_derived_from_ids(self, server: LithosServer):
+        """lithos_write create with derived_from_ids stores and reads back."""
+        src = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Provenance Source",
+                "content": "Source document.",
+                "agent": "prov-agent",
+            },
+        )
+        src_id = src["id"]
+
+        derived = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Provenance Derived",
+                "content": "Derived from source.",
+                "agent": "prov-agent",
+                "derived_from_ids": [src_id],
+            },
+        )
+        assert derived["status"] == "created"
+
+        read = await _call_tool(server, "lithos_read", {"id": derived["id"]})
+        assert read["metadata"]["derived_from_ids"] == [src_id]
+
+    @pytest.mark.asyncio
+    async def test_update_omit_preserves_derived_from_ids(self, server: LithosServer):
+        """lithos_write update without derived_from_ids preserves existing."""
+        src = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Preserve Source",
+                "content": "Source.",
+                "agent": "prov-agent",
+            },
+        )
+
+        doc = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Preserve Derived",
+                "content": "Derived.",
+                "agent": "prov-agent",
+                "derived_from_ids": [src["id"]],
+            },
+        )
+
+        # Update without passing derived_from_ids (None at MCP boundary = preserve)
+        await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "id": doc["id"],
+                "title": "Preserve Derived",
+                "content": "Updated content.",
+                "agent": "prov-agent",
+            },
+        )
+
+        read = await _call_tool(server, "lithos_read", {"id": doc["id"]})
+        assert read["metadata"]["derived_from_ids"] == [src["id"]]
+
+    @pytest.mark.asyncio
+    async def test_update_clear_derived_from_ids(self, server: LithosServer):
+        """lithos_write update with derived_from_ids=[] clears provenance."""
+        src = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Clear Source",
+                "content": "Source.",
+                "agent": "prov-agent",
+            },
+        )
+
+        doc = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Clear Derived",
+                "content": "Derived.",
+                "agent": "prov-agent",
+                "derived_from_ids": [src["id"]],
+            },
+        )
+
+        # Clear by passing empty list
+        await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "id": doc["id"],
+                "title": "Clear Derived",
+                "content": "Cleared.",
+                "agent": "prov-agent",
+                "derived_from_ids": [],
+            },
+        )
+
+        read = await _call_tool(server, "lithos_read", {"id": doc["id"]})
+        # to_dict() omits empty lists, so key may be absent
+        assert read["metadata"].get("derived_from_ids", []) == []
+
+    @pytest.mark.asyncio
+    async def test_update_replace_derived_from_ids(self, server: LithosServer):
+        """lithos_write update with non-empty derived_from_ids replaces."""
+        s1 = await _call_tool(
+            server,
+            "lithos_write",
+            {"title": "Replace S1", "content": "S1.", "agent": "prov-agent"},
+        )
+        s2 = await _call_tool(
+            server,
+            "lithos_write",
+            {"title": "Replace S2", "content": "S2.", "agent": "prov-agent"},
+        )
+
+        doc = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Replace Derived",
+                "content": "Derived.",
+                "agent": "prov-agent",
+                "derived_from_ids": [s1["id"]],
+            },
+        )
+
+        # Replace s1 with s2
+        await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "id": doc["id"],
+                "title": "Replace Derived",
+                "content": "Replaced.",
+                "agent": "prov-agent",
+                "derived_from_ids": [s2["id"]],
+            },
+        )
+
+        read = await _call_tool(server, "lithos_read", {"id": doc["id"]})
+        assert read["metadata"]["derived_from_ids"] == [s2["id"]]
+
+    @pytest.mark.asyncio
+    async def test_create_with_unresolved_returns_warnings(self, server: LithosServer):
+        """lithos_write create with missing source IDs returns warnings."""
+        fake_id = "00000000-0000-0000-0000-111111111111"
+        result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Unresolved Provenance",
+                "content": "References missing source.",
+                "agent": "prov-agent",
+                "derived_from_ids": [fake_id],
+            },
+        )
+        assert result["status"] == "created"
+        assert any(fake_id in w for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_create_with_invalid_uuid_returns_error(self, server: LithosServer):
+        """lithos_write create with invalid UUID in derived_from_ids returns error."""
+        result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Invalid UUID Provenance",
+                "content": "Bad reference.",
+                "agent": "prov-agent",
+                "derived_from_ids": ["not-a-uuid"],
+            },
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+
+
 def test_conformance_module_exists():
     """Sanity check to keep this module discoverable in test listings."""
     assert Path(__file__).name == "test_integration_conformance.py"

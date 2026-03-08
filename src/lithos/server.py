@@ -218,6 +218,7 @@ class LithosServer:
             id: str | None = None,
             source_task: str | None = None,
             source_url: str | None = None,
+            derived_from_ids: list[str] | None = None,
         ) -> dict[str, Any]:
             """Create or update a knowledge file.
 
@@ -232,6 +233,9 @@ class LithosServer:
                 source_task: Task ID this knowledge came from
                 source_url: URL provenance for this knowledge. Pass "" to clear an
                     existing source_url on update.
+                derived_from_ids: List of source document UUIDs this note was derived
+                    from. On update: None (omit) preserves existing; [] clears;
+                    non-empty list replaces.
 
             Returns:
                 Dict with status envelope: created/updated/duplicate
@@ -249,7 +253,8 @@ class LithosServer:
 
                 if id:
                     # Update existing — map MCP boundary to manager semantics:
-                    # None (omitted) → _UNSET (preserve), "" → None (clear), str → pass through
+                    # source_url: None (omitted) → _UNSET (preserve), "" → None (clear),
+                    #             str → pass through
                     url_arg: str | None | _UnsetType
                     if source_url is None:
                         url_arg = _UNSET
@@ -257,6 +262,13 @@ class LithosServer:
                         url_arg = None
                     else:
                         url_arg = source_url
+
+                    # derived_from_ids: None (omitted) → _UNSET (preserve),
+                    #                   [] → [] (clear), non-empty → pass through
+                    prov_arg: list[str] | None | _UnsetType = (
+                        _UNSET if derived_from_ids is None else derived_from_ids
+                    )
+
                     result = await self.knowledge.update(
                         id=id,
                         agent=agent,
@@ -265,6 +277,7 @@ class LithosServer:
                         tags=tags,
                         confidence=confidence,
                         source_url=url_arg,
+                        derived_from_ids=prov_arg,
                     )
                 else:
                     # Create new — default confidence to 1.0 when not specified
@@ -277,6 +290,7 @@ class LithosServer:
                         path=path,
                         source=source_task,
                         source_url=source_url or None,
+                        derived_from_ids=derived_from_ids,
                     )
 
                 # Handle non-success results via WriteResult fields
