@@ -285,7 +285,7 @@ class TestIndexLifecycleConformance:
         (knowledge_path / "restored-source.md").write_text(fm.dumps(post))
 
         # Simulate file watcher event
-        doc = server.knowledge.sync_from_disk(Path("restored-source.md"))
+        doc = await server.knowledge.sync_from_disk(Path("restored-source.md"))
         assert doc.id == missing_id
 
         # Verify auto-resolution
@@ -512,6 +512,6 @@ class TestScanConformance:
         full_path.write_text(fm.dumps(post))
 
         # Simulate file watcher
-        server.knowledge.sync_from_disk(rel_path)
+        await server.knowledge.sync_from_disk(rel_path)
 
         assert server.knowledge._id_to_title[doc_id] == "New Title"

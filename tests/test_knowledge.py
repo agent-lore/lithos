@@ -2,14 +2,18 @@
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
+import frontmatter as fm
 import pytest
 
+from lithos.config import LithosConfig
 from lithos.knowledge import (
     KnowledgeManager,
     KnowledgeMetadata,
     WriteResult,
     generate_slug,
+    normalize_derived_from_ids_lenient,
     normalize_url,
     parse_wiki_links,
     validate_derived_from_ids,
@@ -2436,3 +2440,220 @@ class TestDeleteProvenance:
         assert s2.id not in knowledge_manager._source_to_derived or (
             derived.id not in knowledge_manager._source_to_derived.get(s2.id, set())
         )
+
+
+# ---------------------------------------------------------------------------
+# Code review bug fix tests
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeDerivedFromIdsLenient:
+    """Tests for normalize_derived_from_ids_lenient helper."""
+
+    def test_normalizes_uppercase_uuids(self):
+        """Uppercase UUIDs are lowercased."""
+        upper = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+        result = normalize_derived_from_ids_lenient([upper])
+        assert result == ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
+
+    def test_strips_whitespace(self):
+        """Leading/trailing whitespace is stripped."""
+        padded = "  aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa  "
+        result = normalize_derived_from_ids_lenient([padded])
+        assert result == ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
+
+    def test_deduplicates(self):
+        """Duplicate UUIDs are removed."""
+        uid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        result = normalize_derived_from_ids_lenient([uid, uid])
+        assert result == [uid]
+
+    def test_skips_invalid_uuids(self):
+        """Invalid UUIDs are skipped, not raised."""
+        valid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        result = normalize_derived_from_ids_lenient(["not-a-uuid", valid])
+        assert result == [valid]
+
+    def test_skips_empty_strings(self):
+        """Empty/whitespace entries are skipped."""
+        valid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        result = normalize_derived_from_ids_lenient(["", "  ", valid])
+        assert result == [valid]
+
+    def test_skips_non_strings(self):
+        """Non-string entries are skipped."""
+        valid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        result = normalize_derived_from_ids_lenient([42, valid])  # type: ignore[list-item]
+        assert result == [valid]
+
+    def test_removes_self_reference(self):
+        """Self-references are removed when self_id is provided."""
+        uid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        result = normalize_derived_from_ids_lenient([uid, other], self_id=uid)
+        assert result == [other]
+
+
+class TestScanExistingNormalization:
+    """Tests for _scan_existing() provenance normalization."""
+
+    async def test_scan_normalizes_uppercase_derived_from_ids(self, test_config: LithosConfig):
+        """Startup scan normalizes uppercase UUIDs in derived_from_ids."""
+        knowledge_path = test_config.storage.knowledge_path
+        source_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        derived_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+        # Source doc
+        post_src = fm.Post("# Source\n\nContent.", id=source_id, title="Source")
+        (knowledge_path / "source.md").write_text(fm.dumps(post_src))
+
+        # Derived doc with UPPERCASE source reference
+        upper_source = source_id.upper()
+        post_derived = fm.Post(
+            "# Derived\n\nContent.",
+            id=derived_id,
+            title="Derived",
+            derived_from_ids=[upper_source],
+        )
+        (knowledge_path / "derived.md").write_text(fm.dumps(post_derived))
+
+        mgr = KnowledgeManager()
+
+        # The stored derived_from_ids should be normalized (lowercase)
+        assert mgr._doc_to_sources[derived_id] == [source_id]
+        # The reference should resolve (since normalized matches the source)
+        assert derived_id in mgr._source_to_derived.get(source_id, set())
+        assert not mgr._unresolved_provenance
+
+    async def test_scan_skips_invalid_derived_from_ids(self, test_config: LithosConfig):
+        """Startup scan skips invalid UUIDs in derived_from_ids."""
+        knowledge_path = test_config.storage.knowledge_path
+        doc_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        valid_ref = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+        post = fm.Post(
+            "# Doc\n\nContent.",
+            id=doc_id,
+            title="Doc",
+            derived_from_ids=["not-a-uuid", valid_ref],
+        )
+        (knowledge_path / "doc.md").write_text(fm.dumps(post))
+
+        # Source doc for the valid ref
+        post_src = fm.Post("# Src\n\nContent.", id=valid_ref, title="Src")
+        (knowledge_path / "src.md").write_text(fm.dumps(post_src))
+
+        mgr = KnowledgeManager()
+
+        # Only the valid UUID should be stored
+        assert mgr._doc_to_sources[doc_id] == [valid_ref]
+
+    async def test_scan_removes_self_references(self, test_config: LithosConfig):
+        """Startup scan removes self-references from derived_from_ids."""
+        knowledge_path = test_config.storage.knowledge_path
+        doc_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+        post = fm.Post(
+            "# Doc\n\nContent.",
+            id=doc_id,
+            title="Doc",
+            derived_from_ids=[doc_id],
+        )
+        (knowledge_path / "doc.md").write_text(fm.dumps(post))
+
+        mgr = KnowledgeManager()
+        assert mgr._doc_to_sources[doc_id] == []
+
+
+class TestDuplicateUrlCountReset:
+    """Tests for duplicate_url_count reset on rescan."""
+
+    async def test_count_resets_when_duplicates_fixed(self, test_config: LithosConfig):
+        """duplicate_url_count resets to 0 when duplicates are resolved."""
+        knowledge_path = test_config.storage.knowledge_path
+        id_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        id_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        url = "https://example.com/dup"
+
+        # Create two docs with the same source_url
+        post_a = fm.Post("# A\n\nContent.", id=id_a, title="A", source_url=url)
+        post_b = fm.Post("# B\n\nContent.", id=id_b, title="B", source_url=url)
+        (knowledge_path / "a.md").write_text(fm.dumps(post_a))
+        (knowledge_path / "b.md").write_text(fm.dumps(post_b))
+
+        mgr = KnowledgeManager()
+        assert mgr.duplicate_url_count > 0
+
+        # Fix by removing the duplicate
+        post_b_fixed = fm.Post("# B\n\nContent.", id=id_b, title="B")
+        (knowledge_path / "b.md").write_text(fm.dumps(post_b_fixed))
+
+        mgr._scan_existing()
+        assert mgr.duplicate_url_count == 0
+
+
+class TestSyncFromDiskSourceUrlCollision:
+    """Tests for sync_from_disk source_url collision guard."""
+
+    async def test_sync_preserves_first_owner(self, test_config: LithosConfig):
+        """sync_from_disk does not steal a source_url from its existing owner."""
+        knowledge_path = test_config.storage.knowledge_path
+        id_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        id_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        url = "https://example.com/owned"
+
+        # Doc A owns the URL
+        post_a = fm.Post("# A\n\nContent.", id=id_a, title="A", source_url=url)
+        (knowledge_path / "a.md").write_text(fm.dumps(post_a))
+
+        # Doc B initially has no URL
+        post_b = fm.Post("# B\n\nContent.", id=id_b, title="B")
+        (knowledge_path / "b.md").write_text(fm.dumps(post_b))
+
+        mgr = KnowledgeManager()
+        norm = normalize_url(url)
+        assert mgr._source_url_to_id[norm] == id_a
+
+        # Now externally edit B to claim A's URL
+        post_b_steal = fm.Post("# B\n\nContent.", id=id_b, title="B", source_url=url)
+        (knowledge_path / "b.md").write_text(fm.dumps(post_b_steal))
+
+        await mgr.sync_from_disk(Path("b.md"))
+        # A should still own the URL
+        assert mgr._source_url_to_id[norm] == id_a
+
+
+class TestSyncFromDiskWriteLock:
+    """Tests for sync_from_disk write lock acquisition."""
+
+    def test_sync_from_disk_is_coroutine(self):
+        """sync_from_disk is an async method."""
+        assert asyncio.iscoroutinefunction(KnowledgeManager.sync_from_disk)
+
+    async def test_sync_from_disk_normalizes_provenance(self, test_config: LithosConfig):
+        """sync_from_disk normalizes derived_from_ids from disk."""
+        knowledge_path = test_config.storage.knowledge_path
+        source_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        derived_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+        # Create source doc via manager
+        mgr = KnowledgeManager()
+        post_src = fm.Post("# Source\n\nContent.", id=source_id, title="Source")
+        (knowledge_path / "source.md").write_text(fm.dumps(post_src))
+        await mgr.sync_from_disk(Path("source.md"))
+
+        # Create derived doc externally with uppercase UUID
+        upper_source = source_id.upper()
+        post_derived = fm.Post(
+            "# Derived\n\nContent.",
+            id=derived_id,
+            title="Derived",
+            derived_from_ids=[upper_source],
+        )
+        (knowledge_path / "derived.md").write_text(fm.dumps(post_derived))
+
+        await mgr.sync_from_disk(Path("derived.md"))
+
+        # Should be normalized
+        assert mgr._doc_to_sources[derived_id] == [source_id]
+        assert derived_id in mgr._source_to_derived.get(source_id, set())

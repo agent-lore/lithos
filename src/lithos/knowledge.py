@@ -138,6 +138,43 @@ def validate_derived_from_ids(ids: list[str], self_id: str | None = None) -> lis
     return result
 
 
+def normalize_derived_from_ids_lenient(ids: list[str], self_id: str | None = None) -> list[str]:
+    """Normalize derived_from_ids leniently for disk ingestion.
+
+    Like validate_derived_from_ids() but logs warnings and skips
+    invalid entries instead of raising ValueError.
+    Returns a deduplicated, sorted list of lowercased UUID strings.
+    """
+    normalized: list[str] = []
+    for raw in ids:
+        if not isinstance(raw, str):
+            logger.warning("Skipping non-string derived_from_ids entry: %r", raw)
+            continue
+        trimmed = raw.strip()
+        if not trimmed:
+            logger.warning("Skipping empty derived_from_ids entry")
+            continue
+        try:
+            parsed = uuid.UUID(trimmed)
+        except ValueError:
+            logger.warning("Skipping invalid UUID in derived_from_ids: %r", trimmed)
+            continue
+        normalized.append(str(parsed))
+
+    result = sorted(set(normalized))
+
+    if self_id is not None:
+        try:
+            self_normalized = str(uuid.UUID(self_id))
+            if self_normalized in result:
+                logger.warning("Removing self-reference from derived_from_ids: %s", self_normalized)
+                result.remove(self_normalized)
+        except ValueError:
+            pass
+
+    return result
+
+
 @dataclass
 class KnowledgeMetadata:
     """Document metadata stored in YAML frontmatter."""
@@ -412,6 +449,7 @@ class KnowledgeManager:
         self._source_to_derived.clear()
         self._unresolved_provenance.clear()
         self._id_to_title.clear()
+        self.duplicate_url_count = 0
 
         if not self.knowledge_path.exists():
             return
@@ -463,10 +501,11 @@ class KnowledgeManager:
             except Exception:
                 pass  # Skip invalid files
 
-        # Pass 2: Classify provenance references as resolved or unresolved.
+        # Pass 2: Normalize and classify provenance references as resolved or unresolved.
         for doc_id, source_ids in deferred_provenance:
-            self._doc_to_sources[doc_id] = list(source_ids)
-            for source_id in source_ids:
+            normalized_ids = normalize_derived_from_ids_lenient(source_ids, self_id=doc_id)
+            self._doc_to_sources[doc_id] = normalized_ids
+            for source_id in normalized_ids:
                 if source_id in self._id_to_path:
                     # Resolved: source document exists
                     if source_id not in self._source_to_derived:
@@ -993,7 +1032,7 @@ class KnowledgeManager:
         except FileNotFoundError:
             return None
 
-    def sync_from_disk(self, path: Path) -> KnowledgeDocument:
+    async def sync_from_disk(self, path: Path) -> KnowledgeDocument:
         """Re-read a file from disk and update all manager indexes.
 
         Handles both new files and modified files uniformly.
@@ -1006,6 +1045,11 @@ class KnowledgeManager:
             FileNotFoundError: If the file does not exist on disk.
             ValueError: If the file cannot be parsed.
         """
+        async with self._write_lock:
+            return self._sync_from_disk_unlocked(path)
+
+    def _sync_from_disk_unlocked(self, path: Path) -> KnowledgeDocument:
+        """Internal sync logic, called with _write_lock held."""
         file_path, full_path = self._resolve_safe_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -1055,7 +1099,18 @@ class KnowledgeManager:
                 old_urls_to_remove = [k for k, v in self._source_url_to_id.items() if v == doc_id]
                 for k in old_urls_to_remove:
                     del self._source_url_to_id[k]
-                self._source_url_to_id[norm] = doc_id
+                # Check if another doc already owns this URL (first-owner-wins)
+                existing_owner = self._source_url_to_id.get(norm)
+                if existing_owner is not None and existing_owner != doc_id:
+                    logger.warning(
+                        "source_url collision in sync_from_disk: %s owned by %s, "
+                        "skipping assignment for %s",
+                        norm,
+                        existing_owner,
+                        doc_id,
+                    )
+                else:
+                    self._source_url_to_id[norm] = doc_id
             except ValueError:
                 pass
         else:
@@ -1068,7 +1123,9 @@ class KnowledgeManager:
         self._id_to_title[doc_id] = title
 
         # Update provenance indexes
-        new_sources = metadata.derived_from_ids or []
+        new_sources = normalize_derived_from_ids_lenient(
+            metadata.derived_from_ids or [], self_id=doc_id
+        )
 
         if not is_new:
             # Modified file: diff against current state

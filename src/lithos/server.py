@@ -250,7 +250,7 @@ class LithosServer:
                                 )
                             )
                     else:
-                        doc = self.knowledge.sync_from_disk(relative_path)
+                        doc = await self.knowledge.sync_from_disk(relative_path)
                         self.search.index_document(doc)
                         self.graph.add_document(doc)
                         self.graph.save_cache()
