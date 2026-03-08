@@ -89,6 +89,14 @@ class IndexConfig(BaseModel):
     watch_debounce_ms: int = 500
 
 
+class EventsConfig(BaseModel):
+    """Internal event bus configuration."""
+
+    enabled: bool = True
+    event_buffer_size: int = 500
+    subscriber_queue_size: int = 100
+
+
 class LithosConfig(BaseSettings):
     """Main Lithos configuration."""
 
