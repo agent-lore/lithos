@@ -99,12 +99,12 @@ Exit criteria:
 
 ## Phase 3 - Digest Provenance v2 (`derived_from_ids`)
 
-- [ ] Add `derived_from_ids` frontmatter field + validation/normalization
-- [ ] Add manager provenance indexes (`_doc_to_sources`, `_source_to_derived`, `_unresolved_provenance`)
-- [ ] Implement write semantics (`None` preserve, `[]` clear, list replace)
-- [ ] Add warnings for unresolved source IDs
-- [ ] Add `lithos_provenance` tool (BFS on provenance indexes only)
-- [ ] Keep wiki-link graph behavior unchanged
+- [x] Add `derived_from_ids` frontmatter field + validation/normalization
+- [x] Add manager provenance indexes (`_doc_to_sources`, `_source_to_derived`, `_unresolved_provenance`)
+- [x] Implement write semantics (`None` preserve, `[]` clear, list replace)
+- [x] Add warnings for unresolved source IDs
+- [x] Add `lithos_provenance` tool (BFS on provenance indexes only)
+- [x] Keep wiki-link graph behavior unchanged
 
 Dependencies:
 
