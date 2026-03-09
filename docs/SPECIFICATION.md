@@ -290,6 +290,8 @@ Create or update a knowledge file.
 
 `{ status: "duplicate", duplicate_of: { id, title, source_url }, message: string, warnings: string[] }`
 
+`{ status: "error", code: "invalid_input", message: string, warnings: [] }`
+
 **Behavior on update:** If `id` is provided and exists, the agent is added to `contributors` if not already present.
 
 **Update semantics:** Omitted optional fields preserve existing values. Some fields support explicit clear. At the MCP boundary, FastMCP cannot distinguish omitted from `null`, so clearable string fields use `""` (empty string) as the clear signal (e.g., `source_url: ""`). See `unified-write-contract.md` for the full MCP boundary convention.
@@ -373,7 +375,7 @@ Check the knowledge base for a cached answer before performing expensive researc
 ```json
 {
   "hit": true,
-  "document": { "id": "...", "title": "...", "content": "...", "source_url": "...", "confidence": 0.9, "updated_at": "..." },
+  "document": { "id": "...", "title": "...", "content": "...", "source_url": "...", "confidence": 0.9, "updated_at": "...", "expires_at": "...", "tags": ["..."] },
   "stale_exists": false,
   "stale_id": null
 }
@@ -397,6 +399,15 @@ Check the knowledge base for a cached answer before performing expensive researc
   "stale_exists": false,
   "stale_id": null
 }
+```
+
+**Returns (error):**
+```json
+{ "status": "error", "code": "invalid_input", "message": "..." }
+```
+
+```json
+{ "status": "error", "code": "search_backend_error", "message": "..." }
 ```
 
 **Evaluation pipeline:**
