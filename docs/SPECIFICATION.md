@@ -1,7 +1,7 @@
 # Lithos - Specification
 
-Version: 0.5.0
-Date: 2026-03-08
+Version: 0.6.0
+Date: 2026-03-09
 Status: Aligned with Implementation
 
 ---
@@ -160,6 +160,7 @@ source_url: <string>              # Optional: Canonical URL provenance (normaliz
 derived_from_ids:                 # Optional: Declared lineage (list of UUIDs)
   - <uuid-1>
   - <uuid-2>
+expires_at: <ISO 8601 datetime>   # Optional: Freshness deadline (UTC); null = never expires
 supersedes: <uuid>                # Optional: ID of document this replaces
 ---
 
@@ -354,6 +355,55 @@ Semantic similarity search.
 **Snippet source:** Content of the best-matching chunk for each document.
 
 **Note:** Search operates on chunks internally but returns deduplicated documents.
+
+#### `lithos_cache_lookup`
+Check the knowledge base for a cached answer before performing expensive research.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | Yes | Natural language query for semantic matching |
+| `source_url` | string | No | Exact URL to check first (fast path) |
+| `max_age_hours` | float | No | Reject documents older than N hours (by `updated_at`) |
+| `min_confidence` | float | No | Minimum confidence score (default: 0.5) |
+| `limit` | int | No | Max candidates to evaluate (default: 3) |
+| `tags` | string[] | No | Filter by tags |
+
+**Returns (hit):**
+```json
+{
+  "hit": true,
+  "document": { "id": "...", "title": "...", "content": "...", "source_url": "...", "confidence": 0.9, "updated_at": "..." },
+  "stale_exists": false,
+  "stale_id": null
+}
+```
+
+**Returns (miss with stale candidate):**
+```json
+{
+  "hit": false,
+  "document": null,
+  "stale_exists": true,
+  "stale_id": "<uuid>"
+}
+```
+
+**Returns (clean miss):**
+```json
+{
+  "hit": false,
+  "document": null,
+  "stale_exists": false,
+  "stale_id": null
+}
+```
+
+**Evaluation pipeline:**
+1. **Fast path**: If `source_url` provided, exact URL lookup via `find_by_source_url()`, filtered by tags.
+2. **Semantic fallback**: If fast path misses, `semantic_search(threshold=0.0)` returns top candidates.
+3. **Candidate evaluation** (in order): confidence filter → staleness check (`expires_at`) → `max_age_hours` check → first passing candidate = hit.
+4. **Stale tracking**: If all candidates fail due to staleness, returns `stale_id` so the caller can update the stale document.
 
 #### `lithos_list`
 List knowledge items with filters.
@@ -853,7 +903,7 @@ These are explicitly not part of the initial implementation but may be considere
 - Knowledge versioning (beyond git)
 - Multi-node deployment
 - Access control / namespaces
-- Knowledge expiration / TTL
+- ~~Knowledge expiration / TTL~~ (Implemented in Phase 4 via `expires_at`, `ttl_hours`, `lithos_cache_lookup`, and `is_stale` in search results)
 - Automated knowledge quality scoring
 - Contradictory knowledge resolution
 - Integration with external knowledge sources
@@ -925,13 +975,13 @@ These are explicitly not part of the initial implementation but may be considere
 
 | Category | Tools |
 |----------|-------|
-| Knowledge | `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_semantic`, `lithos_list` |
+| Knowledge | `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_semantic`, `lithos_list`, `lithos_cache_lookup` |
 | Graph | `lithos_links`, `lithos_tags`, `lithos_provenance` |
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_status`, `lithos_finding_post`, `lithos_finding_list` |
 | System | `lithos_stats` |
 
-**Total: 21 MCP tools**
+**Total: 22 MCP tools**
 
 ---
 
