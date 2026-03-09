@@ -614,6 +614,7 @@ class KnowledgeManager:
         source: str | None = None,
         source_url: str | None = None,
         derived_from_ids: list[str] | None = None,
+        expires_at: datetime | None = None,
     ) -> WriteResult:
         """Create a new knowledge document.
 
@@ -679,6 +680,7 @@ class KnowledgeManager:
                 source=source,
                 source_url=norm_url,
                 derived_from_ids=normalized_provenance,
+                expires_at=expires_at,
             )
 
             # Determine file path
@@ -837,6 +839,7 @@ class KnowledgeManager:
         confidence: float | None = None,
         source_url: str | None | _UnsetType = _UNSET,
         derived_from_ids: list[str] | None | _UnsetType = _UNSET,
+        expires_at: datetime | None | _UnsetType = _UNSET,
     ) -> WriteResult:
         """Update an existing document.
 
@@ -849,6 +852,11 @@ class KnowledgeManager:
         - _UNSET (default): preserve existing derived_from_ids, no index change
         - None or []: clear existing provenance, remove from all provenance indexes
         - non-empty list: validate, normalize, replace entire set
+
+        expires_at semantics:
+        - _UNSET (default): preserve existing expires_at
+        - None: clear existing expires_at
+        - datetime: set new value
         """
         async with self._write_lock:
             lithos_metrics.knowledge_ops.add(1, {"op": "update"})
@@ -944,6 +952,10 @@ class KnowledgeManager:
                             warnings.append(
                                 f"derived_from_ids contains missing document: {source_id}"
                             )
+
+            # Handle expires_at update
+            if not isinstance(expires_at, _UnsetType):
+                doc.metadata.expires_at = expires_at
 
             # Update fields
             if content is not None:

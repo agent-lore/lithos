@@ -2836,3 +2836,173 @@ class TestExpiresAtField:
         meta = KnowledgeMetadata.from_dict(data)
         assert meta.expires_at is None
         assert meta.is_stale is False
+
+
+class TestExpiresAtWritePath:
+    """Tests for expires_at in KnowledgeManager.create() and update()."""
+
+    @pytest.mark.asyncio
+    async def test_create_with_expires_at(self, knowledge_manager: KnowledgeManager):
+        """create() with expires_at stores it in metadata."""
+        from datetime import timedelta
+
+        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        result = await knowledge_manager.create(
+            title="Fresh Doc",
+            content="Fresh content.",
+            agent="agent",
+            expires_at=expires,
+        )
+        assert result.status == "created"
+        assert result.document is not None
+        assert result.document.metadata.expires_at == expires
+
+    @pytest.mark.asyncio
+    async def test_create_without_expires_at(self, knowledge_manager: KnowledgeManager):
+        """create() without expires_at defaults to None."""
+        result = await knowledge_manager.create(
+            title="No Expiry",
+            content="No expiry content.",
+            agent="agent",
+        )
+        assert result.status == "created"
+        assert result.document is not None
+        assert result.document.metadata.expires_at is None
+
+    @pytest.mark.asyncio
+    async def test_create_read_round_trip(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """expires_at persists through create-read round trip."""
+        from datetime import timedelta
+
+        expires = datetime.now(timezone.utc) + timedelta(hours=48)
+        created = (
+            await knowledge_manager.create(
+                title="Round Trip",
+                content="Round trip content.",
+                agent="agent",
+                expires_at=expires,
+            )
+        ).document
+        assert created is not None
+
+        doc, _ = await knowledge_manager.read(id=created.id)
+        # Compare with tolerance for serialization precision
+        assert doc.metadata.expires_at is not None
+        assert abs((doc.metadata.expires_at - expires).total_seconds()) < 1
+
+        # Verify raw frontmatter on disk
+        import yaml
+
+        file_path = test_config.storage.knowledge_path / created.path
+        raw = file_path.read_text()
+        parts = raw.split("---", 2)
+        fm_data = yaml.safe_load(parts[1])
+        assert "expires_at" in fm_data
+
+    @pytest.mark.asyncio
+    async def test_update_preserve_expires_at(self, knowledge_manager: KnowledgeManager):
+        """update() with _UNSET preserves existing expires_at."""
+        from datetime import timedelta
+
+        from lithos.knowledge import _UNSET
+
+        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        doc = (
+            await knowledge_manager.create(
+                title="Preserve Test",
+                content="Content.",
+                agent="agent",
+                expires_at=expires,
+            )
+        ).document
+        assert doc is not None
+
+        # Update without touching expires_at (default is _UNSET)
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="editor",
+            content="Updated content.",
+        )
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.expires_at == expires
+
+    @pytest.mark.asyncio
+    async def test_update_clear_expires_at(self, knowledge_manager: KnowledgeManager):
+        """update() with None clears existing expires_at."""
+        from datetime import timedelta
+
+        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        doc = (
+            await knowledge_manager.create(
+                title="Clear Test",
+                content="Content.",
+                agent="agent",
+                expires_at=expires,
+            )
+        ).document
+        assert doc is not None
+
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="editor",
+            expires_at=None,
+        )
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.expires_at is None
+
+    @pytest.mark.asyncio
+    async def test_update_replace_expires_at(self, knowledge_manager: KnowledgeManager):
+        """update() with datetime replaces existing expires_at."""
+        from datetime import timedelta
+
+        old_expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        new_expires = datetime.now(timezone.utc) + timedelta(hours=72)
+
+        doc = (
+            await knowledge_manager.create(
+                title="Replace Test",
+                content="Content.",
+                agent="agent",
+                expires_at=old_expires,
+            )
+        ).document
+        assert doc is not None
+
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="editor",
+            expires_at=new_expires,
+        )
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.expires_at == new_expires
+
+    @pytest.mark.asyncio
+    async def test_update_read_round_trip(self, knowledge_manager: KnowledgeManager):
+        """expires_at persists through update-read round trip."""
+        from datetime import timedelta
+
+        doc = (
+            await knowledge_manager.create(
+                title="Update RT",
+                content="Content.",
+                agent="agent",
+            )
+        ).document
+        assert doc is not None
+        assert doc.metadata.expires_at is None
+
+        new_expires = datetime.now(timezone.utc) + timedelta(hours=12)
+        await knowledge_manager.update(
+            id=doc.id,
+            agent="editor",
+            expires_at=new_expires,
+        )
+
+        read_doc, _ = await knowledge_manager.read(id=doc.id)
+        assert read_doc.metadata.expires_at is not None
+        assert abs((read_doc.metadata.expires_at - new_expires).total_seconds()) < 1
