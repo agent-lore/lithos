@@ -375,6 +375,8 @@ class _LithosMetrics:
         self._search_duration: Any = None
         self._coordination_ops: Any = None
         self._event_bus_ops: Any = None
+        self._cache_lookups: Any = None
+        self._cache_lookup_duration: Any = None
 
     @property
     def knowledge_ops(self) -> Any:
@@ -420,6 +422,24 @@ class _LithosMetrics:
                 description="Event bus emit and drop operations",
             )
         return self._event_bus_ops
+
+    @property
+    def cache_lookups(self) -> Any:
+        if self._cache_lookups is None:
+            self._cache_lookups = get_meter().create_counter(
+                "lithos.cache.lookups",
+                description="Cache lookup operations",
+            )
+        return self._cache_lookups
+
+    @property
+    def cache_lookup_duration(self) -> Any:
+        if self._cache_lookup_duration is None:
+            self._cache_lookup_duration = get_meter().create_histogram(
+                "lithos.cache.lookup_duration_ms",
+                description="Cache lookup latency in milliseconds",
+            )
+        return self._cache_lookup_duration
 
 
 def register_active_claims_observer(get_active_claim_count: Callable[[], int]) -> None:

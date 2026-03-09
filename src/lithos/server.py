@@ -32,7 +32,7 @@ from lithos.events import (
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import _UNSET, KnowledgeManager, _UnsetType
 from lithos.search import SearchEngine
-from lithos.telemetry import get_tracer, register_active_claims_observer
+from lithos.telemetry import get_tracer, lithos_metrics, register_active_claims_observer
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +343,12 @@ class LithosServer:
                             "message": "ttl_hours must be a finite positive number.",
                             "warnings": [],
                         }
+
+                # Emit freshness span attributes
+                if ttl_hours is not None:
+                    span.set_attribute("freshness.ttl_hours", ttl_hours)
+                elif expires_at is not None and expires_at != "":
+                    span.set_attribute("freshness.expires_at_set", True)
 
                 # Compute expires_at_dt from ttl_hours or expires_at string
                 expires_at_dt: datetime | None | _UnsetType
@@ -708,6 +714,9 @@ class LithosServer:
                 Dict with hit, document, stale_exists, stale_id
             """
             logger.info("lithos_cache_lookup query_len=%d source_url=%s", len(query), source_url)
+            import time as _time
+
+            _lookup_start = _time.perf_counter()
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.cache_lookup") as span:
                 span.set_attribute("lithos.tool", "lithos_cache_lookup")
@@ -783,9 +792,13 @@ class LithosServer:
 
                 span.set_attribute("cache.candidates_evaluated", candidates_evaluated)
 
+                elapsed_ms = (_time.perf_counter() - _lookup_start) * 1000
+                lithos_metrics.cache_lookup_duration.record(elapsed_ms)
+
                 if best_hit is not None:
                     span.set_attribute("cache.hit", True)
                     span.set_attribute("cache.stale_exists", False)
+                    lithos_metrics.cache_lookups.add(1, {"outcome": "hit"})
                     return {
                         "hit": True,
                         "document": {
@@ -808,6 +821,7 @@ class LithosServer:
                 elif first_stale_id is not None:
                     span.set_attribute("cache.hit", False)
                     span.set_attribute("cache.stale_exists", True)
+                    lithos_metrics.cache_lookups.add(1, {"outcome": "miss_stale"})
                     return {
                         "hit": False,
                         "document": None,
@@ -817,6 +831,7 @@ class LithosServer:
                 else:
                     span.set_attribute("cache.hit", False)
                     span.set_attribute("cache.stale_exists", False)
+                    lithos_metrics.cache_lookups.add(1, {"outcome": "miss_clean"})
                     return {
                         "hit": False,
                         "document": None,
