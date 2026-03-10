@@ -20,6 +20,9 @@ Lithos is an MCP server that provides a shared knowledge store for AI agents run
 - **🔍 Fast search**: Tantivy full-text + ChromaDB semantic search
 - **🕸️ Knowledge graph**: NetworkX-powered relationships via `[[wiki-links]]`
 - **🤝 Multi-agent coordination**: Task claiming, findings sharing, status tracking
+- **🧠 Research cache**: One-call freshness check so agents skip redundant research — returns hit/miss/stale with update guidance
+- **🔗 URL deduplication**: Automatic detection and prevention of duplicate notes from the same source URL
+- **🧬 Provenance tracking**: Declare which notes a synthesis is derived from and query lineage across the knowledge base
 - **🔌 MCP interface**: Works with any MCP-compatible agent or tool
 - **🏠 Local & private**: No cloud dependencies, you own your data
 

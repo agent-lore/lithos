@@ -120,11 +120,11 @@ Exit criteria:
 
 ## Phase 4 - Research Cache and Freshness
 
-- [ ] Add `expires_at` metadata + staleness helper
-- [ ] Extend `lithos_write` with `ttl_hours`/`expires_at` per unified contract
-- [ ] Add `lithos_cache_lookup`
-- [ ] Add freshness fields (`updated_at`, `is_stale`) to search/semantic responses
-- [ ] Align search schema changes with rebuild framework using the single batched Tantivy schema jump decided in `target-search-schema.md`
+- [x] Add `expires_at` metadata + staleness helper
+- [x] Extend `lithos_write` with `ttl_hours`/`expires_at` per unified contract
+- [x] Add `lithos_cache_lookup`
+- [x] Add freshness fields (`updated_at`, `is_stale`) to search/semantic responses
+- [x] Align search schema changes with rebuild framework using the single batched Tantivy schema jump decided in `target-search-schema.md`
 
 Dependencies:
 
@@ -138,7 +138,9 @@ Exit criteria:
 
 ---
 
-## Phase 5 - Bulk Write v3 (Durable Workflow)
+## Phase 5 - Bulk Write v3 (Durable Workflow) — DEFERRED
+
+Deferred until usage data demonstrates a need for batch writes. Single-write throughput is sufficient for current workloads.
 
 - [ ] Implement batch journal schema and worker lifecycle
 - [ ] Add `lithos_write_batch` and `lithos_batch_status` (and optional `lithos_batch_list`)
@@ -173,7 +175,7 @@ Exit criteria:
 
 Dependencies:
 
-- Phases 2a through 5 complete
+- Phases 2a through 4 complete (Phase 5 deferred)
 
 Exit criteria:
 
