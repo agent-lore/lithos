@@ -6,19 +6,25 @@ Contract note: reconcile behavior is governed by `final-architecture-guardrails.
 
 Provide a deterministic repair path for drift in projection systems without mutating markdown source-of-truth content.
 
-`lithos_reconcile` is the operator and agent-facing mechanism for:
+The reconcile internals are the repair mechanism for:
 
 - rebuilding stale or missing search indices
 - repairing graph cache drift
 - repairing projected provenance edges once that projection store exists
-- previewing repairs safely via `dry_run`
 
-The reconcile tool is not a migration framework and it is not a general-purpose content fixer. It only repairs derived state from authoritative markdown/frontmatter data.
+Reconcile is not a migration framework and it is not a general-purpose content fixer. It only repairs derived state from authoritative markdown/frontmatter data.
 
-## Tool Contract
+Exposure model:
+
+- implement reconcile in core logic so startup repair paths, CLI/admin commands, and future internal callers share one repair path
+- do not expose reconcile as an MCP tool in Phase 6
+- expose reconcile via CLI/admin path for operators
+- keep system health checks CLI/admin-only as well unless a later requirement justifies an MCP diagnostic surface
+
+## Internal Contract
 
 ```python
-lithos_reconcile(
+reconcile(
     scope: Literal["all", "indices", "graph", "provenance_projection"] = "all",
     dry_run: bool = False,
 ) -> {
@@ -162,7 +168,7 @@ Requirements:
 - action list must match what a real run would attempt
 - counts in `summary` reflect planned actions, not applied actions
 
-This makes dry-run suitable for operator review and automated diagnostics.
+This makes dry-run suitable for operator review and CLI/admin diagnostics.
 
 ## Idempotency and Crash Safety
 
@@ -191,13 +197,7 @@ No repair step should depend on in-memory assumptions from a previous failed run
 
 ## Batch Write Coordination
 
-Reconcile must not run concurrently with an active batch apply phase (Phase B of `bulk-write-v3.md`). A reconcile during apply may observe partially-applied batches: some files written but manager indexes not yet fully updated, causing false drift detections and unnecessary rebuilds.
-
-Coordination rule: before running any non-dry-run repair, check `batch.db` for any batch with status `applying`. If found, return a `deferred_due_to_active_batch` status rather than proceeding with repair.
-
-Dry-run is exempt from this constraint — it produces a point-in-time snapshot and performs no mutations.
-
-This constraint is unidirectional: batch writes do not need to check for or block reconcile, since reconcile never mutates write-plane content.
+Batch write coordination is deferred with Phase 5. Phase 6 repair internals should avoid baking in an external `deferred_due_to_active_batch` surface now; add that coordination check when a manual reconcile entry point and active batch apply workflow both exist.
 
 ## Observability
 
@@ -213,7 +213,6 @@ Required traces:
 Required attributes:
 
 - `lithos.reconcile.scope`
-- `lithos.reconcile.dry_run`
 - `lithos.reconcile.backend`
 - `lithos.reconcile.status`
 
@@ -249,7 +248,8 @@ Files likely touched:
 
 | File | Change |
 |------|--------|
-| `src/lithos/server.py` | Add `lithos_reconcile` MCP tool and response shaping |
+| `src/lithos/reconcile.py` or equivalent service module | Add reconcile scan/diff/apply orchestration and response shaping |
+| `src/lithos/cli.py` | Add operator/admin reconcile command(s) that call core reconcile logic |
 | `src/lithos/knowledge.py` | Reuse authoritative document scan/list helpers |
 | `src/lithos/search.py` | Add explicit repair/rebuild helpers for Tantivy and ChromaDB |
 | `src/lithos/graph.py` | Add graph rebuild/diff helpers and atomic cache write path |
@@ -280,3 +280,4 @@ Exit criteria:
 - each scope has deterministic dry-run and real-run behavior
 - reruns are idempotent
 - markdown/frontmatter content is never mutated by reconcile
+- no mutating MCP repair tool is required for Phase 6

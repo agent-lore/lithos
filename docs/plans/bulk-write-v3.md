@@ -259,7 +259,7 @@ No changes to current read/search/list contracts required.
 Mitigations:
 - strict status model
 - explicit consistency docs
-- retries + dead-letter + manual reconcile tool
+- retries + dead-letter + manual reconcile CLI/admin command
 
 ## Testing
 

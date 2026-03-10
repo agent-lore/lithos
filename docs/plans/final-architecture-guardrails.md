@@ -62,16 +62,28 @@ Client-visible guarantees:
 
 ## 5) Reconcile and Repair
 
-Provide an explicit reconcile tool:
+Provide explicit internal reconcile/repair logic for derived-state drift with an operator-facing CLI/admin entry point:
 
-`lithos_reconcile(scope: "all" | "indices" | "graph" | "provenance_projection" = "all", dry_run: bool = false) -> { ... }`
+`reconcile(scope: "all" | "indices" | "graph" | "provenance_projection" = "all", dry_run: bool = false) -> { ... }`
 
 Responsibilities:
 
 - rebuild stale/missing indices from markdown source of truth
 - repair provenance projection drift (`derived_from_ids` -> projected edges)
 - report counts: scanned, repaired, failed, skipped
-- support dry-run preview for safe operations
+- support dry-run preview for safe operator use
+
+Exposure rule:
+
+- implement reconcile in core logic, not in the MCP tool layer
+- no MCP reconcile tool is required in the current phase
+- expose reconcile via CLI/admin path for operators
+- do not add a mutating MCP reconcile tool unless a concrete agent workflow justifies widening authority
+
+Diagnostics rule:
+
+- system health and backend health checks remain operator-facing CLI/admin diagnostics by default
+- no MCP health tool is required by this architecture
 
 Phasing rule:
 

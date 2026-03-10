@@ -168,9 +168,10 @@ Exit criteria:
 ## Phase 6 - Reconcile/Repair Tooling
 
 - [ ] Complete dedicated implementation plan (`reconcile-plan.md`) review before coding starts
-- [ ] Implement `lithos_reconcile` core scopes (`indices`/`graph`/`all`)
+- [ ] Implement core reconcile scopes (`indices`/`graph`/`all`)
 - [ ] Implement deterministic no-op behavior for `provenance_projection` when projection store is not enabled
 - [ ] Add dry-run mode and repair reporting
+- [ ] Expose reconcile via CLI/admin command path
 - [ ] Add idempotency and crash-safe tests
 
 Dependencies:
@@ -216,7 +217,7 @@ The webhook plans are intentionally not assigned to a phase.
 - [ ] Add `lithos_retrieve` with initial scouts + Terrace 1 rerank
 - [ ] Add receipts logging
 - [ ] Add `edges.db` (`related_to`) and `stats.db` base tables
-- [ ] Enable `lithos_reconcile(scope="provenance_projection")` real repair path once projection store exists
+- [ ] Enable real `provenance_projection` reconcile path once projection store exists
 - [ ] Add edge/stats tools
 
 ### MVP 2
