@@ -4,7 +4,11 @@ Lithos is designed as a shared brain for a heterogeneous fleet of agents, but a 
 
 ## Design Plan
 
-SSE and webhooks should be built together. They're two delivery mechanisms for the same internal event bus. Building them separately would mean duplicating the event emission logic.
+The delivery surface is now split into three layers that share the same internal event bus without needing to ship together:
+
+- `event-sse-plan.md`: the primary real-time path and the only part currently assigned to a phase
+- `event-webhooks-plan.md`: a minimal optional webhook layer, deferred indefinitely
+- `event-guaranteed-delivery-plan.md`: durable delivery infrastructure, also deferred indefinitely
 
 ## Architecture Overview
 
@@ -19,7 +23,7 @@ SSE and webhooks should be built together. They're two delivery mechanisms for t
 └─────────────────────────────────────────────────────┘
 ```
 
-One `EventBus` instance, two delivery mechanisms, all events flow through the same path.
+One `EventBus` instance, multiple downstream delivery layers, all events flow through the same path.
 
 ## Event Types
 

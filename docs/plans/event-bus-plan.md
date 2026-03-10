@@ -4,14 +4,14 @@ Contract note: system-level rollout and compatibility constraints are governed b
 
 ## Goal
 
-Add an internal event bus that emits on all write/task/delete/finding success paths. The bus is internal infrastructure — no new MCP tools, no SSE endpoint, no webhooks. Later phases and the delivery plan (`event-delivery-plan.md`) consume from this bus.
+Add an internal event bus that emits on all write/task/delete/finding success paths. The bus is internal infrastructure — no new MCP tools, no SSE endpoint, no webhooks. Later work consumes from this bus: Phase 6.5 SSE delivery and any future webhook delivery.
 
 The bus exists so that:
 
 - later phases can react to state changes without polling or ad-hoc callbacks
 - bulk writes (Phase 5) can emit batch status events internally
 - LCMA (Phase 7) can trigger consolidation on `lithos_task_complete`
-- the delivery surface (Phase 6.5) has a stable emission layer to build on
+- Phase 6.5 SSE delivery has a stable emission layer to build on
 
 ## Event Types
 
@@ -48,7 +48,7 @@ class LithosEvent:
 - `unsubscribe(queue)` — cleanup
 - In-memory ring buffer of last N events (configurable via `EventsConfig.event_buffer_size`)
 
-The bus is purely in-memory. No persistence, no HTTP, no SQLite. Subscribers are internal Python consumers (other Lithos subsystems), not external agents. External delivery is handled by `event-delivery-plan.md`.
+The bus is purely in-memory. No persistence, no HTTP, no SQLite. Subscribers are internal Python consumers (other Lithos subsystems), not external agents. External delivery is handled by the SSE delivery plan plus deferred future webhook plans.
 
 #### Subscriber filtering
 
@@ -79,7 +79,7 @@ class EventsConfig(BaseModel):
     subscriber_queue_size: int = 100
 ```
 
-Only bus-relevant config. SSE and webhook config are added later by `event-delivery-plan.md`.
+Only bus-relevant config. SSE and webhook config are added later by `event-sse-plan.md` and `event-webhooks-plan.md`.
 
 Add to `LithosConfig`:
 
@@ -155,10 +155,8 @@ Ordering and delivery semantics:
 
 ## Out of Scope
 
-The following are covered by `event-delivery-plan.md` (Phase 6.5):
+The following are covered outside this plan:
 
-- SSE endpoint (`GET /events`)
-- Webhook registry and dispatcher
-- Webhook MCP tools (`lithos_webhook_register`, etc.)
-- HMAC signing, delivery retries, SQLite delivery log
-- `max_sse_clients`, `webhook_timeout_seconds`, `webhook_max_retries` config
+- `event-sse-plan.md`: Phase 6.5 SSE endpoint (`GET /events`)
+- `event-webhooks-plan.md`: deferred future webhook registry, dispatcher, and minimal MCP tools
+- `event-guaranteed-delivery-plan.md`: deferred future retries, durable outbox, and delivery history

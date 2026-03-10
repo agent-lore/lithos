@@ -9,7 +9,7 @@ This checklist defines the preferred execution order across the active plans:
 - `research-cache-plan.md`
 - `bulk-write-v3.md`
 - `reconcile-plan.md`
-- `event-delivery-plan.md`
+- `event-sse-plan.md`
 - `lcma-design.md`
 - `cli-extension-plan.md`
 
@@ -183,14 +183,11 @@ Exit criteria:
 
 ---
 
-## Phase 6.5 - Event Delivery Surface
+## Phase 6.5 - SSE Event Delivery
 
 - [ ] Add SSE endpoint (`GET /events`) with type/tag filtering and replay-from-ID
-- [ ] Add webhook registry, durable outbox, and delivery history tables to `coordination.db`
-- [ ] Implement webhook dispatcher with HMAC signing, retries, duplicate-safe `event.id` payloads, and restart-safe outbox processing
 - [ ] Make SSE inherit the MCP auth boundary when auth exists
-- [ ] Add MCP tools: `lithos_webhook_register`, `lithos_webhook_list`, `lithos_webhook_delete`, `lithos_webhook_deliveries`
-- [ ] Add event delivery tests (SSE integration, webhook delivery)
+- [ ] Add SSE delivery tests (streaming, replay, filtering)
 
 Dependencies:
 
@@ -199,8 +196,15 @@ Dependencies:
 
 Exit criteria:
 
-- Agents can subscribe to real-time events via SSE or webhooks
-- Webhook delivery survives server restart via SQLite-backed outbox
+- Agents can subscribe to real-time events via SSE
+- Agent Zero can replace polling with a persistent event stream
+
+## Deferred Future Work - Webhooks
+
+The webhook plans are intentionally not assigned to a phase.
+
+- `event-webhooks-plan.md` remains a future best-effort option if a concrete consumer appears
+- `event-guaranteed-delivery-plan.md` remains a future durable-delivery design if reliability requirements materially change
 
 ---
 
