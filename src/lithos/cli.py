@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
 
 import click
@@ -481,7 +482,7 @@ def reconcile(ctx: click.Context, scope: str, dry_run: bool, json_output: bool) 
                 click.echo(f"    - {failure}", err=True)
 
         non_ok = result["status"] not in ("ok", "noop")
-        raise SystemExit(1 if (result["supported"] is not False and non_ok) else 0)
+        sys.exit(1 if (result["supported"] is not False and non_ok) else 0)
 
     asyncio.run(run())
 
@@ -523,7 +524,7 @@ def inspect_health(ctx: click.Context) -> None:
         if state != "ok":
             all_ok = False
 
-    raise SystemExit(0 if all_ok else 1)
+    sys.exit(0 if all_ok else 1)
 
 
 @inspect.command(name="agents")
@@ -609,7 +610,7 @@ def inspect_doc(ctx: click.Context, identifier: str, content: bool) -> None:
                 doc, truncated = await knowledge.read(path=identifier)
         except Exception as exc:
             click.echo(f"Error: {exc}", err=True)
-            raise SystemExit(1) from exc
+            sys.exit(1)
 
         click.echo(f"Document: {doc.title}")
         click.echo("=" * 50)

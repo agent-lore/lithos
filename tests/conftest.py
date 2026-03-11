@@ -1,6 +1,5 @@
 """Pytest configuration and fixtures."""
 
-import asyncio
 import shutil
 import tempfile
 from collections.abc import AsyncGenerator, Generator
@@ -15,14 +14,6 @@ from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
 from lithos.search import SearchEngine
 from lithos.server import LithosServer
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create event loop for async tests."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture

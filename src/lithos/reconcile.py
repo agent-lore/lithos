@@ -67,10 +67,10 @@ def _make_result(
 async def _scan_corpus(config: LithosConfig) -> list[KnowledgeDocument]:
     """Return all documents from the authoritative markdown corpus.
 
-    Uses KnowledgeManager which reads from the global config (set by the
-    caller before invoking reconcile).
+    Passes ``config`` explicitly into KnowledgeManager so that callers
+    using a non-global config (e.g. tests) get the correct knowledge path.
     """
-    knowledge = KnowledgeManager()
+    knowledge = KnowledgeManager(config=config)
     _, total = await knowledge.list_all(limit=0)
     if total == 0:
         return []
@@ -150,12 +150,13 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
         return _make_result("indices", dry_run, status="noop", scanned=len(corpus_docs))
 
     if dry_run:
+        # Nothing was written — repaired=0 to avoid misleading operators.
         return _make_result(
             "indices",
             dry_run,
             status="ok",
             scanned=len(corpus_docs),
-            repaired=len(actions),
+            repaired=0,
             actions=actions,
         )
 
@@ -168,9 +169,7 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
             apply_span.set_attribute("lithos.reconcile.backend", backend)
             try:
                 if backend == "tantivy":
-                    search.tantivy.clear()
-                    for doc in corpus_docs:
-                        search.tantivy.add_document(doc)
+                    search.tantivy.rebuild_from_docs(corpus_docs)
                     repaired += 1
                 elif backend == "chroma":
                     search.chroma.clear()
@@ -245,7 +244,7 @@ async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any
                     }
                 )
             else:
-                cached_ids = set(graph._id_to_node.keys())
+                cached_ids = graph.get_doc_ids()
                 if cached_ids != corpus_ids:
                     actions.append(
                         {
@@ -261,12 +260,13 @@ async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any
         return _make_result("graph", dry_run, status="noop", scanned=len(corpus_docs))
 
     if dry_run:
+        # Nothing was written — repaired=0 to avoid misleading operators.
         return _make_result(
             "graph",
             dry_run,
             status="ok",
             scanned=len(corpus_docs),
-            repaired=len(actions),
+            repaired=0,
             actions=actions,
         )
 

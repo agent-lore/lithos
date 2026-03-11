@@ -291,6 +291,36 @@ class TantivyIndex:
         # Reload to see changes immediately
         self.index.reload()
 
+    def rebuild_from_docs(self, docs: list["KnowledgeDocument"]) -> None:
+        """Clear the index and re-index *docs* in a single commit.
+
+        Prefer this over calling ``clear()`` + ``add_document()`` in a loop to
+        avoid O(n) writer acquisitions and commits.
+        """
+        writer = self.index.writer(heap_size=15_000_000)
+        writer.delete_all_documents()
+        for doc in docs:
+            writer.add_document(
+                tantivy.Document(
+                    id=doc.id,
+                    title=doc.title,
+                    content=doc.full_content,
+                    path=str(doc.path),
+                    author=doc.metadata.author,
+                    tags=" ".join(doc.metadata.tags),
+                    source_url=doc.metadata.source_url or "",
+                    updated_at=(
+                        doc.metadata.updated_at.isoformat() if doc.metadata.updated_at else ""
+                    ),
+                    expires_at=(
+                        doc.metadata.expires_at.isoformat() if doc.metadata.expires_at else ""
+                    ),
+                )
+            )
+        writer.commit()
+        del writer  # Release lock
+        self.index.reload()
+
     def remove_document(self, doc_id: str) -> None:
         """Remove a document from the index."""
         writer = self.index.writer(heap_size=15_000_000)
@@ -624,6 +654,10 @@ class ChromaIndex:
             metadatas = result.get("metadatas") or []
             return {str(m["doc_id"]) for m in metadatas if m and "doc_id" in m}
         except Exception:
+            logger.warning(
+                "ChromaDB get_indexed_doc_ids failed; treating index as empty (needs rebuild)",
+                exc_info=True,
+            )
             return set()
 
     def clear(self) -> None:

@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import frontmatter
 
-from lithos.config import get_config
+from lithos.config import LithosConfig, get_config
 from lithos.telemetry import lithos_metrics, traced
 
 logger = logging.getLogger(__name__)
@@ -451,9 +451,14 @@ _UNSET = _UnsetType()
 class KnowledgeManager:
     """Manages knowledge documents - CRUD operations."""
 
-    def __init__(self):
-        """Initialize knowledge manager."""
-        self.config = get_config()
+    def __init__(self, config: LithosConfig | None = None):
+        """Initialize knowledge manager.
+
+        Args:
+            config: Optional LithosConfig instance.  When omitted the global
+                    config (via ``get_config()``) is used.
+        """
+        self.config = config if config is not None else get_config()
         self.knowledge_path = self.config.storage.knowledge_path
         self._id_to_path: dict[str, Path] = {}
         self._path_to_id: dict[Path, str] = {}

@@ -417,6 +417,10 @@ class KnowledgeGraph:
         self._filename_to_nodes.clear()
         self._alias_to_node.clear()
 
+    def get_doc_ids(self) -> set[str]:
+        """Return the set of doc_ids tracked by the graph."""
+        return set(self._id_to_node.keys())
+
     def node_count(self) -> int:
         """Get number of document nodes (excluding unresolved)."""
         return sum(1 for n in self.graph.nodes() if not n.startswith("__unresolved__"))
