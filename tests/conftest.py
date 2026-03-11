@@ -25,14 +25,15 @@ def temp_dir() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-def test_config(temp_dir: Path) -> LithosConfig:
+def test_config(temp_dir: Path) -> Generator[LithosConfig, None, None]:
     """Create test configuration with temporary directories."""
     config = LithosConfig(
         storage=StorageConfig(data_dir=temp_dir),
     )
     config.ensure_directories()
     set_config(config)
-    return config
+    yield config
+    set_config(None)  # Reset global config after test to prevent state leakage
 
 
 @pytest.fixture
