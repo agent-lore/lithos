@@ -1159,3 +1159,37 @@ class TestWriteMutualExclusion:
         # Should be roughly 24h from now
         delta = (doc.metadata.expires_at - datetime.now(timezone.utc)).total_seconds()
         assert 23 * 3600 < delta < 25 * 3600
+
+
+class TestHealthTool:
+    """Tests for lithos_health MCP tool."""
+
+    async def _call_health(self, server: LithosServer) -> dict:
+        tool = await server.mcp.get_tool("lithos_health")
+        return await tool.fn()
+
+    @pytest.mark.asyncio
+    async def test_health_returns_ok_in_healthy_setup(self, server: LithosServer):
+        """lithos_health returns status 'ok' when all components are healthy."""
+        result = await self._call_health(server)
+        assert result["status"] == "ok"
+        assert result["components"]["server"]["status"] == "ok"
+        assert result["components"]["embedding_model"]["status"] == "ok"
+        assert result["components"]["knowledge_base"]["status"] == "ok"
+        assert "timestamp" in result
+
+    @pytest.mark.asyncio
+    async def test_health_degraded_when_embedding_fails(self, server: LithosServer):
+        """lithos_health returns 'degraded' when embedding model is unavailable."""
+        from unittest.mock import patch
+
+        with patch.object(
+            server.search.chroma.model,
+            "encode",
+            side_effect=RuntimeError("model unavailable"),
+        ):
+            result = await self._call_health(server)
+
+        assert result["status"] == "degraded"
+        assert result["components"]["embedding_model"]["status"] == "unavailable"
+        assert "error" in result["components"]["embedding_model"]
