@@ -517,6 +517,10 @@ class ChromaIndex:
         await self.ensure_model_loaded()
         return await asyncio.to_thread(self.model.encode, texts)
 
+    def health_check(self) -> None:
+        """Probe the embedding model. Raises on failure."""
+        self.model.encode(["health check"])
+
     @property
     def client(self) -> ClientAPI:
         """Get ChromaDB client."""

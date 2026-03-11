@@ -1726,11 +1726,15 @@ class LithosServer:
             logger.info("lithos_health")
             components: dict[str, Any] = {}
 
-            components["server"] = {"status": "ok"}
+            try:
+                self.knowledge.knowledge_path.stat()
+                components["kb_directory"] = {"status": "ok"}
+            except Exception as e:
+                components["kb_directory"] = {"status": "unavailable", "error": str(e)}
 
             # Check embedding model
             try:
-                self.search.chroma.model.encode(["health check"])
+                self.search.chroma.health_check()
                 components["embedding_model"] = {"status": "ok"}
             except Exception as e:
                 components["embedding_model"] = {"status": "unavailable", "error": str(e)}
