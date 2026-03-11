@@ -34,6 +34,20 @@ class SearchBackendError(LithosError):
         return f"{super().__str__()} [{detail}]"
 
 
+class SlugCollisionError(ValueError, LithosError):
+    """Raised when a slug would collide with an existing document's slug.
+
+    Attributes:
+        slug: The slug that caused the collision.
+        existing_id: The doc_id that already owns the slug.
+    """
+
+    def __init__(self, slug: str, existing_id: str) -> None:
+        super().__init__(f"Slug {slug!r} already in use by document {existing_id!r}")
+        self.slug = slug
+        self.existing_id = existing_id
+
+
 class IndexingError(LithosError):
     """All search backends failed during a write operation (index or remove).
 

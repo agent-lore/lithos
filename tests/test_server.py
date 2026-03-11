@@ -1159,3 +1159,22 @@ class TestWriteMutualExclusion:
         # Should be roughly 24h from now
         delta = (doc.metadata.expires_at - datetime.now(timezone.utc)).total_seconds()
         assert 23 * 3600 < delta < 25 * 3600
+
+
+class TestSlugCollisionServerBoundary:
+    """Tests for slug_collision error surfaced through lithos_write."""
+
+    async def _call_write(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_write")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_write_slug_collision_returns_error_dict(self, server: LithosServer):
+        """lithos_write returns slug_collision error dict when slug is already taken."""
+        await self._call_write(server, title="Collision Doc", content="First.", agent="agent")
+        result = await self._call_write(
+            server, title="Collision Doc", content="Second.", agent="agent"
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "slug_collision"
+        assert "collision-doc" in result["message"]

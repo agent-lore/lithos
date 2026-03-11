@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import frontmatter
 
 from lithos.config import LithosConfig, get_config
+from lithos.errors import SlugCollisionError
 from lithos.telemetry import lithos_metrics, traced
 
 logger = logging.getLogger(__name__)
@@ -519,7 +520,17 @@ class KnowledgeManager:
                     self._id_to_path[doc_id] = rel_path
                     self._path_to_id[rel_path] = doc_id
                     if title:
-                        self._slug_to_id[slugify(title)] = doc_id
+                        slug = slugify(title)
+                        existing_slug_id = self._slug_to_id.get(slug)
+                        if existing_slug_id is not None and existing_slug_id != doc_id:
+                            logger.warning(
+                                "Slug collision detected: slug=%r already used by %r, also claimed by %r",
+                                slug,
+                                existing_slug_id,
+                                doc_id,
+                            )
+                        else:
+                            self._slug_to_id[slug] = doc_id
                         self._id_to_title[doc_id] = title
 
                     # Populate metadata cache for filtering
@@ -716,6 +727,9 @@ class KnowledgeManager:
             # Update indices
             self._id_to_path[doc_id] = file_path
             self._path_to_id[file_path] = doc_id
+            existing_slug_id = self._slug_to_id.get(slug)
+            if existing_slug_id is not None and existing_slug_id != doc_id:
+                raise SlugCollisionError(slug, existing_slug_id)
             self._slug_to_id[slug] = doc_id
             if norm_url is not None:
                 self._source_url_to_id[norm_url] = doc_id
@@ -990,6 +1004,9 @@ class KnowledgeManager:
             # Keep slug index in sync when title changes.
             new_slug = slugify(doc.metadata.title)
             if new_slug != old_slug:
+                existing_slug_id = self._slug_to_id.get(new_slug)
+                if existing_slug_id is not None and existing_slug_id != id:
+                    raise SlugCollisionError(new_slug, existing_slug_id)
                 if self._slug_to_id.get(old_slug) == id:
                     del self._slug_to_id[old_slug]
                 self._slug_to_id[new_slug] = id

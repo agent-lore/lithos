@@ -3002,3 +3002,62 @@ class TestExpiresAtWritePath:
         read_doc, _ = await knowledge_manager.read(id=doc.id)
         assert read_doc.metadata.expires_at is not None
         assert abs((read_doc.metadata.expires_at - new_expires).total_seconds()) < 1
+
+
+class TestSlugCollision:
+    """Tests for slug collision detection (issue #38)."""
+
+    @pytest.mark.asyncio
+    async def test_scan_warns_on_slug_collision(self, test_config, caplog):
+        """_scan_existing() logs a warning when two docs share the same slug."""
+        import logging
+
+        mgr1 = KnowledgeManager()
+        doc1 = (await mgr1.create(title="My Document", content="First.", agent="agent")).document
+        # Bypass dedup by directly writing a second doc with same slug title
+        doc2 = (
+            await mgr1.create(title="Other Document", content="Second.", agent="agent")
+        ).document
+        # Manually patch the second file's title to produce the same slug
+        kp = test_config.storage.knowledge_path
+        file2 = kp / doc2.path
+        raw = file2.read_text()
+        raw = raw.replace("title: Other Document", "title: My Document")
+        file2.write_text(raw)
+
+        with caplog.at_level(logging.WARNING, logger="lithos.knowledge"):
+            mgr2 = KnowledgeManager()
+
+        assert "Slug collision detected" in caplog.text
+        # First-seen-wins: first doc (sorted by path) keeps the slug
+        assert mgr2._slug_to_id.get("my-document") == doc1.id
+
+    @pytest.mark.asyncio
+    async def test_create_raises_on_slug_collision(self, knowledge_manager: KnowledgeManager):
+        """create() raises SlugCollisionError when two docs would share the same slug."""
+        from lithos.errors import SlugCollisionError
+
+        await knowledge_manager.create(title="My Document", content="First.", agent="agent")
+
+        with pytest.raises(SlugCollisionError) as exc_info:
+            await knowledge_manager.create(title="My Document", content="Second.", agent="agent")
+
+        assert "my-document" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_update_raises_on_slug_collision(self, knowledge_manager: KnowledgeManager):
+        """update() raises SlugCollisionError when renaming would create a slug collision."""
+        from lithos.errors import SlugCollisionError
+
+        await knowledge_manager.create(title="Target Title", content="First.", agent="agent")
+        doc2 = (
+            await knowledge_manager.create(title="Other Title", content="Second.", agent="agent")
+        ).document
+        assert doc2 is not None
+
+        with pytest.raises(SlugCollisionError):
+            await knowledge_manager.update(
+                id=doc2.id,
+                agent="editor",
+                title="Target Title",
+            )

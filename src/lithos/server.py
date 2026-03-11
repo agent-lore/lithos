@@ -19,7 +19,7 @@ from watchdog.observers import Observer
 
 from lithos.config import LithosConfig, get_config, set_config
 from lithos.coordination import CoordinationService
-from lithos.errors import SearchBackendError
+from lithos.errors import SearchBackendError, SlugCollisionError
 from lithos.events import (
     AGENT_REGISTERED,
     FINDING_POSTED,
@@ -508,49 +508,58 @@ class LithosServer:
                                 "warnings": [],
                             }
 
-                if id:
-                    # Update existing — map MCP boundary to manager semantics:
-                    # source_url: None (omitted) → _UNSET (preserve), "" → None (clear),
-                    #             str → pass through
-                    url_arg: str | None | _UnsetType
-                    if source_url is None:
-                        url_arg = _UNSET
-                    elif source_url == "":
-                        url_arg = None
+                try:
+                    if id:
+                        # Update existing — map MCP boundary to manager semantics:
+                        # source_url: None (omitted) → _UNSET (preserve), "" → None (clear),
+                        #             str → pass through
+                        url_arg: str | None | _UnsetType
+                        if source_url is None:
+                            url_arg = _UNSET
+                        elif source_url == "":
+                            url_arg = None
+                        else:
+                            url_arg = source_url
+
+                        # derived_from_ids: None (omitted) → _UNSET (preserve),
+                        #                   [] → [] (clear), non-empty → pass through
+                        prov_arg: list[str] | None | _UnsetType = (
+                            _UNSET if derived_from_ids is None else derived_from_ids
+                        )
+
+                        result = await self.knowledge.update(
+                            id=id,
+                            agent=agent,
+                            title=title,
+                            content=content,
+                            tags=tags,
+                            confidence=confidence,
+                            source_url=url_arg,
+                            derived_from_ids=prov_arg,
+                            expires_at=expires_at_dt,
+                        )
                     else:
-                        url_arg = source_url
-
-                    # derived_from_ids: None (omitted) → _UNSET (preserve),
-                    #                   [] → [] (clear), non-empty → pass through
-                    prov_arg: list[str] | None | _UnsetType = (
-                        _UNSET if derived_from_ids is None else derived_from_ids
-                    )
-
-                    result = await self.knowledge.update(
-                        id=id,
-                        agent=agent,
-                        title=title,
-                        content=content,
-                        tags=tags,
-                        confidence=confidence,
-                        source_url=url_arg,
-                        derived_from_ids=prov_arg,
-                        expires_at=expires_at_dt,
-                    )
-                else:
-                    # Create new — default confidence to 1.0 when not specified
-                    result = await self.knowledge.create(
-                        title=title,
-                        content=content,
-                        agent=agent,
-                        tags=tags,
-                        confidence=confidence if confidence is not None else 1.0,
-                        path=path,
-                        source=source_task,
-                        source_url=source_url or None,
-                        derived_from_ids=derived_from_ids,
-                        expires_at=expires_at_dt,  # type: ignore[arg-type]
-                    )
+                        # Create new — default confidence to 1.0 when not specified
+                        result = await self.knowledge.create(
+                            title=title,
+                            content=content,
+                            agent=agent,
+                            tags=tags,
+                            confidence=confidence if confidence is not None else 1.0,
+                            path=path,
+                            source=source_task,
+                            source_url=source_url or None,
+                            derived_from_ids=derived_from_ids,
+                            expires_at=expires_at_dt,  # type: ignore[arg-type]
+                        )
+                except SlugCollisionError as exc:
+                    span.set_attribute("lithos.write_status", "error")
+                    return {
+                        "status": "error",
+                        "code": "slug_collision",
+                        "message": str(exc),
+                        "warnings": [],
+                    }
 
                 # Handle non-success results via WriteResult fields
                 if result.status == "duplicate":
