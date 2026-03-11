@@ -346,7 +346,7 @@ class TestRestartPersistence:
         (knowledge_dir / "binary-file.md").write_bytes(b"\x00\x01\x02\xff\xfe")
 
         # Delete graph cache to force _rebuild_indices on next server init.
-        graph_cache = test_config.storage.graph_path / "graph.pickle"
+        graph_cache = test_config.storage.graph_path / "graph.json"
         if graph_cache.exists():
             graph_cache.unlink()
 
