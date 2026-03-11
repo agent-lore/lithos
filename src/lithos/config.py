@@ -23,6 +23,7 @@ class StorageConfig(BaseModel):
 
     data_dir: Path = Path("./data")
     knowledge_subdir: str = "knowledge"
+    max_content_size_bytes: int = 1_000_000
 
     @property
     def knowledge_path(self) -> Path:
