@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -119,6 +119,25 @@ class LithosConfig(BaseSettings):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     events: EventsConfig = Field(default_factory=EventsConfig)
 
+    @model_validator(mode="after")
+    def _apply_backward_compat_env_overrides(self) -> "LithosConfig":
+        """Apply backward-compatible flat env var overrides.
+
+        Handles: LITHOS_DATA_DIR, LITHOS_PORT, LITHOS_HOST,
+        LITHOS_OTEL_ENABLED, OTEL_EXPORTER_OTLP_ENDPOINT
+        """
+        if data_dir := os.environ.get("LITHOS_DATA_DIR"):
+            self.storage.data_dir = Path(data_dir)
+        if port := os.environ.get("LITHOS_PORT"):
+            self.server.port = int(port)
+        if host := os.environ.get("LITHOS_HOST"):
+            self.server.host = host
+        if otel_enabled := os.environ.get("LITHOS_OTEL_ENABLED"):
+            self.telemetry.enabled = otel_enabled.lower() in ("1", "true")
+        if otlp_endpoint := os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+            self.telemetry.endpoint = otlp_endpoint
+        return self
+
     @classmethod
     def from_yaml(cls, path: Path) -> "LithosConfig":
         """Load configuration from YAML file."""
@@ -152,36 +171,12 @@ def load_config(path: str | None = None) -> LithosConfig:
     Returns:
         Loaded configuration with environment overrides applied
     """
-    # Start with defaults or load from file
+    # Start with defaults or load from file; env var overrides are applied
+    # automatically via LithosConfig._apply_backward_compat_env_overrides.
     if path:
         config_path = Path(path)
-        config = LithosConfig.from_yaml(config_path) if config_path.exists() else LithosConfig()
-    else:
-        config = LithosConfig()
-
-    # Apply environment variable overrides
-    env_data_dir = os.environ.get("LITHOS_DATA_DIR")
-    if env_data_dir:
-        config.storage.data_dir = Path(env_data_dir)
-
-    env_port = os.environ.get("LITHOS_PORT")
-    if env_port:
-        config.server.port = int(env_port)
-
-    env_host = os.environ.get("LITHOS_HOST")
-    if env_host:
-        config.server.host = env_host
-
-    # Backward compat: LITHOS_OTEL_ENABLED and OTEL_EXPORTER_OTLP_ENDPOINT
-    env_otel_enabled = os.environ.get("LITHOS_OTEL_ENABLED")
-    if env_otel_enabled:
-        config.telemetry.enabled = env_otel_enabled.lower() in ("1", "true")
-
-    env_otlp_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if env_otlp_endpoint:
-        config.telemetry.endpoint = env_otlp_endpoint
-
-    return config
+        return LithosConfig.from_yaml(config_path) if config_path.exists() else LithosConfig()
+    return LithosConfig()
 
 
 def get_config() -> LithosConfig:

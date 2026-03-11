@@ -175,6 +175,38 @@ class TestConfigEnvironment:
 
         assert config.server.host == "127.0.0.1"
 
+    def test_env_otel_enabled_numeric(self, monkeypatch):
+        """LITHOS_OTEL_ENABLED=1 maps to telemetry.enabled=True."""
+        monkeypatch.setenv("LITHOS_OTEL_ENABLED", "1")
+
+        config = load_config()
+
+        assert config.telemetry.enabled is True
+
+    def test_env_otel_enabled_string(self, monkeypatch):
+        """LITHOS_OTEL_ENABLED=true maps to telemetry.enabled=True."""
+        monkeypatch.setenv("LITHOS_OTEL_ENABLED", "true")
+
+        config = load_config()
+
+        assert config.telemetry.enabled is True
+
+    def test_env_otel_enabled_false(self, monkeypatch):
+        """LITHOS_OTEL_ENABLED=false keeps telemetry.enabled=False."""
+        monkeypatch.setenv("LITHOS_OTEL_ENABLED", "false")
+
+        config = load_config()
+
+        assert config.telemetry.enabled is False
+
+    def test_env_otlp_endpoint(self, monkeypatch):
+        """OTEL_EXPORTER_OTLP_ENDPOINT maps to telemetry.endpoint."""
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4318")
+
+        config = load_config()
+
+        assert config.telemetry.endpoint == "http://otel-collector:4318"
+
 
 class TestConfigSingleton:
     """Tests for global config singleton."""
