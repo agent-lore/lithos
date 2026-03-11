@@ -1713,6 +1713,43 @@ class LithosServer:
                     "duplicate_urls": self.knowledge.duplicate_url_count,
                 }
 
+        @self.mcp.tool()
+        async def lithos_health() -> dict[str, Any]:
+            """Check server health and readiness.
+
+            Returns server status, embedding model availability,
+            and knowledge base accessibility.
+
+            Returns:
+                Dict with status, components dict, and timestamp
+            """
+            logger.info("lithos_health")
+            components: dict[str, Any] = {}
+
+            components["server"] = {"status": "ok"}
+
+            # Check embedding model
+            try:
+                self.search.chroma.model.encode(["health check"])
+                components["embedding_model"] = {"status": "ok"}
+            except Exception as e:
+                components["embedding_model"] = {"status": "unavailable", "error": str(e)}
+
+            # Check knowledge base
+            try:
+                await self.knowledge.list_all(limit=1)
+                components["knowledge_base"] = {"status": "ok"}
+            except Exception as e:
+                components["knowledge_base"] = {"status": "unavailable", "error": str(e)}
+
+            overall = "ok" if all(c["status"] == "ok" for c in components.values()) else "degraded"
+
+            return {
+                "status": overall,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "components": components,
+            }
+
 
 def _format_sse(event: LithosEvent) -> str:
     """Format a LithosEvent as an SSE message string.
