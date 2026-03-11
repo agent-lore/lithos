@@ -1131,6 +1131,101 @@ class TestCacheLookup:
         assert result["hit"] is False
 
     @pytest.mark.asyncio
+    async def test_sort_by_confidence_returns_highest(self, server: LithosServer):
+        """sort_by_confidence=True returns the highest-confidence passing doc."""
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        low_doc = (
+            await server.knowledge.create(
+                title="Low Confidence Sort Doc",
+                content="Uncertain information about quantum entanglement.",
+                agent="agent",
+                confidence=0.6,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            )
+        ).document
+        server.search.index_document(low_doc)
+
+        high_doc = (
+            await server.knowledge.create(
+                title="High Confidence Sort Doc",
+                content="Certain information about quantum entanglement.",
+                agent="agent",
+                confidence=0.9,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            )
+        ).document
+        server.search.index_document(high_doc)
+
+        # Force both docs into candidates list to test sorting
+        with patch.object(
+            server.search,
+            "semantic_search",
+            return_value=[
+                type("R", (), {"id": low_doc.id})(),
+                type("R", (), {"id": high_doc.id})(),
+            ],
+        ):
+            result = await self._call_cache_lookup(
+                server,
+                query="quantum entanglement",
+                sort_by_confidence=True,
+                min_confidence=0.5,
+            )
+
+        assert result["hit"] is True
+        assert result["document"]["id"] == high_doc.id
+        assert result["document"]["confidence"] == 0.9
+
+    @pytest.mark.asyncio
+    async def test_sort_by_confidence_false_returns_first(self, server: LithosServer):
+        """sort_by_confidence=False (default) returns the first semantic match."""
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        first_doc = (
+            await server.knowledge.create(
+                title="First Match Doc",
+                content="Information about quantum entanglement basics.",
+                agent="agent",
+                confidence=0.6,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            )
+        ).document
+        server.search.index_document(first_doc)
+
+        second_doc = (
+            await server.knowledge.create(
+                title="Second Match Doc",
+                content="More information about quantum entanglement.",
+                agent="agent",
+                confidence=0.9,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            )
+        ).document
+        server.search.index_document(second_doc)
+
+        with patch.object(
+            server.search,
+            "semantic_search",
+            return_value=[
+                type("R", (), {"id": first_doc.id})(),
+                type("R", (), {"id": second_doc.id})(),
+            ],
+        ):
+            result = await self._call_cache_lookup(
+                server,
+                query="quantum entanglement",
+                sort_by_confidence=False,
+                min_confidence=0.5,
+            )
+
+        assert result["hit"] is True
+        # Without sort_by_confidence, the first candidate wins
+        assert result["document"]["id"] == first_doc.id
+
+    @pytest.mark.asyncio
     async def test_max_age_hours_filter(self, server: LithosServer):
         """Cache lookup respects max_age_hours filter."""
         from datetime import timedelta
