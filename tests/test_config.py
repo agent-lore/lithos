@@ -12,6 +12,7 @@ from lithos.config import (
     SearchConfig,
     ServerConfig,
     StorageConfig,
+    _reset_config,
     get_config,
     load_config,
     set_config,
@@ -189,7 +190,7 @@ class TestConfigSingleton:
     def test_get_config_returns_default_if_not_set(self):
         """get_config returns default if not explicitly set."""
         # Reset global config
-        set_config(None)
+        _reset_config()
 
         config = get_config()
 
