@@ -3426,3 +3426,65 @@ class TestSlugCollision:
 
         # File on disk must be identical to what it was before the failed update.
         assert (kp / doc2.path).read_text() == original_text
+
+    @pytest.mark.asyncio
+    async def test_update_collision_with_source_url_leaves_indices_unchanged(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """Compound case: title rename + source_url change + slug collision.
+
+        Regression test for the ordering bug where source_url index mutations
+        happened BEFORE the slug collision check.  If the fix is correct, a
+        failed update must leave BOTH the on-disk file AND the source_url index
+        in their original state.
+        """
+        from lithos.errors import SlugCollisionError
+
+        # doc1 owns the slug we'll collide with.
+        await knowledge_manager.create(title="Target Title", content="First.", agent="agent")
+
+        # doc2 is the one we'll try to update.
+        original_source_url = "https://example.com/original"
+        doc2_result = await knowledge_manager.create(
+            title="Other Title",
+            content="Second.",
+            agent="agent",
+            source_url=original_source_url,
+        )
+        assert doc2_result.document is not None
+        doc2 = doc2_result.document
+
+        kp = test_config.storage.knowledge_path
+        original_text = (kp / doc2.path).read_text()
+
+        # Capture the source_url index state before the bad update.
+        from lithos.knowledge import normalize_url
+
+        original_norm = normalize_url(original_source_url)
+        assert knowledge_manager._source_url_to_id.get(original_norm) == doc2.id
+
+        # Attempt update: rename to colliding title AND change source_url simultaneously.
+        new_source_url = "https://example.com/new"
+        with pytest.raises(SlugCollisionError):
+            await knowledge_manager.update(
+                id=doc2.id,
+                agent="editor",
+                title="Target Title",  # collides with doc1
+                source_url=new_source_url,
+            )
+
+        # On-disk file must be unchanged.
+        assert (kp / doc2.path).read_text() == original_text, (
+            "File was mutated despite SlugCollisionError"
+        )
+
+        # source_url index must still point to doc2 via the original URL.
+        assert knowledge_manager._source_url_to_id.get(original_norm) == doc2.id, (
+            "_source_url_to_id lost original mapping after failed update"
+        )
+
+        # The new URL must NOT have been inserted into the index.
+        new_norm = normalize_url(new_source_url)
+        assert knowledge_manager._source_url_to_id.get(new_norm) is None, (
+            "_source_url_to_id was polluted with new URL after failed update"
+        )

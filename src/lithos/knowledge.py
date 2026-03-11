@@ -953,6 +953,16 @@ class KnowledgeManager:
             old_slug = slugify(doc.metadata.title)
             old_source_url = doc.metadata.source_url
 
+            # Guard: check slug collision BEFORE any state mutations.
+            # If a title rename would collide, bail out immediately so that
+            # source_url / provenance mutations further down never run.
+            if title is not None:
+                _pre_new_slug = slugify(title)
+                if _pre_new_slug != old_slug:
+                    _pre_existing = self._slug_to_id.get(_pre_new_slug)
+                    if _pre_existing is not None and _pre_existing != id:
+                        raise SlugCollisionError(_pre_new_slug, _pre_existing)
+
             # Handle source_url update
             if not isinstance(source_url, _UnsetType):
                 if source_url is None:
@@ -1063,12 +1073,9 @@ class KnowledgeManager:
             if agent not in doc.metadata.contributors and agent != doc.metadata.author:
                 doc.metadata.contributors.append(agent)
 
-            # Keep slug index in sync when title changes — check before writing.
+            # Slug collision was already checked at the top of update(); just
+            # compute new_slug here for the index-update that follows.
             new_slug = slugify(doc.metadata.title)
-            if new_slug != old_slug:
-                existing_slug_id = self._slug_to_id.get(new_slug)
-                if existing_slug_id is not None and existing_slug_id != id:
-                    raise SlugCollisionError(new_slug, existing_slug_id)
 
             # Write to disk — bump version here so early returns above leave
             # the in-memory document at its original version.
