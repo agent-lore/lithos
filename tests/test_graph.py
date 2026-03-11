@@ -1,8 +1,10 @@
 """Tests for graph module - NetworkX knowledge graph."""
 
+import pickle
+
 import pytest
 
-from lithos.graph import KnowledgeGraph
+from lithos.graph import GRAPH_CACHE_VERSION, KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
 
 
@@ -540,3 +542,45 @@ class TestGraphPersistence:
 
         assert rebuilt_stats["nodes"] == original_stats["nodes"]
         assert rebuilt_stats["edges"] == original_stats["edges"]
+
+
+class TestGraphCacheVersionGuard:
+    """Tests for graph cache version guard."""
+
+    def test_version_written_to_cache(self, knowledge_graph: KnowledgeGraph):
+        """save_cache writes the GRAPH_CACHE_VERSION key into the pickle."""
+        knowledge_graph.save_cache()
+        with open(knowledge_graph.graph_cache_path, "rb") as f:
+            data = pickle.load(f)
+        assert data["version"] == GRAPH_CACHE_VERSION
+
+    def test_version_mismatch_triggers_rebuild(self, knowledge_graph: KnowledgeGraph):
+        """load_cache returns False when version does not match."""
+        cache_path = knowledge_graph.graph_cache_path
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "version": 999,
+            "graph": None,
+            "id_to_node": {},
+            "path_to_node": {},
+            "filename_to_nodes": {},
+            "alias_to_node": {},
+        }
+        with open(cache_path, "wb") as f:
+            pickle.dump(data, f)
+        assert knowledge_graph.load_cache() is False
+
+    def test_missing_version_triggers_rebuild(self, knowledge_graph: KnowledgeGraph):
+        """load_cache returns False when version key is absent (old cache)."""
+        cache_path = knowledge_graph.graph_cache_path
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "graph": None,
+            "id_to_node": {},
+            "path_to_node": {},
+            "filename_to_nodes": {},
+            "alias_to_node": {},
+        }
+        with open(cache_path, "wb") as f:
+            pickle.dump(data, f)
+        assert knowledge_graph.load_cache() is False
