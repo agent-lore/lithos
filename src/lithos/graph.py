@@ -1,8 +1,8 @@
 """Knowledge graph - NetworkX wiki-link graph operations."""
 
 import contextlib
+import json
 import os
-import pickle
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,7 +55,7 @@ class KnowledgeGraph:
     @property
     def graph_cache_path(self) -> Path:
         """Get path to graph cache file."""
-        return self.config.storage.graph_path / "graph.pickle"
+        return self.config.storage.graph_path / "graph.json"
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -75,9 +75,12 @@ class KnowledgeGraph:
             return False
 
         try:
-            with open(cache_path, "rb") as f:
-                data = pickle.load(f)
-                self._graph = data.get("graph", nx.DiGraph())
+            with open(cache_path) as f:
+                data = json.load(f)
+                graph_data = data.get("graph")
+                self._graph = (
+                    nx.node_link_graph(graph_data, edges="links") if graph_data else nx.DiGraph()
+                )
                 self._id_to_node = data.get("id_to_node", {})
                 self._path_to_node = data.get("path_to_node", {})
                 self._filename_to_nodes = data.get("filename_to_nodes", {})
@@ -91,8 +94,11 @@ class KnowledgeGraph:
         cache_path = self.graph_cache_path
         cache_path.parent.mkdir(parents=True, exist_ok=True)
 
+        graph_data = (
+            nx.node_link_data(self._graph, edges="links") if self._graph is not None else {}
+        )
         data = {
-            "graph": self._graph,
+            "graph": graph_data,
             "id_to_node": self._id_to_node,
             "path_to_node": self._path_to_node,
             "filename_to_nodes": self._filename_to_nodes,
@@ -101,8 +107,8 @@ class KnowledgeGraph:
 
         tmp_fd, tmp_path = tempfile.mkstemp(dir=cache_path.parent, suffix=".tmp")
         try:
-            with os.fdopen(tmp_fd, "wb") as f:
-                pickle.dump(data, f)
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(data, f)
             os.replace(tmp_path, cache_path)
         except Exception:
             with contextlib.suppress(OSError):
