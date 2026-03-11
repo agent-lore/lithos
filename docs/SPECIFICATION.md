@@ -1,7 +1,7 @@
 # Lithos - Specification
 
-Version: 0.6.0
-Date: 2026-03-09
+Version: 0.6.1
+Date: 2026-03-11
 Status: Aligned with Implementation
 
 ---
@@ -689,6 +689,24 @@ Get knowledge base statistics.
 - **ChromaDB**: Persisted to `.chroma/` directory  
 - **NetworkX**: Cached to `.graph/graph.pickle`, rebuilt if missing
 
+### 6.4 Reconcile / Repair
+
+Lithos provides an operator-facing reconcile path that repairs derived state without mutating authoritative markdown.
+
+**Available scopes:**
+
+- `indices`: detect drift between markdown corpus and Tantivy/Chroma projections and rebuild affected backends
+- `graph`: detect graph cache drift and rebuild `.graph/graph.pickle`
+- `provenance_projection`: deterministic no-op placeholder until LCMA projection storage is enabled
+- `all`: runs the scopes above in order and aggregates status
+
+**Operational behavior:**
+
+- `dry_run=true` computes actions without applying repairs
+- authoritative markdown/frontmatter is never rewritten
+- repeated runs are expected to be idempotent when no drift exists
+- the CLI command is `lithos reconcile`
+
 ---
 
 ## 7. Coordination Database Schema
@@ -743,9 +761,9 @@ CREATE TABLE findings (
 
 ---
 
-## 8. Internal Event Bus
+## 8. Event System
 
-Lithos includes an in-memory event bus that emits `LithosEvent` on all write, delete, task, finding, and agent-register success paths, as well as from the file watcher. This is purely internal infrastructure — no new MCP tools, no SSE, no webhooks.
+Lithos includes an in-memory event bus that emits `LithosEvent` on all write, delete, task, finding, and agent-register success paths, as well as from the file watcher. This internal bus also backs a best-effort SSE delivery surface at `GET /events`. There are still no event MCP tools and no webhook delivery surface.
 
 ### 8.1 LithosEvent Schema
 
@@ -799,7 +817,35 @@ Lithos includes an in-memory event bus that emits `LithosEvent` on all write, de
 
 ### 8.6 Ring Buffer
 
-The event bus maintains an in-memory ring buffer of the last N events using `collections.deque(maxlen=N)`. The buffer is subscribe-only with no public read API. Buffer size is configurable via `events.event_buffer_size` (default: 500).
+The event bus maintains an in-memory ring buffer of the last N events using `collections.deque(maxlen=N)`. SSE replay uses `get_buffered_since(event_id)` to replay buffered events after a known event ID. Buffer size is configurable via `events.event_buffer_size` (default: 500).
+
+### 8.7 SSE Delivery Surface
+
+Lithos exposes a best-effort Server-Sent Events endpoint at `GET /events`.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `types` | string | No | Comma-separated event type filter |
+| `tags` | string | No | Comma-separated tag filter; any matching tag passes |
+| `since` | string | No | Replay buffered events strictly after the given event ID |
+
+**Headers:**
+
+| Name | Description |
+|------|-------------|
+| `Last-Event-ID` | Standard SSE reconnect header; takes precedence over `since` |
+
+**Behavior:**
+
+- Returns `text/event-stream`.
+- Replays buffered events first when `since` or `Last-Event-ID` is supplied, then streams live events.
+- Emits periodic keepalive comments when idle.
+- Returns `503` when `events.sse_enabled=false`.
+- Returns `429` when `events.max_sse_clients` is exceeded.
+- When MCP auth is configured, `/events` uses the same auth boundary and returns `401` for unauthenticated requests.
+- Delivery is best-effort and process-local; missed events outside the in-memory ring buffer cannot be replayed.
 
 ---
 
@@ -849,6 +895,8 @@ events:
   enabled: true              # Enable/disable event bus (no-op when false)
   event_buffer_size: 500     # Ring buffer capacity (last N events)
   subscriber_queue_size: 100 # Max queued events per subscriber
+  sse_enabled: true          # Enable/disable GET /events SSE delivery
+  max_sse_clients: 50        # Max concurrent SSE clients
 ```
 
 ### 9.2 Command Line Interface
@@ -872,6 +920,10 @@ lithos reindex --data-dir ./data --clear
 # Validate knowledge files
 lithos validate --data-dir ./data
 # Reports: broken [[wiki-links]], missing frontmatter, ambiguous links, stale references after renames
+
+# Reconcile derived state without touching markdown
+lithos reconcile --data-dir ./data
+lithos reconcile --scope graph --dry-run --json-output --data-dir ./data
 
 # Show knowledge base statistics
 lithos stats --data-dir ./data

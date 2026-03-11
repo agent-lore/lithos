@@ -93,7 +93,8 @@ Dependencies:
 
 Exit criteria:
 
-- Internal event bus emits on all write/task success paths (no delivery surface yet)
+- Internal event bus emits on all write/task success paths
+- SSE delivery is layered on later without changing event emission semantics
 
 ---
 
@@ -167,12 +168,12 @@ Exit criteria:
 
 ## Phase 6 - Reconcile/Repair Tooling
 
-- [ ] Complete dedicated implementation plan (`reconcile-plan.md`) review before coding starts
-- [ ] Implement core reconcile scopes (`indices`/`graph`/`all`)
-- [ ] Implement deterministic no-op behavior for `provenance_projection` when projection store is not enabled
-- [ ] Add dry-run mode and repair reporting
-- [ ] Expose reconcile via CLI/admin command path
-- [ ] Add idempotency and crash-safe tests
+- [x] Complete dedicated implementation plan (`reconcile-plan.md`) review before coding starts
+- [x] Implement core reconcile scopes (`indices`/`graph`/`all`)
+- [x] Implement deterministic no-op behavior for `provenance_projection` when projection store is not enabled
+- [x] Add dry-run mode and repair reporting
+- [x] Expose reconcile via CLI/admin command path
+- [x] Add idempotency and crash-safe tests
 
 Dependencies:
 
@@ -186,9 +187,9 @@ Exit criteria:
 
 ## Phase 6.5 - SSE Event Delivery
 
-- [ ] Add SSE endpoint (`GET /events`) with type/tag filtering and replay-from-ID
-- [ ] Make SSE inherit the MCP auth boundary when auth exists
-- [ ] Add SSE delivery tests (streaming, replay, filtering)
+- [x] Add SSE endpoint (`GET /events`) with type/tag filtering and replay-from-ID
+- [x] Make SSE inherit the MCP auth boundary when auth exists
+- [x] Add SSE delivery tests (streaming, replay, filtering)
 
 Dependencies:
 
