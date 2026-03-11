@@ -536,66 +536,35 @@ class CoordinationService:
             if not task or task[0] != "open":
                 return False, None
 
-            # Check for existing active claim
+            # Atomically insert or update the claim in a single statement.
+            # The DO UPDATE WHERE clause only fires when the existing claim is
+            # expired (expires_at <= now) OR belongs to the same agent (renewal).
+            # When an active claim held by a different agent exists the WHERE is
+            # false, the row is left unchanged, and changes() returns 0 — closing
+            # the SELECT-then-write TOCTOU gap.
             cursor = await db.execute(
                 """
-                SELECT agent, expires_at FROM claims
-                WHERE task_id = ? AND aspect = ?
+                INSERT INTO claims (task_id, agent, aspect, claimed_at, expires_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(task_id, aspect) DO UPDATE SET
+                    agent      = excluded.agent,
+                    claimed_at = excluded.claimed_at,
+                    expires_at = excluded.expires_at
+                WHERE claims.expires_at <= ? OR claims.agent = excluded.agent
                 """,
-                (task_id, aspect),
+                (
+                    task_id,
+                    agent,
+                    aspect,
+                    _format_datetime(now),
+                    _format_datetime(expires_at),
+                    _format_datetime(now),
+                ),
             )
-            existing = await cursor.fetchone()
-
-            if existing:
-                existing_expires = _parse_datetime(existing[1])
-                if existing_expires and existing_expires > now:
-                    # Active claim exists
-                    if existing[0] == agent:
-                        # Same agent, update expiry
-                        await db.execute(
-                            """
-                            UPDATE claims SET expires_at = ?
-                            WHERE task_id = ? AND aspect = ?
-                            """,
-                            (_format_datetime(expires_at), task_id, aspect),
-                        )
-                        await db.commit()
-                        return True, expires_at
-                    else:
-                        # Different agent has active claim
-                        return False, None
-                else:
-                    # Expired claim, update it
-                    await db.execute(
-                        """
-                        UPDATE claims SET agent = ?, expires_at = ?, claimed_at = ?
-                        WHERE task_id = ? AND aspect = ?
-                        """,
-                        (
-                            agent,
-                            _format_datetime(expires_at),
-                            _format_datetime(now),
-                            task_id,
-                            aspect,
-                        ),
-                    )
-                    await db.commit()
-                    return True, expires_at
-
-            # No existing claim, create new
-            try:
-                await db.execute(
-                    """
-                    INSERT INTO claims (task_id, agent, aspect, claimed_at, expires_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (task_id, agent, aspect, _format_datetime(now), _format_datetime(expires_at)),
-                )
-                await db.commit()
+            await db.commit()
+            if cursor.rowcount == 1:
                 return True, expires_at
-            except aiosqlite.IntegrityError:
-                # Race condition - another agent claimed it
-                return False, None
+            return False, None
 
     async def renew_claim(
         self,
