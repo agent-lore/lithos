@@ -191,7 +191,15 @@ def get_config() -> LithosConfig:
     return _config
 
 
-def set_config(config: LithosConfig | None) -> None:
+def set_config(config: LithosConfig) -> None:
     """Set the global configuration instance."""
+    if config is None:
+        raise TypeError("config must be a LithosConfig instance, not None")
     global _config
     _config = config
+
+
+def _reset_config() -> None:
+    """Reset the global config to None. For testing only."""
+    global _config
+    _config = None
