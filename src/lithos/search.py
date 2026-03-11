@@ -436,6 +436,31 @@ class TantivyIndex:
         self.index.reload()
         return self.index.searcher().num_docs
 
+    def get_indexed_doc_ids(self) -> set[str]:
+        """Return the set of doc_ids currently stored in the index."""
+        try:
+            self.index.reload()
+            searcher = self.index.searcher()
+            num = searcher.num_docs
+            if num == 0:
+                return set()
+            # Match-all query via wildcard on the content field
+            query = self.index.parse_query("*", ["content"])
+            hits = searcher.search(query, num).hits
+            ids: set[str] = set()
+            for _score, doc_address in hits:
+                doc = searcher.doc(doc_address)
+                doc_id = doc.get_first("id")
+                if doc_id:
+                    ids.add(str(doc_id))
+            return ids
+        except Exception:
+            logger.warning(
+                "Tantivy get_indexed_doc_ids failed; treating index as empty (needs rebuild)",
+                exc_info=True,
+            )
+            return set()
+
     def clear(self) -> None:
         """Clear the entire index."""
         writer = self.index.writer(heap_size=15_000_000)

@@ -1,6 +1,6 @@
 """Tests for reconcile module - Phase 6 drift detection and repair.
 
-Tests cover all 8 required scenarios:
+Tests cover all 8 required scenarios plus 3 additional drift-detection tests:
 1. indices dry-run: reports planned full rebuild without mutating indices
 2. indices real run: rebuilds and makes search results match markdown corpus
 3. graph dry-run: reports repair actions without touching cache files
@@ -9,6 +9,9 @@ Tests cover all 8 required scenarios:
 6. provenance_projection: returns supported=True when edges.db exists
 7. scope="all": aggregates mixed success into partial_failure correctly
 8. crash during one scope: does not corrupt markdown and rerun succeeds
+9. indices: same-count/wrong-doc drift detected via doc-id set comparison
+10. graph: edge-set drift detected when wiki-links change but doc set stays same
+11. dry-run summary counts reflect planned actions (repaired > 0)
 """
 
 import pytest
@@ -261,3 +264,90 @@ async def test_crash_safety_markdown_never_mutated(
     result_rerun = await reconcile(scope="graph", dry_run=False, config=test_config)
     assert result_rerun["status"] == "ok"
     assert result_rerun["summary"]["repaired"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — indices: same-count/wrong-doc drift via doc-id set comparison
+# ---------------------------------------------------------------------------
+
+
+async def test_indices_detects_wrong_doc_same_count(
+    test_config: LithosConfig, knowledge_manager: KnowledgeManager
+) -> None:
+    """Index with same doc count but different IDs is detected as drifted."""
+    doc_id_a = await _create_doc(knowledge_manager, "Doc A", "Content A.")
+    await _create_doc(knowledge_manager, "Doc B", "Content B.")
+
+    # Build indices so they match the current corpus
+    result_init = await reconcile(scope="indices", dry_run=False, config=test_config)
+    assert result_init["status"] == "ok"
+
+    # Verify clean state
+    result_clean = await reconcile(scope="indices", dry_run=False, config=test_config)
+    assert result_clean["status"] == "noop"
+
+    # Delete one doc and create a new one — same count, different IDs
+    await knowledge_manager.delete(doc_id_a)
+    await _create_doc(knowledge_manager, "Doc C", "Content C.")
+
+    # Reconcile should detect drift (not noop)
+    result_drift = await reconcile(scope="indices", dry_run=False, config=test_config)
+    assert result_drift["status"] == "ok"
+    assert result_drift["summary"]["repaired"] > 0
+    assert any(a.get("reason") == "doc_set_mismatch" for a in result_drift["actions"])
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — graph: edge-set drift when wiki-links change
+# ---------------------------------------------------------------------------
+
+
+async def test_graph_detects_edge_set_drift(
+    test_config: LithosConfig, knowledge_manager: KnowledgeManager
+) -> None:
+    """Graph drift is detected when wiki-links change but document set stays the same."""
+    doc_id = await _create_doc(knowledge_manager, "Link Source", "Points to [[target-a]].")
+    await _create_doc(knowledge_manager, "Target A", "Target A content.")
+
+    # Build graph cache
+    result_init = await reconcile(scope="graph", dry_run=False, config=test_config)
+    assert result_init["status"] == "ok"
+
+    # Verify clean state
+    result_clean = await reconcile(scope="graph", dry_run=False, config=test_config)
+    assert result_clean["status"] == "noop"
+
+    # Change wiki-links without adding/removing documents
+    await knowledge_manager.update(
+        id=doc_id, agent="test", content="Now points to [[target-b]] instead."
+    )
+
+    # Reconcile should detect edge drift (not noop)
+    result_drift = await reconcile(scope="graph", dry_run=False, config=test_config)
+    assert result_drift["status"] == "ok"
+    assert result_drift["summary"]["repaired"] > 0
+    assert any(a.get("reason") == "edge_set_mismatch" for a in result_drift["actions"])
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — dry-run summary counts reflect planned actions
+# ---------------------------------------------------------------------------
+
+
+async def test_dry_run_summary_reflects_planned_actions(
+    test_config: LithosConfig, knowledge_manager: KnowledgeManager
+) -> None:
+    """Dry-run summary.repaired matches len(actions), not zero."""
+    await _create_doc(knowledge_manager, "Dry Run Doc", "Content for dry-run test.")
+
+    # indices dry-run: docs not indexed yet, so actions are pending
+    result_idx = await reconcile(scope="indices", dry_run=True, config=test_config)
+    assert result_idx["status"] == "ok"
+    assert len(result_idx["actions"]) > 0
+    assert result_idx["summary"]["repaired"] == len(result_idx["actions"])
+
+    # graph dry-run: no cache yet, so rebuild is planned
+    result_graph = await reconcile(scope="graph", dry_run=True, config=test_config)
+    assert result_graph["status"] == "ok"
+    assert len(result_graph["actions"]) > 0
+    assert result_graph["summary"]["repaired"] == len(result_graph["actions"])

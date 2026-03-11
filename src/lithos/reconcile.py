@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from lithos.config import LithosConfig, get_config
 from lithos.graph import KnowledgeGraph
-from lithos.knowledge import KnowledgeDocument, KnowledgeManager
+from lithos.knowledge import KnowledgeDocument, KnowledgeManager, parse_wiki_links
 from lithos.search import SearchEngine
 from lithos.telemetry import get_tracer, lithos_metrics
 
@@ -122,11 +122,20 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
 
         # --- Tantivy drift detection ---
         try:
-            tantivy_count = search.tantivy.count_docs()
-            tantivy_drifted = search.tantivy.needs_rebuild or (tantivy_count != len(corpus_ids))
-            if tantivy_drifted:
-                reason = "schema_mismatch" if search.tantivy.needs_rebuild else "count_mismatch"
-                actions.append({"backend": "tantivy", "action": "full_rebuild", "reason": reason})
+            if search.tantivy.needs_rebuild:
+                actions.append(
+                    {"backend": "tantivy", "action": "full_rebuild", "reason": "schema_mismatch"}
+                )
+            else:
+                tantivy_ids = search.tantivy.get_indexed_doc_ids()
+                if tantivy_ids != corpus_ids:
+                    actions.append(
+                        {
+                            "backend": "tantivy",
+                            "action": "full_rebuild",
+                            "reason": "doc_set_mismatch",
+                        }
+                    )
         except Exception as exc:
             logger.warning("Tantivy drift check failed: %s", exc)
             actions.append(
@@ -150,13 +159,12 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
         return _make_result("indices", dry_run, status="noop", scanned=len(corpus_docs))
 
     if dry_run:
-        # Nothing was written — repaired=0 to avoid misleading operators.
         return _make_result(
             "indices",
             dry_run,
             status="ok",
             scanned=len(corpus_docs),
-            repaired=0,
+            repaired=len(actions),
             actions=actions,
         )
 
@@ -255,18 +263,40 @@ async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any
                             "cached_count": len(cached_ids),
                         }
                     )
+                else:
+                    # Node set matches — check for edge/link-set drift.
+                    # Compare raw (source_id, link_target_text) pairs so we
+                    # don't need to re-resolve links through the lookup tables.
+                    corpus_links: set[tuple[str, str]] = set()
+                    for doc in corpus_docs:
+                        for link in parse_wiki_links(doc.content):
+                            corpus_links.add((doc.id, link.target))
+
+                    cached_links: set[tuple[str, str]] = set()
+                    for source, _target, data in graph.graph.edges(data=True):
+                        link_text = data.get("link_text", "")
+                        if link_text:
+                            cached_links.add((source, link_text))
+
+                    if corpus_links != cached_links:
+                        actions.append(
+                            {
+                                "target": "graph_cache",
+                                "action": "full_rebuild",
+                                "reason": "edge_set_mismatch",
+                            }
+                        )
 
     if not actions:
         return _make_result("graph", dry_run, status="noop", scanned=len(corpus_docs))
 
     if dry_run:
-        # Nothing was written — repaired=0 to avoid misleading operators.
         return _make_result(
             "graph",
             dry_run,
             status="ok",
             scanned=len(corpus_docs),
-            repaired=0,
+            repaired=len(actions),
             actions=actions,
         )
 
