@@ -291,7 +291,7 @@ class TantivyIndex:
         # Reload to see changes immediately
         self.index.reload()
 
-    def rebuild_from_docs(self, docs: list["KnowledgeDocument"]) -> None:
+    def rebuild_from_docs(self, docs: list[KnowledgeDocument]) -> None:
         """Clear the index and re-index *docs* in a single commit.
 
         Prefer this over calling ``clear()`` + ``add_document()`` in a loop to
