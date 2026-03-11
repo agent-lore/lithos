@@ -1173,7 +1173,7 @@ class TestHealthTool:
         """lithos_health returns status 'ok' when all components are healthy."""
         result = await self._call_health(server)
         assert result["status"] == "ok"
-        assert result["components"]["server"]["status"] == "ok"
+        assert result["components"]["kb_directory"]["status"] == "ok"
         assert result["components"]["embedding_model"]["status"] == "ok"
         assert result["components"]["knowledge_base"]["status"] == "ok"
         assert "timestamp" in result
@@ -1184,8 +1184,8 @@ class TestHealthTool:
         from unittest.mock import patch
 
         with patch.object(
-            server.search.chroma.model,
-            "encode",
+            server.search.chroma,
+            "health_check",
             side_effect=RuntimeError("model unavailable"),
         ):
             result = await self._call_health(server)
@@ -1193,3 +1193,17 @@ class TestHealthTool:
         assert result["status"] == "degraded"
         assert result["components"]["embedding_model"]["status"] == "unavailable"
         assert "error" in result["components"]["embedding_model"]
+
+    @pytest.mark.asyncio
+    async def test_health_degraded_when_kb_fails(self, server: LithosServer):
+        """lithos_health returns degraded when knowledge base check fails."""
+        from unittest.mock import MagicMock, patch
+
+        mock_path = MagicMock()
+        mock_path.stat.side_effect = RuntimeError("kb unavailable")
+        with patch.object(server.knowledge, "knowledge_path", mock_path):
+            result = await self._call_health(server)
+
+        assert result["status"] == "degraded"
+        assert result["components"]["kb_directory"]["status"] == "unavailable"
+        assert "error" in result["components"]["kb_directory"]

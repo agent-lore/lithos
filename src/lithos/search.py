@@ -493,6 +493,10 @@ class ChromaIndex:
             self._model = SentenceTransformer(self.model_name)
         return self._model
 
+    def health_check(self) -> None:
+        """Probe the embedding model. Raises on failure."""
+        self.model.encode(["health check"])
+
     @property
     def client(self) -> ClientAPI:
         """Get ChromaDB client."""
