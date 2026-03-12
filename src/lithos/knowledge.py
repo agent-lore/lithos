@@ -1,8 +1,11 @@
 """Knowledge module - Markdown document CRUD with frontmatter."""
 
 import asyncio
+import contextlib
 import logging
+import os
 import re
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -16,6 +19,20 @@ from lithos.config import LithosConfig, get_config
 from lithos.telemetry import lithos_metrics, traced
 
 logger = logging.getLogger(__name__)
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Write content to path atomically using write-then-rename."""
+    tmp_fd, tmp_path_str = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path_str, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path_str)
+        raise
+
 
 # Wiki-link pattern: [[target]] or [[target|display]]
 WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\[|]*[a-zA-Z][^\]\[|]*)(?:\|([^\]]+))?\]\]")
@@ -711,7 +728,7 @@ class KnowledgeManager:
 
             # Write to disk
             full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(doc.to_markdown())
+            _atomic_write(full_path, doc.to_markdown())
 
             # Update indices
             self._id_to_path[doc_id] = file_path
@@ -985,7 +1002,7 @@ class KnowledgeManager:
 
             # Write to disk
             _safe_path, full_path = self._resolve_safe_path(doc.path)
-            full_path.write_text(doc.to_markdown())
+            _atomic_write(full_path, doc.to_markdown())
 
             # Keep slug index in sync when title changes.
             new_slug = slugify(doc.metadata.title)
