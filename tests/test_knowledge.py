@@ -1243,6 +1243,90 @@ class TestDedupOnUpdate:
         assert result.error_code == "invalid_input"
 
 
+class TestUpdateTagsConfidenceSentinel:
+    """Tests for issue #37: _UNSET sentinel for tags and confidence on update."""
+
+    @pytest.mark.asyncio
+    async def test_unset_preserves_tags(self, knowledge_manager: KnowledgeManager):
+        """_UNSET (default): preserves existing tags when not passed."""
+        doc = (
+            await knowledge_manager.create(
+                title="Tagged Doc",
+                content="Content.",
+                agent="agent",
+                tags=["foo", "bar"],
+            )
+        ).document
+        result = await knowledge_manager.update(id=doc.id, agent="editor", content="Updated.")
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.tags == ["foo", "bar"]
+
+    @pytest.mark.asyncio
+    async def test_empty_list_clears_tags(self, knowledge_manager: KnowledgeManager):
+        """[] clears all tags."""
+        doc = (
+            await knowledge_manager.create(
+                title="Tagged Doc 2",
+                content="Content.",
+                agent="agent",
+                tags=["foo", "bar"],
+            )
+        ).document
+        result = await knowledge_manager.update(id=doc.id, agent="editor", tags=[])
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.tags == []
+
+    @pytest.mark.asyncio
+    async def test_nonempty_list_replaces_tags(self, knowledge_manager: KnowledgeManager):
+        """Non-empty list replaces existing tags."""
+        doc = (
+            await knowledge_manager.create(
+                title="Tagged Doc 3",
+                content="Content.",
+                agent="agent",
+                tags=["old"],
+            )
+        ).document
+        result = await knowledge_manager.update(id=doc.id, agent="editor", tags=["new", "tags"])
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.tags == ["new", "tags"]
+
+    @pytest.mark.asyncio
+    async def test_unset_preserves_confidence(self, knowledge_manager: KnowledgeManager):
+        """_UNSET (default): preserves existing confidence when not passed."""
+        doc = (
+            await knowledge_manager.create(
+                title="Confident Doc",
+                content="Content.",
+                agent="agent",
+                confidence=0.7,
+            )
+        ).document
+        result = await knowledge_manager.update(id=doc.id, agent="editor", content="Updated.")
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.confidence == pytest.approx(0.7)
+
+    @pytest.mark.asyncio
+    async def test_float_sets_confidence(self, knowledge_manager: KnowledgeManager):
+        """Float value sets new confidence."""
+        doc = (
+            await knowledge_manager.create(
+                title="Confident Doc 2",
+                content="Content.",
+                agent="agent",
+                confidence=0.5,
+            )
+        ).document
+        result = await knowledge_manager.update(id=doc.id, agent="editor", confidence=0.9)
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.confidence == pytest.approx(0.9)
+
+
 class TestDeleteRemovesUrl:
     """Tests for US-007: delete() cleans up dedup map."""
 

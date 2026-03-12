@@ -891,6 +891,110 @@ class TestFreshnessWritePath:
         assert updated.metadata.expires_at is None
 
 
+class TestWriteUpdateSentinel:
+    """Tests for issue #37: sentinel pattern for tags/confidence at the MCP boundary."""
+
+    async def _call_write(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_write")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_update_null_tags_preserves(self, server: LithosServer):
+        """lithos_write: omitting tags (null) on update preserves existing tags."""
+        doc = (
+            await server.knowledge.create(
+                title="Tagged",
+                content="Content.",
+                agent="agent",
+                tags=["keep", "these"],
+            )
+        ).document
+        assert doc is not None
+        result = await self._call_write(
+            server,
+            id=doc.id,
+            title="Tagged",
+            content="Updated.",
+            agent="editor",
+            # tags omitted (None)
+        )
+        assert result["status"] == "updated"
+        updated = (await server.knowledge.read(id=doc.id))[0]
+        assert updated.metadata.tags == ["keep", "these"]
+
+    @pytest.mark.asyncio
+    async def test_update_empty_list_tags_clears(self, server: LithosServer):
+        """lithos_write: passing tags=[] on update clears all tags."""
+        doc = (
+            await server.knowledge.create(
+                title="Tagged2",
+                content="Content.",
+                agent="agent",
+                tags=["remove", "me"],
+            )
+        ).document
+        assert doc is not None
+        result = await self._call_write(
+            server,
+            id=doc.id,
+            title="Tagged2",
+            content="Updated.",
+            agent="editor",
+            tags=[],
+        )
+        assert result["status"] == "updated"
+        updated = (await server.knowledge.read(id=doc.id))[0]
+        assert updated.metadata.tags == []
+
+    @pytest.mark.asyncio
+    async def test_update_null_confidence_preserves(self, server: LithosServer):
+        """lithos_write: omitting confidence (null) on update preserves existing confidence."""
+        doc = (
+            await server.knowledge.create(
+                title="Confident",
+                content="Content.",
+                agent="agent",
+                confidence=0.6,
+            )
+        ).document
+        assert doc is not None
+        result = await self._call_write(
+            server,
+            id=doc.id,
+            title="Confident",
+            content="Updated.",
+            agent="editor",
+            # confidence omitted (None)
+        )
+        assert result["status"] == "updated"
+        updated = (await server.knowledge.read(id=doc.id))[0]
+        assert updated.metadata.confidence == pytest.approx(0.6)
+
+    @pytest.mark.asyncio
+    async def test_update_confidence_sets_value(self, server: LithosServer):
+        """lithos_write: passing confidence on update sets new value."""
+        doc = (
+            await server.knowledge.create(
+                title="Confident2",
+                content="Content.",
+                agent="agent",
+                confidence=0.5,
+            )
+        ).document
+        assert doc is not None
+        result = await self._call_write(
+            server,
+            id=doc.id,
+            title="Confident2",
+            content="Updated.",
+            agent="editor",
+            confidence=0.95,
+        )
+        assert result["status"] == "updated"
+        updated = (await server.knowledge.read(id=doc.id))[0]
+        assert updated.metadata.confidence == pytest.approx(0.95)
+
+
 class TestCacheLookup:
     """Integration tests for lithos_cache_lookup tool."""
 

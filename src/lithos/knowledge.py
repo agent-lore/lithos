@@ -844,13 +844,22 @@ class KnowledgeManager:
         agent: str,
         content: str | None = None,
         title: str | None = None,
-        tags: list[str] | None = None,
-        confidence: float | None = None,
+        tags: list[str] | _UnsetType = _UNSET,
+        confidence: float | _UnsetType = _UNSET,
         source_url: str | None | _UnsetType = _UNSET,
         derived_from_ids: list[str] | None | _UnsetType = _UNSET,
         expires_at: datetime | None | _UnsetType = _UNSET,
     ) -> WriteResult:
         """Update an existing document.
+
+        tags semantics:
+        - _UNSET (default): preserve existing tags
+        - []: clear all tags
+        - non-empty list: replace tags
+
+        confidence semantics:
+        - _UNSET (default): preserve existing confidence
+        - float: set new value
 
         source_url semantics:
         - _UNSET (default): preserve existing source_url, no map change
@@ -973,9 +982,9 @@ class KnowledgeManager:
             if title is not None:
                 doc.title = title
                 doc.metadata.title = title
-            if tags is not None:
+            if not isinstance(tags, _UnsetType):
                 doc.metadata.tags = tags
-            if confidence is not None:
+            if not isinstance(confidence, _UnsetType):
                 doc.metadata.confidence = confidence
 
             # Update metadata
