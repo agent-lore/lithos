@@ -433,6 +433,14 @@ class LithosServer:
 
                 await self.coordination.ensure_agent_known(agent)
 
+                if len(content.encode("utf-8")) > self._config.storage.max_content_size_bytes:
+                    return {
+                        "status": "error",
+                        "code": "content_too_large",
+                        "message": f"Content exceeds maximum size of {self._config.storage.max_content_size_bytes} bytes",
+                        "warnings": [],
+                    }
+
                 warnings: list[str] = []
 
                 # Validate ttl_hours / expires_at mutual exclusion

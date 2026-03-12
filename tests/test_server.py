@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from lithos.config import LithosConfig
 from lithos.server import LithosServer, _FileChangeHandler, create_server, get_server
 
 pytestmark = pytest.mark.integration
@@ -1159,3 +1160,41 @@ class TestWriteMutualExclusion:
         # Should be roughly 24h from now
         delta = (doc.metadata.expires_at - datetime.now(timezone.utc)).total_seconds()
         assert 23 * 3600 < delta < 25 * 3600
+
+
+class TestWriteContentSizeLimit:
+    """Tests for content size enforcement in lithos_write."""
+
+    async def _call_write(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_write")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_oversized_content_rejected(
+        self, server: LithosServer, test_config: LithosConfig
+    ):
+        """Content exceeding max_content_size_bytes returns content_too_large error."""
+        test_config.storage.max_content_size_bytes = 10
+        oversized = "x" * 11
+        result = await self._call_write(
+            server,
+            title="Too Big",
+            content=oversized,
+            agent="agent",
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "content_too_large"
+        assert "10" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_content_at_limit_accepted(self, server: LithosServer, test_config: LithosConfig):
+        """Content exactly at max_content_size_bytes is accepted."""
+        test_config.storage.max_content_size_bytes = 10
+        exact = "x" * 10
+        result = await self._call_write(
+            server,
+            title="Exact Size",
+            content=exact,
+            agent="agent",
+        )
+        assert result["status"] == "created"

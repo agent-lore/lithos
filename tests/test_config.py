@@ -27,6 +27,7 @@ class TestConfigDefaults:
 
         assert config.data_dir == Path("./data")
         assert config.knowledge_subdir == "knowledge"
+        assert config.max_content_size_bytes == 1_000_000
 
     def test_search_defaults(self):
         """Search config has sensible defaults."""
