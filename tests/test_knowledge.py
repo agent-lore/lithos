@@ -3002,3 +3002,179 @@ class TestExpiresAtWritePath:
         read_doc, _ = await knowledge_manager.read(id=doc.id)
         assert read_doc.metadata.expires_at is not None
         assert abs((read_doc.metadata.expires_at - new_expires).total_seconds()) < 1
+
+
+class TestSlugCollision:
+    """Tests for slug collision detection (issue #38)."""
+
+    @pytest.mark.asyncio
+    async def test_scan_warns_on_slug_collision(self, test_config, caplog):
+        """_scan_existing() logs a warning when two docs share the same slug."""
+        import logging
+
+        mgr1 = KnowledgeManager()
+        doc1 = (await mgr1.create(title="My Document", content="First.", agent="agent")).document
+        # Bypass dedup by directly writing a second doc with same slug title
+        doc2 = (
+            await mgr1.create(title="Other Document", content="Second.", agent="agent")
+        ).document
+        # Manually patch the second file's title to produce the same slug
+        kp = test_config.storage.knowledge_path
+        file2 = kp / doc2.path
+        raw = file2.read_text()
+        raw = raw.replace("title: Other Document", "title: My Document")
+        file2.write_text(raw)
+
+        with caplog.at_level(logging.WARNING, logger="lithos.knowledge"):
+            mgr2 = KnowledgeManager()
+
+        assert "Slug collision detected" in caplog.text
+        # First-seen-wins: first doc (sorted by path) keeps the slug
+        assert mgr2._slug_to_id.get("my-document") == doc1.id
+
+    @pytest.mark.asyncio
+    async def test_create_raises_on_slug_collision(self, knowledge_manager: KnowledgeManager):
+        """create() raises SlugCollisionError when two docs would share the same slug."""
+        from lithos.errors import SlugCollisionError
+
+        await knowledge_manager.create(title="My Document", content="First.", agent="agent")
+
+        with pytest.raises(SlugCollisionError) as exc_info:
+            await knowledge_manager.create(title="My Document", content="Second.", agent="agent")
+
+        assert "my-document" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_update_raises_on_slug_collision(self, knowledge_manager: KnowledgeManager):
+        """update() raises SlugCollisionError when renaming would create a slug collision."""
+        from lithos.errors import SlugCollisionError
+
+        await knowledge_manager.create(title="Target Title", content="First.", agent="agent")
+        doc2 = (
+            await knowledge_manager.create(title="Other Title", content="Second.", agent="agent")
+        ).document
+        assert doc2 is not None
+
+        with pytest.raises(SlugCollisionError):
+            await knowledge_manager.update(
+                id=doc2.id,
+                agent="editor",
+                title="Target Title",
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_collision_leaves_no_zombie(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """create() must not leave a zombie file or corrupt indices on SlugCollisionError."""
+        from lithos.errors import SlugCollisionError
+
+        await knowledge_manager.create(title="My Document", content="First.", agent="agent")
+
+        kp = test_config.storage.knowledge_path
+        with pytest.raises(SlugCollisionError):
+            await knowledge_manager.create(title="My Document", content="Second.", agent="agent")
+
+        # Collect all .md files that contain "Second." (zombie check)
+        zombie_files = [f for f in kp.rglob("*.md") if "Second." in f.read_text()]
+        assert zombie_files == [], f"Zombie file(s) left on disk: {zombie_files}"
+
+        # The new doc_id must not appear in the indices.
+        # We can verify by checking no path maps to a doc with content "Second."
+        for doc_id, path in knowledge_manager._id_to_path.items():
+            full = kp / path
+            if full.exists() and "Second." in full.read_text():
+                pytest.fail(f"_id_to_path still references zombie doc {doc_id}")
+
+        for path in knowledge_manager._path_to_id:
+            full = kp / path
+            if full.exists() and "Second." in full.read_text():
+                pytest.fail(f"_path_to_id still references zombie path {path}")
+
+    @pytest.mark.asyncio
+    async def test_update_collision_leaves_original_unchanged(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """update() must not overwrite the original file on SlugCollisionError."""
+        from lithos.errors import SlugCollisionError
+
+        await knowledge_manager.create(title="Target Title", content="First.", agent="agent")
+        doc2 = (
+            await knowledge_manager.create(title="Other Title", content="Second.", agent="agent")
+        ).document
+        assert doc2 is not None
+
+        kp = test_config.storage.knowledge_path
+        original_text = (kp / doc2.path).read_text()
+
+        with pytest.raises(SlugCollisionError):
+            await knowledge_manager.update(
+                id=doc2.id,
+                agent="editor",
+                title="Target Title",
+            )
+
+        # File on disk must be identical to what it was before the failed update.
+        assert (kp / doc2.path).read_text() == original_text
+
+    @pytest.mark.asyncio
+    async def test_update_collision_with_source_url_leaves_indices_unchanged(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """Compound case: title rename + source_url change + slug collision.
+
+        Regression test for the ordering bug where source_url index mutations
+        happened BEFORE the slug collision check.  If the fix is correct, a
+        failed update must leave BOTH the on-disk file AND the source_url index
+        in their original state.
+        """
+        from lithos.errors import SlugCollisionError
+
+        # doc1 owns the slug we'll collide with.
+        await knowledge_manager.create(title="Target Title", content="First.", agent="agent")
+
+        # doc2 is the one we'll try to update.
+        original_source_url = "https://example.com/original"
+        doc2_result = await knowledge_manager.create(
+            title="Other Title",
+            content="Second.",
+            agent="agent",
+            source_url=original_source_url,
+        )
+        assert doc2_result.document is not None
+        doc2 = doc2_result.document
+
+        kp = test_config.storage.knowledge_path
+        original_text = (kp / doc2.path).read_text()
+
+        # Capture the source_url index state before the bad update.
+        from lithos.knowledge import normalize_url
+
+        original_norm = normalize_url(original_source_url)
+        assert knowledge_manager._source_url_to_id.get(original_norm) == doc2.id
+
+        # Attempt update: rename to colliding title AND change source_url simultaneously.
+        new_source_url = "https://example.com/new"
+        with pytest.raises(SlugCollisionError):
+            await knowledge_manager.update(
+                id=doc2.id,
+                agent="editor",
+                title="Target Title",  # collides with doc1
+                source_url=new_source_url,
+            )
+
+        # On-disk file must be unchanged.
+        assert (kp / doc2.path).read_text() == original_text, (
+            "File was mutated despite SlugCollisionError"
+        )
+
+        # source_url index must still point to doc2 via the original URL.
+        assert knowledge_manager._source_url_to_id.get(original_norm) == doc2.id, (
+            "_source_url_to_id lost original mapping after failed update"
+        )
+
+        # The new URL must NOT have been inserted into the index.
+        new_norm = normalize_url(new_source_url)
+        assert knowledge_manager._source_url_to_id.get(new_norm) is None, (
+            "_source_url_to_id was polluted with new URL after failed update"
+        )

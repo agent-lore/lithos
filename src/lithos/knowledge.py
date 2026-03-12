@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import frontmatter
 
 from lithos.config import LithosConfig, get_config
+from lithos.errors import SlugCollisionError
 from lithos.telemetry import lithos_metrics, traced
 
 logger = logging.getLogger(__name__)
@@ -519,7 +520,17 @@ class KnowledgeManager:
                     self._id_to_path[doc_id] = rel_path
                     self._path_to_id[rel_path] = doc_id
                     if title:
-                        self._slug_to_id[slugify(title)] = doc_id
+                        slug = slugify(title)
+                        existing_slug_id = self._slug_to_id.get(slug)
+                        if existing_slug_id is not None and existing_slug_id != doc_id:
+                            logger.warning(
+                                "Slug collision detected: slug=%r already used by %r, also claimed by %r",
+                                slug,
+                                existing_slug_id,
+                                doc_id,
+                            )
+                        else:
+                            self._slug_to_id[slug] = doc_id
                         self._id_to_title[doc_id] = title
 
                     # Populate metadata cache for filtering
@@ -709,6 +720,11 @@ class KnowledgeManager:
                 links=links,
             )
 
+            # Check for slug collision before writing anything
+            existing_slug_id = self._slug_to_id.get(slug)
+            if existing_slug_id is not None and existing_slug_id != doc_id:
+                raise SlugCollisionError(slug, existing_slug_id)
+
             # Write to disk
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(doc.to_markdown())
@@ -873,6 +889,16 @@ class KnowledgeManager:
             old_slug = slugify(doc.metadata.title)
             old_source_url = doc.metadata.source_url
 
+            # Guard: check slug collision BEFORE any state mutations.
+            # If a title rename would collide, bail out immediately so that
+            # source_url / provenance mutations further down never run.
+            if title is not None:
+                _pre_new_slug = slugify(title)
+                if _pre_new_slug != old_slug:
+                    _pre_existing = self._slug_to_id.get(_pre_new_slug)
+                    if _pre_existing is not None and _pre_existing != id:
+                        raise SlugCollisionError(_pre_new_slug, _pre_existing)
+
             # Handle source_url update
             if not isinstance(source_url, _UnsetType):
                 if source_url is None:
@@ -983,12 +1009,14 @@ class KnowledgeManager:
             if agent not in doc.metadata.contributors and agent != doc.metadata.author:
                 doc.metadata.contributors.append(agent)
 
+            # Slug collision was already checked at the top of update(); just
+            # compute new_slug here for the index-update that follows.
+            new_slug = slugify(doc.metadata.title)
+
             # Write to disk
             _safe_path, full_path = self._resolve_safe_path(doc.path)
             full_path.write_text(doc.to_markdown())
 
-            # Keep slug index in sync when title changes.
-            new_slug = slugify(doc.metadata.title)
             if new_slug != old_slug:
                 if self._slug_to_id.get(old_slug) == id:
                     del self._slug_to_id[old_slug]
