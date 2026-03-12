@@ -398,6 +398,7 @@ class LithosServer:
             derived_from_ids: list[str] | None = None,
             ttl_hours: float | None = None,
             expires_at: str | None = None,
+            expected_version: int | None = None,
         ) -> dict[str, Any]:
             """Create or update a knowledge file.
 
@@ -420,6 +421,8 @@ class LithosServer:
                 expires_at: Absolute ISO 8601 expiry datetime. On update: None (omit)
                     preserves existing; "" clears; ISO string sets new value.
                     Mutually exclusive with ttl_hours.
+                expected_version: If provided on update, reject with version_conflict if the
+                    document's current version differs. Omit to skip version checking.
 
             Returns:
                 Dict with status envelope: created/updated/duplicate
@@ -536,6 +539,7 @@ class LithosServer:
                         source_url=url_arg,
                         derived_from_ids=prov_arg,
                         expires_at=expires_at_dt,
+                        expected_version=expected_version,
                     )
                 else:
                     # Create new — default confidence to 1.0 when not specified
