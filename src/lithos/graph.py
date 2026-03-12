@@ -1,6 +1,7 @@
 """Knowledge graph - NetworkX wiki-link graph operations."""
 
 import contextlib
+import logging
 import os
 import pickle
 import tempfile
@@ -12,6 +13,10 @@ import networkx as nx
 
 from lithos.config import LithosConfig, get_config
 from lithos.knowledge import KnowledgeDocument
+
+logger = logging.getLogger(__name__)
+
+GRAPH_CACHE_VERSION = 1
 
 
 @dataclass
@@ -77,11 +82,19 @@ class KnowledgeGraph:
         try:
             with open(cache_path, "rb") as f:
                 data = pickle.load(f)
-                self._graph = data.get("graph", nx.DiGraph())
-                self._id_to_node = data.get("id_to_node", {})
-                self._path_to_node = data.get("path_to_node", {})
-                self._filename_to_nodes = data.get("filename_to_nodes", {})
-                self._alias_to_node = data.get("alias_to_node", {})
+            cached_version = data.get("version")
+            if cached_version != GRAPH_CACHE_VERSION:
+                logger.warning(
+                    "Graph cache version mismatch (expected %s, got %s), triggering rebuild",
+                    GRAPH_CACHE_VERSION,
+                    cached_version,
+                )
+                return False
+            self._graph = data.get("graph", nx.DiGraph())
+            self._id_to_node = data.get("id_to_node", {})
+            self._path_to_node = data.get("path_to_node", {})
+            self._filename_to_nodes = data.get("filename_to_nodes", {})
+            self._alias_to_node = data.get("alias_to_node", {})
             return True
         except Exception:
             return False
@@ -92,6 +105,7 @@ class KnowledgeGraph:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
 
         data = {
+            "version": GRAPH_CACHE_VERSION,
             "graph": self._graph,
             "id_to_node": self._id_to_node,
             "path_to_node": self._path_to_node,
