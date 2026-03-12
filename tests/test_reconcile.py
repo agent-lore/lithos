@@ -127,6 +127,7 @@ async def test_graph_real_run_idempotent(
     test_config: LithosConfig, knowledge_manager: KnowledgeManager
 ) -> None:
     """First graph run rebuilds; second run with no changes returns noop."""
+    await _create_doc(knowledge_manager, "Gamma Doc", "Gamma content.")
     await _create_doc(knowledge_manager, "Delta Doc", "Delta content [[gamma-doc]].")
 
     from lithos.graph import KnowledgeGraph
@@ -351,3 +352,70 @@ async def test_dry_run_summary_reflects_planned_actions(
     assert result_graph["status"] == "ok"
     assert len(result_graph["actions"]) > 0
     assert result_graph["summary"]["repaired"] == len(result_graph["actions"])
+
+
+# ---------------------------------------------------------------------------
+# Test 12-14 — stale wiki-link detection in graph scope
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileStaleWikiLinks:
+    async def test_stale_link_detected_in_dry_run(
+        self, test_config: LithosConfig, knowledge_manager: KnowledgeManager
+    ) -> None:
+        """Dry-run detects and reports stale wiki-link without writing cache."""
+        doc_a_id = await _create_doc(knowledge_manager, "Doc A", "Links to [[NonExistentNote]].")
+
+        # Build a consistent cache first
+        build_result = await reconcile(scope="graph", dry_run=False, config=test_config)
+        assert build_result["status"] == "ok"
+
+        # Dry-run should detect the stale link
+        result = await reconcile(scope="graph", dry_run=True, config=test_config)
+        assert result["status"] == "ok"
+
+        stale_actions = [a for a in result["actions"] if a.get("action") == "stale_link"]
+        assert len(stale_actions) == 1
+        assert stale_actions[0]["source_id"] == doc_a_id
+        assert stale_actions[0]["link_target"] == "NonExistentNote"
+
+    async def test_stale_link_reported_in_real_run(
+        self, test_config: LithosConfig, knowledge_manager: KnowledgeManager
+    ) -> None:
+        """Real run reports stale wiki-link but does NOT modify note content."""
+        doc_a_id = await _create_doc(knowledge_manager, "Doc A", "Links to [[NonExistentNote]].")
+
+        # Build a consistent cache first
+        build_result = await reconcile(scope="graph", dry_run=False, config=test_config)
+        assert build_result["status"] == "ok"
+
+        # Real run should report stale link
+        result = await reconcile(scope="graph", dry_run=False, config=test_config)
+        assert result["status"] == "ok"
+
+        stale_actions = [a for a in result["actions"] if a.get("action") == "stale_link"]
+        assert len(stale_actions) == 1
+        assert stale_actions[0]["source_id"] == doc_a_id
+        assert stale_actions[0]["link_target"] == "NonExistentNote"
+
+        # Note content must NOT have been modified
+        doc, _ = await knowledge_manager.read(id=doc_a_id)
+        assert "[[NonExistentNote]]" in doc.content
+
+    async def test_no_stale_links_when_all_resolve(
+        self, test_config: LithosConfig, knowledge_manager: KnowledgeManager
+    ) -> None:
+        """No stale_link actions when all wiki-links resolve to existing documents."""
+        await _create_doc(knowledge_manager, "Doc A", "Links to [[doc-b]].")
+        await _create_doc(knowledge_manager, "Doc B", "Content of doc B.")
+
+        # Build cache
+        build_result = await reconcile(scope="graph", dry_run=False, config=test_config)
+        assert build_result["status"] == "ok"
+
+        # Second run: all links resolve, no stale links → noop
+        result = await reconcile(scope="graph", dry_run=False, config=test_config)
+        assert result["status"] == "noop"
+
+        stale_actions = [a for a in result["actions"] if a.get("action") == "stale_link"]
+        assert len(stale_actions) == 0

@@ -288,7 +288,32 @@ async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any
                         )
 
     if not actions:
-        return _make_result("graph", dry_run, status="noop", scanned=len(corpus_docs))
+        # Cache is consistent — scan for stale wiki-links (report-only, do NOT modify note content)
+        broken = graph.get_broken_links()
+        stale_actions: list[dict[str, Any]] = []
+        for source_id, source_title, link_target in broken:
+            stale_actions.append(
+                {
+                    "target": "wiki_link",
+                    "action": "stale_link",
+                    "source_id": source_id,
+                    "source_title": source_title,
+                    "link_target": link_target,
+                    "reason": "target_slug_not_found",
+                }
+            )
+
+        if not stale_actions:
+            return _make_result("graph", dry_run, status="noop", scanned=len(corpus_docs))
+
+        # Stale links detected — report them (no writes in either dry_run or real run)
+        return _make_result(
+            "graph",
+            dry_run,
+            status="ok",
+            scanned=len(corpus_docs),
+            actions=stale_actions,
+        )
 
     if dry_run:
         return _make_result(
