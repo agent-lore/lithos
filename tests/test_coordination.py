@@ -487,6 +487,41 @@ class TestClaimManagement:
         upper_bound = datetime.now(timezone.utc) + timedelta(minutes=2)
         assert lower_bound < expires_at < upper_bound
 
+    @pytest.mark.asyncio
+    async def test_concurrent_claim_only_one_succeeds(
+        self, coordination_service: CoordinationService
+    ):
+        """When two coroutines race to claim the same task aspect, exactly one wins.
+
+        This exercises the TOCTOU fix: the atomic INSERT…ON CONFLICT DO UPDATE
+        WHERE clause ensures that only one claimant wins even when both read
+        'no active claim' at the same moment.
+        """
+        task_id = await coordination_service.create_task(
+            title="Contested Task",
+            agent="creator",
+        )
+
+        # Fire both claims concurrently — asyncio.gather runs them interleaved
+        # on the same event loop, maximising the chance of a race.
+        results = await asyncio.gather(
+            coordination_service.claim_task(task_id, "work", "agent-alpha"),
+            coordination_service.claim_task(task_id, "work", "agent-beta"),
+            return_exceptions=False,
+        )
+
+        successes = [r for r in results if r[0] is True]
+        failures = [r for r in results if r[0] is False]
+
+        assert len(successes) == 1, (
+            f"Expected exactly one winner, got successes={successes} failures={failures}"
+        )
+        assert len(failures) == 1, (
+            f"Expected exactly one loser, got successes={successes} failures={failures}"
+        )
+        # The losing claim should return (False, None) — no expiry
+        assert failures[0][1] is None
+
 
 class TestFindings:
     """Tests for task findings."""
