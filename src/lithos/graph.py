@@ -2,6 +2,7 @@
 
 import contextlib
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -12,6 +13,13 @@ import networkx as nx
 
 from lithos.config import LithosConfig, get_config
 from lithos.knowledge import KnowledgeDocument
+
+logger = logging.getLogger(__name__)
+
+# Increment when the JSON cache schema changes in a backward-incompatible way.
+# Existing graph.pickle files are silently ignored (the new cache path is
+# graph.json); the graph will be rebuilt from source documents on next startup.
+GRAPH_CACHE_VERSION = 1
 
 
 @dataclass
@@ -77,14 +85,22 @@ class KnowledgeGraph:
         try:
             with open(cache_path) as f:
                 data = json.load(f)
-                graph_data = data.get("graph")
-                self._graph = (
-                    nx.node_link_graph(graph_data, edges="links") if graph_data else nx.DiGraph()
+            cached_version = data.get("version")
+            if cached_version != GRAPH_CACHE_VERSION:
+                logger.warning(
+                    "Graph cache version mismatch (expected %s, got %s) — rebuilding",
+                    GRAPH_CACHE_VERSION,
+                    cached_version,
                 )
-                self._id_to_node = data.get("id_to_node", {})
-                self._path_to_node = data.get("path_to_node", {})
-                self._filename_to_nodes = data.get("filename_to_nodes", {})
-                self._alias_to_node = data.get("alias_to_node", {})
+                return False
+            graph_data = data.get("graph")
+            self._graph = (
+                nx.node_link_graph(graph_data, edges="links") if graph_data else nx.DiGraph()
+            )
+            self._id_to_node = data.get("id_to_node", {})
+            self._path_to_node = data.get("path_to_node", {})
+            self._filename_to_nodes = data.get("filename_to_nodes", {})
+            self._alias_to_node = data.get("alias_to_node", {})
             return True
         except Exception:
             return False
@@ -98,6 +114,7 @@ class KnowledgeGraph:
             nx.node_link_data(self._graph, edges="links") if self._graph is not None else {}
         )
         data = {
+            "version": GRAPH_CACHE_VERSION,
             "graph": graph_data,
             "id_to_node": self._id_to_node,
             "path_to_node": self._path_to_node,
