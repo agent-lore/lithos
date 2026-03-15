@@ -1242,3 +1242,16 @@ class TestOptimisticLockingServerLayer:
             agent="agent",
         )
         assert update_result["status"] == "updated"
+
+    @pytest.mark.asyncio
+    async def test_expected_version_ignored_on_create(self, server: LithosServer):
+        """expected_version is silently ignored on create (not an error)."""
+        result = await self._call_write(
+            server,
+            title="Ignored Version On Create",
+            content="Initial content.",
+            agent="agent",
+            expected_version=99,
+        )
+        assert result["status"] == "created"
+        assert result["version"] == 1

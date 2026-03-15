@@ -3100,6 +3100,7 @@ class TestOptimisticLocking:
         assert result.message is not None
         assert "1" in result.message
         assert "2" in result.message
+        assert result.current_version == 2
 
     @pytest.mark.asyncio
     async def test_correct_expected_version_succeeds(self, knowledge_manager: KnowledgeManager):
