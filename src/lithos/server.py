@@ -1732,9 +1732,11 @@ class LithosServer:
             except Exception as e:
                 components["kb_directory"] = {"status": "unavailable", "error": str(e)}
 
-            # Check embedding model
+            # Check embedding model — run synchronous health_check() in a thread
+            # so it doesn't block the async event loop on cold start (model load
+            # can take several seconds the first time it is called).
             try:
-                self.search.chroma.health_check()
+                await asyncio.to_thread(self.search.chroma.health_check)
                 components["embedding_model"] = {"status": "ok"}
             except Exception as e:
                 components["embedding_model"] = {"status": "unavailable", "error": str(e)}
