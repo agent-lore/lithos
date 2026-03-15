@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from lithos.config import LithosConfig, StorageConfig, set_config
+from lithos.config import LithosConfig, StorageConfig, _reset_config, set_config
 from lithos.coordination import CoordinationService
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
@@ -25,14 +25,15 @@ def temp_dir() -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-def test_config(temp_dir: Path) -> LithosConfig:
+def test_config(temp_dir: Path) -> Generator[LithosConfig, None, None]:
     """Create test configuration with temporary directories."""
     config = LithosConfig(
         storage=StorageConfig(data_dir=temp_dir),
     )
     config.ensure_directories()
     set_config(config)
-    return config
+    yield config
+    _reset_config()  # Use _reset_config() not set_config(None) — the latter now raises TypeError
 
 
 @pytest.fixture
