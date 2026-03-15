@@ -26,7 +26,14 @@ def temp_dir() -> Generator[Path, None, None]:
 
 @pytest.fixture
 def test_config(temp_dir: Path) -> Generator[LithosConfig, None, None]:
-    """Create test configuration with temporary directories."""
+    """Create test configuration with temporary directories.
+
+    Note: LithosConfig's model_validator applies LITHOS_* env var overrides on
+    every instantiation (see config.py).  This fixture assumes those env vars
+    are not set in the test environment.  If they are, call
+    ``monkeypatch.delenv("LITHOS_DATA_DIR", raising=False)`` (etc.) before
+    constructing config in affected tests.
+    """
     config = LithosConfig(
         storage=StorageConfig(data_dir=temp_dir),
     )

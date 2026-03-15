@@ -125,6 +125,16 @@ class LithosConfig(BaseSettings):
 
         Handles: LITHOS_DATA_DIR, LITHOS_PORT, LITHOS_HOST,
         LITHOS_OTEL_ENABLED, OTEL_EXPORTER_OTLP_ENDPOINT
+
+        **Important:** This validator runs on *every* ``LithosConfig()``
+        instantiation, not only when called via ``load_config()``.  Any
+        constructor-level value (e.g. ``StorageConfig(data_dir=tmp)``) will be
+        silently overridden if the corresponding env var is set.
+
+        Test fixtures that need isolated configuration must monkeypatch out the
+        relevant env vars (e.g. ``monkeypatch.delenv("LITHOS_DATA_DIR", raising=False)``).
+        See ``tests/conftest.py`` — the ``test_config`` fixture is safe as long as
+        ``LITHOS_DATA_DIR`` is not set in the test environment.
         """
         if data_dir := os.environ.get("LITHOS_DATA_DIR"):
             self.storage.data_dir = Path(data_dir)
