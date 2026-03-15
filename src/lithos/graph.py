@@ -1,8 +1,9 @@
 """Knowledge graph - NetworkX wiki-link graph operations."""
 
 import contextlib
+import json
+import logging
 import os
-import pickle
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,13 @@ import networkx as nx
 
 from lithos.config import LithosConfig, get_config
 from lithos.knowledge import KnowledgeDocument
+
+logger = logging.getLogger(__name__)
+
+# Increment when the JSON cache schema changes in a backward-incompatible way.
+# Existing graph.pickle files are silently ignored (the new cache path is
+# graph.json); the graph will be rebuilt from source documents on next startup.
+GRAPH_CACHE_VERSION = 1
 
 
 @dataclass
@@ -55,7 +63,7 @@ class KnowledgeGraph:
     @property
     def graph_cache_path(self) -> Path:
         """Get path to graph cache file."""
-        return self.config.storage.graph_path / "graph.pickle"
+        return self.config.storage.graph_path / "graph.json"
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -75,13 +83,25 @@ class KnowledgeGraph:
             return False
 
         try:
-            with open(cache_path, "rb") as f:
-                data = pickle.load(f)
-                self._graph = data.get("graph", nx.DiGraph())
-                self._id_to_node = data.get("id_to_node", {})
-                self._path_to_node = data.get("path_to_node", {})
-                self._filename_to_nodes = data.get("filename_to_nodes", {})
-                self._alias_to_node = data.get("alias_to_node", {})
+            with open(cache_path) as f:
+                data = json.load(f)
+            cached_version = data.get("version")
+            if cached_version != GRAPH_CACHE_VERSION:
+                logger.warning(
+                    "Graph cache version mismatch (expected %s, got %s) — rebuilding",
+                    GRAPH_CACHE_VERSION,
+                    cached_version,
+                )
+                return False
+            graph_data = data.get("graph")
+            if graph_data and "nodes" in graph_data and "links" in graph_data:
+                self._graph = nx.node_link_graph(graph_data, edges="links")
+            else:
+                self._graph = nx.DiGraph()
+            self._id_to_node = data.get("id_to_node", {})
+            self._path_to_node = data.get("path_to_node", {})
+            self._filename_to_nodes = data.get("filename_to_nodes", {})
+            self._alias_to_node = data.get("alias_to_node", {})
             return True
         except Exception:
             return False
@@ -91,8 +111,12 @@ class KnowledgeGraph:
         cache_path = self.graph_cache_path
         cache_path.parent.mkdir(parents=True, exist_ok=True)
 
+        graph_data = (
+            nx.node_link_data(self._graph, edges="links") if self._graph is not None else {}
+        )
         data = {
-            "graph": self._graph,
+            "version": GRAPH_CACHE_VERSION,
+            "graph": graph_data,
             "id_to_node": self._id_to_node,
             "path_to_node": self._path_to_node,
             "filename_to_nodes": self._filename_to_nodes,
@@ -101,8 +125,8 @@ class KnowledgeGraph:
 
         tmp_fd, tmp_path = tempfile.mkstemp(dir=cache_path.parent, suffix=".tmp")
         try:
-            with os.fdopen(tmp_fd, "wb") as f:
-                pickle.dump(data, f)
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(data, f)
             os.replace(tmp_path, cache_path)
         except Exception:
             with contextlib.suppress(OSError):

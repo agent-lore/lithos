@@ -540,3 +540,75 @@ class TestGraphPersistence:
 
         assert rebuilt_stats["nodes"] == original_stats["nodes"]
         assert rebuilt_stats["edges"] == original_stats["edges"]
+
+
+class TestGraphCachePersistence:
+    """Tests for JSON cache save/load roundtrip."""
+
+    @pytest.mark.asyncio
+    async def test_save_load_roundtrip(
+        self, knowledge_manager: KnowledgeManager, knowledge_graph: KnowledgeGraph
+    ):
+        """Graph save→load roundtrip preserves nodes, edges, and lookup tables."""
+        # Create two documents with a link between them
+        doc1 = (
+            await knowledge_manager.create(
+                title="Cache Source",
+                content="Links to [[cache-target]].",
+                agent="agent",
+            )
+        ).document
+        doc2 = (
+            await knowledge_manager.create(
+                title="Cache Target",
+                content="Target document.",
+                agent="agent",
+            )
+        ).document
+
+        knowledge_graph.add_document(doc1)
+        knowledge_graph.add_document(doc2)
+
+        original_stats = knowledge_graph.get_stats()
+        assert original_stats["nodes"] == 2
+        assert original_stats["edges"] == 1
+
+        # Persist to JSON
+        knowledge_graph.save_cache()
+
+        # Load into a fresh graph instance using the same config
+        graph2 = KnowledgeGraph(knowledge_graph._config)
+        loaded = graph2.load_cache()
+
+        assert loaded is True
+        assert graph2.get_stats()["nodes"] == original_stats["nodes"]
+        assert graph2.get_stats()["edges"] == original_stats["edges"]
+        assert graph2.has_node(doc1.id)
+        assert graph2.has_node(doc2.id)
+        assert graph2.has_edge(doc1.id, doc2.id)
+
+    @pytest.mark.asyncio
+    async def test_load_cache_version_mismatch_triggers_rebuild(
+        self, knowledge_graph: KnowledgeGraph
+    ):
+        """A cache file with the wrong version is rejected and returns False."""
+        import json
+
+        cache_path = knowledge_graph.graph_cache_path
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write a cache file with a stale/wrong version
+        stale_data = {
+            "version": 0,
+            "graph": {},
+            "id_to_node": {},
+            "path_to_node": {},
+            "filename_to_nodes": {},
+            "alias_to_node": {},
+        }
+        with open(cache_path, "w") as f:
+            json.dump(stale_data, f)
+
+        loaded = knowledge_graph.load_cache()
+
+        assert loaded is False, "Stale cache version should trigger a rebuild (return False)"
