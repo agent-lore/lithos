@@ -3034,3 +3034,198 @@ class TestExpiresAtWritePath:
         read_doc, _ = await knowledge_manager.read(id=doc.id)
         assert read_doc.metadata.expires_at is not None
         assert abs((read_doc.metadata.expires_at - new_expires).total_seconds()) < 1
+
+
+class TestOptimisticLocking:
+    """Tests for optimistic locking via version field (issue #45)."""
+
+    @pytest.mark.asyncio
+    async def test_create_sets_version_1(self, knowledge_manager: KnowledgeManager):
+        """Newly created document has version=1."""
+        result = await knowledge_manager.create(
+            title="Version Test",
+            content="Content.",
+            agent="agent",
+        )
+        assert result.status == "created"
+        assert result.document is not None
+        assert result.document.metadata.version == 1
+
+    @pytest.mark.asyncio
+    async def test_update_increments_version(self, knowledge_manager: KnowledgeManager):
+        """Successful update increments version from 1 to 2."""
+        doc = (
+            await knowledge_manager.create(
+                title="Version Inc",
+                content="Content.",
+                agent="agent",
+            )
+        ).document
+        assert doc is not None
+        assert doc.metadata.version == 1
+
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="agent",
+            content="Updated content.",
+        )
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.version == 2
+
+    @pytest.mark.asyncio
+    async def test_version_conflict_rejected(self, knowledge_manager: KnowledgeManager):
+        """Update with stale expected_version returns version_conflict error."""
+        doc = (
+            await knowledge_manager.create(
+                title="Conflict Test",
+                content="Content.",
+                agent="agent",
+            )
+        ).document
+        assert doc is not None
+
+        # Advance to version 2
+        await knowledge_manager.update(id=doc.id, agent="agent", content="v2")
+
+        # Now try to update with stale expected_version=1
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="agent",
+            content="stale write",
+            expected_version=1,
+        )
+        assert result.status == "error"
+        assert result.error_code == "version_conflict"
+        assert result.message is not None
+        assert "1" in result.message
+        assert "2" in result.message
+        assert result.current_version == 2
+
+    @pytest.mark.asyncio
+    async def test_correct_expected_version_succeeds(self, knowledge_manager: KnowledgeManager):
+        """Update with correct expected_version succeeds and increments to 3."""
+        doc = (
+            await knowledge_manager.create(
+                title="Correct Version",
+                content="Content.",
+                agent="agent",
+            )
+        ).document
+        assert doc is not None
+
+        # Advance to version 2
+        await knowledge_manager.update(id=doc.id, agent="agent", content="v2")
+
+        # Update with correct expected_version=2
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="agent",
+            content="v3",
+            expected_version=2,
+        )
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.version == 3
+
+    @pytest.mark.asyncio
+    async def test_no_expected_version_always_succeeds(self, knowledge_manager: KnowledgeManager):
+        """Update without expected_version succeeds regardless of current version."""
+        doc = (
+            await knowledge_manager.create(
+                title="No Lock",
+                content="Content.",
+                agent="agent",
+            )
+        ).document
+        assert doc is not None
+
+        # Advance to version 2
+        await knowledge_manager.update(id=doc.id, agent="agent", content="v2")
+
+        # Update without expected_version — no locking
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="agent",
+            content="v3 no lock",
+        )
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.version == 3
+
+    @pytest.mark.asyncio
+    async def test_version_persists_on_disk(
+        self, knowledge_manager: KnowledgeManager, test_config: LithosConfig
+    ):
+        """Version field is written to frontmatter and read back correctly."""
+        import yaml
+
+        doc = (
+            await knowledge_manager.create(
+                title="Disk Version",
+                content="Content.",
+                agent="agent",
+            )
+        ).document
+        assert doc is not None
+
+        await knowledge_manager.update(id=doc.id, agent="agent", content="updated")
+
+        file_path = test_config.storage.knowledge_path / doc.path
+        raw = file_path.read_text()
+        parts = raw.split("---", 2)
+        fm_data = yaml.safe_load(parts[1])
+        assert fm_data["version"] == 2
+
+        read_doc, _ = await knowledge_manager.read(id=doc.id)
+        assert read_doc.metadata.version == 2
+
+    @pytest.mark.asyncio
+    async def test_concurrent_update_second_gets_version_conflict(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Two concurrent updates serialised by _write_lock: second gets version_conflict.
+
+        Both coroutines are given expected_version=1, captured before either
+        acquires the lock. _write_lock serialises them: whichever wins first
+        reads v1 from disk, writes v2, and succeeds. The second coroutine then
+        acquires the lock, reads v2 from disk, but its expected_version=1 is
+        now stale — so it receives a version_conflict error.
+        """
+        doc = (
+            await knowledge_manager.create(
+                title="Concurrent Conflict",
+                content="Original content.",
+                agent="agent-a",
+            )
+        ).document
+        assert doc is not None
+        assert doc.metadata.version == 1
+
+        # Both coroutines capture the same expected_version before either update runs.
+        captured_version = doc.metadata.version  # == 1
+
+        async def writer_a() -> WriteResult:
+            return await knowledge_manager.update(
+                id=doc.id,
+                agent="agent-a",
+                content="Writer A wins.",
+                expected_version=captured_version,
+            )
+
+        async def writer_b() -> WriteResult:
+            return await knowledge_manager.update(
+                id=doc.id,
+                agent="agent-b",
+                content="Writer B loses.",
+                expected_version=captured_version,
+            )
+
+        result_a, result_b = await asyncio.gather(writer_a(), writer_b())
+
+        statuses = {result_a.status, result_b.status}
+        assert "updated" in statuses, "Expected one writer to succeed"
+        assert "error" in statuses, "Expected one writer to get a conflict"
+
+        conflict_result = result_a if result_a.status == "error" else result_b
+        assert conflict_result.error_code == "version_conflict"

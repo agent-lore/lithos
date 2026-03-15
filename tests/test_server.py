@@ -1159,3 +1159,99 @@ class TestWriteMutualExclusion:
         # Should be roughly 24h from now
         delta = (doc.metadata.expires_at - datetime.now(timezone.utc)).total_seconds()
         assert 23 * 3600 < delta < 25 * 3600
+
+
+class TestOptimisticLockingServerLayer:
+    """Integration tests verifying expected_version is forwarded through lithos_write."""
+
+    async def _call_write(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_write")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_expected_version_forwarded_on_match(self, server: LithosServer):
+        """lithos_write accepts expected_version=1 when the document is at version 1."""
+        # Create the document first.
+        create_result = await self._call_write(
+            server,
+            title="Version Wiring Test",
+            content="Initial content.",
+            agent="agent",
+        )
+        assert create_result["status"] == "created"
+        assert create_result["version"] == 1
+        doc_id = create_result["id"]
+
+        # Update with the correct expected_version — should succeed.
+        update_result = await self._call_write(
+            server,
+            id=doc_id,
+            title="Version Wiring Test",
+            content="Updated content.",
+            agent="agent",
+            expected_version=1,
+        )
+        assert update_result["status"] == "updated"
+
+        # Version should now be 2.
+        doc, _ = await server.knowledge.read(id=doc_id)
+        assert doc.metadata.version == 2
+
+    @pytest.mark.asyncio
+    async def test_expected_version_forwarded_on_conflict(self, server: LithosServer):
+        """lithos_write rejects a stale expected_version with version_conflict."""
+        create_result = await self._call_write(
+            server,
+            title="Conflict Wiring Test",
+            content="Initial content.",
+            agent="agent",
+        )
+        assert create_result["status"] == "created"
+        doc_id = create_result["id"]
+
+        # Pass a stale version — should return version_conflict.
+        conflict_result = await self._call_write(
+            server,
+            id=doc_id,
+            title="Conflict Wiring Test",
+            content="Conflicting update.",
+            agent="agent",
+            expected_version=99,
+        )
+        assert conflict_result["status"] == "error"
+        assert conflict_result["code"] == "version_conflict"
+        assert conflict_result["current_version"] == 1
+
+    @pytest.mark.asyncio
+    async def test_no_expected_version_is_backwards_compatible(self, server: LithosServer):
+        """lithos_write without expected_version still succeeds (backwards compat)."""
+        create_result = await self._call_write(
+            server,
+            title="No Version Param Test",
+            content="Initial content.",
+            agent="agent",
+        )
+        assert create_result["status"] == "created"
+        doc_id = create_result["id"]
+
+        update_result = await self._call_write(
+            server,
+            id=doc_id,
+            title="No Version Param Test",
+            content="Updated without version.",
+            agent="agent",
+        )
+        assert update_result["status"] == "updated"
+
+    @pytest.mark.asyncio
+    async def test_expected_version_ignored_on_create(self, server: LithosServer):
+        """expected_version is silently ignored on create (not an error)."""
+        result = await self._call_write(
+            server,
+            title="Ignored Version On Create",
+            content="Initial content.",
+            agent="agent",
+            expected_version=99,
+        )
+        assert result["status"] == "created"
+        assert result["version"] == 1

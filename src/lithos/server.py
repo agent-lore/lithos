@@ -398,6 +398,7 @@ class LithosServer:
             derived_from_ids: list[str] | None = None,
             ttl_hours: float | None = None,
             expires_at: str | None = None,
+            expected_version: int | None = None,
         ) -> dict[str, Any]:
             """Create or update a knowledge file.
 
@@ -420,6 +421,9 @@ class LithosServer:
                 expires_at: Absolute ISO 8601 expiry datetime. On update: None (omit)
                     preserves existing; "" clears; ISO string sets new value.
                     Mutually exclusive with ttl_hours.
+                expected_version: If provided on update, reject with version_conflict if the
+                    document's current version differs. Omit to skip version checking.
+                    On create, this parameter is silently ignored.
 
             Returns:
                 Dict with status envelope: created/updated/duplicate
@@ -536,6 +540,7 @@ class LithosServer:
                         source_url=url_arg,
                         derived_from_ids=prov_arg,
                         expires_at=expires_at_dt,
+                        expected_version=expected_version,
                     )
                 else:
                     # Create new — default confidence to 1.0 when not specified
@@ -570,12 +575,15 @@ class LithosServer:
                     }
                 elif result.status == "error":
                     span.set_attribute("lithos.write_status", "error")
-                    return {
+                    error_response: dict[str, Any] = {
                         "status": "error",
                         "code": result.error_code,
                         "message": result.message,
                         "warnings": warnings + result.warnings,
                     }
+                    if result.current_version is not None:
+                        error_response["current_version"] = result.current_version
+                    return error_response
 
                 doc = result.document
                 assert doc is not None
@@ -605,10 +613,15 @@ class LithosServer:
                     )
                 )
 
+                # Design note: knowledge.update() acquires _write_lock *before* reading
+                # the doc, checking expected_version, and writing. The read, version
+                # check, and write all happen inside the same lock acquisition, so
+                # there is no TOCTOU window — concurrent writers are fully serialised.
                 return {
                     "status": result.status,
                     "id": doc.id,
                     "path": str(doc.path),
+                    "version": doc.metadata.version,
                     "warnings": warnings,
                 }
 

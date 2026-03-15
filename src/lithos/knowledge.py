@@ -34,6 +34,25 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
+def _parse_version(value: object) -> int:
+    """Parse a version value from frontmatter, falling back to 1 on bad input."""
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        logger.warning(
+            "_parse_version: non-numeric version value %r in frontmatter; defaulting to 1",
+            value,
+        )
+        return 1
+    if parsed < 1:
+        logger.warning(
+            "_parse_version: non-positive version value %r in frontmatter; clamping to 1",
+            parsed,
+        )
+        return 1
+    return parsed
+
+
 # Wiki-link pattern: [[target]] or [[target|display]]
 WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]\[|]*[a-zA-Z][^\]\[|]*)(?:\|([^\]]+))?\]\]")
 
@@ -67,6 +86,7 @@ _KNOWN_METADATA_KEYS = frozenset(
         "supersedes",
         "derived_from_ids",
         "expires_at",
+        "version",
     }
 )
 
@@ -212,6 +232,7 @@ class KnowledgeMetadata:
     derived_from_ids: list[str] = field(default_factory=list)
     expires_at: datetime | None = None
     extra: dict = field(default_factory=dict)
+    version: int = 1
 
     @property
     def is_stale(self) -> bool:
@@ -240,6 +261,7 @@ class KnowledgeMetadata:
             "source": self.source,
             "supersedes": self.supersedes,
         }
+        result["version"] = self.version
         if self.source_url is not None:
             result["source_url"] = self.source_url
         if self.expires_at is not None:
@@ -299,6 +321,7 @@ class KnowledgeMetadata:
             derived_from_ids=data.get("derived_from_ids", []),
             expires_at=expires_at,
             extra=extra,
+            version=_parse_version(data.get("version", 1)),
         )
 
 
@@ -348,6 +371,7 @@ class WriteResult:
     error_code: str | None = None
     message: str | None = None
     duplicate_of: DuplicateInfo | None = None
+    current_version: int | None = None
 
 
 def slugify(text: str) -> str:
@@ -866,6 +890,7 @@ class KnowledgeManager:
         source_url: str | None | _UnsetType = _UNSET,
         derived_from_ids: list[str] | None | _UnsetType = _UNSET,
         expires_at: datetime | None | _UnsetType = _UNSET,
+        expected_version: int | None = None,
     ) -> WriteResult:
         """Update an existing document.
 
@@ -883,10 +908,23 @@ class KnowledgeManager:
         - _UNSET (default): preserve existing expires_at
         - None: clear existing expires_at
         - datetime: set new value
+
+        Note: version is incremented on every call, even when no fields actually change.
+        This is intentional — simplicity over precision. Callers should not rely on
+        version stability as a proxy for content equality.
         """
         async with self._write_lock:
             lithos_metrics.knowledge_ops.add(1, {"op": "update"})
             doc, _ = await self.read(id=id)
+
+            if expected_version is not None and doc.metadata.version != expected_version:
+                return WriteResult(
+                    status="error",
+                    error_code="version_conflict",
+                    message=f"Version conflict: expected {expected_version}, got {doc.metadata.version}",
+                    current_version=doc.metadata.version,
+                )
+
             old_slug = slugify(doc.metadata.title)
             old_source_url = doc.metadata.source_url
 
@@ -1000,7 +1038,9 @@ class KnowledgeManager:
             if agent not in doc.metadata.contributors and agent != doc.metadata.author:
                 doc.metadata.contributors.append(agent)
 
-            # Write to disk
+            # Write to disk — bump version here so early returns above leave
+            # the in-memory document at its original version.
+            doc.metadata.version += 1
             _safe_path, full_path = self._resolve_safe_path(doc.path)
             _atomic_write(full_path, doc.to_markdown())
 
