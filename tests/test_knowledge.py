@@ -3314,6 +3314,7 @@ class TestOptimisticLocking:
         conflict_result = result_a if result_a.status == "error" else result_b
         assert conflict_result.error_code == "version_conflict"
 
+
 class TestSlugCollision:
     """Tests for slug collision detection (issue #38)."""
 
@@ -3339,8 +3340,13 @@ class TestSlugCollision:
             mgr2 = KnowledgeManager()
 
         assert "Slug collision detected" in caplog.text
-        # First-seen-wins: first doc (sorted by path) keeps the slug
-        assert mgr2._slug_to_id.get("my-document") == doc1.id
+        # First-seen-wins: scan is sorted by relative path for determinism, but
+        # which UUID comes first alphabetically is not guaranteed.  Assert that
+        # exactly one of the two docs holds the slug rather than hard-coding doc1.
+        winner = mgr2._slug_to_id.get("my-document")
+        assert winner in {doc1.id, doc2.id}, (
+            f"Expected slug 'my-document' to be held by one of the two docs, got {winner!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_create_raises_on_slug_collision(self, knowledge_manager: KnowledgeManager):

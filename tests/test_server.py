@@ -1267,7 +1267,6 @@ class TestWriteMutualExclusion:
 
 
 class TestOptimisticLockingServerLayer:
-
     async def _call_write(self, server: LithosServer, **kwargs) -> dict:
         tool = await server.mcp.get_tool("lithos_write")
         return await tool.fn(**kwargs)
