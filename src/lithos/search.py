@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import chromadb
 import tantivy
@@ -22,7 +22,9 @@ from lithos.knowledge import KnowledgeDocument
 from lithos.telemetry import lithos_metrics, traced
 
 if TYPE_CHECKING:
+    import numpy as np
     from chromadb.api import ClientAPI
+    from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
 
@@ -504,7 +506,7 @@ class ChromaIndex:
             if self._model is None:
                 self._model = await asyncio.to_thread(SentenceTransformer, self.model_name)
 
-    async def embed_async(self, texts: list[str]) -> Any:
+    async def embed_async(self, texts: list[str]) -> NDArray[np.float32]:
         """Generate embeddings asynchronously without blocking the event loop.
 
         NOTE: This method is currently unused (dead code).  It is kept here as
