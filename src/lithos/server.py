@@ -26,6 +26,7 @@ from lithos.events import (
     NOTE_CREATED,
     NOTE_DELETED,
     NOTE_UPDATED,
+    TASK_CANCELLED,
     TASK_CLAIMED,
     TASK_COMPLETED,
     TASK_CREATED,
@@ -1615,6 +1616,46 @@ class LithosServer:
                             type=TASK_COMPLETED,
                             agent=agent,
                             payload={"task_id": task_id, "agent": agent},
+                        )
+                    )
+
+                return {"success": success}
+
+        @self.mcp.tool()
+        async def lithos_task_cancel(
+            task_id: str,
+            agent: str,
+            reason: str | None = None,
+        ) -> dict[str, bool]:
+            """Cancel a task, releasing all claims.
+
+            Args:
+                task_id: Task ID
+                agent: Agent cancelling the task
+                reason: Optional reason for cancellation
+
+            Returns:
+                Dict with success boolean
+            """
+            logger.info("lithos_task_cancel task=%s agent=%s reason=%s", task_id, agent, reason)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_cancel") as span:
+                span.set_attribute("lithos.tool", "lithos_task_cancel")
+                span.set_attribute("lithos.agent", agent)
+                span.set_attribute("lithos.task_id", task_id)
+                success = await self.coordination.cancel_task(
+                    task_id=task_id,
+                    agent=agent,
+                    reason=reason,
+                )
+                span.set_attribute("lithos.success", success)
+
+                if success:
+                    await self._emit(
+                        LithosEvent(
+                            type=TASK_CANCELLED,
+                            agent=agent,
+                            payload={"task_id": task_id, "agent": agent, "reason": reason},
                         )
                     )
 

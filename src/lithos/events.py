@@ -35,6 +35,7 @@ TASK_CREATED = "task.created"
 TASK_CLAIMED = "task.claimed"
 TASK_RELEASED = "task.released"
 TASK_COMPLETED = "task.completed"
+TASK_CANCELLED = "task.cancelled"
 
 FINDING_POSTED = "finding.posted"
 

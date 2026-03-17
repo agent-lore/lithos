@@ -485,6 +485,32 @@ class CoordinationService:
             await db.commit()
             return True
 
+    @traced("lithos.coordination.cancel_task")
+    async def cancel_task(self, task_id: str, agent: str, reason: str | None = None) -> bool:
+        """Mark task as cancelled and release all claims.
+
+        Returns:
+            True if task was cancelled
+        """
+        lithos_metrics.coordination_ops.add(1, {"op": "cancel"})
+        await self.ensure_agent_known(agent)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE tasks SET status = 'cancelled' WHERE id = ? AND status = 'open'",
+                (task_id,),
+            )
+            if cursor.rowcount == 0:
+                return False
+
+            await db.execute(
+                "DELETE FROM claims WHERE task_id = ?",
+                (task_id,),
+            )
+
+            await db.commit()
+            return True
+
     async def get_task_status(
         self,
         task_id: str | None = None,

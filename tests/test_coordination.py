@@ -184,6 +184,67 @@ class TestTaskLifecycle:
         assert not success
 
     @pytest.mark.asyncio
+    async def test_cancel_task(self, coordination_service: CoordinationService):
+        """Cancel a task."""
+        task_id = await coordination_service.create_task(
+            title="Cancellable Task",
+            agent="agent",
+        )
+
+        success = await coordination_service.cancel_task(task_id, "agent")
+
+        assert success
+        task = await coordination_service.get_task(task_id)
+        assert task.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_releases_claims(self, coordination_service: CoordinationService):
+        """Cancelling task releases all claims."""
+        task_id = await coordination_service.create_task(
+            title="Task with Claims",
+            agent="agent",
+        )
+        await coordination_service.claim_task(task_id, "research", "agent-1")
+        await coordination_service.claim_task(task_id, "implementation", "agent-2")
+
+        await coordination_service.cancel_task(task_id, "agent")
+
+        statuses = await coordination_service.get_task_status(task_id)
+        assert len(statuses[0].claims) == 0
+
+    @pytest.mark.asyncio
+    async def test_cancel_already_cancelled_fails(self, coordination_service: CoordinationService):
+        """Cannot cancel already cancelled task."""
+        task_id = await coordination_service.create_task(
+            title="Already Cancelled",
+            agent="agent",
+        )
+
+        await coordination_service.cancel_task(task_id, "agent")
+        success = await coordination_service.cancel_task(task_id, "agent")
+
+        assert not success
+
+    @pytest.mark.asyncio
+    async def test_cancel_nonexistent_task_fails(self, coordination_service: CoordinationService):
+        """Cannot cancel a task that does not exist."""
+        success = await coordination_service.cancel_task("nonexistent-id", "agent")
+        assert not success
+
+    @pytest.mark.asyncio
+    async def test_cancel_completed_task_fails(self, coordination_service: CoordinationService):
+        """Cannot cancel an already completed task."""
+        task_id = await coordination_service.create_task(
+            title="Done Task",
+            agent="agent",
+        )
+        await coordination_service.complete_task(task_id, "agent")
+
+        success = await coordination_service.cancel_task(task_id, "agent")
+
+        assert not success
+
+    @pytest.mark.asyncio
     async def test_get_task_status(self, coordination_service: CoordinationService):
         """Get task status with claims."""
         task_id = await coordination_service.create_task(
