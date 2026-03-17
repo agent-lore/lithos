@@ -1391,20 +1391,24 @@ class TestErrorEnvelopes:
     @pytest.mark.asyncio
     async def test_task_claim_conflict_returns_error_envelope(self, server: LithosServer):
         """lithos_task_claim returns error envelope when aspect is already held (fixes #85)."""
-        task_id = await server.coordination.create_task(
-            title="Contested", agent="creator"
-        )
+        task_id = await server.coordination.create_task(title="Contested", agent="creator")
         # First agent claims successfully
         first = await self._call(
-            server, "lithos_task_claim",
-            task_id=task_id, aspect="work", agent="agent-1",
+            server,
+            "lithos_task_claim",
+            task_id=task_id,
+            aspect="work",
+            agent="agent-1",
         )
         assert first["success"] is True
 
         # Second agent should get an error envelope, not success=False
         second = await self._call(
-            server, "lithos_task_claim",
-            task_id=task_id, aspect="work", agent="agent-2",
+            server,
+            "lithos_task_claim",
+            task_id=task_id,
+            aspect="work",
+            agent="agent-2",
         )
         assert second["status"] == "error"
         assert second["code"] == "claim_failed"
@@ -1412,9 +1416,7 @@ class TestErrorEnvelopes:
     # --- lithos_task_renew ---
 
     @pytest.mark.asyncio
-    async def test_task_renew_nonexistent_claim_returns_error_envelope(
-        self, server: LithosServer
-    ):
+    async def test_task_renew_nonexistent_claim_returns_error_envelope(self, server: LithosServer):
         """lithos_task_renew returns error envelope when no active claim exists (fixes #85)."""
         result = await self._call(
             server,
@@ -1470,9 +1472,7 @@ class TestErrorEnvelopes:
         task_id = await server.coordination.create_task(title="Done Task", agent="agent")
         await server.coordination.complete_task(task_id, "agent")
 
-        result = await self._call(
-            server, "lithos_task_complete", task_id=task_id, agent="agent"
-        )
+        result = await self._call(server, "lithos_task_complete", task_id=task_id, agent="agent")
         assert result["status"] == "error"
         assert result["code"] == "task_not_found"
 
