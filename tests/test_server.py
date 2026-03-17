@@ -1761,17 +1761,13 @@ class TestTaskUpdateTool:
         assert result["success"] is False
 
 
-class TestHealthTool:
-    """Tests for lithos_health MCP tool."""
-
-    async def _call_health(self, server: LithosServer) -> dict:
-        tool = await server.mcp.get_tool("lithos_health")
-        return await tool.fn()
+class TestHealthEndpoint:
+    """Tests for the HTTP GET /health endpoint and underlying _get_health logic."""
 
     @pytest.mark.asyncio
     async def test_health_returns_ok_in_healthy_setup(self, server: LithosServer):
-        """lithos_health returns status 'ok' when all components are healthy."""
-        result = await self._call_health(server)
+        """_get_health returns status 'ok' when all components are healthy."""
+        result = await server._get_health()
         assert result["status"] == "ok"
         assert result["components"]["kb_directory"]["status"] == "ok"
         assert result["components"]["embedding_model"]["status"] == "ok"
@@ -1780,7 +1776,7 @@ class TestHealthTool:
 
     @pytest.mark.asyncio
     async def test_health_degraded_when_embedding_fails(self, server: LithosServer):
-        """lithos_health returns 'degraded' when embedding model is unavailable."""
+        """_get_health returns 'degraded' when embedding model is unavailable."""
         from unittest.mock import patch
 
         with patch.object(
@@ -1788,22 +1784,67 @@ class TestHealthTool:
             "health_check",
             side_effect=RuntimeError("model unavailable"),
         ):
-            result = await self._call_health(server)
+            result = await server._get_health()
 
         assert result["status"] == "degraded"
         assert result["components"]["embedding_model"]["status"] == "unavailable"
         assert "error" in result["components"]["embedding_model"]
 
     @pytest.mark.asyncio
-    async def test_health_degraded_when_kb_fails(self, server: LithosServer):
-        """lithos_health returns degraded when knowledge base check fails."""
+    async def test_health_degraded_when_kb_directory_missing(self, server: LithosServer):
+        """_get_health reports unavailable when kb directory does not exist (issue #75)."""
         from unittest.mock import MagicMock, patch
 
         mock_path = MagicMock()
-        mock_path.stat.side_effect = RuntimeError("kb unavailable")
+        mock_path.exists.return_value = False
         with patch.object(server.knowledge, "knowledge_path", mock_path):
-            result = await self._call_health(server)
+            result = await server._get_health()
 
         assert result["status"] == "degraded"
         assert result["components"]["kb_directory"]["status"] == "unavailable"
-        assert "error" in result["components"]["kb_directory"]
+        assert result["components"]["kb_directory"]["error"] == "directory does not exist"
+
+    @pytest.mark.asyncio
+    async def test_health_degraded_when_kb_list_fails(self, server: LithosServer):
+        """_get_health returns degraded when knowledge base list_all raises."""
+        from unittest.mock import AsyncMock, patch
+
+        with patch.object(
+            server.knowledge, "list_all", AsyncMock(side_effect=RuntimeError("kb unavailable"))
+        ):
+            result = await server._get_health()
+
+        assert result["status"] == "degraded"
+        assert result["components"]["knowledge_base"]["status"] == "unavailable"
+        assert "error" in result["components"]["knowledge_base"]
+
+    @pytest.mark.asyncio
+    async def test_http_health_200_when_ok(self, server: LithosServer):
+        """HTTP /health returns 200 when all components are healthy."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        request = MagicMock()
+        response = await server._health_endpoint(request)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_http_health_503_when_degraded(self, server: LithosServer):
+        """HTTP /health returns 503 when any component is degraded."""
+        from unittest.mock import MagicMock, patch
+
+        request = MagicMock()
+        with patch.object(
+            server.search.chroma,
+            "health_check",
+            side_effect=RuntimeError("model unavailable"),
+        ):
+            response = await server._health_endpoint(request)
+
+        assert response.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_lithos_health_not_in_mcp_tools(self, server: LithosServer):
+        """lithos_health must NOT appear as an MCP tool (issue #77)."""
+        tools = await server.mcp.get_tools()
+        tool_names = list(tools.keys()) if isinstance(tools, dict) else [t.name for t in tools]
+        assert "lithos_health" not in tool_names

@@ -88,6 +88,9 @@ class LithosServer:
         # Mount SSE delivery endpoint
         self.mcp.custom_route("/events", methods=["GET"])(self._sse_endpoint)
 
+        # Mount HTTP health endpoint
+        self.mcp.custom_route("/health", methods=["GET"])(self._health_endpoint)
+
     @property
     def config(self) -> LithosConfig:
         """Get configuration."""
@@ -99,6 +102,53 @@ class LithosServer:
             await self.event_bus.emit(event)
         except Exception:
             logger.exception("Failed to emit %s event", event.type)
+
+    async def _get_health(self) -> dict[str, Any]:
+        """Run health checks and return a status dict (shared by HTTP and any callers)."""
+        components: dict[str, Any] = {}
+
+        # Check KB directory — Path.exists() returns bool, does not raise
+        kb_path = self.knowledge.knowledge_path
+        if not kb_path.exists():
+            components["kb_directory"] = {
+                "status": "unavailable",
+                "error": "directory does not exist",
+            }
+        else:
+            components["kb_directory"] = {"status": "ok"}
+
+        # Check embedding model
+        try:
+            await asyncio.to_thread(self.search.chroma.health_check)
+            components["embedding_model"] = {"status": "ok"}
+        except Exception as e:
+            components["embedding_model"] = {"status": "unavailable", "error": str(e)}
+
+        # Check knowledge base
+        try:
+            await self.knowledge.list_all(limit=1)
+            components["knowledge_base"] = {"status": "ok"}
+        except Exception as e:
+            components["knowledge_base"] = {"status": "unavailable", "error": str(e)}
+
+        overall = "ok" if all(c["status"] == "ok" for c in components.values()) else "degraded"
+        return {
+            "status": overall,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "components": components,
+        }
+
+    async def _health_endpoint(self, request: Request) -> Response:
+        """Lightweight HTTP health endpoint for Docker HEALTHCHECK and load balancers.
+
+        Returns ``200 OK`` with JSON body when all components are healthy,
+        ``503 Service Unavailable`` when any component is degraded.
+        """
+        from starlette.responses import JSONResponse
+
+        result = await self._get_health()
+        status_code = 200 if result["status"] == "ok" else 503
+        return JSONResponse(result, status_code=status_code)
 
     async def _sse_endpoint(self, request: Request) -> Response:
         """Server-Sent Events delivery endpoint.
@@ -1905,49 +1955,6 @@ class LithosServer:
                     "tags": len(tags),
                     "duplicate_urls": self.knowledge.duplicate_url_count,
                 }
-
-        @self.mcp.tool()
-        async def lithos_health() -> dict[str, Any]:
-            """Check server health and readiness.
-
-            Returns server status, embedding model availability,
-            and knowledge base accessibility.
-
-            Returns:
-                Dict with status, components dict, and timestamp
-            """
-            logger.info("lithos_health")
-            components: dict[str, Any] = {}
-
-            try:
-                self.knowledge.knowledge_path.exists()
-                components["kb_directory"] = {"status": "ok"}
-            except Exception as e:
-                components["kb_directory"] = {"status": "unavailable", "error": str(e)}
-
-            # Check embedding model — run synchronous health_check() in a thread
-            # so it doesn't block the async event loop on cold start (model load
-            # can take several seconds the first time it is called).
-            try:
-                await asyncio.to_thread(self.search.chroma.health_check)
-                components["embedding_model"] = {"status": "ok"}
-            except Exception as e:
-                components["embedding_model"] = {"status": "unavailable", "error": str(e)}
-
-            # Check knowledge base
-            try:
-                await self.knowledge.list_all(limit=1)
-                components["knowledge_base"] = {"status": "ok"}
-            except Exception as e:
-                components["knowledge_base"] = {"status": "unavailable", "error": str(e)}
-
-            overall = "ok" if all(c["status"] == "ok" for c in components.values()) else "degraded"
-
-            return {
-                "status": overall,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "components": components,
-            }
 
 
 def _format_sse(event: LithosEvent) -> str:
