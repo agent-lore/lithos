@@ -322,6 +322,23 @@ class TestKnowledgeToolWorkflow:
         assert docs[0].metadata.updated_at is not None
 
     @pytest.mark.asyncio
+    async def test_lithos_read_missing_id_returns_structured_error(self, server: LithosServer):
+        """lithos_read returns a structured error envelope for a non-existent document (fixes #102)."""
+        tool = await server.mcp.get_tool("lithos_read")
+        result = await tool.fn(id="00000000-0000-0000-0000-000000000000")
+        assert result["status"] == "error"
+        assert result["code"] == "doc_not_found"
+        assert "00000000-0000-0000-0000-000000000000" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_lithos_read_missing_path_returns_structured_error(self, server: LithosServer):
+        """lithos_read returns a structured error envelope for a non-existent path (fixes #102)."""
+        tool = await server.mcp.get_tool("lithos_read")
+        result = await tool.fn(path="nonexistent/ghost.md")
+        assert result["status"] == "error"
+        assert result["code"] == "doc_not_found"
+
+    @pytest.mark.asyncio
     async def test_handle_deleted_file_removes_indices(self, server: LithosServer):
         """Delete file events remove knowledge/search/graph state."""
         doc = (

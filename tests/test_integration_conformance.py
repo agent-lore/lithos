@@ -236,9 +236,10 @@ class TestMCPToolContracts:
 
         await _call_tool(server, "lithos_delete", {"id": doc_id})
 
-        # Knowledge layer: read should fail.
-        with pytest.raises(ToolError):
-            await _call_tool(server, "lithos_read", {"id": doc_id})
+        # Knowledge layer: read should return structured error envelope.
+        read_result = await _call_tool(server, "lithos_read", {"id": doc_id})
+        assert read_result["status"] == "error"
+        assert read_result["code"] == "doc_not_found"
 
         # Full-text search: absent.
         ft_payload = await _call_tool(
@@ -1540,16 +1541,18 @@ class TestErrorAndBoundaryConditions:
 
     @pytest.mark.asyncio
     async def test_read_nonexistent_id_raises(self, server: LithosServer):
-        """lithos_read with a non-existent UUID raises an error."""
+        """lithos_read with a non-existent UUID returns a structured error envelope."""
         fake_id = "00000000-0000-0000-0000-000000000000"
-        with pytest.raises(ToolError):
-            await _call_tool(server, "lithos_read", {"id": fake_id})
+        result = await _call_tool(server, "lithos_read", {"id": fake_id})
+        assert result["status"] == "error"
+        assert result["code"] == "doc_not_found"
 
     @pytest.mark.asyncio
     async def test_read_nonexistent_path_raises(self, server: LithosServer):
-        """lithos_read with a non-existent path raises an error."""
-        with pytest.raises(ToolError):
-            await _call_tool(server, "lithos_read", {"path": "no-such/file.md"})
+        """lithos_read with a non-existent path returns a structured error envelope."""
+        result = await _call_tool(server, "lithos_read", {"path": "no-such/file.md"})
+        assert result["status"] == "error"
+        assert result["code"] == "doc_not_found"
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_id_returns_false(self, server: LithosServer):

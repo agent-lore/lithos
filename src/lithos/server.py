@@ -691,11 +691,18 @@ class LithosServer:
                 if id:
                     span.set_attribute("lithos.id", id)
 
-                doc, truncated = await self.knowledge.read(
-                    id=id,
-                    path=path,
-                    max_length=max_length,
-                )
+                try:
+                    doc, truncated = await self.knowledge.read(
+                        id=id,
+                        path=path,
+                        max_length=max_length,
+                    )
+                except FileNotFoundError as e:
+                    return {
+                        "status": "error",
+                        "code": "doc_not_found",
+                        "message": str(e),
+                    }
 
                 span.set_attribute("lithos.truncated", truncated)
                 meta = doc.metadata.to_dict()

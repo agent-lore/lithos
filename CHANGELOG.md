@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fix: `lithos_read` returns structured error on missing document (issue #102)
+
+Previously, `lithos_read` propagated a raw `FileNotFoundError` as an
+MCP-level exception when the requested id or path did not exist.  This
+is the most common failure path and a predictable condition, not a crash.
+
+`lithos_read` now catches `FileNotFoundError` and returns a structured
+error envelope:
+
+```json
+{ "status": "error", "code": "doc_not_found", "message": "..." }
+```
+
 ### Schema change — `version` field in frontmatter (issue #45)
 
 PR #55 adds optimistic locking via a `version` integer field in the YAML
