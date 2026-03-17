@@ -499,7 +499,7 @@ class TestConcurrencyContention:
             for i in range(8)
         ]
         claim_results = await asyncio.gather(*claim_attempts)
-        success_count = sum(1 for result in claim_results if result["success"])
+        success_count = sum(1 for result in claim_results if result.get("success"))
         assert success_count == 1
 
         status = await _call_tool(server, "lithos_task_status", {"task_id": task_id})
@@ -829,7 +829,7 @@ class TestAgentAndCoordinationMCPTools:
             "lithos_task_release",
             {"task_id": task_id, "aspect": "implementation", "agent": "worker-a"},
         )
-        assert released_again["success"] is False
+        assert released_again["status"] == "error"
 
         completed = await _call_tool(
             server, "lithos_task_complete", {"task_id": task_id, "agent": "worker-a"}
@@ -840,7 +840,7 @@ class TestAgentAndCoordinationMCPTools:
         completed_again = await _call_tool(
             server, "lithos_task_complete", {"task_id": task_id, "agent": "worker-a"}
         )
-        assert completed_again["success"] is False
+        assert completed_again["status"] == "error"
 
         status = await _call_tool(server, "lithos_task_status", {"task_id": task_id})
         assert len(status["tasks"]) == 1
@@ -1556,14 +1556,14 @@ class TestErrorAndBoundaryConditions:
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_id_returns_false(self, server: LithosServer):
-        """lithos_delete with a non-existent UUID returns success=False."""
+        """lithos_delete with a non-existent UUID returns an error envelope."""
         fake_id = "00000000-0000-0000-0000-000000000000"
         result = await _call_tool(server, "lithos_delete", {"id": fake_id})
-        assert result["success"] is False
+        assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_claim_nonexistent_task_returns_false(self, server: LithosServer):
-        """lithos_task_claim on a non-existent task returns success=False."""
+        """lithos_task_claim on a non-existent task returns an error envelope."""
         result = await _call_tool(
             server,
             "lithos_task_claim",
@@ -1574,22 +1574,21 @@ class TestErrorAndBoundaryConditions:
                 "ttl_minutes": 10,
             },
         )
-        assert result["success"] is False
-        assert result["expires_at"] is None
+        assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_complete_nonexistent_task_returns_false(self, server: LithosServer):
-        """lithos_task_complete on a non-existent task returns success=False."""
+        """lithos_task_complete on a non-existent task returns an error envelope."""
         result = await _call_tool(
             server,
             "lithos_task_complete",
             {"task_id": "nonexistent-task-id", "agent": "err-agent"},
         )
-        assert result["success"] is False
+        assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_release_nonexistent_claim_returns_false(self, server: LithosServer):
-        """lithos_task_release on a non-existent claim returns success=False."""
+        """lithos_task_release on a non-existent claim returns an error envelope."""
         task = await _call_tool(
             server,
             "lithos_task_create",
@@ -1604,11 +1603,11 @@ class TestErrorAndBoundaryConditions:
                 "agent": "err-agent",
             },
         )
-        assert result["success"] is False
+        assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_renew_nonexistent_claim_returns_false(self, server: LithosServer):
-        """lithos_task_renew on a non-existent claim returns success=False."""
+        """lithos_task_renew on a non-existent claim returns an error envelope."""
         task = await _call_tool(
             server,
             "lithos_task_create",
@@ -1624,7 +1623,7 @@ class TestErrorAndBoundaryConditions:
                 "ttl_minutes": 10,
             },
         )
-        assert result["success"] is False
+        assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_write_with_source_task_persists(self, server: LithosServer):
