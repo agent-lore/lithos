@@ -416,9 +416,11 @@ class CoordinationService:
         """Update mutable task metadata.
 
         Only updates fields that are not None (partial update pattern).
+        Only open tasks can be updated; completed or cancelled tasks are
+        treated as not found (consistent with complete_task behaviour).
 
         Returns:
-            True if task was found and updated, False if not found
+            True if task was found, is open, and was updated; False otherwise
         """
         import json
 
@@ -439,15 +441,17 @@ class CoordinationService:
             params.append(json.dumps(tags))
 
         if not sets:
-            # Nothing to update; check task exists
+            # Nothing to update; check task exists and is open
             async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
+                cursor = await db.execute(
+                    "SELECT id FROM tasks WHERE id = ? AND status = 'open'", (task_id,)
+                )
                 return await cursor.fetchone() is not None
 
         params.append(task_id)
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
+                f"UPDATE tasks SET {', '.join(sets)} WHERE id = ? AND status = 'open'",
                 params,
             )
             await db.commit()
