@@ -404,6 +404,55 @@ class CoordinationService:
                 tags=tags,
             )
 
+    @traced("lithos.coordination.update_task")
+    async def update_task(
+        self,
+        task_id: str,
+        agent: str,
+        title: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+    ) -> bool:
+        """Update mutable task metadata.
+
+        Only updates fields that are not None (partial update pattern).
+
+        Returns:
+            True if task was found and updated, False if not found
+        """
+        import json
+
+        lithos_metrics.coordination_ops.add(1, {"op": "update_task"})
+        await self.ensure_agent_known(agent)
+
+        sets: list[str] = []
+        params: list[Any] = []
+
+        if title is not None:
+            sets.append("title = ?")
+            params.append(title)
+        if description is not None:
+            sets.append("description = ?")
+            params.append(description)
+        if tags is not None:
+            sets.append("tags = ?")
+            params.append(json.dumps(tags))
+
+        if not sets:
+            # Nothing to update; check task exists
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
+                return await cursor.fetchone() is not None
+
+        params.append(task_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     @traced("lithos.coordination.complete_task")
     async def complete_task(self, task_id: str, agent: str) -> bool:
         """Mark task as completed and release all claims.

@@ -1405,6 +1405,53 @@ class LithosServer:
                 return {"task_id": task_id}
 
         @self.mcp.tool()
+        async def lithos_task_update(
+            task_id: str,
+            agent: str,
+            title: str | None = None,
+            description: str | None = None,
+            tags: list[str] | None = None,
+        ) -> dict[str, Any]:
+            """Update mutable task metadata (title, description, tags).
+
+            At least one of title, description, or tags must be provided.
+
+            Args:
+                task_id: Task ID to update
+                agent: Agent making the update
+                title: New task title (optional)
+                description: New task description (optional)
+                tags: New task tags (optional)
+
+            Returns:
+                Dict with success and message
+            """
+            if title is None and description is None and tags is None:
+                return {
+                    "success": False,
+                    "message": "At least one of title, description, or tags must be provided",
+                }
+
+            logger.info("lithos_task_update task=%s agent=%s", task_id, agent)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_update") as span:
+                span.set_attribute("lithos.tool", "lithos_task_update")
+                span.set_attribute("lithos.agent", agent)
+                span.set_attribute("lithos.task_id", task_id)
+                updated = await self.coordination.update_task(
+                    task_id=task_id,
+                    agent=agent,
+                    title=title,
+                    description=description,
+                    tags=tags,
+                )
+                span.set_attribute("lithos.success", updated)
+
+                if updated:
+                    return {"success": True, "message": f"Task {task_id} updated"}
+                return {"success": False, "message": f"Task {task_id} not found"}
+
+        @self.mcp.tool()
         async def lithos_task_claim(
             task_id: str,
             aspect: str,

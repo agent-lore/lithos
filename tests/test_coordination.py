@@ -653,3 +653,90 @@ class TestCoordinationStats:
         assert stats["agents"] >= 1
         assert stats["active_tasks"] >= 1
         assert stats["open_claims"] >= 1
+
+
+class TestTaskUpdate:
+    """Tests for update_task partial-update method."""
+
+    @pytest.mark.asyncio
+    async def test_update_title(self, coordination_service: CoordinationService):
+        """Update task title."""
+        task_id = await coordination_service.create_task(
+            title="Original Title",
+            agent="agent",
+        )
+        success = await coordination_service.update_task(task_id, "agent", title="New Title")
+        assert success
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.title == "New Title"
+
+    @pytest.mark.asyncio
+    async def test_update_description(self, coordination_service: CoordinationService):
+        """Update task description."""
+        task_id = await coordination_service.create_task(
+            title="Task",
+            agent="agent",
+            description="Old description",
+        )
+        success = await coordination_service.update_task(
+            task_id, "agent", description="New description"
+        )
+        assert success
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.description == "New description"
+
+    @pytest.mark.asyncio
+    async def test_update_tags(self, coordination_service: CoordinationService):
+        """Update task tags."""
+        task_id = await coordination_service.create_task(
+            title="Task",
+            agent="agent",
+            tags=["old"],
+        )
+        success = await coordination_service.update_task(task_id, "agent", tags=["new", "updated"])
+        assert success
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.tags == ["new", "updated"]
+
+    @pytest.mark.asyncio
+    async def test_update_multiple_fields(self, coordination_service: CoordinationService):
+        """Update title, description, and tags in one call."""
+        task_id = await coordination_service.create_task(
+            title="Task",
+            agent="agent",
+            description="Old",
+            tags=["a"],
+        )
+        success = await coordination_service.update_task(
+            task_id,
+            "agent",
+            title="Updated",
+            description="New",
+            tags=["b", "c"],
+        )
+        assert success
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.title == "Updated"
+        assert task.description == "New"
+        assert task.tags == ["b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_update_nonexistent_task_returns_false(
+        self, coordination_service: CoordinationService
+    ):
+        """update_task returns False for unknown task_id."""
+        success = await coordination_service.update_task("nonexistent-id", "agent", title="Nope")
+        assert not success
+
+    @pytest.mark.asyncio
+    async def test_update_does_not_change_status(self, coordination_service: CoordinationService):
+        """update_task does not alter task status."""
+        task_id = await coordination_service.create_task(title="Task", agent="agent")
+        await coordination_service.update_task(task_id, "agent", title="Changed")
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.status == "open"
