@@ -1,7 +1,7 @@
 # Lithos - Specification
 
-Version: 0.6.1
-Date: 2026-03-11
+Version: 0.1.4
+Date: 2026-03-17
 Status: Aligned with Implementation
 
 ---
@@ -79,9 +79,9 @@ Status: Aligned with Implementation
 
 ### 2.2 Data Flow
 
-1. **Write path**: Agent → MCP tool → Knowledge Manager → Write file → File watcher triggers → Update indices
+1. **Write path**: Agent → MCP tool → Knowledge Manager → Write file → Update indices and graph cache → Emit event
 2. **Read path**: Agent → MCP tool → Search Engine → Query indices → Return results
-3. **Startup**: Load persisted indices → Scan files for changes (mtime) → Incremental update → Ready
+3. **Startup**: Ensure directories and coordination DB → Check rebuild conditions → Load graph cache or rebuild projections → Pre-warm embeddings in background → Ready
 
 ### 2.3 Semantic Search: Chunking Strategy
 
@@ -162,6 +162,7 @@ derived_from_ids:                 # Optional: Declared lineage (list of UUIDs)
   - <uuid-2>
 expires_at: <ISO 8601 datetime>   # Optional: Freshness deadline (UTC); null = never expires
 supersedes: <uuid>                # Optional: ID of document this replaces
+version: <int>                    # Managed by Lithos; starts at 1 and increments on update
 ---
 
 # Title
@@ -275,22 +276,23 @@ Create or update a knowledge file.
 | `derived_from_ids` | string[] | No | Canonical declared lineage (UUIDs). On create: `null`/omit stores `[]`. On update: `null`/omit preserves existing, `[]` clears, non-empty replaces. Self-references rejected. |
 | `ttl_hours` | float | No | Relative freshness window; converted to `expires_at` |
 | `expires_at` | string | No | Absolute ISO datetime freshness deadline |
-| `note_type` | string | No | LCMA note type (`observation`, `summary`, `concept`, etc.) |
-| `namespace` | string | No | LCMA namespace for retrieval scope |
-| `access_scope` | string | No | LCMA access scope (`agent_private`, `task`, `project`, `shared`, `user_private`) |
-| `entities` | string[] | No | LCMA entity annotations |
-| `status` | string | No | LCMA status (`active`, `archived`, `quarantined`) |
-| `schema_version` | int | No | Optional explicit schema version |
+| `expected_version` | int | No | Optimistic-locking guard for updates; ignored on create |
 
 **Returns (status envelope):**
 
-`{ status: "created", id: string, path: string, warnings: string[] }`
+`{ status: "created", id: string, path: string, version: int, warnings: string[] }`
 
-`{ status: "updated", id: string, path: string, warnings: string[] }`
+`{ status: "updated", id: string, path: string, version: int, warnings: string[] }`
 
 `{ status: "duplicate", duplicate_of: { id, title, source_url }, message: string, warnings: string[] }`
 
 `{ status: "error", code: "invalid_input", message: string, warnings: [] }`
+
+`{ status: "error", code: "content_too_large", message: string, warnings: [] }`
+
+`{ status: "error", code: "slug_collision", message: string, warnings: [] }`
+
+`{ status: "error", code: "version_conflict", message: string, current_version: int, warnings: [] }`
 
 **Behavior on update:** If `id` is provided and exists, the agent is added to `contributors` if not already present.
 
@@ -665,10 +667,12 @@ Get knowledge base statistics.
 4. **Rebuild decision** (first matching condition wins):
    - `rebuild_on_start` config flag is set → full rebuild
    - Tantivy schema version requires rebuild → full rebuild
-   - NetworkX graph cache (`.graph/graph.pickle`) fails to load → full rebuild
+   - NetworkX graph cache (`.graph/graph.json`) fails to load → full rebuild
    - Graph cache loads successfully → use existing indices
 5. **Full rebuild** (when triggered): clear all indices, scan `knowledge/` directory, re-parse and re-index every `.md` file
-6. Start file watcher
+6. Pre-warm the embedding model in the background
+
+**File watcher startup:** The server supports watching, but the watcher is started by the CLI `serve` command when `--watch` is enabled. `initialize()` does not start it by itself.
 
 **On-demand rebuild** via `lithos reindex --clear`.
 
@@ -679,7 +683,7 @@ Get knowledge base statistics.
 | File created | Parse, chunk, add to all indices |
 | File modified | Parse, re-chunk, update all indices |
 | File deleted | Remove from all indices |
-| File moved/renamed | Parse new file, match by UUID in frontmatter, update path in indices |
+| File moved/renamed | No dedicated move handler; watchdog create/modify/delete events are processed best-effort |
 
 **Note on renames and wiki-links:** When a file is renamed, UUID matching preserves identity in indices. However, wiki-link text in *other* files still points to the old path. `lithos validate` reports these as broken links.
 
@@ -687,7 +691,7 @@ Get knowledge base statistics.
 
 - **Tantivy**: Persisted to `.tantivy/` directory
 - **ChromaDB**: Persisted to `.chroma/` directory  
-- **NetworkX**: Cached to `.graph/graph.pickle`, rebuilt if missing
+- **NetworkX**: Cached to `.graph/graph.json`, rebuilt if missing
 
 ### 6.4 Reconcile / Repair
 
@@ -696,7 +700,7 @@ Lithos provides an operator-facing reconcile path that repairs derived state wit
 **Available scopes:**
 
 - `indices`: detect drift between markdown corpus and Tantivy/Chroma projections and rebuild affected backends
-- `graph`: detect graph cache drift and rebuild `.graph/graph.pickle`
+- `graph`: detect graph cache drift and rebuild `.graph/graph.json`
 - `provenance_projection`: deterministic no-op placeholder until LCMA projection storage is enabled
 - `all`: runs the scopes above in order and aggregates status
 
@@ -856,7 +860,7 @@ Lithos exposes a best-effort Server-Sent Events endpoint at `GET /events`.
 Configuration is managed via `pydantic-settings` (`LithosConfig`). Values are resolved in order:
 
 1. Defaults (hardcoded in `config.py`)
-2. YAML config file (`config.yaml` in data directory or specified via `--config`)
+2. YAML config file specified via `--config`
 3. Environment variables with `LITHOS_` prefix (e.g., `LITHOS_DATA_DIR`, `LITHOS_PORT`)
 
 ```yaml
@@ -890,6 +894,14 @@ index:
   rebuild_on_start: false   # Force rebuild indices on startup
   watch_debounce_ms: 500    # Debounce file changes
 
+# Telemetry
+telemetry:
+  enabled: false
+  endpoint: null
+  console_fallback: false
+  service_name: lithos
+  export_interval_ms: 30000
+
 # Event Bus
 events:
   enabled: true              # Enable/disable event bus (no-op when false)
@@ -903,34 +915,40 @@ events:
 
 ```bash
 # Run with stdio transport (for MCP)
-lithos serve --transport stdio --data-dir ./data
+lithos --data-dir ./data serve --transport stdio
 
 # Run with SSE transport (for HTTP access)
-lithos serve --transport sse --host 0.0.0.0 --port 8765 --data-dir ./data
+lithos --data-dir ./data serve --transport sse --host 0.0.0.0 --port 8765
 
 # Disable file watcher
-lithos serve --no-watch --data-dir ./data
+lithos --data-dir ./data serve --no-watch
 
 # Rebuild indices (incremental by default)
-lithos reindex --data-dir ./data
+lithos --data-dir ./data reindex
 
 # Clear and rebuild all indices from scratch
-lithos reindex --data-dir ./data --clear
+lithos --data-dir ./data reindex --clear
 
 # Validate knowledge files
-lithos validate --data-dir ./data
+lithos --data-dir ./data validate
 # Reports: broken [[wiki-links]], missing frontmatter, ambiguous links, stale references after renames
 
 # Reconcile derived state without touching markdown
-lithos reconcile --data-dir ./data
-lithos reconcile --scope graph --dry-run --json-output --data-dir ./data
+lithos --data-dir ./data reconcile
+lithos --data-dir ./data reconcile --scope graph --dry-run --json-output
 
 # Show knowledge base statistics
-lithos stats --data-dir ./data
+lithos --data-dir ./data stats
 
 # Search knowledge base from CLI
-lithos search "query text" --data-dir ./data
-lithos search "query text" --semantic --data-dir ./data
+lithos --data-dir ./data search "query text"
+lithos --data-dir ./data search "query text" --semantic
+
+# Inspect backends, agents, tasks, or a document
+lithos --data-dir ./data inspect health
+lithos --data-dir ./data inspect agents
+lithos --data-dir ./data inspect tasks --all
+lithos --data-dir ./data inspect doc <id-or-path> --content
 ```
 
 ---
@@ -939,21 +957,25 @@ lithos search "query text" --semantic --data-dir ./data
 
 ### 10.1 Current Behavior
 
-Tools indicate errors through their return values:
+Tools indicate routine domain failures through return values, and unexpected backend failures may still surface as MCP-level exceptions.
 
-- **Boolean success fields**: Coordination tools return `{ success: false }` on failure (e.g., claim conflicts, missing tasks)
-- **Empty results**: Search/read operations return empty results or `null` fields when items are not found
-- **Exceptions**: Unexpected errors (file I/O, index corruption) propagate as MCP-level exceptions
+- **Structured status envelopes**: `lithos_write` returns `{ status: "error", code, message, ... }` for invalid input and contract-level failures
+- **Boolean success fields**: Coordination and delete operations return `{ success: false }` on expected failure paths
+- **Nullable results**: `lithos_agent_info` returns `null` when the agent is not found
+- **Exceptions**: `lithos_read` for missing documents and unexpected file/index/backend errors can propagate as MCP-level exceptions
 
 ### 10.2 Error Scenarios
 
 | Scenario | Behavior |
 |----------|----------|
-| Knowledge item not found | `lithos_read` returns error, `lithos_delete` returns `{ success: false }` |
+| Knowledge item not found | `lithos_read` raises a not-found error at the MCP layer; `lithos_delete` returns `{ success: false }` |
 | Claim conflict (aspect taken) | `lithos_task_claim` returns `{ success: false }` |
 | Claim renewal by wrong agent | `lithos_task_renew` returns `{ success: false }` |
 | Invalid arguments | FastMCP validation rejects the call |
 | Ambiguous wiki-link | Link treated as unresolved (no error raised) |
+| Write content exceeds configured limit | `lithos_write` returns `{ status: "error", code: "content_too_large" }` |
+| Slug collision on create/update | `lithos_write` returns `{ status: "error", code: "slug_collision" }` |
+| Optimistic lock mismatch | `lithos_write` returns `{ status: "error", code: "version_conflict", current_version }` |
 
 ---
 
@@ -985,7 +1007,7 @@ These are explicitly not part of the initial implementation but may be considere
 ```
 # Check knowledge base stats
 → lithos_stats()
-← { documents: 0, chunks: 0, agents: 0, active_tasks: 0, open_claims: 0, tags: 0 }
+← { documents: 0, chunks: 0, agents: 0, active_tasks: 0, open_claims: 0, tags: 0, duplicate_urls: 0 }
 
 # Agent Zero registers (optional, would auto-register anyway)
 → lithos_agent_register(id="agent-zero", name="Agent Zero", type="agent-zero")
@@ -993,7 +1015,7 @@ These are explicitly not part of the initial implementation but may be considere
 
 # Agent Zero stores a discovery
 → lithos_write(title="Python asyncio.gather patterns", content="...", tags=["python", "async"], agent="agent-zero")
-← { id: "abc-123", path: "python-asyncio-gather-patterns.md" }
+← { status: "created", id: "abc-123", path: "python-asyncio-gather-patterns.md", version: 1, warnings: [] }
 
 # OpenClaw searches for async knowledge (semantic search uses chunks internally)
 → lithos_semantic(query="how to run async tasks concurrently in python")
@@ -1029,7 +1051,7 @@ These are explicitly not part of the initial implementation but may be considere
 
 # Check updated stats
 → lithos_stats()
-← { documents: 1, chunks: 3, agents: 2, active_tasks: 0, open_claims: 0, tags: 2 }
+← { documents: 1, chunks: 3, agents: 2, active_tasks: 0, open_claims: 0, tags: 2, duplicate_urls: 0 }
 ```
 
 ---
@@ -1042,7 +1064,7 @@ These are explicitly not part of the initial implementation but may be considere
 | Graph | `lithos_links`, `lithos_tags`, `lithos_provenance` |
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_status`, `lithos_finding_post`, `lithos_finding_list` |
-| System | `lithos_stats` |
+| System | `lithos_stats`, `lithos_health` |
 
 **Total: 22 MCP tools**
 
