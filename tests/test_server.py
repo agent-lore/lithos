@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -320,6 +320,89 @@ class TestKnowledgeToolWorkflow:
         assert docs[0].id == new_doc.id
         assert str(docs[0].path).startswith("procedures")
         assert docs[0].metadata.updated_at is not None
+
+    @pytest.mark.asyncio
+    async def test_lithos_tags_prefix_filter(self, server: LithosServer):
+        """lithos_tags with prefix only returns matching tags (fixes #81)."""
+        await server.knowledge.create(
+            title="Python Web Doc",
+            content="Python web content.",
+            agent="agent",
+            tags=["python:web", "python:api"],
+        )
+        await server.knowledge.create(
+            title="Rust Systems Doc",
+            content="Rust systems content.",
+            agent="agent",
+            tags=["rust:systems"],
+        )
+        tool = await server.mcp.get_tool("lithos_tags")
+        result = await tool.fn(prefix="python")
+        assert "tags" in result
+        tags = result["tags"]
+        assert "python:web" in tags
+        assert "python:api" in tags
+        assert "rust:systems" not in tags
+
+    @pytest.mark.asyncio
+    async def test_lithos_tags_no_prefix_returns_all(self, server: LithosServer):
+        """lithos_tags without prefix returns all tags (existing behaviour unchanged)."""
+        await server.knowledge.create(
+            title="Multi Tag Doc",
+            content="Content.",
+            agent="agent",
+            tags=["alpha", "beta"],
+        )
+        tool = await server.mcp.get_tool("lithos_tags")
+        result = await tool.fn()
+        assert "tags" in result
+        tags = result["tags"]
+        assert "alpha" in tags
+        assert "beta" in tags
+
+    @pytest.mark.asyncio
+    async def test_lithos_list_title_contains(self, server: LithosServer):
+        """lithos_list with title_contains filters by case-insensitive substring (fixes #48)."""
+        await server.knowledge.create(
+            title="Alpha Guide",
+            content="Alpha content.",
+            agent="agent",
+        )
+        await server.knowledge.create(
+            title="Beta Reference",
+            content="Beta content.",
+            agent="agent",
+        )
+        tool = await server.mcp.get_tool("lithos_list")
+        result = await tool.fn(title_contains="alpha")
+        assert result["total"] == 1
+        assert len(result["items"]) == 1
+        assert result["items"][0]["title"] == "Alpha Guide"
+
+    @pytest.mark.asyncio
+    async def test_lithos_list_content_query(self, server: LithosServer):
+        """lithos_list with content_query intersects FTS results (fixes #48)."""
+        doc_a = (
+            await server.knowledge.create(
+                title="Doc A",
+                content="Unique content for doc a.",
+                agent="agent",
+            )
+        ).document
+        await server.knowledge.create(
+            title="Doc B",
+            content="Other content for doc b.",
+            agent="agent",
+        )
+        tool = await server.mcp.get_tool("lithos_list")
+        # Mock FTS to return only doc_a's ID
+        mock_result = MagicMock()
+        mock_result.id = doc_a.id
+        with patch.object(server.search, "full_text_search", return_value=[mock_result]):
+            result = await tool.fn(content_query="some query")
+        assert result["total"] == 1
+        assert len(result["items"]) == 1
+        assert result["items"][0]["id"] == doc_a.id
 
     @pytest.mark.asyncio
     async def test_lithos_read_missing_id_returns_structured_error(self, server: LithosServer):

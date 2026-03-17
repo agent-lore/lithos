@@ -1088,6 +1088,8 @@ class LithosServer:
             since: str | None = None,
             limit: int = 50,
             offset: int = 0,
+            title_contains: str | None = None,
+            content_query: str | None = None,
         ) -> dict[str, Any]:
             """List knowledge documents with filters.
 
@@ -1098,6 +1100,8 @@ class LithosServer:
                 since: Filter by updated since (ISO datetime)
                 limit: Max results (default: 50)
                 offset: Pagination offset
+                title_contains: Filter by case-insensitive substring match on title
+                content_query: Filter by full-text search query (Tantivy)
 
             Returns:
                 Dict with items list and total count
@@ -1120,6 +1124,23 @@ class LithosServer:
                     limit=limit,
                     offset=offset,
                 )
+
+                if title_contains is not None:
+                    docs = [d for d in docs if title_contains.lower() in d.title.lower()]
+                    total = len(docs)
+
+                if content_query is not None:
+                    try:
+                        fts_results = self.search.full_text_search(query=content_query, limit=10000)
+                        fts_ids = {r.id for r in fts_results}
+                        docs = [d for d in docs if d.id in fts_ids]
+                        total = len(docs)
+                    except SearchBackendError as exc:
+                        return {
+                            "status": "error",
+                            "code": "search_backend_error",
+                            "message": f"Full-text search failed: {exc}",
+                        }
 
                 span.set_attribute("lithos.result_count", len(docs))
                 logger.info("lithos_list results=%d total=%d", len(docs), total)
@@ -1239,17 +1260,24 @@ class LithosServer:
                 return result
 
         @self.mcp.tool()
-        async def lithos_tags() -> dict[str, dict[str, int]]:
+        async def lithos_tags(
+            prefix: str | None = None,
+        ) -> dict[str, dict[str, int]]:
             """Get all tags with document counts.
+
+            Args:
+                prefix: Optional prefix filter (case-insensitive). Only tags starting with this prefix are returned.
 
             Returns:
                 Dict with tags mapping tag name to count
             """
-            logger.info("lithos_tags")
+            logger.info("lithos_tags prefix=%s", prefix)
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.tags") as span:
                 span.set_attribute("lithos.tool", "lithos_tags")
                 tags = await self.knowledge.get_all_tags()
+                if prefix is not None:
+                    tags = {k: v for k, v in tags.items() if k.lower().startswith(prefix.lower())}
                 span.set_attribute("lithos.tag_count", len(tags))
                 return {"tags": tags}
 
