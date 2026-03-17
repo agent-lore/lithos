@@ -692,6 +692,106 @@ class TestFindings:
         assert findings[0].summary == "New finding"
 
 
+class TestListTasks:
+    """Tests for list_tasks filtering."""
+
+    @pytest.mark.asyncio
+    async def test_list_all_tasks(self, coordination_service: CoordinationService):
+        """list_tasks with no filters returns all tasks."""
+        t1 = await coordination_service.create_task(title="Task A", agent="agent-x")
+        t2 = await coordination_service.create_task(title="Task B", agent="agent-y")
+
+        tasks = await coordination_service.list_tasks()
+        ids = [t["id"] for t in tasks]
+        assert t1 in ids
+        assert t2 in ids
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_filter_by_agent(self, coordination_service: CoordinationService):
+        """Filter tasks by creating agent."""
+        t1 = await coordination_service.create_task(title="By Alpha", agent="alpha")
+        await coordination_service.create_task(title="By Beta", agent="beta")
+
+        tasks = await coordination_service.list_tasks(agent="alpha")
+        ids = [t["id"] for t in tasks]
+        assert t1 in ids
+        assert all(t["created_by"] == "alpha" for t in tasks)
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_filter_by_status(self, coordination_service: CoordinationService):
+        """Filter tasks by status."""
+        open_id = await coordination_service.create_task(title="Open Task", agent="agent")
+        done_id = await coordination_service.create_task(title="Done Task", agent="agent")
+        await coordination_service.complete_task(done_id, "agent")
+
+        open_tasks = await coordination_service.list_tasks(status="open")
+        open_ids = [t["id"] for t in open_tasks]
+        assert open_id in open_ids
+        assert done_id not in open_ids
+
+        done_tasks = await coordination_service.list_tasks(status="completed")
+        done_ids = [t["id"] for t in done_tasks]
+        assert done_id in done_ids
+        assert open_id not in done_ids
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_filter_by_tags(self, coordination_service: CoordinationService):
+        """Filter tasks that contain all specified tags."""
+        t1 = await coordination_service.create_task(
+            title="Tagged Task", agent="agent", tags=["research", "api"]
+        )
+        t2 = await coordination_service.create_task(title="Other Task", agent="agent", tags=["api"])
+        await coordination_service.create_task(title="No Tags", agent="agent")
+
+        tasks = await coordination_service.list_tasks(tags=["research"])
+        ids = [t["id"] for t in tasks]
+        assert t1 in ids
+        assert t2 not in ids
+
+        tasks = await coordination_service.list_tasks(tags=["api"])
+        ids = [t["id"] for t in tasks]
+        assert t1 in ids
+        assert t2 in ids
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_filter_by_since(self, coordination_service: CoordinationService):
+        """Filter tasks by created_at >= since."""
+        import asyncio
+        from datetime import timezone
+
+        await coordination_service.create_task(title="Old Task", agent="agent")
+        await asyncio.sleep(0.05)
+        cutoff = datetime.now(timezone.utc).isoformat()
+        await asyncio.sleep(0.05)
+        new_id = await coordination_service.create_task(title="New Task", agent="agent")
+
+        tasks = await coordination_service.list_tasks(since=cutoff)
+        ids = [t["id"] for t in tasks]
+        assert new_id in ids
+        # Old task created before cutoff should not appear
+        assert all(t["title"] != "Old Task" for t in tasks)
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_returns_task_fields(self, coordination_service: CoordinationService):
+        """Returned dicts include all expected fields."""
+        task_id = await coordination_service.create_task(
+            title="Full Task",
+            agent="agent",
+            description="A description",
+            tags=["tag1"],
+        )
+
+        tasks = await coordination_service.list_tasks()
+        task = next(t for t in tasks if t["id"] == task_id)
+
+        assert task["title"] == "Full Task"
+        assert task["description"] == "A description"
+        assert task["status"] == "open"
+        assert task["created_by"] == "agent"
+        assert "tag1" in task["tags"]
+        assert task["created_at"] is not None
+
+
 class TestCoordinationStats:
     """Tests for coordination statistics."""
 

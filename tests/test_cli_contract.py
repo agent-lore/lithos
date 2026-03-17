@@ -186,7 +186,8 @@ class TestCLIContracts:
         assert tasks.exit_code == 0, tasks.output
         assert "Tasks (" in tasks.output
         assert "[OPEN] CLI Inspect Task" in tasks.output
-        assert "claim:" in tasks.output
+        # claim: is not shown in list view — list_tasks() returns a summary without claim data.
+        # Use `inspect tasks --task-id <id>` (get_task_status) for claim details.
         assert "CLI Completed Task" not in tasks.output
 
         all_tasks = runner.invoke(cli, ["--data-dir", str(temp_dir), "inspect", "tasks", "--all"])

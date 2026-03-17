@@ -1703,13 +1703,50 @@ class LithosServer:
                 return {"success": success}
 
         @self.mcp.tool()
-        async def lithos_task_status(
-            task_id: str | None = None,
+        async def lithos_task_list(
+            agent: str | None = None,
+            status: str | None = None,
+            tags: list[str] | None = None,
+            since: str | None = None,
         ) -> dict[str, list[dict[str, Any]]]:
-            """Get task status with active claims.
+            """List tasks with optional filters.
 
             Args:
-                task_id: Specific task ID, or None for all active tasks
+                agent: Filter by creating agent
+                status: Filter by status: "open", "completed", or "cancelled" (None = all)
+                tags: Filter by tags (task must have all specified tags)
+                since: Filter by created_at >= this ISO datetime string (e.g. "2024-01-01T00:00:00Z")
+
+            Returns:
+                Dict with tasks list containing id, title, description, status, created_by, created_at, tags
+            """
+            logger.info(
+                "lithos_task_list agent=%s status=%s tags=%s since=%s", agent, status, tags, since
+            )
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_list") as span:
+                span.set_attribute("lithos.tool", "lithos_task_list")
+                if agent:
+                    span.set_attribute("lithos.agent", agent)
+                if status:
+                    span.set_attribute("lithos.status", status)
+
+                tasks = await self.coordination.list_tasks(
+                    agent=agent,
+                    status=status,
+                    tags=tags,
+                    since=since,
+                )
+                return {"tasks": tasks}
+
+        @self.mcp.tool()
+        async def lithos_task_status(
+            task_id: str,
+        ) -> dict[str, list[dict[str, Any]]]:
+            """Get status of a specific task with its active claims.
+
+            Args:
+                task_id: Task ID to look up
 
             Returns:
                 Dict with tasks list containing id, title, status, claims
@@ -1718,8 +1755,7 @@ class LithosServer:
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.task_status") as span:
                 span.set_attribute("lithos.tool", "lithos_task_status")
-                if task_id:
-                    span.set_attribute("lithos.task_id", task_id)
+                span.set_attribute("lithos.task_id", task_id)
 
                 statuses = await self.coordination.get_task_status(task_id)
 

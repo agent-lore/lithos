@@ -361,14 +361,15 @@ class CoordinationService:
 
         task_id = str(uuid.uuid4())
         tags_json = json.dumps(tags) if tags else None
+        now = _format_datetime(datetime.now(timezone.utc))
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT INTO tasks (id, title, description, created_by, tags)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO tasks (id, title, description, created_by, tags, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (task_id, title, description, agent, tags_json),
+                (task_id, title, description, agent, tags_json, now),
             )
             await db.commit()
 
@@ -510,6 +511,73 @@ class CoordinationService:
 
             await db.commit()
             return True
+
+    async def list_tasks(
+        self,
+        agent: str | None = None,
+        status: str | None = None,
+        tags: list[str] | None = None,
+        since: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List tasks with optional filters.
+
+        Args:
+            agent: Filter by created_by agent
+            status: Filter by status (open/completed/cancelled), or None for all
+            tags: Filter by tags (task must have all specified tags)
+            since: Filter by created_at >= this ISO datetime string
+
+        Returns:
+            List of task dicts with id, title, description, status, created_by, created_at, tags
+        """
+        import json
+
+        query = "SELECT * FROM tasks WHERE 1=1"
+        params: list[Any] = []
+
+        if agent:
+            query += " AND created_by = ?"
+            params.append(agent)
+
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+
+        if since:
+            query += " AND created_at >= ?"
+            params.append(since)
+
+        query += " ORDER BY created_at DESC"
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(query, params)
+            rows = await cursor.fetchall()
+
+            results: list[dict[str, Any]] = []
+            for row in rows:
+                task_tags: list[str] = []
+                if row["tags"]:
+                    with contextlib.suppress(json.JSONDecodeError):
+                        task_tags = json.loads(row["tags"])
+
+                # Filter by tags: task must contain all requested tags
+                if tags and not all(t in task_tags for t in tags):
+                    continue
+
+                results.append(
+                    {
+                        "id": row["id"],
+                        "title": row["title"],
+                        "description": row["description"],
+                        "status": row["status"],
+                        "created_by": row["created_by"],
+                        "created_at": row["created_at"],
+                        "tags": task_tags,
+                    }
+                )
+
+            return results
 
     async def get_task_status(
         self,
