@@ -41,6 +41,17 @@ All failure paths now return a standard error envelope:
 **Breaking:** callers that checked `result.get("success") == False` on
 coordination tools must be updated to check `result.get("status") == "error"`.
 Success paths are unchanged.
+
+### Breaking: `agent` is now required on `lithos_delete` (issue #80)
+
+For audit-trail consistency, `agent` was optional on `lithos_delete` while
+it was required on every other mutation tool (`lithos_write`,
+`lithos_task_create`, `lithos_task_claim`, `lithos_task_complete`,
+`lithos_finding_post`).
+
+`agent` is now a **required** parameter on `lithos_delete`.  Callers that
+omit it will receive a `TypeError` from the MCP layer.  This is a breaking
+change intended to land before v1.0.
 ### Schema change — `version` field in frontmatter (issue #45)
 
 PR #55 adds optimistic locking via a `version` integer field in the YAML

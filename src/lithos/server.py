@@ -723,13 +723,13 @@ class LithosServer:
         @self.mcp.tool()
         async def lithos_delete(
             id: str,
-            agent: str | None = None,
+            agent: str,
         ) -> dict[str, Any]:
             """Delete a knowledge file.
 
             Args:
                 id: UUID of knowledge item to delete
-                agent: Agent performing deletion (for audit trail)
+                agent: Agent performing deletion (required for audit trail)
 
             Returns:
                 Dict with success boolean, or error envelope if document not found
@@ -739,9 +739,8 @@ class LithosServer:
             with tracer.start_as_current_span("lithos.tool.delete") as span:
                 span.set_attribute("lithos.tool", "lithos_delete")
                 span.set_attribute("lithos.id", id)
-                if agent:
-                    span.set_attribute("lithos.agent", agent)
-                    await self.coordination.ensure_agent_known(agent)
+                span.set_attribute("lithos.agent", agent)
+                await self.coordination.ensure_agent_known(agent)
 
                 success, path = await self.knowledge.delete(id)
 
@@ -759,7 +758,7 @@ class LithosServer:
                 await self._emit(
                     LithosEvent(
                         type=NOTE_DELETED,
-                        agent=agent or "",
+                        agent=agent,
                         payload={"id": id, "path": path},
                     )
                 )

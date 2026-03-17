@@ -1353,6 +1353,7 @@ class TestErrorEnvelopes:
             server,
             "lithos_delete",
             id="00000000-0000-0000-0000-000000000000",
+            agent="test-agent",
         )
         assert result["status"] == "error"
         assert result["code"] == "doc_not_found"
@@ -1369,7 +1370,7 @@ class TestErrorEnvelopes:
             )
         ).document
         assert doc is not None
-        result = await self._call(server, "lithos_delete", id=doc.id)
+        result = await self._call(server, "lithos_delete", id=doc.id, agent="agent")
         assert result == {"success": True}
 
     # --- lithos_task_claim ---
@@ -1475,6 +1476,41 @@ class TestErrorEnvelopes:
         result = await self._call(server, "lithos_task_complete", task_id=task_id, agent="agent")
         assert result["status"] == "error"
         assert result["code"] == "task_not_found"
+
+
+class TestDeleteAgentRequired:
+    """Tests for issue #80: agent is required on lithos_delete."""
+
+    async def _call_delete(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_delete")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_delete_records_agent_in_span(self, server: LithosServer):
+        """lithos_delete registers the agent for audit trail purposes (fixes #80)."""
+        doc = (
+            await server.knowledge.create(
+                title="Audit Delete Doc",
+                content="To be deleted with agent attribution.",
+                agent="creator-agent",
+            )
+        ).document
+        assert doc is not None
+
+        result = await self._call_delete(server, id=doc.id, agent="deleter-agent")
+        assert result == {"success": True}
+
+        # Agent should now be registered in the coordination service
+        agent_info = await server.coordination.get_agent("deleter-agent")
+        assert agent_info is not None
+        assert agent_info.id == "deleter-agent"
+
+    @pytest.mark.asyncio
+    async def test_delete_agent_param_is_required(self, server: LithosServer):
+        """lithos_delete raises TypeError when agent is omitted (fixes #80)."""
+        tool = await server.mcp.get_tool("lithos_delete")
+        with pytest.raises(TypeError):
+            await tool.fn(id="00000000-0000-0000-0000-000000000000")
 
 
 class TestWriteMutualExclusion:
