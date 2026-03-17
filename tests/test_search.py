@@ -7,6 +7,7 @@ from lithos.knowledge import KnowledgeManager
 from lithos.search import (
     SearchEngine,
     chunk_text,
+    reciprocal_rank_fusion,
 )
 
 
@@ -850,3 +851,91 @@ class TestExpiresAtInSearch:
         match = [r for r in results if r.id == doc.id]
         assert len(match) == 1
         assert match[0].is_stale is False
+
+
+class TestHybridSearch:
+    """Tests for hybrid search (RRF fusion of Tantivy + ChromaDB)."""
+
+    def test_rrf_pure_function(self):
+        """reciprocal_rank_fusion produces correct scores."""
+        # Two lists with one common doc: common doc should rank highest
+        list1 = ["common", "only_in_1"]
+        list2 = ["common", "only_in_2"]
+        scores = reciprocal_rank_fusion([list1, list2])
+
+        assert "common" in scores
+        assert "only_in_1" in scores
+        assert "only_in_2" in scores
+        # common appears in both lists so its score should be highest
+        assert scores["common"] > scores["only_in_1"]
+        assert scores["common"] > scores["only_in_2"]
+
+        # Single list: doc at rank 1 → score = 1/(60+1)
+        single = reciprocal_rank_fusion([["doc_a"]])
+        assert abs(single["doc_a"] - 1.0 / 61) < 1e-9
+
+        # Empty lists return empty dict
+        assert reciprocal_rank_fusion([]) == {}
+        assert reciprocal_rank_fusion([[]]) == {}
+
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_returns_results(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """hybrid_search finds an indexed document."""
+        doc = (
+            await knowledge_manager.create(
+                title="Hybrid Search Test",
+                content="This document is about distributed systems and consensus algorithms.",
+                agent="agent",
+            )
+        ).document
+        search_engine.index_document(doc)
+
+        results = search_engine.hybrid_search("distributed systems consensus")
+
+        assert len(results) >= 1
+        assert any(r.id == doc.id for r in results)
+        # All scores should be positive RRF scores
+        for r in results:
+            assert r.score > 0
+
+    @pytest.mark.asyncio
+    async def test_fulltext_mode_via_engine(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """full_text_search still works independently."""
+        doc = (
+            await knowledge_manager.create(
+                title="Fulltext Only Test",
+                content="Searching with BM25 full text retrieval.",
+                agent="agent",
+            )
+        ).document
+        search_engine.index_document(doc)
+
+        results = search_engine.full_text_search("BM25 full text")
+
+        assert len(results) >= 1
+        assert any(r.id == doc.id for r in results)
+
+    @pytest.mark.asyncio
+    async def test_hybrid_deduplicates_by_doc_id(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """Same doc appearing in both backends shows up only once in hybrid results."""
+        doc = (
+            await knowledge_manager.create(
+                title="Deduplication Test",
+                content="Python programming language features and best practices.",
+                agent="agent",
+                tags=["python"],
+            )
+        ).document
+        search_engine.index_document(doc)
+
+        results = search_engine.hybrid_search("Python programming")
+
+        # doc should appear at most once
+        ids = [r.id for r in results]
+        assert ids.count(doc.id) <= 1

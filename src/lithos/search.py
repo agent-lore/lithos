@@ -72,6 +72,23 @@ def _compute_is_stale(expires_at_str: str) -> bool:
         return False
 
 
+def reciprocal_rank_fusion(ranked_lists: list[list[str]], k: int = 60) -> dict[str, float]:
+    """Merge ranked lists of doc IDs using Reciprocal Rank Fusion.
+
+    Args:
+        ranked_lists: Each inner list is a ranking of doc IDs (best first).
+        k: Constant that controls score smoothing (default: 60).
+
+    Returns:
+        Dict mapping doc_id -> RRF score (higher is better).
+    """
+    scores: dict[str, float] = {}
+    for ranked in ranked_lists:
+        for rank, doc_id in enumerate(ranked, start=1):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+    return scores
+
+
 def chunk_text(text: str, chunk_size: int = 500, chunk_max: int = 1000) -> list[str]:
     """Split text into chunks at paragraph boundaries.
 
@@ -915,6 +932,118 @@ class SearchEngine:
             lithos_metrics.search_ops.add(1, {"type": "semantic"})
             lithos_metrics.search_duration.record(
                 elapsed_ms, {"type": "semantic", "success": success}
+            )
+
+    @traced("lithos.search.hybrid")
+    def hybrid_search(
+        self,
+        query: str,
+        limit: int = 10,
+        threshold: float | None = None,
+        tags: list[str] | None = None,
+        author: str | None = None,
+        path_prefix: str | None = None,
+    ) -> list[SearchResult]:
+        """Hybrid search combining full-text (Tantivy) and semantic (ChromaDB) via RRF.
+
+        Calls both backends, extracts ranked doc ID lists, merges them with
+        Reciprocal Rank Fusion (k=60), and returns SearchResult objects sorted
+        by RRF score descending.
+
+        Raises:
+            SearchBackendError: If every backend fails.  A single-backend failure
+                is tolerated and logged — the other backend's results are returned.
+        """
+        start = time.perf_counter()
+        success = True
+        try:
+            ft_results: list[SearchResult] = []
+            sem_results: list[SemanticResult] = []
+
+            try:
+                ft_results = self.tantivy.search(
+                    query=query,
+                    limit=limit,
+                    tags=tags,
+                    author=author,
+                    path_prefix=path_prefix,
+                )
+            except Exception as exc:
+                logger.warning("Hybrid search: full-text backend failed: %s", exc)
+
+            try:
+                sem_results = self.chroma.search(
+                    query=query,
+                    limit=limit,
+                    threshold=threshold
+                    if threshold is not None
+                    else self.config.search.semantic_threshold,
+                    tags=tags,
+                )
+            except Exception as exc:
+                logger.warning("Hybrid search: semantic backend failed: %s", exc)
+
+            if not ft_results and not sem_results:
+                raise SearchBackendError(
+                    "All backends failed during hybrid search",
+                    {},
+                )
+
+            ft_ids = [r.id for r in ft_results]
+            sem_ids = [r.id for r in sem_results]
+
+            rrf_scores = reciprocal_rank_fusion([ft_ids, sem_ids])
+
+            # Build lookup maps for merging
+            ft_by_id = {r.id: r for r in ft_results}
+            sem_by_id = {r.id: r for r in sem_results}
+
+            merged: list[SearchResult] = []
+            for doc_id, rrf_score in sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True):
+                if doc_id in ft_by_id:
+                    r = ft_by_id[doc_id]
+                    merged.append(
+                        SearchResult(
+                            id=r.id,
+                            title=r.title,
+                            snippet=r.snippet,
+                            score=rrf_score,
+                            path=r.path,
+                            source_url=r.source_url,
+                            updated_at=r.updated_at,
+                            is_stale=r.is_stale,
+                        )
+                    )
+                else:
+                    s = sem_by_id[doc_id]
+                    merged.append(
+                        SearchResult(
+                            id=s.id,
+                            title=s.title,
+                            snippet=s.snippet,
+                            score=rrf_score,
+                            path=s.path,
+                            source_url=s.source_url,
+                            updated_at=s.updated_at,
+                            is_stale=s.is_stale,
+                        )
+                    )
+                if len(merged) >= limit:
+                    break
+
+            return merged
+        except SearchBackendError:
+            success = False
+            raise
+        except Exception as exc:
+            success = False
+            logger.error("Hybrid search failed: %s", exc)
+            raise SearchBackendError("Hybrid search failed", {}) from exc
+        finally:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            lithos_metrics.search_ops.add(1, {"type": "hybrid"})
+            lithos_metrics.search_duration.record(
+                elapsed_ms, {"type": "hybrid", "success": success}
             )
 
     def clear_all(self) -> None:

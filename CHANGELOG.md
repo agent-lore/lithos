@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Breaking Changes
+
+- **`lithos_semantic` MCP tool removed.** Use `lithos_search` with `mode="semantic"`
+  for pure semantic search, or the new default `mode="hybrid"` for best results.
+
+### Added
+
+- `lithos_search` now accepts a `mode` parameter (`fulltext` | `semantic` | `hybrid`,
+  default: `hybrid`).
+- Hybrid search mode merges Tantivy (BM25) and ChromaDB (cosine similarity) results
+  using Reciprocal Rank Fusion (RRF, k=60) for improved ranking quality.
+
 ### Fix: `lithos_read` returns structured error on missing document (issue #102)
 
 Previously, `lithos_read` propagated a raw `FileNotFoundError` as an

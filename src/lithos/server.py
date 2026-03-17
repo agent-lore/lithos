@@ -819,45 +819,57 @@ class LithosServer:
         async def lithos_search(
             query: str,
             limit: int = 10,
+            mode: str = "hybrid",
             tags: list[str] | None = None,
             author: str | None = None,
             path_prefix: str | None = None,
+            threshold: float | None = None,
         ) -> dict[str, list[dict[str, Any]]]:
-            """Full-text search across knowledge base.
+            """Search across the knowledge base.
+
+            Supports three search modes:
+            - ``hybrid`` (default): Merges Tantivy BM25 full-text and ChromaDB
+              cosine-similarity results using Reciprocal Rank Fusion (RRF, k=60).
+              Best overall quality.
+            - ``fulltext``: Pure Tantivy full-text search (BM25). Supports Tantivy
+              query syntax (e.g. field-specific queries, boolean operators).
+            - ``semantic``: Pure ChromaDB semantic/vector search. Finds documents
+              with similar meaning even when keywords differ.
 
             Args:
-                query: Search query (Tantivy query syntax)
+                query: Search query string
                 limit: Max results (default: 10)
+                mode: Search mode — "hybrid" | "fulltext" | "semantic" (default: "hybrid")
                 tags: Filter by tags (AND)
-                author: Filter by author
-                path_prefix: Filter by path prefix
+                author: Filter by author (fulltext/hybrid only)
+                path_prefix: Filter by path prefix (fulltext/hybrid only)
+                threshold: Minimum similarity 0-1 for semantic/hybrid (default: 0.5)
 
             Returns:
-                Dict with results list containing id, title, snippet, score, path
+                Dict with results list containing id, title, snippet, score, path,
+                source_url, updated_at, is_stale, derived_from_ids
             """
-            logger.info("lithos_search query_len=%d limit=%d", len(query), limit)
+            logger.info("lithos_search mode=%s query_len=%d limit=%d", mode, len(query), limit)
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.search") as span:
-                span.set_attribute("lithos.tool", "lithos_search")
+                span.set_attribute("lithos.tool", f"lithos_search:{mode}")
                 span.set_attribute("lithos.query.length", len(query))
                 span.set_attribute(
                     "lithos.query.sha256",
                     hashlib.sha256(query.encode()).hexdigest()[:16],
                 )
                 span.set_attribute("lithos.limit", limit)
+                span.set_attribute("lithos.mode", mode)
 
-                results = self.search.full_text_search(
-                    query=query,
-                    limit=limit,
-                    tags=tags,
-                    author=author,
-                    path_prefix=path_prefix,
-                )
-
-                span.set_attribute("lithos.result_count", len(results))
-                logger.info("lithos_search results=%d", len(results))
-                return {
-                    "results": [
+                if mode == "fulltext":
+                    ft_results = self.search.full_text_search(
+                        query=query,
+                        limit=limit,
+                        tags=tags,
+                        author=author,
+                        path_prefix=path_prefix,
+                    )
+                    results_payload = [
                         {
                             "id": r.id,
                             "title": r.title,
@@ -869,64 +881,58 @@ class LithosServer:
                             "is_stale": r.is_stale,
                             "derived_from_ids": self.knowledge.get_doc_sources(r.id),
                         }
-                        for r in results
+                        for r in ft_results
                     ]
-                }
-
-        @self.mcp.tool()
-        async def lithos_semantic(
-            query: str,
-            limit: int = 10,
-            threshold: float | None = None,
-            tags: list[str] | None = None,
-        ) -> dict[str, list[dict[str, Any]]]:
-            """Semantic similarity search.
-
-            Args:
-                query: Natural language query
-                limit: Max results (default: 10)
-                threshold: Minimum similarity 0-1 (default: 0.5)
-                tags: Filter by tags (AND)
-
-            Returns:
-                Dict with results list containing id, title, snippet, similarity, path
-            """
-            logger.info("lithos_semantic query_len=%d limit=%d", len(query), limit)
-            tracer = get_tracer()
-            with tracer.start_as_current_span("lithos.tool.semantic") as span:
-                span.set_attribute("lithos.tool", "lithos_semantic")
-                span.set_attribute("lithos.query.length", len(query))
-                span.set_attribute(
-                    "lithos.query.sha256",
-                    hashlib.sha256(query.encode()).hexdigest()[:16],
-                )
-                span.set_attribute("lithos.limit", limit)
-
-                results = self.search.semantic_search(
-                    query=query,
-                    limit=limit,
-                    threshold=threshold,
-                    tags=tags,
-                )
-
-                span.set_attribute("lithos.result_count", len(results))
-                logger.info("lithos_semantic results=%d", len(results))
-                return {
-                    "results": [
+                elif mode == "semantic":
+                    sem_results = self.search.semantic_search(
+                        query=query,
+                        limit=limit,
+                        threshold=threshold,
+                        tags=tags,
+                    )
+                    results_payload = [
                         {
                             "id": r.id,
                             "title": r.title,
                             "snippet": r.snippet,
-                            "similarity": r.similarity,
+                            "score": r.similarity,
                             "path": r.path,
                             "source_url": r.source_url,
                             "updated_at": r.updated_at,
                             "is_stale": r.is_stale,
                             "derived_from_ids": self.knowledge.get_doc_sources(r.id),
                         }
-                        for r in results
+                        for r in sem_results
                     ]
-                }
+                else:
+                    # hybrid (default)
+                    hybrid_results = self.search.hybrid_search(
+                        query=query,
+                        limit=limit,
+                        threshold=threshold,
+                        tags=tags,
+                        author=author,
+                        path_prefix=path_prefix,
+                    )
+                    results_payload = [
+                        {
+                            "id": r.id,
+                            "title": r.title,
+                            "snippet": r.snippet,
+                            "score": r.score,
+                            "path": r.path,
+                            "source_url": r.source_url,
+                            "updated_at": r.updated_at,
+                            "is_stale": r.is_stale,
+                            "derived_from_ids": self.knowledge.get_doc_sources(r.id),
+                        }
+                        for r in hybrid_results
+                    ]
+
+                span.set_attribute("lithos.result_count", len(results_payload))
+                logger.info("lithos_search mode=%s results=%d", mode, len(results_payload))
+                lithos_metrics.search_ops.add(1, {"type": mode})
+                return {"results": results_payload}
 
         @self.mcp.tool()
         async def lithos_cache_lookup(
