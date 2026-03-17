@@ -429,9 +429,7 @@ class TestKnowledgeToolWorkflow:
 
         # Page 1: limit=5, offset=0 — should see 5 items but total=12
         page1 = await tool.fn(title_contains="widget", limit=5, offset=0)
-        assert page1["total"] == 12, (
-            f"total should be 12 (full match count), got {page1['total']}"
-        )
+        assert page1["total"] == 12, f"total should be 12 (full match count), got {page1['total']}"
         assert len(page1["items"]) == 5
 
         # Page 2: limit=5, offset=5 — next 5 items, total still 12
