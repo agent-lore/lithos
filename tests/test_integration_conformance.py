@@ -120,7 +120,9 @@ class TestMCPToolContracts:
         assert isinstance(list_payload["total"], int)
         assert any(item["id"] == doc_id for item in list_payload["items"])
 
-        delete_payload = await _call_tool(server, "lithos_delete", {"id": doc_id})
+        delete_payload = await _call_tool(
+            server, "lithos_delete", {"id": doc_id, "agent": "test-agent"}
+        )
         assert delete_payload == {"success": True}
 
     @pytest.mark.asyncio
@@ -204,7 +206,7 @@ class TestMCPToolContracts:
         initial_count = server.search.chroma.collection.count()
         assert initial_count > 0
 
-        await _call_tool(server, "lithos_delete", {"id": doc_id})
+        await _call_tool(server, "lithos_delete", {"id": doc_id, "agent": "test-agent"})
 
         await _wait_for_semantic_miss(server, "quantum entanglement particles", doc_id)
 
@@ -234,7 +236,7 @@ class TestMCPToolContracts:
         assert server.knowledge.get_id_by_slug("cascade-delete-target") == doc_id
         assert doc_id in server.knowledge._id_to_path
 
-        await _call_tool(server, "lithos_delete", {"id": doc_id})
+        await _call_tool(server, "lithos_delete", {"id": doc_id, "agent": "test-agent"})
 
         # Knowledge layer: read should return structured error envelope.
         read_result = await _call_tool(server, "lithos_read", {"id": doc_id})
@@ -1558,7 +1560,7 @@ class TestErrorAndBoundaryConditions:
     async def test_delete_nonexistent_id_returns_false(self, server: LithosServer):
         """lithos_delete with a non-existent UUID returns an error envelope."""
         fake_id = "00000000-0000-0000-0000-000000000000"
-        result = await _call_tool(server, "lithos_delete", {"id": fake_id})
+        result = await _call_tool(server, "lithos_delete", {"id": fake_id, "agent": "test-agent"})
         assert result["status"] == "error"
 
     @pytest.mark.asyncio
@@ -1777,7 +1779,7 @@ class TestCrossConcernMutationAssertions:
         tags_before = await _call_tool(server, "lithos_tags", {})
         assert tags_before["tags"].get(unique_tag, 0) >= 1
 
-        await _call_tool(server, "lithos_delete", {"id": doc_id})
+        await _call_tool(server, "lithos_delete", {"id": doc_id, "agent": "test-agent"})
 
         tags_after = await _call_tool(server, "lithos_tags", {})
         assert tags_after["tags"].get(unique_tag, 0) == 0
