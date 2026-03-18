@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Breaking Changes
+
+- **`lithos_semantic` MCP tool removed.** Use `lithos_search` with `mode="semantic"`
+  for pure semantic search, or the new default `mode="hybrid"` for best results.
+- **`lithos_search` now defaults to hybrid mode.** Existing callers that relied on
+  `lithos_search` for full-text-only results will now receive hybrid (BM25 + semantic
+  RRF) results instead. Pass `mode="fulltext"` explicitly to restore the previous
+  behaviour.
+- **`similarity` key renamed to `score` in search results.** Callers migrating from
+  `lithos_semantic` that read `result["similarity"]` must update to `result["score"]`.
+  All three modes (`hybrid`, `fulltext`, `semantic`) now use a unified `score` field.
+
+### Added
+
+- `lithos_search` now accepts a `mode` parameter (`fulltext` | `semantic` | `hybrid`,
+  default: `hybrid`).
+- Hybrid search mode merges Tantivy (BM25) and ChromaDB (cosine similarity) results
+  using Reciprocal Rank Fusion (RRF, k=60) for improved ranking quality.
+- Unknown `mode` values now return a structured `{"status": "error", "code": "invalid_mode", ...}`
+  dict instead of raising a `ValueError`.
+
 ### Fix: `lithos_read` returns structured error on missing document (issue #102)
 
 Previously, `lithos_read` propagated a raw `FileNotFoundError` as an

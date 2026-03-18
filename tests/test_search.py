@@ -7,6 +7,7 @@ from lithos.knowledge import KnowledgeManager
 from lithos.search import (
     SearchEngine,
     chunk_text,
+    reciprocal_rank_fusion,
 )
 
 
@@ -451,6 +452,199 @@ class TestSearchEngineIntegration:
         assert stats["chunks"] >= 1
 
 
+class TestChromaIndexFilters:
+    """Tests for author and path_prefix filters on ChromaIndex.search()."""
+
+    @pytest.mark.asyncio
+    async def test_author_filter_includes_matching(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """ChromaIndex.search() returns only docs by the specified author."""
+        alice_doc = (
+            await knowledge_manager.create(
+                title="Alice's Research",
+                content="Deep learning architectures and transformer models.",
+                agent="alice",
+            )
+        ).document
+        bob_doc = (
+            await knowledge_manager.create(
+                title="Bob's Research",
+                content="Deep learning architectures and transformer models.",
+                agent="bob",
+            )
+        ).document
+        search_engine.index_document(alice_doc)
+        search_engine.index_document(bob_doc)
+
+        results = search_engine.chroma.search(
+            "deep learning transformers", limit=10, threshold=0.0, author="alice"
+        )
+        result_ids = [r.id for r in results]
+
+        assert alice_doc.id in result_ids
+        assert bob_doc.id not in result_ids
+
+    @pytest.mark.asyncio
+    async def test_author_filter_excludes_all_when_no_match(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """ChromaIndex.search() returns empty list when author filter matches nobody."""
+        doc = (
+            await knowledge_manager.create(
+                title="Some Research",
+                content="Machine learning and neural networks.",
+                agent="charlie",
+            )
+        ).document
+        search_engine.index_document(doc)
+
+        results = search_engine.chroma.search(
+            "machine learning", limit=10, threshold=0.0, author="nobody"
+        )
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_path_prefix_filter_includes_matching(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """ChromaIndex.search() returns only docs under the given path prefix."""
+        procedures_doc = (
+            await knowledge_manager.create(
+                title="Deployment Procedure",
+                content="Steps for deploying microservices to production.",
+                agent="agent",
+                path="procedures",
+            )
+        ).document
+        notes_doc = (
+            await knowledge_manager.create(
+                title="Deployment Notes",
+                content="Steps for deploying microservices to production.",
+                agent="agent",
+                path="notes",
+            )
+        ).document
+        search_engine.index_document(procedures_doc)
+        search_engine.index_document(notes_doc)
+
+        results = search_engine.chroma.search(
+            "deploying microservices", limit=10, threshold=0.0, path_prefix="procedures"
+        )
+        result_ids = [r.id for r in results]
+
+        assert procedures_doc.id in result_ids
+        assert notes_doc.id not in result_ids
+
+    @pytest.mark.asyncio
+    async def test_author_and_path_prefix_combined(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """ChromaIndex.search() applies author and path_prefix as AND filters."""
+        match_doc = (
+            await knowledge_manager.create(
+                title="Alice Procedures Doc",
+                content="Database optimisation and indexing strategies.",
+                agent="alice",
+                path="procedures",
+            )
+        ).document
+        wrong_author_doc = (
+            await knowledge_manager.create(
+                title="Bob Procedures Doc",
+                content="Database optimisation and indexing strategies.",
+                agent="bob",
+                path="procedures",
+            )
+        ).document
+        wrong_path_doc = (
+            await knowledge_manager.create(
+                title="Alice Notes Doc",
+                content="Database optimisation and indexing strategies.",
+                agent="alice",
+                path="notes",
+            )
+        ).document
+        search_engine.index_document(match_doc)
+        search_engine.index_document(wrong_author_doc)
+        search_engine.index_document(wrong_path_doc)
+
+        results = search_engine.chroma.search(
+            "database indexing",
+            limit=10,
+            threshold=0.0,
+            author="alice",
+            path_prefix="procedures",
+        )
+        result_ids = [r.id for r in results]
+
+        assert match_doc.id in result_ids
+        assert wrong_author_doc.id not in result_ids
+        assert wrong_path_doc.id not in result_ids
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_engine_wires_author_filter(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """SearchEngine.semantic_search() correctly wires author filter to ChromaIndex."""
+        alice_doc = (
+            await knowledge_manager.create(
+                title="Alice's ML Notes",
+                content="Reinforcement learning policy gradients and reward shaping.",
+                agent="alice",
+            )
+        ).document
+        bob_doc = (
+            await knowledge_manager.create(
+                title="Bob's ML Notes",
+                content="Reinforcement learning policy gradients and reward shaping.",
+                agent="bob",
+            )
+        ).document
+        search_engine.index_document(alice_doc)
+        search_engine.index_document(bob_doc)
+
+        results = search_engine.semantic_search(
+            "reinforcement learning", limit=10, threshold=0.0, author="alice"
+        )
+        result_ids = [r.id for r in results]
+
+        assert alice_doc.id in result_ids
+        assert bob_doc.id not in result_ids
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_engine_wires_path_prefix_filter(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """SearchEngine.semantic_search() correctly wires path_prefix filter to ChromaIndex."""
+        arch_doc = (
+            await knowledge_manager.create(
+                title="Architecture Doc",
+                content="Event-driven architecture with message queues and async processing.",
+                agent="agent",
+                path="architecture",
+            )
+        ).document
+        other_doc = (
+            await knowledge_manager.create(
+                title="Other Doc",
+                content="Event-driven architecture with message queues and async processing.",
+                agent="agent",
+                path="scratch",
+            )
+        ).document
+        search_engine.index_document(arch_doc)
+        search_engine.index_document(other_doc)
+
+        results = search_engine.semantic_search(
+            "event-driven message queues", limit=10, threshold=0.0, path_prefix="architecture"
+        )
+        result_ids = [r.id for r in results]
+
+        assert arch_doc.id in result_ids
+        assert other_doc.id not in result_ids
+
+
 class TestSearchEngineResiliency:
     """Tests for error propagation and partial-failure handling in SearchEngine."""
 
@@ -850,3 +1044,91 @@ class TestExpiresAtInSearch:
         match = [r for r in results if r.id == doc.id]
         assert len(match) == 1
         assert match[0].is_stale is False
+
+
+class TestHybridSearch:
+    """Tests for hybrid search (RRF fusion of Tantivy + ChromaDB)."""
+
+    def test_rrf_pure_function(self):
+        """reciprocal_rank_fusion produces correct scores."""
+        # Two lists with one common doc: common doc should rank highest
+        list1 = ["common", "only_in_1"]
+        list2 = ["common", "only_in_2"]
+        scores = reciprocal_rank_fusion([list1, list2])
+
+        assert "common" in scores
+        assert "only_in_1" in scores
+        assert "only_in_2" in scores
+        # common appears in both lists so its score should be highest
+        assert scores["common"] > scores["only_in_1"]
+        assert scores["common"] > scores["only_in_2"]
+
+        # Single list: doc at rank 1 → score = 1/(60+1)
+        single = reciprocal_rank_fusion([["doc_a"]])
+        assert abs(single["doc_a"] - 1.0 / 61) < 1e-9
+
+        # Empty lists return empty dict
+        assert reciprocal_rank_fusion([]) == {}
+        assert reciprocal_rank_fusion([[]]) == {}
+
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_returns_results(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """hybrid_search finds an indexed document."""
+        doc = (
+            await knowledge_manager.create(
+                title="Hybrid Search Test",
+                content="This document is about distributed systems and consensus algorithms.",
+                agent="agent",
+            )
+        ).document
+        search_engine.index_document(doc)
+
+        results = search_engine.hybrid_search("distributed systems consensus")
+
+        assert len(results) >= 1
+        assert any(r.id == doc.id for r in results)
+        # All scores should be positive RRF scores
+        for r in results:
+            assert r.score > 0
+
+    @pytest.mark.asyncio
+    async def test_fulltext_mode_via_engine(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """full_text_search still works independently."""
+        doc = (
+            await knowledge_manager.create(
+                title="Fulltext Only Test",
+                content="Searching with BM25 full text retrieval.",
+                agent="agent",
+            )
+        ).document
+        search_engine.index_document(doc)
+
+        results = search_engine.full_text_search("BM25 full text")
+
+        assert len(results) >= 1
+        assert any(r.id == doc.id for r in results)
+
+    @pytest.mark.asyncio
+    async def test_hybrid_deduplicates_by_doc_id(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """Same doc appearing in both backends shows up only once in hybrid results."""
+        doc = (
+            await knowledge_manager.create(
+                title="Deduplication Test",
+                content="Python programming language features and best practices.",
+                agent="agent",
+                tags=["python"],
+            )
+        ).document
+        search_engine.index_document(doc)
+
+        results = search_engine.hybrid_search("Python programming")
+
+        # doc should appear at most once
+        ids = [r.id for r in results]
+        assert ids.count(doc.id) <= 1

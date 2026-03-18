@@ -50,7 +50,9 @@ async def _wait_for_semantic_hit(
     """Wait briefly for semantic search to find a document."""
     for _ in range(20):
         payload = await _call_tool(
-            server, "lithos_semantic", {"query": query, "limit": 10, "threshold": threshold}
+            server,
+            "lithos_search",
+            {"query": query, "limit": 10, "threshold": threshold, "mode": "semantic"},
         )
         if any(item["id"] == doc_id for item in payload["results"]):
             return
@@ -74,7 +76,9 @@ async def _wait_for_semantic_miss(
     """Wait briefly for a document to disappear from semantic search."""
     for _ in range(20):
         payload = await _call_tool(
-            server, "lithos_semantic", {"query": query, "limit": 10, "threshold": threshold}
+            server,
+            "lithos_search",
+            {"query": query, "limit": 10, "threshold": threshold, "mode": "semantic"},
         )
         if not any(item["id"] == doc_id for item in payload["results"]):
             return
@@ -251,7 +255,9 @@ class TestMCPToolContracts:
 
         # Semantic search: absent.
         sem_payload = await _call_tool(
-            server, "lithos_semantic", {"query": "neural network deep learning", "limit": 10}
+            server,
+            "lithos_search",
+            {"query": "neural network deep learning", "limit": 10, "mode": "semantic"},
         )
         assert not any(item["id"] == doc_id for item in sem_payload["results"])
 
@@ -1203,8 +1209,13 @@ class TestSearchAndListFilters:
 
         filtered = await _call_tool(
             server,
-            "lithos_semantic",
-            {"query": "bioluminescent organisms", "tags": ["land"], "limit": 10},
+            "lithos_search",
+            {
+                "query": "bioluminescent organisms",
+                "tags": ["land"],
+                "limit": 10,
+                "mode": "semantic",
+            },
         )
         result_ids = [r["id"] for r in filtered["results"]]
         assert land_id in result_ids
@@ -1230,20 +1241,22 @@ class TestSearchAndListFilters:
         # Very high threshold should return fewer or no results
         high_threshold = await _call_tool(
             server,
-            "lithos_semantic",
+            "lithos_search",
             {
                 "query": "superconducting magnets particle accelerators",
                 "threshold": 0.99,
                 "limit": 10,
+                "mode": "semantic",
             },
         )
         low_threshold = await _call_tool(
             server,
-            "lithos_semantic",
+            "lithos_search",
             {
                 "query": "superconducting magnets particle accelerators",
                 "threshold": 0.0,
                 "limit": 10,
+                "mode": "semantic",
             },
         )
         assert len(low_threshold["results"]) >= len(high_threshold["results"])
@@ -2012,7 +2025,9 @@ class TestSourceUrlMCPResponses:
         await _wait_for_semantic_hit(server, "cryogenic turbopump launch vehicles", doc_id)
 
         semantic = await _call_tool(
-            server, "lithos_semantic", {"query": "cryogenic turbopump launch vehicles", "limit": 10}
+            server,
+            "lithos_search",
+            {"query": "cryogenic turbopump launch vehicles", "limit": 10, "mode": "semantic"},
         )
         matched = [r for r in semantic["results"] if r["id"] == doc_id]
         assert len(matched) == 1
