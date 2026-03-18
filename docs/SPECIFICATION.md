@@ -558,7 +558,7 @@ Update mutable task metadata.
 | `description` | string | No | Replacement description |
 | `tags` | string[] | No | Replacement tags |
 
-**Returns:** `{ success: true, message }` on success, otherwise `{ success: false, message }`.
+**Returns:** `{ success: true, message }` on success, or `{ status: "error", code, message }` on failure (codes: `invalid_input`, `task_not_found`).
 
 **Behavior:**
 - At least one of `title`, `description`, or `tags` must be provided.
@@ -627,7 +627,7 @@ Cancel a task and release all claims.
 | `agent` | string | Yes | Agent cancelling the task |
 | `reason` | string | No | Optional cancellation reason |
 
-**Returns:** `{ success: boolean }`
+**Returns:** `{ success: true }` on success, or `{ status: "error", code: "task_not_found", message }` on failure.
 
 **Behavior:** Marks an open task as `cancelled` and deletes all claims on that task. The optional `reason` is accepted by the MCP surface but is not persisted in SQLite.
 
@@ -701,6 +701,39 @@ Get knowledge base statistics.
 ```
 
 **Use case:** Allows agents to understand knowledge base scale before issuing broad queries.
+
+### 5.6 HTTP Endpoints
+
+These endpoints are standard HTTP routes mounted alongside the MCP transport. They are **not** MCP tools and do not appear in `tools/list`.
+
+#### `GET /health`
+
+Lightweight health check for Docker `HEALTHCHECK`, load balancers, and monitoring.
+
+**Returns (200 OK):**
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-03-18T12:00:00+00:00",
+  "components": {
+    "kb_directory": { "status": "ok" },
+    "embedding_model": { "status": "ok" },
+    "knowledge_base": { "status": "ok" }
+  }
+}
+```
+
+**Returns (503 Service Unavailable):** Same shape with `"status": "degraded"` and per-component `error` strings for any unhealthy component.
+
+**Components checked:**
+
+| Component | Check |
+|-----------|-------|
+| `kb_directory` | Knowledge base directory exists on disk |
+| `embedding_model` | ChromaDB embedding health check passes |
+| `knowledge_base` | Can list at least one document |
+
+**Use case:** The Docker image uses this endpoint in its `HEALTHCHECK` directive (`curl -f http://localhost:8765/health`). External orchestrators and load balancers can poll it to determine readiness.
 
 ---
 
@@ -1012,8 +1045,7 @@ lithos --data-dir ./data inspect doc <id-or-path> --content
 Tools indicate routine domain failures through return values, and unexpected backend failures may still surface as MCP-level exceptions.
 
 - **Structured status envelopes**: `lithos_write` returns `{ status: "error", code, message, ... }` for invalid input and contract-level failures
-- **Structured error envelopes on many tools**: `lithos_delete`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_search`, `lithos_list`, and `lithos_cache_lookup` use `{ status: "error", code, message }` for routine domain failures
-- **Boolean success fields**: `lithos_task_update` and `lithos_task_cancel` use `{ success: false, ... }` on expected failure paths
+- **Structured error envelopes on many tools**: `lithos_delete`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_update`, `lithos_task_cancel`, `lithos_search`, `lithos_list`, and `lithos_cache_lookup` use `{ status: "error", code, message }` for routine domain failures
 - **Nullable results**: `lithos_agent_info` returns `null` when the agent is not found
 - **Exceptions**: Unexpected file/index/backend errors may still propagate at the MCP layer
 
@@ -1029,6 +1061,8 @@ Tools indicate routine domain failures through return values, and unexpected bac
 | Claim renewal by wrong agent or missing claim | `lithos_task_renew` returns `{ status: "error", code: "claim_not_found" }` |
 | Claim release with no matching claim | `lithos_task_release` returns `{ status: "error", code: "claim_not_found" }` |
 | Completing unknown or non-open task | `lithos_task_complete` returns `{ status: "error", code: "task_not_found" }` |
+| Updating task with no fields provided | `lithos_task_update` returns `{ status: "error", code: "invalid_input" }` |
+| Updating or cancelling unknown/closed task | `lithos_task_update` / `lithos_task_cancel` returns `{ status: "error", code: "task_not_found" }` |
 | Invalid arguments | FastMCP validation rejects the call |
 | Ambiguous wiki-link | Link treated as unresolved (no error raised) |
 | Write content exceeds configured limit | `lithos_write` returns `{ status: "error", code: "content_too_large" }` |
@@ -1052,7 +1086,7 @@ These are explicitly not part of the initial implementation but may be considere
 - Integration with external knowledge sources
 - Full edit history / provenance log
 - Hierarchical multi-hop link results
-- Structured MCP error codes (`NOT_FOUND`, `CLAIM_CONFLICT`, `AMBIGUOUS_LINK`, etc.)
+- ~~Structured MCP error codes (`NOT_FOUND`, `CLAIM_CONFLICT`, `AMBIGUOUS_LINK`, etc.)~~ (Implemented via `{ status: "error", code, message }` envelopes; see §10.2 for the full list of error codes)
 - ~~Structured `source` provenance with `derived_from` links to source knowledge items~~ (Implemented in Phase 3 via `derived_from_ids` and `lithos_provenance`)
 - ~~`lithos_tags` prefix filtering~~ (Implemented via `prefix`)
 - `lithos_delete` audit trail logging (record which agent deleted what)
@@ -1122,8 +1156,9 @@ These are explicitly not part of the initial implementation but may be considere
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`, `lithos_finding_post`, `lithos_finding_list` |
 | System | `lithos_stats` |
+| HTTP | `GET /health` (not an MCP tool; see §5.6) |
 
-**Total: 24 MCP tools**
+**Total: 24 MCP tools + 1 HTTP endpoint**
 
 ---
 

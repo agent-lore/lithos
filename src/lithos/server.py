@@ -1534,7 +1534,8 @@ class LithosServer:
             """
             if title is None and description is None and tags is None:
                 return {
-                    "success": False,
+                    "status": "error",
+                    "code": "invalid_input",
                     "message": "At least one of title, description, or tags must be provided",
                 }
 
@@ -1555,7 +1556,11 @@ class LithosServer:
 
                 if updated:
                     return {"success": True, "message": f"Task {task_id} updated"}
-                return {"success": False, "message": f"Task {task_id} not found"}
+                return {
+                    "status": "error",
+                    "code": "task_not_found",
+                    "message": f"Task {task_id} not found",
+                }
 
         @self.mcp.tool()
         async def lithos_task_claim(
@@ -1759,7 +1764,7 @@ class LithosServer:
             task_id: str,
             agent: str,
             reason: str | None = None,
-        ) -> dict[str, bool]:
+        ) -> dict[str, Any]:
             """Cancel a task, releasing all claims.
 
             Args:
@@ -1791,8 +1796,13 @@ class LithosServer:
                             payload={"task_id": task_id, "agent": agent, "reason": reason},
                         )
                     )
+                    return {"success": True}
 
-                return {"success": success}
+                return {
+                    "status": "error",
+                    "code": "task_not_found",
+                    "message": f"Task {task_id} not found or already closed",
+                }
 
         @self.mcp.tool()
         async def lithos_task_list(

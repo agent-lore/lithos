@@ -1850,7 +1850,7 @@ class TestTaskUpdateTool:
 
     @pytest.mark.asyncio
     async def test_update_task_not_found(self, server: LithosServer):
-        """lithos_task_update: returns success=False for unknown task_id."""
+        """lithos_task_update: returns error envelope for unknown task_id."""
         result = await self._call_task_update(
             server,
             task_id="nonexistent-task-id",
@@ -1858,12 +1858,13 @@ class TestTaskUpdateTool:
             title="Ghost Update",
         )
 
-        assert result["success"] is False
+        assert result["status"] == "error"
+        assert result["code"] == "task_not_found"
         assert "nonexistent-task-id" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_update_completed_task_returns_false(self, server: LithosServer):
-        """lithos_task_update: returns success=False for completed tasks (status guard)."""
+    async def test_update_completed_task_returns_error(self, server: LithosServer):
+        """lithos_task_update: returns error envelope for completed tasks (status guard)."""
         task_id = await server.coordination.create_task(
             title="Will Complete",
             agent="test-agent",
@@ -1877,11 +1878,12 @@ class TestTaskUpdateTool:
             title="Too Late",
         )
 
-        assert result["success"] is False
+        assert result["status"] == "error"
+        assert result["code"] == "task_not_found"
 
     @pytest.mark.asyncio
     async def test_update_task_no_fields_returns_error(self, server: LithosServer):
-        """lithos_task_update: returns success=False when no fields are provided."""
+        """lithos_task_update: returns error envelope when no fields are provided."""
         task_id = await server.coordination.create_task(
             title="Task",
             agent="test-agent",
@@ -1894,7 +1896,53 @@ class TestTaskUpdateTool:
             # No title, description, or tags
         )
 
-        assert result["success"] is False
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+
+
+class TestTaskCancelTool:
+    """Tests for lithos_task_cancel MCP tool."""
+
+    async def _call_task_cancel(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_task_cancel")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_happy_path(self, server: LithosServer):
+        """lithos_task_cancel: succeeds for an open task."""
+        task_id = await server.coordination.create_task(
+            title="Cancellable Task",
+            agent="test-agent",
+        )
+
+        result = await self._call_task_cancel(server, task_id=task_id, agent="test-agent")
+
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_cancel_nonexistent_task(self, server: LithosServer):
+        """lithos_task_cancel: returns error envelope for unknown task_id."""
+        result = await self._call_task_cancel(
+            server, task_id="nonexistent-task-id", agent="test-agent"
+        )
+
+        assert result["status"] == "error"
+        assert result["code"] == "task_not_found"
+        assert "nonexistent-task-id" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_cancel_completed_task(self, server: LithosServer):
+        """lithos_task_cancel: returns error envelope for already-completed task."""
+        task_id = await server.coordination.create_task(
+            title="Will Complete",
+            agent="test-agent",
+        )
+        await server.coordination.complete_task(task_id, "test-agent")
+
+        result = await self._call_task_cancel(server, task_id=task_id, agent="test-agent")
+
+        assert result["status"] == "error"
+        assert result["code"] == "task_not_found"
 
 
 class TestHealthEndpoint:
