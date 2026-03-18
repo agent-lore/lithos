@@ -313,7 +313,7 @@ class TestIndexLifecycleConformance:
         derived_id = derived["id"]
 
         # Delete the source
-        await _call_tool(server, "lithos_delete", {"id": src_id})
+        await _call_tool(server, "lithos_delete", {"id": src_id, "agent": "conf-agent"})
 
         # Derived doc now has unresolved provenance
         assert derived_id in server.knowledge._unresolved_provenance.get(src_id, set())

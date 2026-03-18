@@ -335,6 +335,6 @@ class TestEventEmissionFailureIsolation:
             "lithos_delete",
             {"id": "nonexistent-uuid", "agent": "test-agent"},
         )
-        assert result["success"] is False
+        assert result.get("status") == "error" or result.get("success") is False
         assert queue.empty()
         server.event_bus.unsubscribe(queue)

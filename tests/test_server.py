@@ -2047,6 +2047,9 @@ class TestHealthEndpoint:
     @pytest.mark.asyncio
     async def test_lithos_health_not_in_mcp_tools(self, server: LithosServer):
         """lithos_health must NOT appear as an MCP tool (issue #77)."""
-        tools = await server.mcp.get_tools()
-        tool_names = list(tools.keys()) if isinstance(tools, dict) else [t.name for t in tools]
+        if hasattr(server.mcp, "get_tools"):
+            tools = await server.mcp.get_tools()
+            tool_names = list(tools.keys()) if isinstance(tools, dict) else [t.name for t in tools]
+        else:
+            tool_names = list(server.mcp._tool_manager.get_tools().keys())
         assert "lithos_health" not in tool_names
