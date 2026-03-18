@@ -668,6 +668,7 @@ Get knowledge base statistics.
    - `rebuild_on_start` config flag is set → full rebuild
    - Tantivy schema version requires rebuild → full rebuild
    - NetworkX graph cache (`.graph/graph.json`) fails to load → full rebuild
+   - NetworkX graph cache `GRAPH_CACHE_VERSION` field does not match the expected version → silent rebuild with a warning log
    - Graph cache loads successfully → use existing indices
 5. **Full rebuild** (when triggered): clear all indices, scan `knowledge/` directory, re-parse and re-index every `.md` file
 6. Pre-warm the embedding model in the background
@@ -692,6 +693,8 @@ Get knowledge base statistics.
 - **Tantivy**: Persisted to `.tantivy/` directory
 - **ChromaDB**: Persisted to `.chroma/` directory  
 - **NetworkX**: Cached to `.graph/graph.json`, rebuilt if missing
+
+**Graph cache format:** The JSON cache includes a `GRAPH_CACHE_VERSION` field alongside the serialised graph, node maps, and alias tables. If the version field in the file does not match the expected constant in the codebase, Lithos performs an automatic silent rebuild and logs a warning (version mismatch is not an error).
 
 ### 6.4 Reconcile / Repair
 
