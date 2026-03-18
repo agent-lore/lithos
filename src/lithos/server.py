@@ -824,7 +824,7 @@ class LithosServer:
             author: str | None = None,
             path_prefix: str | None = None,
             threshold: float | None = None,
-        ) -> dict[str, list[dict[str, Any]]]:
+        ) -> dict[str, Any]:
             """Search across the knowledge base.
 
             Supports three search modes:
