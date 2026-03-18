@@ -20,8 +20,8 @@
   default: `hybrid`).
 - Hybrid search mode merges Tantivy (BM25) and ChromaDB (cosine similarity) results
   using Reciprocal Rank Fusion (RRF, k=60) for improved ranking quality.
-- Unknown `mode` values now raise a `ValueError` immediately instead of silently
-  falling through to hybrid.
+- Unknown `mode` values now return a structured `{"status": "error", "code": "invalid_mode", ...}`
+  dict instead of raising a `ValueError`.
 
 ### Fix: `lithos_read` returns structured error on missing document (issue #102)
 
