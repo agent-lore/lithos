@@ -2043,4 +2043,3 @@ class TestHealthEndpoint:
             response = await server._health_endpoint(request)
 
         assert response.status_code == 503
-
