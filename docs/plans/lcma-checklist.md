@@ -27,7 +27,7 @@ Exit criteria (all MVPs):
 ### Storage
 - [ ] Create `data/.lithos/edges.db` with `edges` table and indexes
 - [ ] Create `data/.lithos/stats.db` with `node_stats` and `coactivation` tables
-- [ ] Create `data/.lithos/receipts.jsonl` append-only audit log
+- [ ] Create `data/.lithos/receipts.jsonl` append-only audit log (each entry includes `id` field for `receipt_id` reference)
 - [ ] Create `data/.lithos/migrations/registry.json` schema migration registry
 - [ ] Implement schema migration runner (idempotent, never removes existing fields)
 
@@ -39,6 +39,7 @@ Exit criteria (all MVPs):
 - [ ] Implement Terrace 1 fast re-rank with `note_type` priors, diversity (MMR), and basic salience
 - [ ] All scouts apply `namespace_filter` and `access_scope` gating before returning candidates
 - [ ] Terrace 2 (LLM interpretive pass) falls through to Terrace 1 result in MVP 1 with debug log
+- [ ] `lithos_retrieve` response shape compatible with `lithos_search`: top-level `results` key, per-item fields `id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids` preserved; LCMA-only extras `reasons`, `scouts`, `salience` additive; envelope adds `temperature`, `terrace_reached`, `receipt_id`
 
 ### Learning
 - [ ] Basic positive reinforcement on retrieval (salience + spaced rep strength updates in `stats.db`)
@@ -51,7 +52,7 @@ Exit criteria (all MVPs):
 - [ ] `lithos_node_stats` — view salience and usage stats from `stats.db`
 
 Exit criteria:
-- `lithos_retrieve` returns ranked results using vector + lexical + tags/recency scouts
+- `lithos_retrieve` returns ranked results using vector + lexical + tags/recency scouts, with response shape compatible with `lithos_search`
 - Retrieval receipts written to `receipts.jsonl`
 - `edges.db` and `stats.db` created and populated on first use
 - Existing notes without LCMA fields remain fully readable (defaults applied at read time)
@@ -60,6 +61,9 @@ Exit criteria:
 
 ## MVP 2 — Reinforcement & Namespacing
 
+### Background process
+- [ ] Introduce `lithos-enrich` background process: event-driven (triggered by `lithos_task_complete`, schedule, WM size threshold); runs consolidation, concept formation, decay, and edge reinforcement outside the `lithos_retrieve` hot path
+
 - [ ] Negative reinforcement: penalize ignored nodes per query class (`stats.db` updates)
 - [ ] Negative reinforcement: penalize misleading nodes with stronger salience decay + quarantine threshold
 - [ ] Weaken edges that pulled in bad-context nodes
@@ -67,7 +71,7 @@ Exit criteria:
 - [ ] `lithos_conflict_resolve` tool (resolution states: `unreviewed|accepted_dual|superseded|refuted|merged`)
 - [ ] Contradiction surfacing in retrieval for design/decision/synthesis/debug query classes
 - [ ] Namespace + `access_scope` filtering applied in all scouts
-- [ ] Consolidation hook on `lithos_task_complete` (WM → LTM: reinforce co-activated edges, promote confirmed hypotheses)
+- [ ] Consolidation in `lithos-enrich` triggered by `lithos_task_complete` (WM → LTM: reinforce co-activated edges, promote confirmed hypotheses)
 - [ ] Graph scout querying both NetworkX wiki-link graph and `edges.db` typed edges
 - [ ] `lithos_edge_update` tool (adjust weight or conflict state)
 
@@ -81,16 +85,16 @@ Exit criteria:
 ## MVP 3 — Advanced Cognition
 
 - [ ] Analogy scout: frame extraction (`{problem, constraints, actions, outcome, lessons}`) + structural matching
-- [ ] Temperature computation: `temperature = 1 - coherence` (coherence = mean edge strength among top candidates)
+- [ ] Temperature computation in `lithos_retrieve` Terrace 1: `temperature = 1 - coherence` (coherence = mean edge strength among top candidates)
 - [ ] Temperature-guided exploration depth (high temp → deeper exploration, more `scout_exploration` weight)
 - [ ] `scout_exploration` with novelty/random/mixed modes
 - [ ] Concept nodes: regular notes with `note_type: "concept"` created via `lithos_write`
-- [ ] Concept node formation from stable coactivation clusters (`maybe_update_concepts`)
+- [ ] Concept node formation from stable coactivation clusters (`maybe_update_concepts`) — runs inside `lithos-enrich`, not `lithos_retrieve` hot path
 - [ ] Concept node damping: salience ceiling + diversity penalty for repeated concept retrieval
 - [ ] Embedding space versioning via separate ChromaDB collections per space (`knowledge_<space_id>`)
 - [ ] Multi-space vector scout during embedding migration
 - [ ] `lithos_receipts` tool — query retrieval audit history from `receipts.jsonl`
-- [ ] Terrace 2 LLM interpretive pass (requires `LithosConfig.lcma.llm_provider` config)
+- [ ] Terrace 2 LLM interpretive pass in `lithos-enrich` (requires `LithosConfig.lcma.llm_provider` config) — not in `lithos_retrieve` hot path
 
 Exit criteria:
 - Analogy scout returns structurally similar notes across domains
