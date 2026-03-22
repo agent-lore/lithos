@@ -12,9 +12,9 @@ LCMA turns Lithos from “notes + embeddings” into a **cognitive substrate**:
 - **Concept nodes** that emerge from stable clusters (with damping to avoid domination)
 - **Multi-agent coordination** via namespaces, scopes, and task-shared WM
 - **Auditable retrieval** (“why was this retrieved?” receipts)
-- **Two-component architecture**: `lithos-enrich` (background enrichment) + `lithos_retrieve` (lightweight query-time orchestration)
+- **Two-component architecture**: `lithos-enrich` (in-process background enrichment worker) + `lithos_retrieve` (lightweight query-time orchestration)
 
-The architecture is split into two runtime components: **`lithos-enrich`** runs as a background daemon or scheduled process, performing expensive query-independent work (concept node creation, typed edge building, salience score updates, coactivation tracking, Terrace 2 LLM synthesis). Its outputs are persistent artifacts discoverable via `lithos_search`. **`lithos_retrieve`** is a lightweight, synchronous MCP tool that assembles pre-computed enrichment into a ranked result for a specific query — fast because the heavy lifting already happened in the background.
+The architecture is split into two runtime components: **`lithos-enrich`** runs as an in-process background worker inside the Lithos server, performing expensive query-independent work (concept node creation, typed edge building, salience score updates, coactivation tracking, Terrace 2 LLM synthesis). Its outputs are persistent artifacts discoverable via `lithos_search`. **`lithos_retrieve`** is a lightweight, synchronous MCP tool that assembles pre-computed enrichment into a ranked result for a specific query — fast because the heavy lifting already happened in the background.
 
 ### Non-goals
 
@@ -52,7 +52,13 @@ A `KnowledgeDocument` — an Obsidian-compatible Markdown note with YAML frontma
 - `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
 - `entities` (list of extracted entity names)
 - `status` (enum: `active|archived|quarantined`, default `active`)
-- `summaries.short` / `summaries.long` (optional)
+- `summaries` (optional nested object with `short` and `long` fields)
+
+Implementation notes:
+
+- `summaries` is stored in YAML as a nested mapping, not dotted keys.
+- LCMA frontmatter fields are additive and backward-compatible.
+- `namespace` defaults from the document path when absent and may be synthesized at read time for legacy notes rather than eagerly written.
 
 **Dynamic signals (stored in `stats.db`, NOT in frontmatter):**
 
@@ -90,7 +96,7 @@ PTS is exposed as a **new** `lithos_retrieve` tool. The existing `lithos_search`
 
 - vector similarity top-k → `ChromaIndex.search()` (existing)
 - lexical match → `TantivyIndex.search()` (existing)
-- tags/metadata → `KnowledgeManager.list_documents()` with filters (existing)
+- tags/metadata → `KnowledgeManager.list_all()` with filters (existing)
 - graph neighbors → `KnowledgeGraph.get_links()` (NetworkX, existing) + `edges.db` queries (new)
 - recency → sort by `updated_at` from knowledge manager (existing)
 - analogy → new (frame extraction, no existing equivalent)
@@ -177,6 +183,10 @@ Lithos already provides: agent registry (`lithos_agent_register`), task lifecycl
 - per-agent WM + per-task shared WM (linked to existing `task_id` from coordination)
 - write policies for reinforcement into shared memory (can gate via existing claim mechanics)
 
+Implementation note:
+
+- In MVP 1, namespace/access-scope enforcement is guaranteed on `lithos_retrieve`. Existing tools such as `lithos_read`, `lithos_search`, and `lithos_list` remain backward-compatible and do not gain caller-context-aware access control in the first slice.
+
 ### F) Cold-start / bootstrap behavior
 
 When no weights/stats exist:
@@ -200,6 +210,11 @@ At retrieval time:
 - namespace filter is applied at scout generation
 - scope rules prevent cross-project leakage
 - “shared patterns” can be opt-in allowlisted
+
+MVP 1 boundary:
+
+- Scope filtering is implemented in `lithos_retrieve` and its scouts first.
+- Existing direct-access tools remain unchanged until a separate caller-context contract is introduced.
 
 ### I) Temperature is operationalized
 
@@ -279,10 +294,11 @@ Add `schema_version` per note and a migration registry.
 LCMA has two runtime components:
 
 - **`lithos_retrieve` (MCP tool, synchronous)**: Terrace 0 + Terrace 1 only. Uses pre-computed enrichment from `stats.db` and `edges.db`. Fast enough for the client hot path.
-- **`lithos-enrich` (background process)**: Runs consolidation, concept formation, Terrace 2 LLM synthesis, decay, and edge reinforcement. Triggered via two modes:
-  - **Event-driven incremental**: Subscribes to the existing Lithos event bus (`events.py`). Actions that change knowledge state (`lithos_write`, `lithos_delete`, `lithos_task_complete`, `lithos_finding_post`, `lithos_edge_create/update`) emit events that are written to the `enrich_queue` table in `stats.db`. A periodic drain (e.g., every 5 minutes) processes pending queue entries, targeting only affected nodes. Multiple events for the same node are deduplicated within a drain cycle.
+- **`lithos-enrich` (in-process worker)**: Runs consolidation, concept formation, Terrace 2 LLM synthesis, decay, and edge reinforcement. Triggered via two modes:
+  - **Event-driven incremental**: Runs inside the Lithos server process and subscribes to the existing in-memory event bus (`events.py`). Actions that change knowledge state (`lithos_write`, `lithos_delete`, `lithos_task_complete`, `lithos_finding_post`, `lithos_edge_create/update`) enqueue work into the `enrich_queue` table in `stats.db`. A periodic drain (e.g., every 5 minutes) processes pending queue entries, targeting only affected nodes. Multiple events for the same node are deduplicated within a drain cycle.
   - **Scheduled full sweep** (default: daily, configurable): Runs a full enrichment pass across all nodes regardless of queue state — recomputes decay, runs full concept cluster analysis, and catches anything missed by incremental runs.
   - Writes persistent artifacts (concept nodes, edges, salience scores) discoverable via `lithos_search`.
+  - The incremental path is intentionally best-effort; the scheduled full sweep is authoritative and repairs anything missed due to lossy event delivery.
 
 ---
 
@@ -542,7 +558,7 @@ def scout_lexical(q: QueryContext, k: int) -> list[Candidate]:
     ...
 
 def scout_tags_meta(q: QueryContext, k: int) -> list[Candidate]:
-    # Wraps existing KnowledgeManager.list_documents(tags, author, path_prefix)
+    # Wraps existing KnowledgeManager.list_all(tags=..., author=..., path_prefix=...)
     ...
 
 def scout_graph(q: QueryContext, seed_nodes: list[str], k: int) -> list[Candidate]:
@@ -552,7 +568,7 @@ def scout_graph(q: QueryContext, seed_nodes: list[str], k: int) -> list[Candidat
     ...
 
 def scout_recency(q: QueryContext, k: int) -> list[Candidate]:
-    # Wraps existing KnowledgeManager.list_documents(since=...) sorted by updated_at
+    # Wraps existing KnowledgeManager.list_all(since=...) sorted by updated_at
     ...
 
 def scout_analogy(q: QueryContext, k: int) -> list[Candidate]:
@@ -571,6 +587,7 @@ def scout_contradictions(q: QueryContext, seed_nodes: list[str]) -> list[str]:
 Notes:
 
 - All scouts must apply `namespace_filter` and `access_scope` gating **before returning** candidates.
+- In MVP 1, this gating is local to `lithos_retrieve`; legacy tools keep their current behavior until explicit caller-context support is added.
 - Existing search tools (`lithos_search`) remain available for direct client use.
     
 
@@ -1016,6 +1033,11 @@ Migrations must be idempotent and never remove existing fields.
 
 Each MVP builds on the existing Lithos infrastructure. Existing tools are extended with backward-compatible optional parameters (e.g., `lithos_write` gains optional `note_type`, `namespace`, `access_scope` params with defaults that preserve current behavior). LCMA adopts the shared `lithos_write` status-based response contract from the source-url dedup + digest v2 plans (`created`/`updated`/`duplicate` with optional `warnings`) rather than introducing a separate return shape.
 
+Write-contract note for LCMA params:
+
+- New LCMA fields follow the existing write-contract model: omitted values preserve existing values on update unless a field-specific clear rule is explicitly defined.
+- Any field that needs clear semantics at the MCP boundary must specify them individually before implementation.
+
 ## MVP 1 (3 scouts + Terrace 1 — wraps existing engines)
 
 > **Note**: `lithos_retrieve` in MVP 1 implements Terrace 0 + Terrace 1 only. Terrace 2 (LLM pass) is not part of `lithos_retrieve` — it belongs to `lithos-enrich`.
@@ -1030,10 +1052,12 @@ Each MVP builds on the existing Lithos infrastructure. Existing tools are extend
 - `data/.lithos/stats.db` (node_stats, coactivation)
 - New tools: `lithos_edge_create`, `lithos_edge_list`, `lithos_node_stats`
 - Schema versioning: `schema_version` field + migration registry
+- `summaries` stored as nested YAML (`summaries: { short, long }`)
+- `lithos_retrieve` owns namespace/access-scope enforcement in MVP 1; legacy tools remain unchanged
 
 ## MVP 2 (v2 essentials)
 
-> **Note**: `lithos-enrich` is introduced in MVP 2 as a background process. It handles concept formation, edge building, salience scoring, and decay. `lithos_retrieve` continues to use only Terrace 0 + Terrace 1, now benefiting from pre-computed enrichment.
+> **Note**: `lithos-enrich` is introduced in MVP 2 as an in-process background worker. It handles concept formation, edge building, salience scoring, and decay. `lithos_retrieve` continues to use only Terrace 0 + Terrace 1, now benefiting from pre-computed enrichment.
 
 - Negative reinforcement on ignored/misleading (stats.db updates)
 - Contradiction edges with `unreviewed` state + `lithos_conflict_resolve` tool
@@ -1139,4 +1163,4 @@ The external LLM provider will be configured via a new `LithosConfig` field (pro
 - Clients who need salience-weighted, graph-aware, multi-scout ranked results use `lithos_retrieve`.
 - **Terrace 2 (LLM pass) belongs to `lithos-enrich`** because: (a) it is expensive, (b) it is not query-specific in the same way — it synthesizes knowledge proactively, (c) clients should not block waiting for LLM synthesis.
 - **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`) are additive. The envelope adds `temperature`, `terrace_reached`, and `receipt_id`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
-- **Enrichment queue pattern**: Rather than triggering `lithos-enrich` directly on each action, triggering actions emit events via the existing Lithos event bus. `lithos-enrich` subscribes to these events and writes to an `enrich_queue` table in `stats.db`. A periodic drain processes pending work, deduplicating multiple events for the same node. A daily full sweep catches anything missed and recomputes global signals (decay, concept clusters). This avoids redundant enrichment runs (e.g., 10 task completions → 1 enrichment run), enables incremental targeted processing, and leverages existing event infrastructure with no new event system required.
+- **Enrichment queue pattern**: Rather than triggering `lithos-enrich` directly on each action, triggering actions emit events via the existing Lithos event bus. The in-process `lithos-enrich` worker subscribes to these events and writes to an `enrich_queue` table in `stats.db`. A periodic drain processes pending work, deduplicating multiple events for the same node. A daily full sweep catches anything missed and recomputes global signals (decay, concept clusters). This avoids redundant enrichment runs (e.g., 10 task completions → 1 enrichment run), enables incremental targeted processing, and leverages existing event infrastructure with no new event system required.
