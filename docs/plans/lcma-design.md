@@ -12,6 +12,9 @@ LCMA turns Lithos from “notes + embeddings” into a **cognitive substrate**:
 - **Concept nodes** that emerge from stable clusters (with damping to avoid domination)
 - **Multi-agent coordination** via namespaces, scopes, and task-shared WM
 - **Auditable retrieval** (“why was this retrieved?” receipts)
+- **Two-component architecture**: `lithos-enrich` (background enrichment) + `lithos_retrieve` (lightweight query-time orchestration)
+
+The architecture is split into two runtime components: **`lithos-enrich`** runs as a background daemon or scheduled process, performing expensive query-independent work (concept node creation, typed edge building, salience score updates, coactivation tracking, Terrace 2 LLM synthesis). Its outputs are persistent artifacts discoverable via `lithos_search`. **`lithos_retrieve`** is a lightweight, synchronous MCP tool that assembles pre-computed enrichment into a ranked result for a specific query — fast because the heavy lifting already happened in the background.
 
 ### Non-goals
 
@@ -93,11 +96,13 @@ PTS is exposed as a **new** `lithos_retrieve` tool. The existing `lithos_search`
 - analogy → new (frame extraction, no existing equivalent)
 - exploration → new (novelty/random sampling)
 
+> **Architecture note**: `lithos_retrieve` is fast enough for synchronous client use because `lithos-enrich` has already performed the expensive enrichment work in the background. **Terrace 2 (LLM interpretive pass) is NOT part of `lithos_retrieve`** — it belongs to `lithos-enrich`, which runs asynchronously. `lithos_retrieve` only executes Terrace 0 and Terrace 1.
+
 **Terraces**:
 
 - Terrace 0: union candidates (cheap)
 - Terrace 1: fast re-rank (diversity + priors)
-- Terrace 2: optional LLM interpretive pass for final selection
+- Terrace 2 (LLM pass — **belongs to `lithos-enrich`**, not `lithos_retrieve`): `llm_interpretive_select()` — semantic reranking via LLM synthesis, run asynchronously in the background by `lithos-enrich`. Not executed in the `lithos_retrieve` hot path.
 
 ## 1.3 Learning (v1)
 
@@ -267,6 +272,14 @@ Add `schema_version` per note and a migration registry.
 	- namespaces and access control (new filtering on existing tools)
 	- contradiction workflow (new, extends existing `supersedes` field)
 	- provenance and audit receipts (`receipts.jsonl`)
+
+
+#### Two-Component Runtime Architecture
+
+LCMA has two runtime components:
+
+- **`lithos_retrieve` (MCP tool, synchronous)**: Terrace 0 + Terrace 1 only. Uses pre-computed enrichment from `stats.db` and `edges.db`. Fast enough for the client hot path.
+- **`lithos-enrich` (background process)**: Runs consolidation, concept formation, Terrace 2 LLM synthesis, decay, and edge reinforcement. Triggered by `lithos_task_complete`, schedule, or WM threshold. Writes persistent artifacts (concept nodes as `.md` files, edges in `edges.db`, salience in `stats.db`) that are discoverable via `lithos_search`.
 
 ---
 
@@ -589,21 +602,14 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
     conflict_edges = scout_contradictions(q, seed_nodes=[c.node_id for c in top[:10]])
     receipt["conflicts_surfaced"] = conflict_edges
 
-    # Decide whether to go to Terrace 2 (LLM)
+    # Terrace 2 (LLM interpretive pass) is NOT part of lithos_retrieve.
+    # It belongs to lithos-enrich, which runs asynchronously in the background.
+    # should_use_llm_pass() and llm_interpretive_select() are lithos-enrich concerns.
+    # terrace_reached will always be 0 or 1 for lithos_retrieve.
     terrace = 1
-    if should_use_llm_pass(q, temp, conflict_edges):
-        terrace = 2
-        final = llm_interpretive_select(q, top)   # choose 8-15, identify bridges, request follow-ups
-        # optional targeted follow-up retrieval based on LLM prompts if still high temp
-        if final.confidence < 0.5 and temp > 0.6:
-            extra = targeted_followups(q, final.followup_queries)
-            ranked2 = rerank_fast(q, top + extra)
-            final = llm_interpretive_select(q, ranked2[:40])
-        final_nodes = final.nodes[:q.max_context_nodes]
-    else:
-        final_nodes = top[:q.max_context_nodes]
+    final_nodes = top[:q.max_context_nodes]
 
-    receipt["terrace_reached"] = terrace
+    receipt["terrace_reached"] = terrace  # max=1 for lithos_retrieve; Terrace 2 is lithos-enrich
     receipt["final_nodes"] = summarize_reasons(final_nodes)
 
     write_receipt(receipt)
@@ -786,6 +792,8 @@ def weaken_edges_for_bad_context(retrieved_nodes: list[str], bad_nodes: set[str]
 
 ## 5.7 Consolidation (WM → LTM “rest period”)
 
+> **Note**: This function runs inside `lithos-enrich`, not in the `lithos_retrieve` hot path.
+
 Consolidation hooks into the existing task lifecycle. A natural trigger is when `lithos_task_complete` is called — the coordination system already tracks `task_id` and `agent` for each task.
 
 Run:
@@ -818,6 +826,8 @@ def consolidate(task_id: str, agent_id: str):
 ---
 
 ## 5.8 Concept Formation + Damping
+
+> **Note**: This function runs inside `lithos-enrich`, not in the `lithos_retrieve` hot path.
 
 Concept nodes are regular `KnowledgeDocument` notes with `note_type: "concept"`, created via `lithos_write`. Member links are `is_example_of` edges in `edges.db`.
 
@@ -959,6 +969,8 @@ Each MVP builds on the existing Lithos infrastructure. Existing tools are extend
 
 ## MVP 1 (3 scouts + Terrace 1 — wraps existing engines)
 
+> **Note**: `lithos_retrieve` in MVP 1 implements Terrace 0 + Terrace 1 only. Terrace 2 (LLM pass) is not part of `lithos_retrieve` — it belongs to `lithos-enrich`.
+
 - Verify existing `coordination.db` migration path remains stable (already implemented)
 - `lithos_retrieve` tool orchestrating scouts internally
 - Scouts: vector (ChromaDB), lexical (Tantivy), tags/recency (KnowledgeManager)
@@ -972,6 +984,8 @@ Each MVP builds on the existing Lithos infrastructure. Existing tools are extend
 
 ## MVP 2 (v2 essentials)
 
+> **Note**: `lithos-enrich` is introduced in MVP 2 as a background process. It handles concept formation, edge building, salience scoring, and decay. `lithos_retrieve` continues to use only Terrace 0 + Terrace 1, now benefiting from pre-computed enrichment.
+
 - Negative reinforcement on ignored/misleading (stats.db updates)
 - Contradiction edges with `unreviewed` state + `lithos_conflict_resolve` tool
 - Namespace + access_scope filtering on scouts
@@ -979,6 +993,8 @@ Each MVP builds on the existing Lithos infrastructure. Existing tools are extend
 - Graph scout querying both NetworkX and edges.db
 
 ## MVP 3 (Hofstadter-flavored)
+
+> **Note**: Terrace 2 (LLM pass) is part of `lithos-enrich`, not `lithos_retrieve`. It runs asynchronously in the background. `lithos_retrieve` remains Terrace 0 + Terrace 1 only.
 
 - Analogy scout (frame extraction — new, no existing equivalent)
 - Temperature-based exploration depth
@@ -1065,3 +1081,11 @@ LCMA is also compatible with cross-plan metadata additions: `source_url`, `deriv
 When `should_use_llm_pass()` returns `True` in MVP 1, the implementation should fall through to `final_nodes = top[:q.max_context_nodes]` as if Terrace 1 was the terminal decision, and log a debug note that Terrace 2 is not yet configured.
 
 The external LLM provider will be configured via a new `LithosConfig` field (provisionally `LithosConfig.lcma.llm_provider`) when MVP 2 ships.
+
+### 7.x Two-Component Design Rationale
+
+- **`lithos-enrich`** does the expensive, query-independent work in the background. Its outputs (concept nodes as `.md` files, edges in `edges.db`, salience scores in `stats.db`) are persistent and discoverable via `lithos_search`.
+- **`lithos_retrieve`** is the thin query-time layer that assembles pre-computed enrichment into a ranked result for a specific query. It is fast because the heavy lifting already happened.
+- Clients who only need content can use `lithos_search` and benefit from enrichment passively — concept nodes created by `lithos-enrich` are regular `.md` files indexed by the standard search pipeline.
+- Clients who need salience-weighted, graph-aware, multi-scout ranked results use `lithos_retrieve`.
+- **Terrace 2 (LLM pass) belongs to `lithos-enrich`** because: (a) it is expensive, (b) it is not query-specific in the same way — it synthesizes knowledge proactively, (c) clients should not block waiting for LLM synthesis.
