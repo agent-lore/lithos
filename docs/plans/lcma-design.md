@@ -436,6 +436,7 @@ Append-only JSONL: `data/.lithos/receipts.jsonl`
 
 ```json
 {
+  "id": "rcpt_7f3a9c12",
   "ts":"2026-02-26T18:12:01Z",
   "query":"add dynamic memory management to lithos",
   "namespace_filter":["project/lithos","shared"],
@@ -470,16 +471,42 @@ class QueryContext:
     max_context_nodes: int
 
 class Candidate:
+    """Internal working type during PTS pipeline. Projected to ResultItem on output."""
     node_id: str
     score: float
     reasons: list[str]
     scouts: list[str]
 
+class ResultItem:
+    """A single result — superset of lithos_search result fields."""
+    # lithos_search fields (all preserved):
+    id: str
+    title: str
+    snippet: str
+    score: float
+    path: str
+    source_url: str
+    updated_at: str
+    is_stale: bool
+    derived_from_ids: list[str]
+    # LCMA-only extras (additive):
+    reasons: list[str]   # why this node was retrieved
+    scouts: list[str]    # which scouts surfaced it
+    salience: float      # from stats.db
+
 class RetrievalResult:
-    final_nodes: list[Candidate]
+    """Response shape is structurally compatible with lithos_search.
+
+    The top-level `results` key mirrors lithos_search so clients can
+    switch between tools without rewriting result-handling code.
+    LCMA-specific fields (reasons, scouts, salience, temperature,
+    terrace_reached, receipt_id) are additive — clients that only
+    read id/title/score/snippet will work unchanged.
+    """
+    results: list[ResultItem]   # compatible with lithos_search results
     temperature: float
     terrace_reached: int
-    receipt: dict
+    receipt_id: str             # reference to receipts.jsonl entry
 ```
 
 ---
@@ -614,11 +641,17 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
 
     write_receipt(receipt)
 
+    # Project Candidates to ResultItems (compatible with lithos_search)
+    result_items = [
+        project_to_result_item(c, knowledge_manager)
+        for c in final_nodes
+    ]
+
     return RetrievalResult(
-        final_nodes=final_nodes,
+        results=result_items,
         temperature=temp,
         terrace_reached=terrace,
-        receipt=receipt
+        receipt_id=receipt["id"]
     )
 ```
 
@@ -1089,3 +1122,4 @@ The external LLM provider will be configured via a new `LithosConfig` field (pro
 - Clients who only need content can use `lithos_search` and benefit from enrichment passively — concept nodes created by `lithos-enrich` are regular `.md` files indexed by the standard search pipeline.
 - Clients who need salience-weighted, graph-aware, multi-scout ranked results use `lithos_retrieve`.
 - **Terrace 2 (LLM pass) belongs to `lithos-enrich`** because: (a) it is expensive, (b) it is not query-specific in the same way — it synthesizes knowledge proactively, (c) clients should not block waiting for LLM synthesis.
+- **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`) are additive. The envelope adds `temperature`, `terrace_reached`, and `receipt_id`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
