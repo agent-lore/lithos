@@ -279,7 +279,10 @@ Add `schema_version` per note and a migration registry.
 LCMA has two runtime components:
 
 - **`lithos_retrieve` (MCP tool, synchronous)**: Terrace 0 + Terrace 1 only. Uses pre-computed enrichment from `stats.db` and `edges.db`. Fast enough for the client hot path.
-- **`lithos-enrich` (background process)**: Runs consolidation, concept formation, Terrace 2 LLM synthesis, decay, and edge reinforcement. Triggered by `lithos_task_complete`, schedule, or WM threshold. Writes persistent artifacts (concept nodes as `.md` files, edges in `edges.db`, salience in `stats.db`) that are discoverable via `lithos_search`.
+- **`lithos-enrich` (background process)**: Runs consolidation, concept formation, Terrace 2 LLM synthesis, decay, and edge reinforcement. Triggered via two modes:
+  - **Event-driven incremental**: Subscribes to the existing Lithos event bus (`events.py`). Actions that change knowledge state (`lithos_write`, `lithos_delete`, `lithos_task_complete`, `lithos_finding_post`, `lithos_edge_create/update`) emit events that are written to the `enrich_queue` table in `stats.db`. A periodic drain (e.g., every 5 minutes) processes pending queue entries, targeting only affected nodes. Multiple events for the same node are deduplicated within a drain cycle.
+  - **Scheduled full sweep** (default: daily, configurable): Runs a full enrichment pass across all nodes regardless of queue state — recomputes decay, runs full concept cluster analysis, and catches anything missed by incremental runs.
+  - Writes persistent artifacts (concept nodes, edges, salience scores) discoverable via `lithos_search`.
 
 ---
 
@@ -416,6 +419,19 @@ Table: `coactivation`
 - `count` INTEGER
 - `last_at` TEXT  
     PK `(node_id_a, node_id_b, namespace)`
+
+Table: `enrich_queue`
+
+- `id` INTEGER PK (autoincrement)
+- `trigger_type` TEXT — `'write'`, `'delete'`, `'task_complete'`, `'finding_post'`, `'edge_write'`, `'full_sweep'`
+- `node_id` TEXT NULL — affected node UUID (if applicable)
+- `task_id` TEXT NULL — affected task ID (if applicable)
+- `triggered_at` TEXT — ISO datetime
+- `processed_at` TEXT NULL — NULL = pending; set when processed
+
+Index: `(processed_at)` for fast pending-item queries.
+
+Deduplication: enrichment drains by `SELECT DISTINCT node_id WHERE processed_at IS NULL` — multiple events for the same node are processed once per drain cycle.
 
 ## 4.5 Embeddings Store
 
@@ -825,7 +841,7 @@ def weaken_edges_for_bad_context(retrieved_nodes: list[str], bad_nodes: set[str]
 
 ## 5.7 Consolidation (WM → LTM “rest period”)
 
-> **Note**: This function runs inside `lithos-enrich`, not in the `lithos_retrieve` hot path.
+> **Note**: This function runs inside `lithos-enrich`, not in the `lithos_retrieve` hot path. It is triggered via the enrichment queue: `lithos_task_complete` emits an event that writes a `task_complete` entry to `enrich_queue`; the next drain cycle calls `consolidate()` for that task. For the daily full sweep, consolidation runs for all tasks completed since the last full run.
 
 Consolidation hooks into the existing task lifecycle. A natural trigger is when `lithos_task_complete` is called — the coordination system already tracks `task_id` and `agent` for each task.
 
@@ -1123,3 +1139,4 @@ The external LLM provider will be configured via a new `LithosConfig` field (pro
 - Clients who need salience-weighted, graph-aware, multi-scout ranked results use `lithos_retrieve`.
 - **Terrace 2 (LLM pass) belongs to `lithos-enrich`** because: (a) it is expensive, (b) it is not query-specific in the same way — it synthesizes knowledge proactively, (c) clients should not block waiting for LLM synthesis.
 - **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`) are additive. The envelope adds `temperature`, `terrace_reached`, and `receipt_id`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
+- **Enrichment queue pattern**: Rather than triggering `lithos-enrich` directly on each action, triggering actions emit events via the existing Lithos event bus. `lithos-enrich` subscribes to these events and writes to an `enrich_queue` table in `stats.db`. A periodic drain processes pending work, deduplicating multiple events for the same node. A daily full sweep catches anything missed and recomputes global signals (decay, concept clusters). This avoids redundant enrichment runs (e.g., 10 task completions → 1 enrichment run), enables incremental targeted processing, and leverages existing event infrastructure with no new event system required.

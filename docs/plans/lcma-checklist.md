@@ -26,7 +26,7 @@ Exit criteria (all MVPs):
 
 ### Storage
 - [ ] Create `data/.lithos/edges.db` with `edges` table and indexes
-- [ ] Create `data/.lithos/stats.db` with `node_stats` and `coactivation` tables
+- [ ] Create `data/.lithos/stats.db` with `node_stats`, `coactivation`, and `enrich_queue` tables (`enrich_queue`: `id`, `trigger_type`, `node_id`, `task_id`, `triggered_at`, `processed_at`; index on `processed_at`)
 - [ ] Create `data/.lithos/receipts.jsonl` append-only audit log (each entry includes `id` field for `receipt_id` reference)
 - [ ] Create `data/.lithos/migrations/registry.json` schema migration registry
 - [ ] Implement schema migration runner (idempotent, never removes existing fields)
@@ -62,7 +62,9 @@ Exit criteria:
 ## MVP 2 — Reinforcement & Namespacing
 
 ### Background process
-- [ ] Introduce `lithos-enrich` background process: event-driven (triggered by `lithos_task_complete`, schedule, WM size threshold); runs consolidation, concept formation, decay, and edge reinforcement outside the `lithos_retrieve` hot path
+- [ ] Introduce `lithos-enrich` background process with two triggering modes:
+  - **Incremental**: subscribe to existing Lithos event bus; `lithos_write`, `lithos_delete`, `lithos_task_complete`, `lithos_finding_post`, `lithos_edge_create/update` events write to `enrich_queue`; periodic drain (e.g. every 5 min) processes pending entries, deduplicating by `node_id`
+  - **Full sweep**: daily scheduled run (configurable interval) across all nodes — recomputes decay, full concept cluster analysis, catches anything missed by incremental runs
 
 - [ ] Negative reinforcement: penalize ignored nodes per query class (`stats.db` updates)
 - [ ] Negative reinforcement: penalize misleading nodes with stronger salience decay + quarantine threshold
@@ -71,7 +73,7 @@ Exit criteria:
 - [ ] `lithos_conflict_resolve` tool (resolution states: `unreviewed|accepted_dual|superseded|refuted|merged`)
 - [ ] Contradiction surfacing in retrieval for design/decision/synthesis/debug query classes
 - [ ] Namespace + `access_scope` filtering applied in all scouts
-- [ ] Consolidation in `lithos-enrich` triggered by `lithos_task_complete` (WM → LTM: reinforce co-activated edges, promote confirmed hypotheses)
+- [ ] Consolidation in `lithos-enrich` triggered via `enrich_queue` (`task_complete` entries from `lithos_task_complete` events; also runs during daily full sweep for all tasks since last run)
 - [ ] Graph scout querying both NetworkX wiki-link graph and `edges.db` typed edges
 - [ ] `lithos_edge_update` tool (adjust weight or conflict state)
 
