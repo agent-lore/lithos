@@ -42,10 +42,14 @@ ENV PYTHONUNBUFFERED=1
 # Install curl for HEALTHCHECK
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
-# Create data directory
-RUN mkdir -p /data/knowledge /data/index /data/chroma /data/graph
+# Create runtime user and data directory with host-friendly ownership
+RUN groupadd --gid 1000 lithos \
+    && useradd --uid 1000 --gid 1000 --create-home --home-dir /home/lithos --shell /usr/sbin/nologin lithos \
+    && mkdir -p /data/knowledge /data/index /data/chroma /data/graph \
+    && chown -R 1000:1000 /data /home/lithos
 
 # Default environment variables
+ENV HOME=/home/lithos
 ENV LITHOS_DATA_DIR=/data
 ENV LITHOS_HOST=0.0.0.0
 ENV LITHOS_PORT=8765
@@ -56,6 +60,8 @@ EXPOSE 8765
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8765/health || exit 1
+
+USER 1000:1000
 
 # Default command: run SSE server
 CMD ["python", "-m", "lithos.cli", "serve", "--transport", "sse", "--host", "0.0.0.0", "--port", "8765"]
