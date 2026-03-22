@@ -84,7 +84,7 @@ A regular `KnowledgeDocument` with `note_type: "concept"` — created via `litho
 
 ## 1.2 Retrieval: PTS-lite
 
-PTS is exposed as a **new** `lithos_retrieve` tool. The existing `lithos_search` (Tantivy full-text) and `lithos_semantic` (ChromaDB) tools remain available for direct use by clients.
+PTS is exposed as a **new** `lithos_retrieve` tool. The existing `lithos_search` tool remains available for direct use by clients.
 
 **Scouts** (parallel candidate generators, mapped to existing infrastructure):
 
@@ -260,7 +260,7 @@ Add `schema_version` per note and a migration registry.
 
 3. **Retrieval layer (PTS — new, alongside existing tools)**
 	- New `lithos_retrieve` tool orchestrates scouts
-	- Existing `lithos_search` and `lithos_semantic` remain as direct-access tools
+	- Existing `lithos_search` remains as a direct-access tool
 	- Terraces re-rank and optionally interpret
 
 4. **Learning layer (new)**
@@ -571,7 +571,7 @@ def scout_contradictions(q: QueryContext, seed_nodes: list[str]) -> list[str]:
 Notes:
 
 - All scouts must apply `namespace_filter` and `access_scope` gating **before returning** candidates.
-- Existing search tools (`lithos_search`, `lithos_semantic`) remain available for direct client use.
+- Existing search tools (`lithos_search`) remain available for direct client use.
     
 
 ---
@@ -1064,10 +1064,10 @@ Each MVP builds on the existing Lithos infrastructure. Existing tools are extend
 
 ## Alignment with Existing Lithos (preserving backward compatibility)
 
-### Existing tools preserved (20 tools, no renames or removals)
+### Existing tools preserved (24 tools, no renames or removals)
 
-- Knowledge: `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_semantic`, `lithos_list`
-- Graph: `lithos_links`, `lithos_tags`
+- Knowledge: `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup`
+- Graph: `lithos_links`, `lithos_tags`, `lithos_provenance`
 - Agents: `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list`
 - Coordination: `lithos_task_create`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_status`
 - Findings: `lithos_finding_post`, `lithos_finding_list`

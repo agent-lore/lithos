@@ -8,7 +8,7 @@ Dependencies: Phases 0 through 6.5 complete ✅
 Exit criteria (all MVPs):
 - LCMA features remain additive and consistent with canonical write contract
 - On-disk compatibility preserved throughout rollout
-- All existing 20 tools preserved with no renames or removals
+- All existing 24 tools preserved with no renames or removals
 
 ---
 
