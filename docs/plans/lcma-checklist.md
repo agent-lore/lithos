@@ -42,8 +42,8 @@ Exit criteria (all MVPs):
 - [ ] All scouts apply `namespace_filter` and `access_scope` gating before returning candidates
 - [ ] MVP 1 explicitly keeps legacy tools (`lithos_read`, `lithos_search`, `lithos_list`) backward-compatible; caller-context-aware scope enforcement begins in `lithos_retrieve`
 - [ ] `scout_contradictions` is a no-op stub in MVP 1 (returns empty list); activated in MVP 2
-- [ ] `lithos_retrieve` accepts optional `query_class` parameter (enum: `lookup|debug|design|planning|write|synthesis|decision`, default `lookup`)
-- [ ] `lithos_retrieve` response shape compatible with `lithos_search`: top-level `results` key, per-item `score` always a normalized float (matching hybrid-mode `SearchResult`); per-item fields `id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids` preserved; LCMA-only extras `reasons`, `scouts`, `salience` additive; envelope adds `temperature`, `terrace_reached`, `receipt_id`, `query_class_used`
+- [ ] `lithos_retrieve` accepts optional `surface_conflicts` boolean (default `False`) — when True, surfaces contradiction edges in results
+- [ ] `lithos_retrieve` response shape compatible with `lithos_search`: top-level `results` key, per-item `score` always a normalized float (matching hybrid-mode `SearchResult`); per-item fields `id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids` preserved; LCMA-only extras `reasons`, `scouts`, `salience` additive; envelope adds `temperature`, `terrace_reached`, `receipt_id`
 
 ### Learning
 - [ ] Basic positive reinforcement on retrieval (salience + spaced rep strength updates in `stats.db`)
@@ -71,12 +71,12 @@ Exit criteria:
   - **Full sweep**: daily scheduled run (configurable interval) across all nodes — recomputes decay, full concept cluster analysis, catches anything missed by incremental runs
 - [ ] Treat the daily full sweep as authoritative repair for any missed best-effort incremental triggers
 
-- [ ] Negative reinforcement: penalize ignored nodes per query class (`stats.db` updates)
+- [ ] Negative reinforcement: penalize ignored nodes (salience decay in `stats.db` when chronically ignored)
 - [ ] Negative reinforcement: penalize misleading nodes with stronger salience decay + quarantine threshold
 - [ ] Weaken edges that pulled in bad-context nodes
 - [ ] Contradiction edges: `type="contradicts"` with `conflict_state` in `edges.db`
 - [ ] `lithos_conflict_resolve` tool (resolution states: `unreviewed|accepted_dual|superseded|refuted|merged`)
-- [ ] Contradiction surfacing in retrieval for design/decision/synthesis/debug query classes
+- [ ] Contradiction surfacing in retrieval when `surface_conflicts=True` is passed to `lithos_retrieve`
 - [ ] Namespace + `access_scope` filtering applied in all scouts
 - [ ] Consolidation in `lithos-enrich` triggered via `enrich_queue` (`task_complete` entries from `lithos_task_complete` events; also runs during daily full sweep for all tasks since last run)
 - [ ] Graph scout querying both NetworkX wiki-link graph and `edges.db` typed edges

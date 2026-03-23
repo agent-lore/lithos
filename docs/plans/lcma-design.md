@@ -426,7 +426,6 @@ Table: `node_stats`
 - `misleading_count` INTEGER
 - `decay_rate` REAL
 - `spaced_rep_strength` REAL
-- `per_queryclass_priors` TEXT (JSON map)
 
 
 Table: `coactivation`
@@ -488,7 +487,7 @@ Append-only JSONL: `data/.lithos/receipts.jsonl`
   "ts":"2026-02-26T18:12:01Z",
   "query":"add dynamic memory management to lithos",
   "namespace_filter":["project/lithos","shared"],
-  "query_class":"design",
+  "surface_conflicts":true,
   "temperature":0.42,
   "scouts_fired":["vector","lexical","graph","analogy","exploration"],
   "candidates_considered":97,
@@ -510,23 +509,12 @@ The pseudocode is designed so you can implement MVP first, then add sophisticati
 ## 5.1 Types
 
 ```python
-class QueryClass(str, Enum):
-    """Canonical query classes. Optional on lithos_retrieve (default: LOOKUP).
-    Server-side inference from query text is deferred to a future phase."""
-    LOOKUP = "lookup"           # simple retrieval, no special behavior
-    DEBUG = "debug"             # debugging/troubleshooting context
-    DESIGN = "design"           # architectural/design decisions
-    PLANNING = "planning"       # task planning and roadmapping
-    WRITE = "write"             # content authoring context
-    SYNTHESIS = "synthesis"     # multi-source synthesis
-    DECISION = "decision"       # decision-making context
-
 class QueryContext:
     query_text: str
     namespace_filter: list[str]
     agent_id: str
     task_id: str | None
-    query_class: QueryClass = QueryClass.LOOKUP  # optional, defaults to "lookup"
+    surface_conflicts: bool = False  # when True, surface contradiction edges in results
     max_context_nodes: int
 
 class Candidate:
@@ -565,14 +553,13 @@ class RetrievalResult:
     The top-level `results` key mirrors lithos_search so clients can
     switch between tools without rewriting result-handling code.
     LCMA-specific fields (reasons, scouts, salience, temperature,
-    terrace_reached, receipt_id, query_class_used) are additive — clients
-    that only read id/title/score/snippet will work unchanged.
+    terrace_reached, receipt_id) are additive — clients that only
+    read id/title/score/snippet will work unchanged.
     """
     results: list[ResultItem]   # compatible with lithos_search results
     temperature: float
     terrace_reached: int
     receipt_id: str             # reference to receipts.jsonl entry
-    query_class_used: str       # echoes the query_class applied (may differ from input if inferred in future)
 ```
 
 ---
@@ -657,7 +644,7 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
     receipt = init_receipt(q)
 
     # -------- Terrace 0: parallel scouts (cheap) --------
-    # Base k's can be tuned by query_class and temperature later.
+    # Base k's can be tuned by temperature later.
     cands = []
     cands += scout_vector(q, k=12)
     cands += scout_lexical(q, k=12)
@@ -728,8 +715,6 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
 def should_use_llm_pass(q, temp, conflict_edges) -> bool:
     if conflict_edges:
         return True
-    if q.query_class in {"design", "synthesis", "decision"} and temp > 0.25:
-        return True
     if temp > 0.6:
         return True
     return False
@@ -748,13 +733,13 @@ def rerank_fast(q: QueryContext, pool: list[Candidate]) -> list[Candidate]:
         stats = get_node_stats(c.node_id)
         meta  = read_frontmatter(c.node_id)
 
-        type_prior = note_type_prior(meta.note_type, q.query_class)
+        type_prior = note_type_prior(meta.note_type)
         scope_prior = namespace_affinity(meta.namespace, q.namespace_filter)
         concept_damp = concept_penalty_if_overused(meta.note_type, c.node_id, q)
 
         decay_boost = spaced_repetition_boost(stats)
-        ignore_pen  = ignored_penalty(stats, q.query_class)
-        mislead_pen = misleading_penalty(stats, q.query_class)
+        ignore_pen  = ignored_penalty(stats)
+        mislead_pen = misleading_penalty(stats)
 
         # Graph affinity: how connected is this node to other high candidates?
         graph_aff = quick_graph_affinity(c.node_id, [x.node_id for x in pool[:20]], meta.namespace)
@@ -861,8 +846,6 @@ def penalize_ignored(node_ids: set[str], q: QueryContext):
     for nid in node_ids:
         stats = get_node_stats(nid)
         stats.ignored_count += 1
-        # penalize per query class first
-        adjust_queryclass_prior(nid, q.query_class, delta=-0.03)
         # mild salience decay if chronic
         if stats.ignored_count > 5 and stats.ignored_count > stats.retrieval_count:
             stats.salience = clamp(stats.salience - 0.02, 0.0, 1.0)
@@ -872,7 +855,6 @@ def penalize_misleading(node_ids: set[str], q: QueryContext):
     for nid in node_ids:
         stats = get_node_stats(nid)
         stats.misleading_count += 1
-        adjust_queryclass_prior(nid, q.query_class, delta=-0.08)
         stats.salience = clamp(stats.salience - 0.05, 0.0, 1.0)
         # optional: quarantine if repeatedly misleading
         if stats.misleading_count >= 3:
@@ -967,11 +949,8 @@ def handle_contradiction(a_id: str, b_id: str, evidence: dict, namespace: str):
     e.evidence = merge_evidence(e.evidence, evidence)
     write_edge(e)
 
-def retrieval_should_surface_conflicts(query_class: str) -> bool:
-    return query_class in {"design","decision","synthesis","debug"}
-
 def surface_conflicts(nodes: list[str], q: QueryContext) -> list[str]:
-    if not retrieval_should_surface_conflicts(q.query_class):
+    if not q.surface_conflicts:
         return []
     conflicts = []
     for nid in nodes:
@@ -1196,7 +1175,7 @@ The external LLM provider will be configured via a new `LithosConfig` field (pro
 - Clients who only need content can use `lithos_search` and benefit from enrichment passively — concept nodes created by `lithos-enrich` are regular `.md` files indexed by the standard search pipeline.
 - Clients who need salience-weighted, graph-aware, multi-scout ranked results use `lithos_retrieve`.
 - **Terrace 2 (LLM pass) belongs to `lithos-enrich`** because: (a) it is expensive, (b) it is not query-specific in the same way — it synthesizes knowledge proactively, (c) clients should not block waiting for LLM synthesis.
-- **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`) are additive. The envelope adds `temperature`, `terrace_reached`, `receipt_id`, and `query_class_used`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
+- **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`) are additive. The envelope adds `temperature`, `terrace_reached`, and `receipt_id`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
 - **Enrichment queue pattern**: Rather than triggering `lithos-enrich` directly on each action, triggering actions emit events via the existing Lithos event bus. The in-process `lithos-enrich` worker subscribes to these events and writes to an `enrich_queue` table in `stats.db`. A periodic drain processes pending work, deduplicating multiple events for the same node. A daily full sweep catches anything missed and recomputes global signals (decay, concept clusters). This avoids redundant enrichment runs (e.g., 10 task completions → 1 enrichment run), enables incremental targeted processing, and leverages existing event infrastructure with no new event system required.
 
 ### 7.y When to Use Which Tool
