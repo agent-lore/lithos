@@ -48,9 +48,9 @@ A `KnowledgeDocument` — an Obsidian-compatible Markdown note with YAML frontma
 
 - `schema_version` (int, default 1)
 - `namespace` (str, derived from path if absent, e.g. `"project/lithos"`)
-- `access_scope` (enum: `agent_private|task|project|shared|user_private`, default `shared`) — **advisory filtering**, not a security control (see trust model note below)
+- `access_scope` (enum: `agent_private|task|project|shared`, default `shared`) — **advisory filtering**, not a security control (see trust model note below)
 - `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
-- `entities` (list of extracted entity names)
+- `entities` (list of extracted entity names) — **deferred to MVP 2**: auto-extracted by `lithos-enrich`; not populated in MVP 1
 - `status` (enum: `active|archived|quarantined`, default `active`)
 - `summaries` (optional nested object with `short` and `long` fields)
 
@@ -136,7 +136,7 @@ LCMA must be able to **lose confidence**, not only gain it.
 - **Positive reinforcement**: strengthen edges / salience when helpful
 - **Negative reinforcement**: weaken edges / priors when repeatedly irrelevant or misleading
 
-Key rule: apply penalties **contextually first** (per query type / namespace) before global decay.
+Key rule: apply penalties **contextually by namespace** before global decay.
 
 ### B) Contradiction workflow is first-class
 
@@ -288,7 +288,7 @@ Add `schema_version` per note and a migration registry.
 5. **Governance layer (extends existing coordination)**
 	- namespaces and access control (new filtering on existing tools)
 	- contradiction workflow (new, extends existing `supersedes` field)
-	- provenance and audit receipts (`receipts.jsonl`)
+	- provenance and audit receipts (`receipts` table in `stats.db`)
 
 
 #### Two-Component Runtime Architecture
@@ -324,8 +324,7 @@ data/                              # configurable via StorageConfig.data_dir
   .lithos/                         # SQLite stores + LCMA data
     coordination.db                #   agents, tasks, claims, findings
     edges.db                       #   typed weighted edges (separate from NetworkX)
-    stats.db                       #   usage stats, salience, decay
-    receipts.jsonl                 #   Auditor logs
+    stats.db                       #   usage stats, salience, decay, receipts, WM
     migrations/
       registry.json                #   schema migrations
 ```
@@ -448,7 +447,10 @@ Table: `enrich_queue`
 
 Index: `(processed_at)` for fast pending-item queries.
 
-Deduplication: enrichment drains by `SELECT DISTINCT node_id WHERE processed_at IS NULL` — multiple events for the same node are processed once per drain cycle.
+Deduplication: the drain loop handles two work types separately:
+
+1. **Node-level work**: `SELECT DISTINCT node_id FROM enrich_queue WHERE node_id IS NOT NULL AND processed_at IS NULL` — multiple events for the same node are processed once per drain cycle.
+2. **Task-level work**: `SELECT DISTINCT task_id FROM enrich_queue WHERE node_id IS NULL AND processed_at IS NULL` — each completed task triggers its own consolidation pass, avoiding NULL-collapse from `DISTINCT node_id`.
 
 Table: `working_memory`
 
@@ -457,12 +459,32 @@ Table: `working_memory`
 - `activation_count` INTEGER — how many times this node was retrieved/used in this task
 - `first_seen_at` TEXT — ISO datetime of first retrieval in this task
 - `last_seen_at` TEXT — ISO datetime of most recent retrieval in this task
-- `last_receipt_id` TEXT NULL — backreference to `receipts.jsonl` for traceability
+- `last_receipt_id` TEXT NULL — backreference to `receipts` table for traceability
     PK `(task_id, node_id)`
 
 Index: `(task_id)` for fast WM lookup per task.
 
-Working memory is the operational data structure for task-scoped retrieval tracking. `receipts.jsonl` remains the audit/explainability log but is not used for keyed lookups. Consolidation (§5.7) reads from `working_memory` instead of scanning `receipts.jsonl`.
+Working memory is the operational data structure for task-scoped retrieval tracking. The `receipts` table in `stats.db` remains the audit/explainability log but is not used for keyed lookups. Consolidation (§5.7) reads from `working_memory` instead of scanning `receipts`.
+
+**WM eviction policy**: The daily full sweep in `lithos-enrich` evicts `working_memory` entries where: (a) the associated `task_id` maps to a completed or cancelled task in `coordination.db`, OR (b) `last_seen_at` exceeds a configurable TTL (default: 7 days, via `LithosConfig.lcma.wm_eviction_days`). This prevents unbounded WM growth from crashed or abandoned agent tasks.
+
+Table: `receipts`
+
+- `id` TEXT PK — receipt ID (e.g., `rcpt_7f3a9c12`)
+- `ts` TEXT — ISO datetime
+- `query` TEXT — the query text
+- `namespace_filter` TEXT — JSON array of namespace strings
+- `agent_id` TEXT NULL
+- `task_id` TEXT NULL
+- `surface_conflicts` INTEGER — boolean (0/1)
+- `temperature` REAL
+- `scouts_fired` TEXT — JSON array of scout names
+- `candidates_considered` INTEGER
+- `terrace_reached` INTEGER
+- `final_nodes` TEXT — JSON array of `{id, reason}` objects
+- `conflicts_surfaced` TEXT — JSON array of `{edge_id, state}` objects
+
+Indexes: `(ts)`, `(task_id)`, `(agent_id)` for filtered queries via `lithos_receipts`.
 
 ## 4.5 Embeddings Store
 
@@ -479,26 +501,29 @@ This avoids introducing a separate SQLite or FAISS store — ChromaDB already ha
 
 ## 4.6 Retrieval Receipts (Auditor)
 
-Append-only JSONL: `data/.lithos/receipts.jsonl`
+Receipts are stored in the `receipts` table in `stats.db` (schema in §4.4). This provides indexed queries for `lithos_receipts` without full-file scans, and is consistent with all other LCMA stores using SQLite.
+
+Example receipt row:
 
 ```json
 {
   "id": "rcpt_7f3a9c12",
-  "ts":"2026-02-26T18:12:01Z",
-  "query":"add dynamic memory management to lithos",
-  "namespace_filter":["project/lithos","shared"],
-  "surface_conflicts":true,
-  "temperature":0.42,
-  "scouts_fired":["vector","lexical","graph","analogy","exploration"],
-  "candidates_considered":97,
-  "terrace_reached":2,
-  "final_nodes":[
-    {"id":"node_7f3a9c","reason":"concept gateway + lexical match + high salience (damped)"},
-    {"id":"node_a12b77","reason":"analogy scout: similar tradeoff pattern in different subsystem"}
+  "ts": "2026-02-26T18:12:01Z",
+  "query": "add dynamic memory management to lithos",
+  "namespace_filter": ["project/lithos", "shared"],
+  "surface_conflicts": true,
+  "temperature": 0.42,
+  "scouts_fired": ["vector", "lexical", "graph"],
+  "candidates_considered": 97,
+  "terrace_reached": 1,
+  "final_nodes": [
+    {"id": "node_7f3a9c", "reason": "concept gateway + lexical match + high salience (damped)"}
   ],
-  "conflicts_surfaced":[{"edge_id":"edge_19cc","state":"unreviewed"}]
+  "conflicts_surfaced": [{"edge_id": "edge_19cc", "state": "unreviewed"}]
 }
 ```
+
+JSON array fields (`namespace_filter`, `scouts_fired`, `final_nodes`, `conflicts_surfaced`) are stored as JSON text columns in SQLite and parsed on read.
 
 ---
 
@@ -559,7 +584,7 @@ class RetrievalResult:
     results: list[ResultItem]   # compatible with lithos_search results
     temperature: float
     terrace_reached: int
-    receipt_id: str             # reference to receipts.jsonl entry
+    receipt_id: str             # reference to receipts table entry in stats.db
 ```
 
 ---
@@ -643,8 +668,8 @@ def compute_temperature(coherence: float) -> float:
 def retrieve_pts(q: QueryContext) -> RetrievalResult:
     receipt = init_receipt(q)
 
-    # -------- Terrace 0: parallel scouts (cheap) --------
-    # Base k's can be tuned by temperature later.
+    # -------- Terrace 0: candidate generation --------
+    # Phase A — truly parallel scouts (no dependencies):
     cands = []
     cands += scout_vector(q, k=12)
     cands += scout_lexical(q, k=12)
@@ -660,7 +685,7 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
     receipt["candidates_considered"] = len(pool)
     receipt["scouts_fired"] = scouts_used(pool)
 
-    # Seed nodes for graph expansion: top N from pool
+    # Phase B — sequential (needs Phase A results as seeds):
     seed = top_ids(pool, n=10)
     pool += merge_and_normalize(scout_graph(q, seed, k=18))
 
@@ -668,13 +693,17 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
     ranked = rerank_fast(q, pool)                 # diversity, priors, concept damping, type priors
     top = ranked[:30]
 
-    # Temperature after we have a coherent set to measure
-    coherence = compute_coherence([c.node_id for c in top[:12]], namespace=dominant_namespace(q))
-    temp = compute_temperature(coherence)
+    # Temperature: use fixed default during cold start (few edges → unreliable coherence)
+    total_edges = count_edges_in_namespace(dominant_namespace(q))
+    if total_edges < TEMPERATURE_EDGE_THRESHOLD:  # default: 50, configurable via LcmaConfig
+        temp = TEMPERATURE_DEFAULT  # default: 0.5
+    else:
+        coherence = compute_coherence([c.node_id for c in top[:12]], namespace=dominant_namespace(q))
+        temp = compute_temperature(coherence)
     receipt["temperature"] = temp
 
-    # Adjust exploration based on temperature (v2)
-    if temp > 0.6:
+    # Adjust exploration based on temperature (MVP 3 — requires scout_exploration)
+    if temp > 0.6 and total_edges >= TEMPERATURE_EDGE_THRESHOLD:
         pool += merge_and_normalize(scout_exploration(q, k=8, mode="mixed"))
         ranked = rerank_fast(q, pool)
         top = ranked[:30]
@@ -689,6 +718,16 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
     # terrace_reached will always be 0 or 1 for lithos_retrieve.
     terrace = 1
     final_nodes = top[:q.max_context_nodes]
+
+    # -------- Working Memory upsert (if task-scoped) --------
+    if q.task_id is not None:
+        for c in final_nodes:
+            upsert_working_memory(
+                task_id=q.task_id,
+                node_id=c.node_id,
+                receipt_id=receipt["id"],
+            )
+            # upsert increments activation_count, updates last_seen_at and last_receipt_id
 
     receipt["terrace_reached"] = terrace  # max=1 for lithos_retrieve; Terrace 2 is lithos-enrich
     receipt["final_nodes"] = summarize_reasons(final_nodes)
@@ -764,6 +803,24 @@ def rerank_fast(q: QueryContext, pool: list[Candidate]) -> list[Candidate]:
     return mmr_diversify(out, lambda a,b: similarity(a.node_id, b.node_id), top_n=200)
 ```
 
+### `note_type_prior()` definition
+
+Static lookup returning a retrieval prior weight per `note_type`. These are initial defaults; move to `LcmaConfig.note_type_priors` for tunability.
+
+```python
+NOTE_TYPE_PRIORS: dict[str, float] = {
+    "observation": 0.5,
+    "agent_finding": 0.6,
+    "summary": 0.4,
+    "concept": 0.3,
+    "task_record": 0.2,
+    "hypothesis": 0.5,
+}
+
+def note_type_prior(note_type: str) -> float:
+    return NOTE_TYPE_PRIORS.get(note_type, 0.5)  # default 0.5 for unknown types
+```
+
 ---
 
 ## 5.6 Learning Updates After a Task (Bidirectional)
@@ -776,6 +833,8 @@ Inputs:
 - output text
 - optional user feedback / acceptance
 - agent’s explicit citations (best if you can enforce)
+
+**Call site**: `post_task_update()` is invoked server-side when an agent calls `lithos_task_complete` with the optional feedback params introduced in MVP 2: `cited_nodes: list[str]` and `misleading_nodes: list[str]`. The server retrieves the last retrieval receipt for that `task_id` from the `receipts` table, diffs `cited_nodes` against `final_nodes` to determine used vs. ignored, and calls `post_task_update()`. No new MCP tool is needed — `lithos_task_complete` is the natural extension point since agents already call it at task end.
 
 ```python
 def post_task_update(q: QueryContext, retrieval: RetrievalResult, output_text: str, citations: list[str], user_feedback=None):
@@ -1042,6 +1101,129 @@ Migrations must be idempotent and never remove existing fields.
 
 ---
 
+## 5.12 `lithos-enrich` Worker Pseudocode
+
+> **Note**: This is the other half of the two-component architecture. `lithos-enrich` runs as an in-process background worker inside the Lithos server, performing expensive query-independent enrichment. Ships in MVP 2; schema and queue created in MVP 1.
+
+```python
+class EnrichWorker:
+    def __init__(self, config: LcmaConfig, event_bus: EventBus, db: StatsDB):
+        self.config = config
+        self.event_bus = event_bus
+        self.db = db
+        self._running = False
+        self._drain_task: asyncio.Task | None = None
+        self._sweep_task: asyncio.Task | None = None
+
+    async def start(self):
+        self._running = True
+        # Subscribe to knowledge-mutating events
+        self.event_bus.subscribe("note_written", self._on_note_event)
+        self.event_bus.subscribe("note_deleted", self._on_note_event)
+        self.event_bus.subscribe("task_completed", self._on_task_event)
+        self.event_bus.subscribe("finding_posted", self._on_note_event)
+        self.event_bus.subscribe("edge_written", self._on_note_event)
+        # Start periodic loops
+        self._drain_task = asyncio.create_task(self._drain_loop())
+        self._sweep_task = asyncio.create_task(self._sweep_loop())
+
+    async def stop(self):
+        self._running = False
+        if self._drain_task:
+            self._drain_task.cancel()
+        if self._sweep_task:
+            self._sweep_task.cancel()
+
+    # ---- Event handlers: enqueue work ----
+
+    async def _on_note_event(self, event):
+        """Enqueue node-level enrichment work."""
+        self.db.execute(
+            "INSERT INTO enrich_queue (trigger_type, node_id, triggered_at) VALUES (?, ?, ?)",
+            (event.type, event.node_id, now_iso())
+        )
+
+    async def _on_task_event(self, event):
+        """Enqueue task-level consolidation work."""
+        self.db.execute(
+            "INSERT INTO enrich_queue (trigger_type, task_id, triggered_at) VALUES (?, ?, ?)",
+            ("task_complete", event.task_id, now_iso())
+        )
+
+    # ---- Drain loop: process pending queue entries ----
+
+    async def _drain_loop(self):
+        while self._running:
+            await asyncio.sleep(self.config.enrich_drain_interval_minutes * 60)
+            await self.drain()
+
+    async def drain(self):
+        """Process pending enrich_queue entries, deduplicating by work type."""
+        # Node-level work: deduplicate by node_id
+        node_rows = self.db.query(
+            "SELECT DISTINCT node_id FROM enrich_queue "
+            "WHERE node_id IS NOT NULL AND processed_at IS NULL"
+        )
+        for row in node_rows:
+            await self._enrich_node(row.node_id)
+            self.db.execute(
+                "UPDATE enrich_queue SET processed_at = ? "
+                "WHERE node_id = ? AND processed_at IS NULL",
+                (now_iso(), row.node_id)
+            )
+
+        # Task-level work: deduplicate by task_id
+        task_rows = self.db.query(
+            "SELECT DISTINCT task_id FROM enrich_queue "
+            "WHERE node_id IS NULL AND processed_at IS NULL"
+        )
+        for row in task_rows:
+            await self._consolidate_task(row.task_id)
+            self.db.execute(
+                "UPDATE enrich_queue SET processed_at = ? "
+                "WHERE task_id = ? AND node_id IS NULL AND processed_at IS NULL",
+                (now_iso(), row.task_id)
+            )
+
+    # ---- Full sweep: authoritative repair pass ----
+
+    async def _sweep_loop(self):
+        while self._running:
+            await asyncio.sleep(self._seconds_until_next_sweep())
+            await self.full_sweep()
+
+    async def full_sweep(self):
+        """Daily authoritative pass: recompute decay, concept clusters, WM eviction."""
+        all_nodes = get_all_node_ids()
+        for node_id in all_nodes:
+            apply_decay(node_id)                     # salience decay based on last_used_at
+        maybe_update_concepts(namespace=None)         # full concept cluster analysis
+        evict_stale_working_memory(                   # WM eviction policy (§4.4)
+            ttl_days=self.config.wm_eviction_days
+        )
+
+    # ---- Dispatch helpers ----
+
+    async def _enrich_node(self, node_id: str):
+        """Run enrichment for a single node: update stats, rebuild edges if needed."""
+        update_node_salience(node_id)
+        rebuild_projected_edges(node_id)              # re-sync derived_from edges
+
+    async def _consolidate_task(self, task_id: str):
+        """Run WM→LTM consolidation for a completed task."""
+        agent_id = get_task_agent(task_id)
+        consolidate(task_id, agent_id)                # §5.7 consolidation logic
+
+    def _seconds_until_next_sweep(self) -> float:
+        """Compute seconds until next scheduled sweep (default: daily at 3am)."""
+        # Parse self.config.enrich_full_sweep_cron
+        ...
+```
+
+Error handling: enrichment failures for individual nodes/tasks are logged and skipped — the next drain cycle or full sweep will retry. No dead-letter queue in MVP 2; add if failure rates warrant it.
+
+---
+
 # 6) MVP Roadmap (so this doesn’t explode)
 
 Each MVP builds on the existing Lithos infrastructure. Existing tools are extended with backward-compatible optional parameters (e.g., `lithos_write` gains optional `note_type`, `namespace`, `access_scope` params with defaults that preserve current behavior). LCMA adopts the shared `lithos_write` status-based response contract from the source-url dedup + digest v2 plans (`created`/`updated`/`duplicate` with optional `warnings`) rather than introducing a separate return shape.
@@ -1060,7 +1242,8 @@ Write-contract note for LCMA params:
 - Scouts: vector (ChromaDB), lexical (Tantivy), tags/recency (KnowledgeManager)
 - Basic rerank with `note_type` priors (requires new optional frontmatter fields)
 - Extend `lithos_write` with optional LCMA frontmatter params (`note_type`, `namespace`, `access_scope`, etc.) while reusing the shared cross-plan write payload (`source_url`, `derived_from_ids`, `ttl_hours`/`expires_at`, etc.) and shared status-based response envelope
-- `data/.lithos/receipts.jsonl` logging
+- Retrieval receipts written to `receipts` table in `stats.db`
+- Temperature returned as fixed default (0.5) — computed temperature activates in MVP 3 when edges exist
 - `data/.lithos/edges.db` (related_to) + basic reinforcement
 - `data/.lithos/stats.db` (node_stats, coactivation)
 - New tools: `lithos_edge_create`, `lithos_edge_list`, `lithos_node_stats`
@@ -1077,6 +1260,9 @@ Write-contract note for LCMA params:
 - Namespace + access_scope filtering on scouts
 - Consolidation hook on `lithos_task_complete`
 - Graph scout querying both NetworkX and edges.db
+- Extend `lithos_task_complete` with optional feedback params: `cited_nodes: list[str]`, `misleading_nodes: list[str]` — server calls `post_task_update()` on receipt
+- `lithos-enrich` auto-extracts `entities` from notes (deferred from MVP 1)
+- `lithos-enrich` pseudocode finalized (§5.12) before implementation begins
 
 ## MVP 3 (Hofstadter-flavored)
 
@@ -1092,7 +1278,7 @@ Write-contract note for LCMA params:
 # 7) Implementation Notes for Lithos Specifically
 
 - Keep Markdown as source of truth for _content_ and stable metadata.
-- Keep sqlite stores as truth for _dynamic signals_ (weights, stats, receipts).
+- Keep SQLite stores as truth for _dynamic signals_ (weights, stats, receipts — all in `stats.db`).
 - Make every agent write action policy-gated:
     - “agent can propose; librarian/auditor confirms” if you want strictness
     - Can leverage existing claim mechanics (`lithos_task_claim`) for write gating
@@ -1130,7 +1316,7 @@ Write-contract note for LCMA params:
   }
   ```
 
-  Reads from `receipts.jsonl` with optional filtering. Read-only query tool; does not affect retrieval behavior or stats.
+  Reads from the `receipts` table in `stats.db` with optional filtering. Read-only query tool; does not affect retrieval behavior or stats.
 
 Provenance query policy:
 
@@ -1168,6 +1354,31 @@ When `should_use_llm_pass()` returns `True` in MVP 1, the implementation should 
 
 The external LLM provider will be configured via a new `LithosConfig` field (provisionally `LithosConfig.lcma.llm_provider`) when MVP 2 ships.
 
+### 7.z `LcmaConfig` Schema (Draft)
+
+```python
+class LcmaConfig(BaseModel):
+    """LCMA configuration subtree under LithosConfig.lcma"""
+    enabled: bool = False                          # feature gate for MVP 1
+    enrich_drain_interval_minutes: int = 5
+    enrich_full_sweep_cron: str = "0 3 * * *"      # daily at 3am
+    rerank_weights: dict[str, float] = {
+        "type_prior": 0.25, "scope": 0.15, "graph": 0.15,
+        "decay": 0.10, "ignore": -0.20, "mislead": -0.30,
+        "concept_damp": -0.15,
+    }
+    note_type_priors: dict[str, float] = {
+        "observation": 0.5, "agent_finding": 0.6, "summary": 0.4,
+        "concept": 0.3, "task_record": 0.2, "hypothesis": 0.5,
+    }
+    temperature_default: float = 0.5               # used when edges < threshold
+    temperature_edge_threshold: int = 50            # min edges for computed temp
+    wm_eviction_days: int = 7
+    llm_provider: str | None = None                # MVP 2+, Terrace 2
+```
+
+Ship with hardcoded defaults in MVP 1. Config override via `LithosConfig.lcma` available from first release but only becomes load-bearing when `lithos-enrich` ships in MVP 2.
+
 ### 7.x Two-Component Design Rationale
 
 - **`lithos-enrich`** does the expensive, query-independent work in the background. Its outputs (concept nodes as `.md` files, edges in `edges.db`, salience scores in `stats.db`) are persistent and discoverable via `lithos_search`.
@@ -1202,11 +1413,11 @@ The following items were identified during design review and need resolution dur
 
 2. **Namespace derivation algorithm (§1.1)**: Define precisely how `namespace` is derived from `path` when absent. What namespace does `research/foo.md` get? The whole directory path? First segment only? Recommend a fallback like `"default"` for notes that don't match the `shared/`/`project/<name>/`/`agent/<id>/` convention.
 
-3. **`enrich_queue` task-level dedup (§4.4)**: Current dedup is `SELECT DISTINCT node_id WHERE processed_at IS NULL`, but `task_complete` triggers are task-level (`node_id` is NULL). Add `task_id` to the dedup key for task-level triggers. Drain should handle node-level and task-level work separately.
+3. **`enrich_queue` task-level dedup (§4.4)**: Current dedup is `SELECT DISTINCT node_id WHERE processed_at IS NULL`, but `task_complete` triggers are task-level (`node_id` is NULL). Add `task_id` to the dedup key for task-level triggers. Drain should handle node-level and task-level work separately. **Resolved**: Drain handles node-level and task-level work separately (see updated §4.4 dedup description).
 
 4. **Schema migration timing (§5.11)**: Specify lazy migration: apply defaults at read time, write back on next `lithos_write` update. This is consistent with the "existing notes without LCMA fields remain valid" guarantee.
 
-5. **`receipts.jsonl` scalability (§4.6)**: Append-only JSONL with no rotation or indexing. The `lithos_receipts` query tool would need a full file scan. Consider SQLite for receipts (consistent with other stores, gives indexed queries for free) or at minimum add a rotation policy.
+5. **~~`receipts.jsonl` scalability (§4.6)~~**: **Resolved** — receipts are now stored in the `receipts` table in `stats.db` with indexed columns `(ts)`, `(task_id)`, `(agent_id)`, consistent with other SQLite stores. **Resolved**: Receipts moved to `receipts` table in `stats.db`. All JSONL references replaced.
 
 6. **Cold-start temperature guard (§5.3)**: On cold start with no edges, coherence ≈ 0 and temperature ≈ 1.0, triggering maximum exploration on every query. Add a guard: if `total_edges < threshold`, use a fixed default temperature (e.g., 0.5) instead of computing from edge coherence.
 
@@ -1214,6 +1425,6 @@ The following items were identified during design review and need resolution dur
 
 8. **Rerank weight configurability (§5.5)**: The Terrace 1 linear combination uses hardcoded coefficients (0.25, 0.15, etc.). Move these into `LithosConfig.lcma` as a configurable weights dict to enable tuning without code changes.
 
-9. **Summaries ownership (§4.2)**: Clarify whether `summaries: {short, long}` is agent-written (via `lithos_write`), auto-generated (by `lithos-enrich`), or both. If enrich-generated, this implies background frontmatter writes — define precedence rules (does agent-written take priority?).
+9. **Summaries ownership (§4.2)**: Clarify whether `summaries: {short, long}` is agent-written (via `lithos_write`), auto-generated (by `lithos-enrich`), or both. If enrich-generated, this implies background frontmatter writes — define precedence rules (does agent-written take priority?). **Resolved**: `summaries` is agent-written only in MVP 1 (via `lithos_write`). In MVP 2, `lithos-enrich` may generate summaries for notes where `summaries` is empty or `note_type` is `concept`/`summary`. Agent-written summaries take precedence — enrich never overwrites non-empty agent-written values.
 
 10. **Enrich subscriber queue sizing (§3.2)**: The event bus is lossy (default subscriber queue size: 100, drops silently when full). Size the `lithos-enrich` subscriber queue much larger (e.g., 10,000) or have the enrich worker drain its asyncio.Queue frequently (seconds, not minutes) to minimize double-buffering overflow risk.
