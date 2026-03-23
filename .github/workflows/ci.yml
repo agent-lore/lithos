@@ -94,6 +94,8 @@ jobs:
       - name: Start Lithos
         run: |
           cd docker
+          mkdir -p data/knowledge data/index data/chroma data/graph
+          chmod -R 777 data
           LITHOS_IMAGE=lithos:test-ci LITHOS_OTEL_ENABLED=false docker compose up -d --no-build
 
       - name: Wait for server to become healthy
