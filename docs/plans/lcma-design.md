@@ -48,7 +48,7 @@ A `KnowledgeDocument` — an Obsidian-compatible Markdown note with YAML frontma
 
 - `schema_version` (int, default 1)
 - `namespace` (str, derived from path if absent, e.g. `"project/lithos"`)
-- `access_scope` (enum: `agent_private|task|project|shared|user_private`, default `shared`)
+- `access_scope` (enum: `agent_private|task|project|shared|user_private`, default `shared`) — **advisory filtering**, not a security control (see trust model note below)
 - `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
 - `entities` (list of extracted entity names)
 - `status` (enum: `active|archived|quarantined`, default `active`)
@@ -59,6 +59,8 @@ Implementation notes:
 - `summaries` is stored in YAML as a nested mapping, not dotted keys.
 - LCMA frontmatter fields are additive and backward-compatible.
 - `namespace` defaults from the document path when absent and may be synthesized at read time for legacy notes rather than eagerly written.
+
+**Trust model for `access_scope`:** `access_scope` is an advisory filtering mechanism to reduce noise, not a security control. Agents self-identify via `agent_id` parameter on `lithos_retrieve`. `agent_private` notes are filtered from other agents' results by matching `author == agent_id`, but this is not enforced cryptographically — agents could misidentify themselves. The purpose is to keep agent-specific scratch notes from bloating search results for all agents, not to enforce hard isolation.
 
 **Dynamic signals (stored in `stats.db`, NOT in frontmatter):**
 
@@ -270,7 +272,7 @@ Add `schema_version` per note and a migration registry.
 2. **Index layer (existing engines + new stores)**
 	- Tantivy full-text index in `data/.tantivy/` (existing, English stemmer)
 	- ChromaDB embeddings in `data/.chroma/` (existing, `all-MiniLM-L6-v2`)
-	- NetworkX wiki-link graph in `data/.graph/` (existing, pickle-cached)
+	- NetworkX wiki-link graph in `data/.graph/` (existing, JSON-cached as `graph.json`)
 	- LCMA typed edges in `data/.lithos/edges.db` (new)
 
 3. **Retrieval layer (PTS — new, alongside existing tools)**
@@ -449,6 +451,20 @@ Index: `(processed_at)` for fast pending-item queries.
 
 Deduplication: enrichment drains by `SELECT DISTINCT node_id WHERE processed_at IS NULL` — multiple events for the same node are processed once per drain cycle.
 
+Table: `working_memory`
+
+- `task_id` TEXT
+- `node_id` TEXT
+- `activation_count` INTEGER — how many times this node was retrieved/used in this task
+- `first_seen_at` TEXT — ISO datetime of first retrieval in this task
+- `last_seen_at` TEXT — ISO datetime of most recent retrieval in this task
+- `last_receipt_id` TEXT NULL — backreference to `receipts.jsonl` for traceability
+    PK `(task_id, node_id)`
+
+Index: `(task_id)` for fast WM lookup per task.
+
+Working memory is the operational data structure for task-scoped retrieval tracking. `receipts.jsonl` remains the audit/explainability log but is not used for keyed lookups. Consolidation (§5.7) reads from `working_memory` instead of scanning `receipts.jsonl`.
+
 ## 4.5 Embeddings Store
 
 Lithos already uses **ChromaDB** (`data/.chroma/`) with `all-MiniLM-L6-v2` (sentence-transformers) and cosine similarity. Documents are chunked (~500 char target, ~1000 max) and stored with metadata (`doc_id`, `chunk_index`, `title`, `path`, `author`, `tags`).
@@ -494,28 +510,45 @@ The pseudocode is designed so you can implement MVP first, then add sophisticati
 ## 5.1 Types
 
 ```python
+class QueryClass(str, Enum):
+    """Canonical query classes. Optional on lithos_retrieve (default: LOOKUP).
+    Server-side inference from query text is deferred to a future phase."""
+    LOOKUP = "lookup"           # simple retrieval, no special behavior
+    DEBUG = "debug"             # debugging/troubleshooting context
+    DESIGN = "design"           # architectural/design decisions
+    PLANNING = "planning"       # task planning and roadmapping
+    WRITE = "write"             # content authoring context
+    SYNTHESIS = "synthesis"     # multi-source synthesis
+    DECISION = "decision"       # decision-making context
+
 class QueryContext:
     query_text: str
     namespace_filter: list[str]
     agent_id: str
     task_id: str | None
-    query_class: str            # e.g., "debug", "design", "planning", "write"
+    query_class: QueryClass = QueryClass.LOOKUP  # optional, defaults to "lookup"
     max_context_nodes: int
 
 class Candidate:
     """Internal working type during PTS pipeline. Projected to ResultItem on output."""
     node_id: str
-    score: float
+    score: float                # normalized 0-1 (all scout scores normalized during candidate creation)
     reasons: list[str]
     scouts: list[str]
 
 class ResultItem:
-    """A single result — superset of lithos_search result fields."""
+    """A single result — superset of lithos_search result fields.
+
+    `score` is always a normalized float matching the hybrid-mode SearchResult shape.
+    Semantic similarity scores are mapped to `score` during candidate creation.
+    This ensures clients can use lithos_retrieve and lithos_search interchangeably
+    without handling different score field names.
+    """
     # lithos_search fields (all preserved):
     id: str
     title: str
     snippet: str
-    score: float
+    score: float                # always normalized (hybrid-mode SearchResult compatible)
     path: str
     source_url: str
     updated_at: str
@@ -532,13 +565,14 @@ class RetrievalResult:
     The top-level `results` key mirrors lithos_search so clients can
     switch between tools without rewriting result-handling code.
     LCMA-specific fields (reasons, scouts, salience, temperature,
-    terrace_reached, receipt_id) are additive — clients that only
-    read id/title/score/snippet will work unchanged.
+    terrace_reached, receipt_id, query_class_used) are additive — clients
+    that only read id/title/score/snippet will work unchanged.
     """
     results: list[ResultItem]   # compatible with lithos_search results
     temperature: float
     terrace_reached: int
     receipt_id: str             # reference to receipts.jsonl entry
+    query_class_used: str       # echoes the query_class applied (may differ from input if inferred in future)
 ```
 
 ---
@@ -658,7 +692,7 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
         ranked = rerank_fast(q, pool)
         top = ranked[:30]
 
-    # Contradictions check
+    # Contradictions check (MVP 1: no-op stub returning []; activated in MVP 2)
     conflict_edges = scout_contradictions(q, seed_nodes=[c.node_id for c in top[:10]])
     receipt["conflicts_surfaced"] = conflict_edges
 
@@ -870,7 +904,7 @@ Run:
 
 ```python
 def consolidate(task_id: str, agent_id: str):
-    # WM = nodes retrieved/used during this task (tracked via receipts.jsonl)
+    # WM = nodes retrieved/used during this task (from working_memory table in stats.db)
     wm_nodes = get_working_memory(task_id, agent_id)
     if not wm_nodes:
         return
@@ -1162,5 +1196,45 @@ The external LLM provider will be configured via a new `LithosConfig` field (pro
 - Clients who only need content can use `lithos_search` and benefit from enrichment passively — concept nodes created by `lithos-enrich` are regular `.md` files indexed by the standard search pipeline.
 - Clients who need salience-weighted, graph-aware, multi-scout ranked results use `lithos_retrieve`.
 - **Terrace 2 (LLM pass) belongs to `lithos-enrich`** because: (a) it is expensive, (b) it is not query-specific in the same way — it synthesizes knowledge proactively, (c) clients should not block waiting for LLM synthesis.
-- **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`) are additive. The envelope adds `temperature`, `terrace_reached`, and `receipt_id`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
+- **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`) are additive. The envelope adds `temperature`, `terrace_reached`, `receipt_id`, and `query_class_used`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
 - **Enrichment queue pattern**: Rather than triggering `lithos-enrich` directly on each action, triggering actions emit events via the existing Lithos event bus. The in-process `lithos-enrich` worker subscribes to these events and writes to an `enrich_queue` table in `stats.db`. A periodic drain processes pending work, deduplicating multiple events for the same node. A daily full sweep catches anything missed and recomputes global signals (decay, concept clusters). This avoids redundant enrichment runs (e.g., 10 task completions → 1 enrichment run), enables incremental targeted processing, and leverages existing event infrastructure with no new event system required.
+
+### 7.y When to Use Which Tool
+
+`lithos_search` and `lithos_retrieve` have distinct, complementary roles. `lithos_retrieve` is additive, not a replacement — `lithos_search` is not deprecated.
+
+- **`lithos_search`** is the canonical **low-level search API** — the stable, direct-access retrieval primitive.
+  - Use for: exact lookup, keyword/fulltext search, semantic search without extra orchestration, UI/debugging/manual inspection, low-latency or deterministic behavior.
+  - Behavior: fast, simple, predictable, low-policy. Returns results from a single search mode (fulltext, semantic, or hybrid RRF).
+
+- **`lithos_retrieve`** is the canonical **high-level retrieval API** — the LCMA retrieval primitive for task-oriented context assembly.
+  - Use for: "give me the best context for this task", multi-document synthesis, design/debug/decision workflows, graph-aware or salience-aware retrieval, contradiction surfacing and exploration behavior.
+  - Behavior: orchestrated, salience-weighted, multi-scout, graph-aware. Uses pre-computed enrichment from `lithos-enrich`.
+
+Both tool MCP descriptions should make this distinction explicit so agents can choose appropriately.
+
+---
+
+## 8) Open Implementation Questions
+
+The following items were identified during design review and need resolution during implementation. They are ordered roughly by the section they affect.
+
+1. **Edge tool boundary (§4.3)**: `lithos_edge_create` is described as "create/update" while `lithos_edge_update` is "adjust weight or conflict state." Clarify the boundary: either make `lithos_edge_create` create-only (error if exists) with `lithos_edge_update` as the mutation path, or merge into a single `lithos_edge_upsert`.
+
+2. **Namespace derivation algorithm (§1.1)**: Define precisely how `namespace` is derived from `path` when absent. What namespace does `research/foo.md` get? The whole directory path? First segment only? Recommend a fallback like `"default"` for notes that don't match the `shared/`/`project/<name>/`/`agent/<id>/` convention.
+
+3. **`enrich_queue` task-level dedup (§4.4)**: Current dedup is `SELECT DISTINCT node_id WHERE processed_at IS NULL`, but `task_complete` triggers are task-level (`node_id` is NULL). Add `task_id` to the dedup key for task-level triggers. Drain should handle node-level and task-level work separately.
+
+4. **Schema migration timing (§5.11)**: Specify lazy migration: apply defaults at read time, write back on next `lithos_write` update. This is consistent with the "existing notes without LCMA fields remain valid" guarantee.
+
+5. **`receipts.jsonl` scalability (§4.6)**: Append-only JSONL with no rotation or indexing. The `lithos_receipts` query tool would need a full file scan. Consider SQLite for receipts (consistent with other stores, gives indexed queries for free) or at minimum add a rotation policy.
+
+6. **Cold-start temperature guard (§5.3)**: On cold start with no edges, coherence ≈ 0 and temperature ≈ 1.0, triggering maximum exploration on every query. Add a guard: if `total_edges < threshold`, use a fixed default temperature (e.g., 0.5) instead of computing from edge coherence.
+
+7. **Coactivation scope (§5.6)**: `update_coactivation(retrieval.final_nodes, q)` creates O(N²) pairs. With 30 final nodes that's 435 pairs per retrieval. Scope to top-k used/cited nodes (e.g., top 10) rather than all final nodes.
+
+8. **Rerank weight configurability (§5.5)**: The Terrace 1 linear combination uses hardcoded coefficients (0.25, 0.15, etc.). Move these into `LithosConfig.lcma` as a configurable weights dict to enable tuning without code changes.
+
+9. **Summaries ownership (§4.2)**: Clarify whether `summaries: {short, long}` is agent-written (via `lithos_write`), auto-generated (by `lithos-enrich`), or both. If enrich-generated, this implies background frontmatter writes — define precedence rules (does agent-written take priority?).
+
+10. **Enrich subscriber queue sizing (§3.2)**: The event bus is lossy (default subscriber queue size: 100, drops silently when full). Size the `lithos-enrich` subscriber queue much larger (e.g., 10,000) or have the enrich worker drain its asyncio.Queue frequently (seconds, not minutes) to minimize double-buffering overflow risk.

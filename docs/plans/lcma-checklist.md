@@ -17,7 +17,7 @@ Exit criteria (all MVPs):
 ### New frontmatter fields (optional, backward-compatible defaults)
 - [ ] Add `schema_version` (int, default 1)
 - [ ] Add `namespace` (str, derived from path if absent)
-- [ ] Add `access_scope` (enum: `agent_private|task|project|shared|user_private`, default `shared`)
+- [ ] Add `access_scope` (enum: `agent_private|task|project|shared|user_private`, default `shared`) — advisory filtering to reduce noise, not a security control; agents self-identify via `agent_id`
 - [ ] Add `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
 - [ ] Add `entities` (list of extracted entity names)
 - [ ] Add `status` (enum: `active|archived|quarantined`, default `active`)
@@ -27,7 +27,7 @@ Exit criteria (all MVPs):
 
 ### Storage
 - [ ] Create `data/.lithos/edges.db` with `edges` table and indexes
-- [ ] Create `data/.lithos/stats.db` with `node_stats`, `coactivation`, and `enrich_queue` tables (`enrich_queue`: `id`, `trigger_type`, `node_id`, `task_id`, `triggered_at`, `processed_at`; index on `processed_at`)
+- [ ] Create `data/.lithos/stats.db` with `node_stats`, `coactivation`, `enrich_queue`, and `working_memory` tables (`enrich_queue`: `id`, `trigger_type`, `node_id`, `task_id`, `triggered_at`, `processed_at`; index on `processed_at`; `working_memory`: `task_id`, `node_id`, `activation_count`, `first_seen_at`, `last_seen_at`, `last_receipt_id`; PK `(task_id, node_id)`; index on `task_id`)
 - [ ] Create `data/.lithos/receipts.jsonl` append-only audit log (each entry includes `id` field for `receipt_id` reference)
 - [ ] Create `data/.lithos/migrations/registry.json` schema migration registry
 - [ ] Implement schema migration runner (idempotent, never removes existing fields)
@@ -41,13 +41,14 @@ Exit criteria (all MVPs):
 - [ ] Implement Terrace 1 fast re-rank with `note_type` priors, diversity (MMR), and basic salience
 - [ ] All scouts apply `namespace_filter` and `access_scope` gating before returning candidates
 - [ ] MVP 1 explicitly keeps legacy tools (`lithos_read`, `lithos_search`, `lithos_list`) backward-compatible; caller-context-aware scope enforcement begins in `lithos_retrieve`
-- [ ] Terrace 2 (LLM interpretive pass) falls through to Terrace 1 result in MVP 1 with debug log
-- [ ] `lithos_retrieve` response shape compatible with `lithos_search`: top-level `results` key, per-item fields `id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids` preserved; LCMA-only extras `reasons`, `scouts`, `salience` additive; envelope adds `temperature`, `terrace_reached`, `receipt_id`
+- [ ] `scout_contradictions` is a no-op stub in MVP 1 (returns empty list); activated in MVP 2
+- [ ] `lithos_retrieve` accepts optional `query_class` parameter (enum: `lookup|debug|design|planning|write|synthesis|decision`, default `lookup`)
+- [ ] `lithos_retrieve` response shape compatible with `lithos_search`: top-level `results` key, per-item `score` always a normalized float (matching hybrid-mode `SearchResult`); per-item fields `id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids` preserved; LCMA-only extras `reasons`, `scouts`, `salience` additive; envelope adds `temperature`, `terrace_reached`, `receipt_id`, `query_class_used`
 
 ### Learning
 - [ ] Basic positive reinforcement on retrieval (salience + spaced rep strength updates in `stats.db`)
 - [ ] Coactivation count updates in `stats.db`
-- [ ] Enable `lithos_reconcile(scope="provenance_projection")` real repair path (hooks into `edges.db`)
+- [ ] Make internal `_reconcile_provenance_projection` work with `edges.db` (remove `supported=False` guard, implement actual repair logic; reconcile stays internal, not an MCP tool)
 
 ### New tools
 - [ ] `lithos_edge_create` — create/update a typed edge in `edges.db`
