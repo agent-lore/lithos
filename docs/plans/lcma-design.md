@@ -63,7 +63,7 @@ A `KnowledgeDocument` — an Obsidian-compatible Markdown note with YAML frontma
 
 - `schema_version` (int, default 1)
 - `namespace` (str, derived from path if absent, e.g. `"project/lithos"`)
-- `access_scope` (enum: `agent_private|task|project|shared`, default `shared`) — **advisory filtering**, not a security control (see trust model note below)
+- `access_scope` (enum: `shared|task|agent_private`, default `shared`) — **advisory visibility**, not a security control (see trust model note below). Project-level scoping is handled by `namespace`, not `access_scope` — this avoids overlap between the two fields.
 - `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
 - `entities` (list of extracted entity names) — **deferred to MVP 2**: auto-extracted by `lithos-enrich`; not populated in MVP 1
 - `status` (enum: `active|archived|quarantined`, default `active`)
@@ -75,7 +75,22 @@ Implementation notes:
 - LCMA frontmatter fields are additive and backward-compatible.
 - `namespace` defaults from the document path when absent and may be synthesized at read time for legacy notes rather than eagerly written.
 
-**Trust model for `access_scope`:** `access_scope` is an advisory filtering mechanism to reduce noise, not a security control. Agents self-identify via `agent_id` parameter on `lithos_retrieve`. `agent_private` notes are filtered from other agents' results by matching `author == agent_id`, but this is not enforced cryptographically — agents could misidentify themselves. The purpose is to keep agent-specific scratch notes from bloating search results for all agents, not to enforce hard isolation.
+**Namespace derivation rule** (when `namespace` is absent from frontmatter):
+
+The namespace is derived from the note's path relative to `knowledge/` by taking the directory portion. Recognized conventions get short names; everything else uses the full directory path:
+
+| Path | Derived namespace |
+| --- | --- |
+| `knowledge/shared/foo.md` | `shared` |
+| `knowledge/project/lithos/bar.md` | `project/lithos` |
+| `knowledge/agent/cartographer/scratch.md` | `agent/cartographer` |
+| `knowledge/research/foo.md` | `research` |
+| `knowledge/research/deep/nested/bar.md` | `research/deep/nested` |
+| `knowledge/foo.md` (root-level) | `default` |
+
+Rules: (1) strip `knowledge/` prefix, (2) take the directory path (everything before the filename), (3) if empty (root-level note), use `"default"`. The namespace is always a forward-slash-separated string, never includes the filename, and is case-preserved. Explicitly set `namespace` in frontmatter overrides path derivation.
+
+**Trust model for `access_scope`:** `access_scope` is an advisory visibility mechanism to reduce noise, not a security control. Agents self-identify via `agent_id` parameter on `lithos_retrieve`. `agent_private` notes are filtered from other agents' results by matching `author == agent_id`; `task`-scoped notes are filtered to agents working on the same `task_id`. Neither is enforced cryptographically — agents could misidentify themselves. The purpose is to keep agent-specific scratch notes from bloating search results for all agents, not to enforce hard isolation. Project-level scoping is handled by `namespace` filtering, not by `access_scope`.
 
 **Dynamic signals (stored in `stats.db`, NOT in frontmatter):**
 
@@ -103,7 +118,7 @@ Provenance authority rule (cross-plan consistency):
 
 ### Concept Node (emergent)
 
-A regular `KnowledgeDocument` with `note_type: "concept"` — created via `lithos_write` (extended with an optional `note_type` parameter). Summarizes a cluster and links canonical examples via `is_example_of` edges in `edges.db`.
+Concepts emerge in two phases. First, `lithos-enrich` detects stable coactivation clusters and tracks them as **derived clusters** in `stats.db` — these are queryable but not yet materialized as notes. Second, when a cluster is stable enough (configurable threshold), an agent or `lithos-enrich` can **promote** it to a regular `KnowledgeDocument` with `note_type: "concept"`, created via `lithos_write`. This avoids auto-generating markdown notes that blur the authoritative/derived boundary and create noisy git churn. Once materialized, a concept note summarizes its cluster and links canonical examples via `is_example_of` edges in `edges.db`.
 
 ## 1.2 Retrieval: PTS-lite
 
@@ -329,7 +344,7 @@ LCMA has two runtime components:
 
 - **`lithos_retrieve` (MCP tool, synchronous)**: Terrace 0 + Terrace 1 only. Uses pre-computed enrichment from `stats.db` and `edges.db`. Fast enough for the client hot path.
 - **`lithos-enrich` (in-process worker)**: Runs consolidation, concept formation, background LLM synthesis, decay, and edge reinforcement. Triggered via two modes:
-  - **Event-driven incremental**: Runs inside the Lithos server process and subscribes to the existing in-memory event bus (`events.py`). Actions that change knowledge state (`lithos_write`, `lithos_delete`, `lithos_task_complete`, `lithos_finding_post`, `lithos_edge_create/update`) enqueue work into the `enrich_queue` table in `stats.db`. A periodic drain (e.g., every 5 minutes) processes pending queue entries, targeting only affected nodes. Multiple events for the same node are deduplicated within a drain cycle.
+  - **Event-driven incremental**: Runs inside the Lithos server process and subscribes to the existing in-memory event bus (`events.py`). Actions that change knowledge state (`lithos_write`, `lithos_delete`, `lithos_task_complete`, `lithos_finding_post`) emit events that the worker consumes; `lithos_edge_upsert` writes directly to `enrich_queue` since there is no edge event type in the event bus. A periodic drain (e.g., every 5 minutes) processes pending queue entries, targeting only affected nodes. Multiple events for the same node are deduplicated within a drain cycle.
   - **Scheduled full sweep** (default: daily, configurable): Runs a full enrichment pass across all nodes regardless of queue state — recomputes decay, runs full concept cluster analysis, and catches anything missed by incremental runs.
   - Writes persistent artifacts (concept nodes, edges, salience scores) discoverable via `lithos_search`.
   - The incremental path is intentionally best-effort; the scheduled full sweep is authoritative and repairs anything missed due to lossy event delivery.
@@ -394,7 +409,7 @@ supersedes: null                                 # UUID of replaced document
 # --- LCMA extensions (optional, with defaults) ---
 schema_version: 2                                # default: 1
 namespace: "project/lithos"                      # default: derived from path
-access_scope: "project"                          # default: "shared"
+access_scope: "shared"                            # default: "shared" (enum: shared|task|agent_private)
 note_type: "concept"                             # default: "observation"
 entities: ["Lithos", "Parallel Terraced Scan", "Hofstadter"]
 status: "active"                                 # default: "active"
@@ -1066,13 +1081,19 @@ def consolidate(task_id: str, agent_id: str):
 
 > **Note**: This function runs inside `lithos-enrich`, not in the `lithos_retrieve` hot path.
 
-Concept nodes are regular `KnowledgeDocument` notes with `note_type: "concept"`, created via `lithos_write`. Member links are `is_example_of` edges in `edges.db`.
+Concepts emerge in two phases: derived clusters first, then explicit promotion to notes (see §1.1 Concept Node).
 
 ```python
 def maybe_update_concepts(namespace: str):
-    # identify clusters based on coactivation graph (from stats.db)
+    # Phase 1: detect and track clusters in stats.db (no note materialization)
     clusters = detect_stable_clusters(namespace, min_size=5, min_coactivation=3)
+    upsert_derived_clusters(clusters, namespace)  # persist in stats.db
+
+    # Phase 2: promote stable clusters to concept notes (explicit, not automatic)
+    # Only promote clusters that exceed a stability threshold (e.g., seen in N+ drain cycles)
     for cluster in clusters:
+        if not cluster_exceeds_promotion_threshold(cluster):
+            continue
         # find_or_create uses lithos_write with note_type="concept"
         concept_id = find_or_create_concept_node(cluster, namespace)
         # link via edges.db type="is_example_of"
@@ -1411,7 +1432,7 @@ Write-contract note for LCMA params:
 
 ## Alignment with Existing Lithos (preserving backward compatibility)
 
-### Existing tools preserved (27 tools, no renames or removals)
+### Existing tools preserved (24 tools, no renames or removals)
 
 - Knowledge: `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup`
 - Graph: `lithos_links`, `lithos_tags`, `lithos_provenance`
@@ -1477,13 +1498,11 @@ LCMA is also compatible with cross-plan metadata additions: `source_url`, `deriv
 - **NetworkX vs edges.db**: NetworkX handles structural `[[wiki-link]]` navigation and powers `lithos_links`. edges.db handles semantic/learned relationships with weights and types. Both are queried by the graph scout.
 - **Declared provenance vs learned edges**: `derived_from_ids` is the source of truth for declared lineage. `edges.db` can carry mirrored `derived_from` edges as an accelerator only.
 - **Frontmatter vs stats.db**: Static metadata in frontmatter (author, tags, note_type). Dynamic signals in stats.db (salience, retrieval_count, decay). This avoids constant file rewrites from learning updates.
-- **Concept nodes**: Regular `KnowledgeDocument` notes with `note_type: “concept”`, not a separate entity type. Created via standard `lithos_write`.
+- **Concept nodes**: Emerge as derived clusters in `stats.db` first, then promoted to regular `KnowledgeDocument` notes with `note_type: “concept”` via `lithos_write` once stable. Not auto-materialized — promotion requires exceeding a stability threshold to avoid noisy git churn.
 
 ### LLM integration scope
 
-`should_use_llm_pass()` and `llm_interpretive_select()` require an external LLM provider. This is deferred to MVP 2+. MVP 1 stops at Terrace 1 (fast re-rank only) — no local model is bundled and no external LLM call is made.
-
-Background LLM synthesis is not available in MVP 1 or MVP 2. `lithos_retrieve` always terminates at Terrace 1. LLM synthesis ships in MVP 3 as part of `lithos-enrich`, configured via `LithosConfig.lcma.llm_provider`.
+Background LLM synthesis (the `should_enrich_with_llm()` policy and `llm_interpretive_synthesize()` worker in §5.4/§5.12) requires an external LLM provider and is not available in MVP 1 or MVP 2. `lithos_retrieve` always terminates at Terrace 1 — no local model is bundled and no external LLM call is made. LLM synthesis ships in MVP 3 as part of `lithos-enrich`, configured via `LithosConfig.lcma.llm_provider`.
 
 ### 7.z `LcmaConfig` Schema (Draft)
 
@@ -1542,7 +1561,7 @@ The following items were identified during design review and need resolution dur
 
 1. **~~Edge tool boundary (§4.3)~~**: **Resolved** — merged `lithos_edge_create` + `lithos_edge_update` into a single `lithos_edge_upsert`. Creates if absent, updates if exists. `lithos_conflict_resolve` deferred to MVP 2.
 
-2. **Namespace derivation algorithm (§1.1)**: Define precisely how `namespace` is derived from `path` when absent. What namespace does `research/foo.md` get? The whole directory path? First segment only? Recommend a fallback like `"default"` for notes that don't match the `shared/`/`project/<name>/`/`agent/<id>/` convention.
+2. **~~Namespace derivation algorithm (§1.1)~~**: **Resolved** — strip `knowledge/` prefix, take directory path, fall back to `"default"` for root-level notes. Full rule with examples in §1.1 implementation notes.
 
 3. **`enrich_queue` task-level dedup (§4.4)**: Current dedup is `SELECT DISTINCT node_id WHERE processed_at IS NULL`, but `task_complete` triggers are task-level (`node_id` is NULL). Add `task_id` to the dedup key for task-level triggers. Drain should handle node-level and task-level work separately. **Resolved**: Drain handles node-level and task-level work separately (see updated §4.4 dedup description).
 

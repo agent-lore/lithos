@@ -8,7 +8,7 @@ Dependencies: Phases 0 through 6.5 complete ✅
 Exit criteria (all MVPs):
 - LCMA features remain additive and consistent with canonical write contract
 - On-disk compatibility preserved throughout rollout
-- All existing 27 tools preserved with no renames or removals
+- All existing 24 tools preserved with no renames or removals
 
 ---
 
@@ -18,7 +18,7 @@ Exit criteria (all MVPs):
 
 - [ ] Add `schema_version` (int, default 1) — lazy default at read time, persisted on next `lithos_write`
 - [ ] Add `namespace` (str, derived from path if absent) — lazy default at read time, persisted on next `lithos_write`; writable via `lithos_write` for explicit overrides
-- [ ] Add `access_scope` (enum: `agent_private|task|project|shared`, default `shared`) — advisory filtering to reduce noise, not a security control; agents self-identify via `agent_id`
+- [ ] Add `access_scope` (enum: `shared|task|agent_private`, default `shared`) — advisory visibility to reduce noise, not a security control; agents self-identify via `agent_id`; project-level scoping handled by `namespace`
 - [ ] Add `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
 - [ ] Add `entities` field (list of extracted entity names) — **deferred to MVP 2**: auto-extracted by `lithos-enrich`; not populated in MVP 1
 - [ ] Add `status` (enum: `active|archived|quarantined`, default `active`)
