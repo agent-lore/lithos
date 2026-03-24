@@ -344,7 +344,7 @@ LCMA has two runtime components:
 
 - **`lithos_retrieve` (MCP tool, synchronous)**: Terrace 0 + Terrace 1 only. Uses pre-computed enrichment from `stats.db` and `edges.db`. Fast enough for the client hot path.
 - **`lithos-enrich` (in-process worker)**: Runs consolidation, concept formation, background LLM synthesis, decay, and edge reinforcement. Triggered via two modes:
-  - **Event-driven incremental**: Runs inside the Lithos server process and subscribes to the existing in-memory event bus (`events.py`). Actions that change knowledge state (`lithos_write`, `lithos_delete`, `lithos_task_complete`, `lithos_finding_post`) emit events that the worker consumes; `lithos_edge_upsert` writes directly to `enrich_queue` since there is no edge event type in the event bus. A periodic drain (e.g., every 5 minutes) processes pending queue entries, targeting only affected nodes. Multiple events for the same node are deduplicated within a drain cycle.
+  - **Event-driven incremental**: Runs inside the Lithos server process and subscribes to the existing in-memory event bus (`events.py`). All state-mutating actions emit events via the bus: `lithos_write` (`note.created`/`note.updated`), `lithos_delete` (`note.deleted`), `lithos_task_complete` (`task.completed`), `lithos_finding_post` (`finding.posted`), and `lithos_edge_upsert` (`edge.upserted` — **new event type**, added to `events.py` in MVP 1). The enrich worker consumes these events and writes to `enrich_queue`. A periodic drain (e.g., every 5 minutes) processes pending queue entries, targeting only affected nodes. Multiple events for the same node are deduplicated within a drain cycle.
   - **Scheduled full sweep** (default: daily, configurable): Runs a full enrichment pass across all nodes regardless of queue state — recomputes decay, runs full concept cluster analysis, and catches anything missed by incremental runs.
   - Writes persistent artifacts (concept nodes, edges, salience scores) discoverable via `lithos_search`.
   - The incremental path is intentionally best-effort; the scheduled full sweep is authoritative and repairs anything missed due to lossy event delivery.
@@ -485,7 +485,7 @@ Table: `coactivation`
 Table: `enrich_queue`
 
 - `id` INTEGER PK (autoincrement)
-- `trigger_type` TEXT — `'write'`, `'delete'`, `'task_complete'`, `'finding_post'`, `'edge_write'`, `'full_sweep'`
+- `trigger_type` TEXT — `'note.created'`, `'note.updated'`, `'note.deleted'`, `'task.completed'`, `'finding.posted'`, `'edge.upserted'`, `'full_sweep'`
 - `node_id` TEXT NULL — affected node UUID (if applicable)
 - `task_id` TEXT NULL — affected task ID (if applicable)
 - `triggered_at` TEXT — ISO datetime
@@ -763,6 +763,51 @@ def compute_coherence(top_node_ids: list[str], namespace: str) -> float:
 def compute_temperature(coherence: float) -> float:
     return 1.0 - coherence
 ```
+
+---
+
+## 5.3.1 Score Contract
+
+**Problem**: Raw scores from different backends have incompatible semantics — BM25 scores are unbounded positive floats, cosine similarity is 0–1, and RRF scores are small positive fractions (e.g., max ~0.033 with k=60 and 2 lists). The existing `lithos_search` hybrid mode returns raw RRF scores, and tests only assert `score > 0`.
+
+**`lithos_retrieve` score contract**: All `ResultItem.score` values are normalized to `[0, 1]` via per-scout min-max normalization within each `merge_and_normalize` call. This makes scores comparable across scouts and meaningful to clients.
+
+**`lithos_search` is unchanged**: Its scores retain their current semantics (raw BM25, cosine, or RRF depending on mode). `lithos_retrieve` normalizes internally — it does not change `lithos_search` behavior.
+
+```python
+def merge_and_normalize(candidates: list[Candidate]) -> list[Candidate]:
+    """Merge candidates by node_id (max score wins) and normalize scores to [0, 1].
+
+    Normalization is per-scout min-max: within each scout's candidates,
+    the highest score maps to 1.0 and the lowest to 0.0 (or 1.0 if all
+    scores are equal). This makes scores comparable across scouts with
+    different raw score ranges (BM25, cosine, RRF, binary match, etc.).
+    """
+    # Group by scout, normalize each group
+    by_scout: dict[str, list[Candidate]] = group_by_scout(candidates)
+    normalized = []
+    for scout_name, group in by_scout.items():
+        scores = [c.score for c in group]
+        lo, hi = min(scores), max(scores)
+        span = hi - lo if hi > lo else 1.0
+        for c in group:
+            c.score = (c.score - lo) / span
+            normalized.append(c)
+
+    # Merge by node_id: keep max normalized score, union reasons and scouts
+    merged: dict[str, Candidate] = {}
+    for c in normalized:
+        if c.node_id in merged:
+            existing = merged[c.node_id]
+            existing.score = max(existing.score, c.score)
+            existing.reasons += c.reasons
+            existing.scouts = list(set(existing.scouts + c.scouts))
+        else:
+            merged[c.node_id] = c
+    return list(merged.values())
+```
+
+**Prerequisite**: This normalization must be implemented before `lithos_retrieve` ships in MVP 1. It is not a change to `lithos_search`.
 
 ---
 
@@ -1248,6 +1293,7 @@ class EnrichWorker:
                 "note.created", "note.updated", "note.deleted",
                 "task.completed",
                 "finding.posted",
+                "edge.upserted",  # new in MVP 1
             ]
         )
         # Start event consumer + periodic loops
@@ -1274,6 +1320,8 @@ class EnrichWorker:
             event = await self._event_queue.get()
             if event.type == "task.completed":
                 self._enqueue_task_work(event)
+            elif event.type == "edge.upserted":
+                self._enqueue_edge_work(event)
             else:
                 self._enqueue_node_work(event)
 
@@ -1290,6 +1338,15 @@ class EnrichWorker:
             "INSERT INTO enrich_queue (trigger_type, task_id, triggered_at) VALUES (?, ?, ?)",
             ("task.completed", event.data.get("task_id"), now_iso())
         )
+
+    def _enqueue_edge_work(self, event):
+        """Enqueue enrichment for both nodes connected by an edge."""
+        for node_id in (event.data.get("from_id"), event.data.get("to_id")):
+            if node_id:
+                self.db.execute(
+                    "INSERT INTO enrich_queue (trigger_type, node_id, triggered_at) VALUES (?, ?, ?)",
+                    ("edge.upserted", node_id, now_iso())
+                )
 
     # ---- Drain loop: process pending queue entries ----
 
@@ -1362,6 +1419,26 @@ class EnrichWorker:
 ```
 
 Error handling: enrichment failures for individual nodes/tasks are logged and skipped — the next drain cycle or full sweep will retry. No dead-letter queue in MVP 2; add if failure rates warrant it.
+
+---
+
+## 5.13 Prerequisites (must be resolved before MVP 1 implementation)
+
+### Async search hot-path
+
+`lithos_retrieve` orchestrates multiple scouts in parallel, each wrapping existing sync search backends. Currently:
+
+- `SearchManager.full_text_search()` is sync ([search.py:870](src/lithos/search.py#L870)) — the server already has a TODO noting it should not block the event loop ([server.py:1181](src/lithos/server.py#L1181))
+- `SearchManager.semantic_search()` is sync ([search.py:910](src/lithos/search.py#L910)) — the embedding model load uses `asyncio.to_thread` but the search call itself does not
+- `SearchManager.hybrid_search()` is sync ([search.py:962](src/lithos/search.py#L962)) — calls both of the above sequentially
+
+Before LCMA adds 7+ scouts calling into these backends, the sync search methods must be wrapped in `asyncio.to_thread()` or equivalent. Otherwise `lithos_retrieve` will block the event loop for the entire multi-scout pipeline, starving other async operations (event bus delivery, MCP message handling, enrich worker drains).
+
+**Resolution**: Wrap `full_text_search()`, `semantic_search()`, and `hybrid_search()` calls in `asyncio.to_thread()` at the call site (in `lithos_search` tool handler and in each LCMA scout). This is a small change to the server/scout layer and does not require modifying the `SearchManager` class itself.
+
+### Score normalization
+
+See §5.3.1 — `merge_and_normalize` with per-scout min-max normalization must be implemented before `lithos_retrieve` ships.
 
 ---
 

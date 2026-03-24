@@ -12,6 +12,14 @@ Exit criteria (all MVPs):
 
 ---
 
+## Prerequisites (before MVP 1 implementation)
+
+- [ ] Wrap `full_text_search()`, `semantic_search()`, and `hybrid_search()` calls in `asyncio.to_thread()` at call sites — sync search must not block the event loop when LCMA adds 7+ parallel scouts (see design doc §5.13)
+- [ ] Implement `merge_and_normalize()` with per-scout min-max normalization to `[0, 1]` — all `lithos_retrieve` scores must be normalized (see design doc §5.3.1); `lithos_search` scores are unchanged
+- [ ] Add `EDGE_UPSERTED = "edge.upserted"` event type to `events.py` — all state changes must flow through the event bus (see design doc §3.1 runtime architecture)
+
+---
+
 ## MVP 1 — Core Infrastructure
 
 ### New frontmatter fields (optional, backward-compatible defaults)
@@ -77,7 +85,7 @@ Exit criteria (all MVPs):
 
 ### Background process
 - [ ] Introduce `lithos-enrich` as an in-process background worker with two triggering modes:
-  - **Incremental**: subscribe to the existing in-memory Lithos event bus (queue-based `subscribe()` API with event types `note.created`, `note.updated`, `note.deleted`, `task.completed`, `finding.posted`); write to `enrich_queue`; periodic drain (e.g. every 5 min) processes pending entries, deduplicating node-level work by `node_id` and task-level work by `task_id` (see design doc §4.4)
+  - **Incremental**: subscribe to the existing in-memory Lithos event bus (queue-based `subscribe()` API with event types `note.created`, `note.updated`, `note.deleted`, `task.completed`, `finding.posted`, `edge.upserted`); write to `enrich_queue`; periodic drain (e.g. every 5 min) processes pending entries, deduplicating node-level work by `node_id` and task-level work by `task_id` (see design doc §4.4)
   - **Full sweep**: daily scheduled run (configurable interval) across all nodes — recomputes decay, catches anything missed by incremental runs (concept cluster analysis deferred to MVP 3)
 - [ ] Treat the daily full sweep as authoritative repair for any missed best-effort incremental triggers
 - [ ] WM eviction in daily full sweep: evict entries where task is completed/cancelled or `last_seen_at` exceeds `wm_eviction_days` TTL (default: 7 days)
