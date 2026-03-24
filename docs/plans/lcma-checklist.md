@@ -38,7 +38,11 @@ Exit criteria (all MVPs):
 - [ ] Add `lithos_retrieve` tool orchestrating scouts internally
 - [ ] Implement vector scout (wraps existing `ChromaIndex.search()`)
 - [ ] Implement lexical scout (wraps existing `TantivyIndex.search()`)
+- [ ] Implement exact/alias/path scout (wraps existing `KnowledgeGraph` link resolution: `_alias_to_node`, slugified title, UUID prefix, path/filename matching)
 - [ ] Implement tags/recency scout (wraps existing `KnowledgeManager.list_all()`)
+- [ ] Implement provenance scout (walk `derived_from_ids` forward and reverse via existing provenance index; sequential, needs Phase A seeds)
+- [ ] Implement task-context scout (notes linked by same `task_id` via findings/claims in `coordination.db`; only activated when `task_id` provided)
+- [ ] Implement freshness scout (stale-but-relevant notes via existing `expires_at`/`is_stale`; activates more strongly on update/refresh/recheck query signals)
 - [ ] Implement Terrace 1 fast re-rank with `note_type` priors (all neutral 0.5 in MVP 1), diversity (MMR), and basic salience
 - [ ] Define `note_type_prior()` lookup table: all types = 0.5 in MVP 1 (configurable via `LcmaConfig.note_type_priors`; differentiated priors deferred to MVP 2+)
 - [ ] All scouts apply `namespace_filter` and `access_scope` gating before returning candidates
@@ -58,8 +62,9 @@ Exit criteria (all MVPs):
 - [ ] `lithos_edge_upsert` — create or update a typed edge in `edges.db`
 - [ ] `lithos_edge_list` — query edges by node, type, or namespace
 
-Exit criteria:
-- `lithos_retrieve` returns ranked results using vector + lexical + tags/recency scouts, with response shape compatible with `lithos_search`
+**Exit criteria:**
+
+- `lithos_retrieve` returns ranked results using 7 scouts (vector, lexical, exact/alias, tags/recency, provenance, task-context, freshness), with response shape compatible with `lithos_search`
 - Retrieval receipts written to `receipts` table in `stats.db`
 - `edges.db` and `stats.db` created and populated on first use
 - Existing notes without LCMA fields remain fully readable (defaults applied at read time)
@@ -99,12 +104,15 @@ Exit criteria:
 - [ ] Namespace + `access_scope` filtering applied in all scouts
 - [ ] Consolidation in `lithos-enrich` triggered via `enrich_queue` (`task.completed` entries from `lithos_task_complete` events; also runs during daily full sweep for all tasks since last run)
 - [ ] Graph scout querying both NetworkX wiki-link graph and `edges.db` typed edges
+- [ ] Coactivation/bridge scout: find nodes that frequently co-occur or connect separate clusters via `coactivation` table in `stats.db`
+- [ ] Source-url/domain scout: notes from the same normalized URL family or host via existing `_source_url_to_id` map; activated when query or seed nodes have `source_url` set
 - [ ] `lithos-enrich` auto-extracts `entities` from notes (deferred from MVP 1)
 - [ ] Schema migration registry (`data/.lithos/migrations/registry.json`) — deferred from MVP 1; needed only for semantic schema changes
 - [ ] Implement schema migration runner (idempotent, never removes existing fields)
 - [ ] Differentiated `note_type_priors` tuning based on MVP 1 learning data
 
-Exit criteria:
+**Exit criteria:**
+
 - Retrieval utility improves over time via positive/negative reinforcement
 - Contradictions are surfaced and resolvable
 - Namespace isolation works across agents
@@ -125,7 +133,8 @@ Exit criteria:
 - [ ] `lithos_receipts` tool — query retrieval audit history from `receipts` table in `stats.db`
 - [ ] Background LLM synthesis in `lithos-enrich` (requires `LithosConfig.lcma.llm_provider` config) — produces persistent artifacts (summaries, concept notes, edge annotations), not query-time reranking
 
-Exit criteria:
+**Exit criteria:**
+
 - Analogy scout returns structurally similar notes across domains
 - Temperature operationalized and controlling exploration depth
 - Concept nodes emerge from usage patterns without manual curation

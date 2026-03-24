@@ -111,13 +111,27 @@ PTS is exposed as a **new** `lithos_retrieve` tool. The existing `lithos_search`
 
 **Scouts** (parallel candidate generators, mapped to existing infrastructure):
 
+MVP 1 scouts:
+
 - vector similarity top-k → `ChromaIndex.search()` (existing)
 - lexical match → `TantivyIndex.search()` (existing)
 - tags/metadata → `KnowledgeManager.list_all()` with filters (existing)
-- graph neighbors → `KnowledgeGraph.get_links()` (NetworkX, existing) + `edges.db` queries (new)
 - recency → sort by `updated_at` from knowledge manager (existing)
+- provenance → walk `derived_from_ids` forward and reverse links (existing `KnowledgeMetadata.derived_from_ids` + provenance index)
+- exact/alias/path → match by title, alias, slug, filename, or path via existing `KnowledgeGraph` link resolution (`_alias_to_node`, slugified title, UUID, path matching)
+- task-context → notes linked by the same `task_id` via findings and claims in `coordination.db` (existing indexes); activated when `task_id` is provided
+- freshness → retrieve stale-but-relevant notes using existing `expires_at` / `is_stale`; activates more strongly when query text contains update/refresh/recheck/verify signals
+
+MVP 2 scouts:
+
+- graph neighbors → `KnowledgeGraph.get_links()` (NetworkX, existing) + `edges.db` queries (new) — deferred to MVP 2 because edges.db needs population first
+- coactivation/bridge → find nodes that frequently co-occur or connect otherwise separate clusters via `coactivation` table in `stats.db` — needs MVP 1 coactivation data to be meaningful
+- source-url/domain → notes from the same normalized URL family or host via existing `_source_url_to_id` map and `normalize_url()`; activated when query or seed nodes have `source_url` set
+
+MVP 3 scouts:
+
 - analogy → new (frame extraction, no existing equivalent)
-- exploration → new (novelty/random sampling)
+- exploration → new (novelty/random sampling, temperature-guided)
 
 > **Architecture note**: `lithos_retrieve` is fast enough for synchronous client use because `lithos-enrich` has already performed the expensive enrichment work in the background. **Background LLM synthesis is NOT part of `lithos_retrieve`** — it belongs to `lithos-enrich`, which runs asynchronously. `lithos_retrieve` only executes Terrace 0 and Terrace 1.
 
@@ -611,6 +625,8 @@ class RetrievalResult:
 Each scout wraps existing Lithos infrastructure where possible. Implementation notes in comments.
 
 ```python
+# --- MVP 1 scouts ---
+
 def scout_vector(q: QueryContext, k: int) -> list[Candidate]:
     # Wraps existing ChromaIndex.search(query, limit=k, threshold, tags)
     # Queries active embedding spaces (multiple ChromaDB collections during migration)
@@ -624,22 +640,78 @@ def scout_tags_meta(q: QueryContext, k: int) -> list[Candidate]:
     # Wraps existing KnowledgeManager.list_all(tags=..., author=..., path_prefix=...)
     ...
 
+def scout_recency(q: QueryContext, k: int) -> list[Candidate]:
+    # Wraps existing KnowledgeManager.list_all(since=...) sorted by updated_at
+    ...
+
+def scout_provenance(q: QueryContext, seed_nodes: list[str], k: int) -> list[Candidate]:
+    # Walk derived_from_ids forward (what was derived from these seeds?)
+    # and reverse (what did these seeds derive from?).
+    # Uses existing KnowledgeMetadata.derived_from_ids and provenance index
+    # (KnowledgeManager._build_provenance_index, lithos_provenance tool).
+    # Cheap and high-signal: declared lineage is the strongest relationship signal
+    # in the knowledge base.
+    ...
+
+def scout_exact_alias(q: QueryContext, k: int) -> list[Candidate]:
+    # Exact match by title, alias, slug, filename, or path.
+    # Wraps existing KnowledgeGraph link resolution:
+    #   - _alias_to_node dict (alias -> node_id)
+    #   - slugified title matching (title.lower().replace(" ", "-"))
+    #   - UUID prefix matching
+    #   - path/filename matching
+    # Handles the common case where an agent knows roughly what it's looking
+    # for by name — other scouts assume fuzzy/semantic intent.
+    ...
+
+def scout_task_context(q: QueryContext, k: int) -> list[Candidate]:
+    # Notes linked by the same task_id via findings and claims in coordination.db.
+    # Only activated when q.task_id is provided.
+    # Uses existing indexes: idx_findings_task_id, task/claim tables.
+    # Returns notes referenced in findings for this task, notes written by
+    # agents working on the same task, and notes linked by claimed aspects.
+    ...
+
+def scout_freshness(q: QueryContext, k: int) -> list[Candidate]:
+    # Retrieve stale-but-relevant notes using existing expires_at / is_stale.
+    # Activates more strongly when query text contains update/refresh/recheck/
+    # verify/latest signals (simple keyword check).
+    # Uses existing KnowledgeMetadata.is_stale property and expires_at field.
+    # Purpose: surface notes that need attention, not just notes that match.
+    ...
+
+# --- MVP 2 scouts ---
+
 def scout_graph(q: QueryContext, seed_nodes: list[str], k: int) -> list[Candidate]:
     # Queries BOTH:
     #   - existing KnowledgeGraph.get_links(id, direction, depth) for wiki-link neighbors
     #   - new edges.db for typed/weighted edge neighbors
+    # Deferred to MVP 2: edges.db needs population from MVP 1 usage first.
     ...
 
-def scout_recency(q: QueryContext, k: int) -> list[Candidate]:
-    # Wraps existing KnowledgeManager.list_all(since=...) sorted by updated_at
+def scout_coactivation(q: QueryContext, seed_nodes: list[str], k: int) -> list[Candidate]:
+    # Find nodes that frequently co-occur with seed nodes or connect otherwise
+    # separate clusters, via coactivation table in stats.db.
+    # Needs MVP 1 coactivation data to be meaningful.
+    # More principled than random exploration: surfaces empirically useful
+    # associations rather than hoping for serendipity.
     ...
+
+def scout_source_url(q: QueryContext, seed_nodes: list[str], k: int) -> list[Candidate]:
+    # Notes from the same normalized URL family or host.
+    # Wraps existing _source_url_to_id map and normalize_url().
+    # Only activated when query or seed nodes have source_url set.
+    # Most useful for research/digest-heavy knowledge bases.
+    ...
+
+# --- MVP 3 scouts ---
 
 def scout_analogy(q: QueryContext, k: int) -> list[Candidate]:
     # NEW: no existing equivalent — frame extraction + structural matching
     ...
 
 def scout_exploration(q: QueryContext, k: int, mode: str) -> list[Candidate]:
-    # NEW: mode in {"novelty","random","mixed"}
+    # NEW: mode in {"novelty","random","mixed"}, temperature-guided
     ...
 
 def scout_contradictions(q: QueryContext, seed_nodes: list[str]) -> list[str]:
@@ -690,13 +762,14 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
     cands = []
     cands += scout_vector(q, k=12)
     cands += scout_lexical(q, k=12)
+    cands += scout_exact_alias(q, k=6)            # MVP 1: title/alias/path exact match
     cands += scout_tags_meta(q, k=8)
     cands += scout_recency(q, k=6)
-    cands += scout_analogy(q, k=8)
+    cands += scout_freshness(q, k=6)              # MVP 1: stale-but-relevant notes
+    if q.task_id:
+        cands += scout_task_context(q, k=8)       # MVP 1: same-task findings/claims
 
-    # Exploration scout (unified interface, but log mode)
-    # Start with novelty bias before temp is known.
-    cands += scout_exploration(q, k=6, mode="novelty")
+    # MVP 3: analogy + exploration scouts added here
 
     pool = merge_and_normalize(cands)             # merges by node_id, normalizes per scout
     receipt["candidates_considered"] = len(pool)
@@ -704,7 +777,10 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
 
     # Phase B — sequential (needs Phase A results as seeds):
     seed = top_ids(pool, n=10)
-    pool += merge_and_normalize(scout_graph(q, seed, k=18))
+    pool += merge_and_normalize(scout_provenance(q, seed, k=12))  # MVP 1: derived_from lineage
+    pool += merge_and_normalize(scout_graph(q, seed, k=18))       # MVP 2: wiki-link + edges.db
+    pool += merge_and_normalize(scout_coactivation(q, seed, k=8)) # MVP 2: co-occurrence bridges
+    pool += merge_and_normalize(scout_source_url(q, seed, k=6))   # MVP 2: same-source notes
 
     # -------- Terrace 1: fast re-rank (no LLM) --------
     ranked = rerank_fast(q, pool)                 # diversity, priors, concept damping, type priors
@@ -1277,13 +1353,13 @@ Write-contract note for LCMA params:
 - New LCMA fields follow the existing write-contract model: omitted values preserve existing values on update unless a field-specific clear rule is explicitly defined.
 - Any field that needs clear semantics at the MCP boundary must specify them individually before implementation.
 
-## MVP 1 (3 scouts + Terrace 1 — wraps existing engines)
+## MVP 1 (7 scouts + Terrace 1 — wraps existing engines)
 
 > **Note**: `lithos_retrieve` in MVP 1 implements Terrace 0 + Terrace 1 only. Background LLM synthesis belongs to `lithos-enrich` (MVP 3).
 
 - Verify existing `coordination.db` migration path remains stable (already implemented)
 - `lithos_retrieve` tool orchestrating scouts internally
-- Scouts: vector (ChromaDB), lexical (Tantivy), tags/recency (KnowledgeManager)
+- Scouts: vector (ChromaDB), lexical (Tantivy), exact/alias/path (KnowledgeGraph), tags/recency (KnowledgeManager), provenance (`derived_from_ids`), task-context (coordination.db, when `task_id` provided), freshness (`expires_at`/`is_stale`)
 - Basic rerank with `note_type` priors (requires new optional frontmatter fields)
 - Extend `lithos_write` with optional LCMA frontmatter params (`note_type`, `namespace`, `access_scope`, etc.) while reusing the shared cross-plan write payload (`source_url`, `derived_from_ids`, `ttl_hours`/`expires_at`, etc.) and shared status-based response envelope
 - Retrieval receipts written to `receipts` table in `stats.db`
@@ -1305,7 +1381,7 @@ Write-contract note for LCMA params:
 - Schema migration registry (`data/.lithos/migrations/registry.json`) — deferred from MVP 1
 - Namespace + access_scope filtering on scouts
 - Consolidation hook on `lithos_task_complete`
-- Graph scout querying both NetworkX and edges.db
+- New scouts: graph (NetworkX + edges.db), coactivation/bridge (stats.db), source-url/domain (`_source_url_to_id`)
 - Extend `lithos_task_complete` with optional feedback params: `cited_nodes: list[str]`, `misleading_nodes: list[str]` — server calls `post_task_update()` on receipt
 - `lithos-enrich` auto-extracts `entities` from notes (deferred from MVP 1)
 - `lithos-enrich` pseudocode finalized (§5.12) before implementation begins
@@ -1316,6 +1392,7 @@ Write-contract note for LCMA params:
 > **Note**: Background LLM synthesis is part of `lithos-enrich`, not `lithos_retrieve`. It runs asynchronously and produces persistent artifacts. `lithos_retrieve` remains Terrace 0 + Terrace 1 only.
 
 - Analogy scout (frame extraction — new, no existing equivalent)
+- Exploration scout (novelty/random/mixed modes, temperature-guided)
 - Temperature-based exploration depth
 - Concept nodes (regular notes with `note_type: "concept"`) + damping
 - Embedding space versioning via ChromaDB collections
