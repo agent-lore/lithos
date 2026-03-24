@@ -155,7 +155,7 @@ async def test_graph_real_run_idempotent(
 
 async def test_provenance_projection_no_store(test_config: LithosConfig) -> None:
     """Returns supported=False, status=noop deterministically when edges.db absent."""
-    edges_db = test_config.storage.data_dir / "edges.db"
+    edges_db = test_config.storage.data_dir / ".lithos" / "edges.db"
     assert not edges_db.exists()
 
     result1 = await reconcile(scope="provenance_projection", dry_run=False, config=test_config)
@@ -181,7 +181,8 @@ async def test_provenance_projection_no_store(test_config: LithosConfig) -> None
 
 async def test_provenance_projection_store_present(test_config: LithosConfig) -> None:
     """When edges.db is present the scope is supported and returns noop (no LCMA yet)."""
-    edges_db = test_config.storage.data_dir / "edges.db"
+    edges_db = test_config.storage.data_dir / ".lithos" / "edges.db"
+    edges_db.parent.mkdir(parents=True, exist_ok=True)
     edges_db.touch()
 
     result = await reconcile(scope="provenance_projection", dry_run=False, config=test_config)

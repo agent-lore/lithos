@@ -371,7 +371,7 @@ def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) -> dic
     Returns supported=True with status=noop once that storage is present
     (full repair logic is deferred to after LCMA rollout).
     """
-    edges_db = config.storage.data_dir / "edges.db"
+    edges_db = config.storage.data_dir / ".lithos" / "edges.db"
     if not edges_db.exists():
         return _make_result(
             "provenance_projection",

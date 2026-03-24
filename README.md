@@ -6,8 +6,6 @@ A local, privacy-first knowledge base that enables heterogeneous AI agents to sh
 
 ## The Problem
 
-Enterprise AI adoption is stalling at the infrastructure layer. According to a [Computer Weekly / IDC survey](https://www.computerweekly.com/), **only 2% of enterprises have deployed AI at scale** — despite a potential **$450B market opportunity**. A [2025 NBER study of 6,000 executives](https://www.nber.org/) found that the primary barrier is the absence of reliable, shared knowledge infrastructure.
-
 When agents cannot share what they know, every agent starts from zero. Work is duplicated, discoveries are lost, and coordination breaks down. Lithos solves this by providing a **persistent, shared knowledge layer** that compounds in value over time.
 
 ## What It Is

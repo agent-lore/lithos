@@ -4,6 +4,21 @@ Contract note: write-path request/response semantics referenced here are governe
 
 ## 0. Summary
 
+### Intellectual lineage
+
+LCMA's retrieval architecture is inspired by Douglas Hofstadter's **Parallel Terraced Scan (PTS)**, the search strategy at the heart of his Copycat and Metacat models of analogy-making. In PTS, many lightweight “codelets” (here called **scouts**) probe the problem space in parallel at low cost. A global **temperature** signal — derived from how coherent or fragmented the current candidates are — controls whether the system exploits familiar, well-connected knowledge or explores novel, loosely related material. When temperature is high (low coherence among results), exploration dominates; when temperature is low (strong agreement), the system narrows and deepens.
+
+This explains several LCMA design choices that might otherwise seem unusual:
+
+- **Scouts** are deliberately cheap and overlapping — redundancy is a feature, not waste, because each scout captures a different retrieval signal (lexical, semantic, graph, recency, provenance).
+- **Terraces** are levels of increasing computational cost. Terrace 0 is the parallel scout union; Terrace 1 applies fast reranking. The system stops as soon as the result quality is sufficient, rather than always running the most expensive pass.
+- **Temperature** is not an LLM sampling parameter — it is a measure of retrieval uncertainty that governs the explore/exploit tradeoff.
+- **Concept nodes** and **coactivation** tracking echo Hofstadter's interest in how repeated exposure causes abstract concepts to crystallize from concrete examples.
+
+LCMA adapts these ideas to a knowledge management context rather than a perceptual analogy context. The scouts probe a knowledge base instead of a letter-string workspace, and the “codelets” are retrieval strategies rather than micro-transformations. But the core insight — that intelligent retrieval requires parallel, temperature-governed search with emergent structure — carries over directly.
+
+### Overview
+
 LCMA turns Lithos from “notes + embeddings” into a **cognitive substrate**:
 
 - **Parallel Terraced Scan (PTS)** retrieval: many cheap probes → selective deepening
@@ -14,7 +29,7 @@ LCMA turns Lithos from “notes + embeddings” into a **cognitive substrate**:
 - **Auditable retrieval** (“why was this retrieved?” receipts)
 - **Two-component architecture**: `lithos-enrich` (in-process background enrichment worker) + `lithos_retrieve` (lightweight query-time orchestration)
 
-The architecture is split into two runtime components: **`lithos-enrich`** runs as an in-process background worker inside the Lithos server, performing expensive query-independent work (concept node creation, typed edge building, salience score updates, coactivation tracking, Terrace 2 LLM synthesis). Its outputs are persistent artifacts discoverable via `lithos_search`. **`lithos_retrieve`** is a lightweight, synchronous MCP tool that assembles pre-computed enrichment into a ranked result for a specific query — fast because the heavy lifting already happened in the background.
+The architecture is split into two runtime components: **`lithos-enrich`** runs as an in-process background worker inside the Lithos server, performing expensive query-independent work (concept node creation, typed edge building, salience score updates, coactivation tracking, background LLM synthesis). Its outputs are persistent artifacts discoverable via `lithos_search`. **`lithos_retrieve`** is a lightweight, synchronous MCP tool that assembles pre-computed enrichment into a ranked result for a specific query — fast because the heavy lifting already happened in the background.
 
 ### Non-goals
 
@@ -104,13 +119,16 @@ PTS is exposed as a **new** `lithos_retrieve` tool. The existing `lithos_search`
 - analogy → new (frame extraction, no existing equivalent)
 - exploration → new (novelty/random sampling)
 
-> **Architecture note**: `lithos_retrieve` is fast enough for synchronous client use because `lithos-enrich` has already performed the expensive enrichment work in the background. **Terrace 2 (LLM interpretive pass) is NOT part of `lithos_retrieve`** — it belongs to `lithos-enrich`, which runs asynchronously. `lithos_retrieve` only executes Terrace 0 and Terrace 1.
+> **Architecture note**: `lithos_retrieve` is fast enough for synchronous client use because `lithos-enrich` has already performed the expensive enrichment work in the background. **Background LLM synthesis is NOT part of `lithos_retrieve`** — it belongs to `lithos-enrich`, which runs asynchronously. `lithos_retrieve` only executes Terrace 0 and Terrace 1.
 
-**Terraces**:
+**Terraces** (query-time, inside `lithos_retrieve`):
 
 - Terrace 0: union candidates (cheap)
 - Terrace 1: fast re-rank (diversity + priors)
-- Terrace 2 (LLM pass — **belongs to `lithos-enrich`**, not `lithos_retrieve`): `llm_interpretive_select()` — semantic reranking via LLM synthesis, run asynchronously in the background by `lithos-enrich`. Not executed in the `lithos_retrieve` hot path.
+
+**Background synthesis** (query-independent, inside `lithos-enrich`):
+
+- `llm_interpretive_synthesize()` — proactive knowledge synthesis via LLM, run asynchronously in the background by `lithos-enrich`. This is **not a retrieval terrace** — it produces persistent artifacts (summaries, concept notes, edge annotations) that improve future retrieval, rather than reranking a specific query's results.
 
 ## 1.3 Learning (v1)
 
@@ -182,7 +200,7 @@ Add a scout aimed at **structural similarity**, not semantic closeness:
 Lithos already provides: agent registry (`lithos_agent_register`), task lifecycle (`lithos_task_create/complete`), aspect-based claims with TTL (`lithos_task_claim/renew/release`), and findings (`lithos_finding_post/list`). LCMA extends this with:
 
 - namespaces and memory visibility (new filtering layer on existing tools)
-- per-agent WM + per-task shared WM (linked to existing `task_id` from coordination)
+- task-shared WM (linked to existing `task_id` from coordination) — per-agent WM is deferred; task-shared WM maps directly onto existing coordination and is simpler to reason about
 - write policies for reinforcement into shared memory (can gate via existing claim mechanics)
 
 Implementation note:
@@ -296,7 +314,7 @@ Add `schema_version` per note and a migration registry.
 LCMA has two runtime components:
 
 - **`lithos_retrieve` (MCP tool, synchronous)**: Terrace 0 + Terrace 1 only. Uses pre-computed enrichment from `stats.db` and `edges.db`. Fast enough for the client hot path.
-- **`lithos-enrich` (in-process worker)**: Runs consolidation, concept formation, Terrace 2 LLM synthesis, decay, and edge reinforcement. Triggered via two modes:
+- **`lithos-enrich` (in-process worker)**: Runs consolidation, concept formation, background LLM synthesis, decay, and edge reinforcement. Triggered via two modes:
   - **Event-driven incremental**: Runs inside the Lithos server process and subscribes to the existing in-memory event bus (`events.py`). Actions that change knowledge state (`lithos_write`, `lithos_delete`, `lithos_task_complete`, `lithos_finding_post`, `lithos_edge_create/update`) enqueue work into the `enrich_queue` table in `stats.db`. A periodic drain (e.g., every 5 minutes) processes pending queue entries, targeting only affected nodes. Multiple events for the same node are deduplicated within a drain cycle.
   - **Scheduled full sweep** (default: daily, configurable): Runs a full enrichment pass across all nodes regardless of queue state — recomputes decay, runs full concept cluster analysis, and catches anything missed by incremental runs.
   - Writes persistent artifacts (concept nodes, edges, salience scores) discoverable via `lithos_search`.
@@ -320,7 +338,7 @@ data/                              # configurable via StorageConfig.data_dir
     agent/<agent_id>/              #   optional namespace convention
   .tantivy/                        # existing: Tantivy full-text index
   .chroma/                         # existing: ChromaDB embeddings (all-MiniLM-L6-v2)
-  .graph/                          # existing: NetworkX wiki-link graph (pickle)
+  .graph/                          # existing: NetworkX wiki-link graph (JSON-cached as graph.json)
   .lithos/                         # SQLite stores + LCMA data
     coordination.db                #   agents, tasks, claims, findings
     edges.db                       #   typed weighted edges (separate from NetworkX)
@@ -378,7 +396,7 @@ Note: `salience`, `usage_stats`, and `embedding_spaces` are stored in `stats.db`
 
 ## 4.3 Edges Store Schema (sqlite)
 
-Stored in `data/.lithos/edges.db`. This is **separate from** the existing NetworkX wiki-link graph (`data/.graph/graph.pickle`), which continues to power `lithos_links` and wiki-link resolution.
+Stored in `data/.lithos/edges.db`. This is **separate from** the existing NetworkX wiki-link graph (`data/.graph/graph.json`), which continues to power `lithos_links` and wiki-link resolution.
 
 The two systems complement each other:
 
@@ -407,10 +425,9 @@ Indexes:
 
 New MCP tools for LCMA edges (do not modify existing `lithos_links`):
 
-- `lithos_edge_create` — create/update a typed edge
+- `lithos_edge_upsert` — create or update a typed edge (combines former `lithos_edge_create` + `lithos_edge_update`)
 - `lithos_edge_list` — query edges by node, type, or namespace
-- `lithos_edge_update` — adjust weight or conflict state
-- `lithos_conflict_resolve` — resolve a contradiction edge
+- `lithos_conflict_resolve` — resolve a contradiction edge (**deferred to MVP 2**, when contradiction workflow is live)
 
 ## 4.4 Stats Store Schema (sqlite)
 
@@ -712,9 +729,8 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
     conflict_edges = scout_contradictions(q, seed_nodes=[c.node_id for c in top[:10]])
     receipt["conflicts_surfaced"] = conflict_edges
 
-    # Terrace 2 (LLM interpretive pass) is NOT part of lithos_retrieve.
+    # Background LLM synthesis is NOT part of lithos_retrieve.
     # It belongs to lithos-enrich, which runs asynchronously in the background.
-    # should_use_llm_pass() and llm_interpretive_select() are lithos-enrich concerns.
     # terrace_reached will always be 0 or 1 for lithos_retrieve.
     terrace = 1
     final_nodes = top[:q.max_context_nodes]
@@ -729,7 +745,7 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
             )
             # upsert increments activation_count, updates last_seen_at and last_receipt_id
 
-    receipt["terrace_reached"] = terrace  # max=1 for lithos_retrieve; Terrace 2 is lithos-enrich
+    receipt["terrace_reached"] = terrace  # max=1 for lithos_retrieve; LLM synthesis is lithos-enrich
     receipt["final_nodes"] = summarize_reasons(final_nodes)
 
     write_receipt(receipt)
@@ -748,10 +764,12 @@ def retrieve_pts(q: QueryContext) -> RetrievalResult:
     )
 ```
 
-### `should_use_llm_pass` policy (v2)
+### `should_enrich_with_llm` policy (lithos-enrich, v2+)
+
+This policy governs when `lithos-enrich` should trigger background LLM synthesis for a node or cluster. It runs asynchronously and is **not part of the retrieval pipeline**.
 
 ```python
-def should_use_llm_pass(q, temp, conflict_edges) -> bool:
+def should_enrich_with_llm(node_id, temp, conflict_edges) -> bool:
     if conflict_edges:
         return True
     if temp > 0.6:
@@ -759,7 +777,7 @@ def should_use_llm_pass(q, temp, conflict_edges) -> bool:
     return False
 ```
 
-This reflects my disagreement: **low temp does not automatically trigger LLM**.
+Note: **low temperature does not automatically trigger LLM** — synthesis is reserved for high-uncertainty or conflict scenarios.
 
 ---
 
@@ -805,15 +823,17 @@ def rerank_fast(q: QueryContext, pool: list[Candidate]) -> list[Candidate]:
 
 ### `note_type_prior()` definition
 
-Static lookup returning a retrieval prior weight per `note_type`. These are initial defaults; move to `LcmaConfig.note_type_priors` for tunability.
+Lookup returning a retrieval prior weight per `note_type`. Configurable via `LcmaConfig.note_type_priors`.
+
+**MVP 1: all priors are neutral (0.5).** Hand-tuned priors are brittle before learning signals exist to validate them. Let reinforcement differentiate note types over time. Differentiated priors may be introduced in MVP 2+ once there is data to inform them.
 
 ```python
 NOTE_TYPE_PRIORS: dict[str, float] = {
     "observation": 0.5,
-    "agent_finding": 0.6,
-    "summary": 0.4,
-    "concept": 0.3,
-    "task_record": 0.2,
+    "agent_finding": 0.5,
+    "summary": 0.5,
+    "concept": 0.5,
+    "task_record": 0.5,
     "hypothesis": 0.5,
 }
 
@@ -1074,7 +1094,23 @@ def scout_vector(q: QueryContext, k: int) -> list[Candidate]:
 
 ## 5.11 Schema Versioning for Notes
 
-Each note has `schema_version` (default: 1 for existing notes without it). A migration registry in `data/.lithos/migrations/registry.json`:
+Each note has `schema_version` (default: 1 for existing notes without it).
+
+**MVP 1: lazy defaults + write-back-on-touch.** Since unknown frontmatter fields already survive round-trips (tested in `test_integration_conformance.py`), LCMA fields are additive and need no eager migration. When a note is read, missing LCMA fields get in-memory defaults. When a note is next written via `lithos_write`, the defaults are persisted. This avoids unnecessary file churn and respects the "existing notes without LCMA fields remain valid" guarantee.
+
+```python
+def read_with_lcma_defaults(note_path: str) -> tuple[dict, str]:
+    meta, body = read_frontmatter(note_path)    # existing python-frontmatter parsing
+    # Apply LCMA defaults at read time — no file write needed
+    meta.setdefault("schema_version", 1)
+    meta.setdefault("namespace", derive_namespace_from_path(note_path))
+    meta.setdefault("access_scope", "shared")
+    meta.setdefault("note_type", "observation")
+    meta.setdefault("status", "active")
+    return meta, body
+```
+
+**MVP 2: migration registry.** A formal migration registry (`data/.lithos/migrations/registry.json`) is introduced only when semantic schema changes (not just additive fields) require it:
 
 ```json
 {
@@ -1085,25 +1121,13 @@ Each note has `schema_version` (default: 1 for existing notes without it). A mig
 }
 ```
 
-Migration runner (uses existing `KnowledgeManager` for file I/O):
-
-```python
-def migrate_note(note_path: str):
-    meta, body = read_frontmatter(note_path)    # existing python-frontmatter parsing
-    v = meta.get("schema_version", 1)            # missing = version 1
-    while v < CURRENT_SCHEMA_VERSION:
-        meta, body = apply_migration(v, v+1, meta, body)
-        v += 1
-    write_note(note_path, meta, body)
-```
-
 Migrations must be idempotent and never remove existing fields.
 
 ---
 
 ## 5.12 `lithos-enrich` Worker Pseudocode
 
-> **Note**: This is the other half of the two-component architecture. `lithos-enrich` runs as an in-process background worker inside the Lithos server, performing expensive query-independent enrichment. Ships in MVP 2; schema and queue created in MVP 1.
+> **Note**: This is the other half of the two-component architecture. `lithos-enrich` runs as an in-process background worker inside the Lithos server, performing expensive query-independent enrichment (edge building, salience scoring, decay, and — in MVP 3 — concept formation and LLM synthesis). Ships in MVP 2; schema and queue created in MVP 1.
 
 ```python
 class EnrichWorker:
@@ -1117,37 +1141,57 @@ class EnrichWorker:
 
     async def start(self):
         self._running = True
-        # Subscribe to knowledge-mutating events
-        self.event_bus.subscribe("note_written", self._on_note_event)
-        self.event_bus.subscribe("note_deleted", self._on_note_event)
-        self.event_bus.subscribe("task_completed", self._on_task_event)
-        self.event_bus.subscribe("finding_posted", self._on_note_event)
-        self.event_bus.subscribe("edge_written", self._on_note_event)
-        # Start periodic loops
+        # Subscribe to knowledge-mutating events via queue-based EventBus API.
+        # EventBus.subscribe() returns an asyncio.Queue filtered by event_types.
+        # Event type constants use dot-delimited names (events.py):
+        #   note.created, note.updated, note.deleted,
+        #   task.completed, task.cancelled, finding.posted
+        self._event_queue = self.event_bus.subscribe(
+            event_types=[
+                "note.created", "note.updated", "note.deleted",
+                "task.completed",
+                "finding.posted",
+            ]
+        )
+        # Start event consumer + periodic loops
+        self._consumer_task = asyncio.create_task(self._consume_events())
         self._drain_task = asyncio.create_task(self._drain_loop())
         self._sweep_task = asyncio.create_task(self._sweep_loop())
 
     async def stop(self):
         self._running = False
+        if self._consumer_task:
+            self._consumer_task.cancel()
         if self._drain_task:
             self._drain_task.cancel()
         if self._sweep_task:
             self._sweep_task.cancel()
+        if self._event_queue:
+            self.event_bus.unsubscribe(self._event_queue)
 
-    # ---- Event handlers: enqueue work ----
+    # ---- Event consumer: read from queue, enqueue work ----
 
-    async def _on_note_event(self, event):
+    async def _consume_events(self):
+        """Drain the EventBus subscription queue into enrich_queue rows."""
+        while self._running:
+            event = await self._event_queue.get()
+            if event.type == "task.completed":
+                self._enqueue_task_work(event)
+            else:
+                self._enqueue_node_work(event)
+
+    def _enqueue_node_work(self, event):
         """Enqueue node-level enrichment work."""
         self.db.execute(
             "INSERT INTO enrich_queue (trigger_type, node_id, triggered_at) VALUES (?, ?, ?)",
-            (event.type, event.node_id, now_iso())
+            (event.type, event.data.get("doc_id"), now_iso())
         )
 
-    async def _on_task_event(self, event):
+    def _enqueue_task_work(self, event):
         """Enqueue task-level consolidation work."""
         self.db.execute(
             "INSERT INTO enrich_queue (trigger_type, task_id, triggered_at) VALUES (?, ?, ?)",
-            ("task_complete", event.task_id, now_iso())
+            ("task.completed", event.data.get("task_id"), now_iso())
         )
 
     # ---- Drain loop: process pending queue entries ----
@@ -1235,7 +1279,7 @@ Write-contract note for LCMA params:
 
 ## MVP 1 (3 scouts + Terrace 1 — wraps existing engines)
 
-> **Note**: `lithos_retrieve` in MVP 1 implements Terrace 0 + Terrace 1 only. Terrace 2 (LLM pass) is not part of `lithos_retrieve` — it belongs to `lithos-enrich`.
+> **Note**: `lithos_retrieve` in MVP 1 implements Terrace 0 + Terrace 1 only. Background LLM synthesis belongs to `lithos-enrich` (MVP 3).
 
 - Verify existing `coordination.db` migration path remains stable (already implemented)
 - `lithos_retrieve` tool orchestrating scouts internally
@@ -1246,27 +1290,30 @@ Write-contract note for LCMA params:
 - Temperature returned as fixed default (0.5) — computed temperature activates in MVP 3 when edges exist
 - `data/.lithos/edges.db` (related_to) + basic reinforcement
 - `data/.lithos/stats.db` (node_stats, coactivation)
-- New tools: `lithos_edge_create`, `lithos_edge_list`, `lithos_node_stats`
-- Schema versioning: `schema_version` field + migration registry
+- New tools: `lithos_edge_upsert`, `lithos_edge_list`
+- Schema versioning: `schema_version` field (lazy defaults + write-back-on-touch; migration registry deferred to MVP 2)
 - `summaries` stored as nested YAML (`summaries: { short, long }`)
 - `lithos_retrieve` owns namespace/access-scope enforcement in MVP 1; legacy tools remain unchanged
 
 ## MVP 2 (v2 essentials)
 
-> **Note**: `lithos-enrich` is introduced in MVP 2 as an in-process background worker. It handles concept formation, edge building, salience scoring, and decay. `lithos_retrieve` continues to use only Terrace 0 + Terrace 1, now benefiting from pre-computed enrichment.
+> **Note**: `lithos-enrich` is introduced in MVP 2 as an in-process background worker. It handles edge building, salience scoring, and decay. `lithos_retrieve` continues to use only Terrace 0 + Terrace 1, now benefiting from pre-computed enrichment. Concept formation and LLM synthesis are deferred to MVP 3.
 
 - Negative reinforcement on ignored/misleading (stats.db updates)
 - Contradiction edges with `unreviewed` state + `lithos_conflict_resolve` tool
+- `lithos_node_stats` tool — view salience and usage stats from `stats.db`
+- Schema migration registry (`data/.lithos/migrations/registry.json`) — deferred from MVP 1
 - Namespace + access_scope filtering on scouts
 - Consolidation hook on `lithos_task_complete`
 - Graph scout querying both NetworkX and edges.db
 - Extend `lithos_task_complete` with optional feedback params: `cited_nodes: list[str]`, `misleading_nodes: list[str]` — server calls `post_task_update()` on receipt
 - `lithos-enrich` auto-extracts `entities` from notes (deferred from MVP 1)
 - `lithos-enrich` pseudocode finalized (§5.12) before implementation begins
+- Differentiated `note_type_priors` tuning based on MVP 1 learning data
 
 ## MVP 3 (Hofstadter-flavored)
 
-> **Note**: Terrace 2 (LLM pass) is part of `lithos-enrich`, not `lithos_retrieve`. It runs asynchronously in the background. `lithos_retrieve` remains Terrace 0 + Terrace 1 only.
+> **Note**: Background LLM synthesis is part of `lithos-enrich`, not `lithos_retrieve`. It runs asynchronously and produces persistent artifacts. `lithos_retrieve` remains Terrace 0 + Terrace 1 only.
 
 - Analogy scout (frame extraction — new, no existing equivalent)
 - Temperature-based exploration depth
@@ -1287,21 +1334,30 @@ Write-contract note for LCMA params:
 
 ## Alignment with Existing Lithos (preserving backward compatibility)
 
-### Existing tools preserved (24 tools, no renames or removals)
+### Existing tools preserved (27 tools, no renames or removals)
 
 - Knowledge: `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup`
 - Graph: `lithos_links`, `lithos_tags`, `lithos_provenance`
 - Agents: `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list`
-- Coordination: `lithos_task_create`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_status`
+- Coordination: `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`
 - Findings: `lithos_finding_post`, `lithos_finding_list`
 - System: `lithos_stats`
 
 ### New LCMA tools (additive only)
 
+**MVP 1:**
+
 - `lithos_retrieve` — PTS-based retrieval orchestrating scouts
-- `lithos_edge_create`, `lithos_edge_list`, `lithos_edge_update` — typed edge CRUD
-- `lithos_conflict_resolve` — contradiction resolution
+- `lithos_edge_upsert` — create or update a typed edge
+- `lithos_edge_list` — query edges by node, type, or namespace
+
+**MVP 2:**
+
 - `lithos_node_stats` — view/query salience and usage stats
+- `lithos_conflict_resolve` — contradiction resolution
+
+**MVP 3:**
+
 - `lithos_receipts` — query retrieval audit history
 
   ```python
@@ -1350,9 +1406,7 @@ LCMA is also compatible with cross-plan metadata additions: `source_url`, `deriv
 
 `should_use_llm_pass()` and `llm_interpretive_select()` require an external LLM provider. This is deferred to MVP 2+. MVP 1 stops at Terrace 1 (fast re-rank only) — no local model is bundled and no external LLM call is made.
 
-When `should_use_llm_pass()` returns `True` in MVP 1, the implementation should fall through to `final_nodes = top[:q.max_context_nodes]` as if Terrace 1 was the terminal decision, and log a debug note that Terrace 2 is not yet configured.
-
-The external LLM provider will be configured via a new `LithosConfig` field (provisionally `LithosConfig.lcma.llm_provider`) when MVP 2 ships.
+Background LLM synthesis is not available in MVP 1 or MVP 2. `lithos_retrieve` always terminates at Terrace 1. LLM synthesis ships in MVP 3 as part of `lithos-enrich`, configured via `LithosConfig.lcma.llm_provider`.
 
 ### 7.z `LcmaConfig` Schema (Draft)
 
@@ -1368,13 +1422,13 @@ class LcmaConfig(BaseModel):
         "concept_damp": -0.15,
     }
     note_type_priors: dict[str, float] = {
-        "observation": 0.5, "agent_finding": 0.6, "summary": 0.4,
-        "concept": 0.3, "task_record": 0.2, "hypothesis": 0.5,
-    }
+        "observation": 0.5, "agent_finding": 0.5, "summary": 0.5,
+        "concept": 0.5, "task_record": 0.5, "hypothesis": 0.5,
+    }  # All neutral in MVP 1; differentiate in MVP 2+ once learning data exists
     temperature_default: float = 0.5               # used when edges < threshold
     temperature_edge_threshold: int = 50            # min edges for computed temp
     wm_eviction_days: int = 7
-    llm_provider: str | None = None                # MVP 2+, Terrace 2
+    llm_provider: str | None = None                # MVP 3+, background LLM synthesis
 ```
 
 Ship with hardcoded defaults in MVP 1. Config override via `LithosConfig.lcma` available from first release but only becomes load-bearing when `lithos-enrich` ships in MVP 2.
@@ -1385,7 +1439,7 @@ Ship with hardcoded defaults in MVP 1. Config override via `LithosConfig.lcma` a
 - **`lithos_retrieve`** is the thin query-time layer that assembles pre-computed enrichment into a ranked result for a specific query. It is fast because the heavy lifting already happened.
 - Clients who only need content can use `lithos_search` and benefit from enrichment passively — concept nodes created by `lithos-enrich` are regular `.md` files indexed by the standard search pipeline.
 - Clients who need salience-weighted, graph-aware, multi-scout ranked results use `lithos_retrieve`.
-- **Terrace 2 (LLM pass) belongs to `lithos-enrich`** because: (a) it is expensive, (b) it is not query-specific in the same way — it synthesizes knowledge proactively, (c) clients should not block waiting for LLM synthesis.
+- **Background LLM synthesis belongs to `lithos-enrich`** (not the retrieval pipeline) because: (a) it is expensive, (b) it is query-independent — it synthesizes knowledge proactively, producing persistent artifacts (summaries, concept notes, edge annotations), (c) clients should not block waiting for LLM synthesis. It is deliberately **not** numbered as "Terrace 2" to avoid implying it is a step in the retrieval pipeline.
 - **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`) are additive. The envelope adds `temperature`, `terrace_reached`, and `receipt_id`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
 - **Enrichment queue pattern**: Rather than triggering `lithos-enrich` directly on each action, triggering actions emit events via the existing Lithos event bus. The in-process `lithos-enrich` worker subscribes to these events and writes to an `enrich_queue` table in `stats.db`. A periodic drain processes pending work, deduplicating multiple events for the same node. A daily full sweep catches anything missed and recomputes global signals (decay, concept clusters). This avoids redundant enrichment runs (e.g., 10 task completions → 1 enrichment run), enables incremental targeted processing, and leverages existing event infrastructure with no new event system required.
 
@@ -1409,13 +1463,13 @@ Both tool MCP descriptions should make this distinction explicit so agents can c
 
 The following items were identified during design review and need resolution during implementation. They are ordered roughly by the section they affect.
 
-1. **Edge tool boundary (§4.3)**: `lithos_edge_create` is described as "create/update" while `lithos_edge_update` is "adjust weight or conflict state." Clarify the boundary: either make `lithos_edge_create` create-only (error if exists) with `lithos_edge_update` as the mutation path, or merge into a single `lithos_edge_upsert`.
+1. **~~Edge tool boundary (§4.3)~~**: **Resolved** — merged `lithos_edge_create` + `lithos_edge_update` into a single `lithos_edge_upsert`. Creates if absent, updates if exists. `lithos_conflict_resolve` deferred to MVP 2.
 
 2. **Namespace derivation algorithm (§1.1)**: Define precisely how `namespace` is derived from `path` when absent. What namespace does `research/foo.md` get? The whole directory path? First segment only? Recommend a fallback like `"default"` for notes that don't match the `shared/`/`project/<name>/`/`agent/<id>/` convention.
 
 3. **`enrich_queue` task-level dedup (§4.4)**: Current dedup is `SELECT DISTINCT node_id WHERE processed_at IS NULL`, but `task_complete` triggers are task-level (`node_id` is NULL). Add `task_id` to the dedup key for task-level triggers. Drain should handle node-level and task-level work separately. **Resolved**: Drain handles node-level and task-level work separately (see updated §4.4 dedup description).
 
-4. **Schema migration timing (§5.11)**: Specify lazy migration: apply defaults at read time, write back on next `lithos_write` update. This is consistent with the "existing notes without LCMA fields remain valid" guarantee.
+4. **~~Schema migration timing (§5.11)~~**: **Resolved** — MVP 1 uses lazy defaults + write-back-on-touch. Migration registry deferred to MVP 2 for semantic changes only.
 
 5. **~~`receipts.jsonl` scalability (§4.6)~~**: **Resolved** — receipts are now stored in the `receipts` table in `stats.db` with indexed columns `(ts)`, `(task_id)`, `(agent_id)`, consistent with other SQLite stores. **Resolved**: Receipts moved to `receipts` table in `stats.db`. All JSONL references replaced.
 

@@ -90,7 +90,7 @@ MCP roadmap source: https://modelcontextprotocol.io/development/roadmap
 
 **MCP roadmap (On the Horizon):** Finer-grained least-privilege scopes, OAuth mix-up attack guidance, secure credential management, vulnerability disclosure program.
 
-**Lithos:** The `access_scope` field (LCMA MVP 1) provides retrieval scoping (`agent_private|task|project|shared|user_private`) but is explicitly not a security boundary — all agents operate in the same trust domain per `SPECIFICATION.md` section 1.2. When MCP defines fine-grained scopes, Lithos's `access_scope` model will need review to determine whether it should be promoted to an enforced boundary or remain a retrieval hint.
+**Lithos:** The `access_scope` field (LCMA MVP 1) provides retrieval scoping (`agent_private|task|project|shared`) but is explicitly not a security boundary — all agents operate in the same trust domain per `SPECIFICATION.md` section 1.2. When MCP defines fine-grained scopes, Lithos's `access_scope` model will need review to determine whether it should be promoted to an enforced boundary or remain a retrieval hint.
 
 ---
 
