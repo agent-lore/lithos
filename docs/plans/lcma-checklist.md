@@ -17,6 +17,8 @@ Exit criteria (all MVPs):
 - [ ] Wrap `full_text_search()`, `semantic_search()`, and `hybrid_search()` calls in `asyncio.to_thread()` at call sites — sync search must not block the event loop when LCMA adds 7+ parallel scouts (see design doc §5.13)
 - [ ] Implement `merge_and_normalize()` with per-scout min-max normalization to `[0, 1]` — all `lithos_retrieve` scores must be normalized (see design doc §5.3.1); `lithos_search` scores are unchanged
 - [ ] Add `EDGE_UPSERTED = "edge.upserted"` event type to `events.py` — all state changes must flow through the event bus (see design doc §3.1 runtime architecture)
+- [ ] Extend `EventBus.subscribe()` to accept an optional `maxsize: int | None = None` parameter — if provided, use it for the subscriber queue instead of the default `self._queue_size`. This is required so `lithos-enrich` can pass `ENRICH_SUBSCRIBER_QUEUE_SIZE` at subscribe time in MVP 2.
+- [ ] Bump `lithos-enrich` subscriber queue size to ~10,000 by passing `ENRICH_SUBSCRIBER_QUEUE_SIZE` to the `EventBus.subscribe()` call in the enrich worker (depends on above item)
 
 ---
 
@@ -25,7 +27,7 @@ Exit criteria (all MVPs):
 ### New frontmatter fields (optional, backward-compatible defaults)
 
 - [ ] Add `schema_version` (int, default 1) — lazy default at read time, persisted on next `lithos_write`
-- [ ] Add `namespace` (str, derived from path if absent) — lazy default at read time, persisted on next `lithos_write`; writable via `lithos_write` for explicit overrides
+- [ ] Add `namespace` (str, derived from path if absent) — lazy default at read time, derived from path; **persist only if explicitly passed by caller** (not written back automatically on touch); writable via `lithos_write` for explicit overrides
 - [ ] Add `access_scope` (enum: `shared|task|agent_private`, default `shared`) — advisory visibility to reduce noise, not a security control; agents self-identify via `agent_id`; project-level scoping handled by `namespace`
 - [ ] Add `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
 - [ ] Add `entities` field (list of extracted entity names) — **deferred to MVP 2**: auto-extracted by `lithos-enrich`; not populated in MVP 1
@@ -33,7 +35,18 @@ Exit criteria (all MVPs):
 - [ ] Add `summaries` nested object (`short`, `long`) (optional)
   - MVP 1: agent-written only (via `lithos_write`); MVP 2: `lithos-enrich` may auto-generate for notes where `summaries` is empty and `note_type` is `concept`/`summary` — agent-written values take precedence
 - [ ] Extend `lithos_write` with optional LCMA params while preserving shared write contract and status envelope
-- [ ] Define preserve/set/clear semantics for each new `lithos_write` LCMA field before implementation
+- [x] ~~Define preserve/set/clear semantics for each new `lithos_write` LCMA field before implementation~~ — **Resolved:** Preserve if already set; write default on first touch (write-back-on-touch). Exception: `namespace` — derive at read time only, persist only if explicitly passed by caller.
+
+  | Field | On update, if omitted |
+  |---|---|
+  | `schema_version` | Write default (1) if absent; preserve if already set |
+  | `note_type` | Write default (`observation`) if absent; preserve if already set |
+  | `access_scope` | Write default (`shared`) if absent; preserve if already set |
+  | `status` | Write default (`active`) if absent; preserve if already set |
+  | `summaries` | Leave absent if not provided; do not overwrite with null |
+  | `namespace` | Derive at read time; persist only if explicitly passed |
+  | `entities` | Leave absent in MVP 1; do not set. MVP 2: `lithos-enrich` auto-populates; agent-written values preserved (never overwritten by enrich). |
+
 - [ ] Implement lazy defaults + write-back-on-touch for LCMA fields (no migration runner in MVP 1)
 
 ### Storage
