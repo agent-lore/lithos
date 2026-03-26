@@ -62,11 +62,12 @@ def merge_and_normalize(candidates: list[Candidate]) -> list[Candidate]:
     # Multi-scout Candidates are produced as *output* of this function, not
     # accepted as input (they would corrupt the per-scout normalisation step).
     for c in candidates:
-        assert len(c.scouts) <= 1, (
-            f"merge_and_normalize expects single-scout Candidates as input; "
-            f"got scouts={c.scouts!r} for node_id={c.node_id!r}. "
-            "Multi-scout Candidates are produced as output, not accepted as input."
-        )
+        if len(c.scouts) > 1:
+            raise ValueError(
+                f"merge_and_normalize expects single-scout Candidates as input; "
+                f"got scouts={c.scouts!r} for node_id={c.node_id!r}. "
+                "Multi-scout Candidates are produced as output, not accepted as input."
+            )
 
     # --- Step 1: group by scout name ---
     by_scout: dict[str, list[Candidate]] = {}
