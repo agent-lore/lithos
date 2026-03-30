@@ -144,8 +144,16 @@ class KnowledgeGraph:
 
         # Remove existing node if present (to update)
         if node_id in self.graph:
+            # Preserve incoming edges before removal (outgoing are rebuilt from doc.links)
+            incoming_edges = [
+                (pred, self.graph.edges[pred, node_id].copy())
+                for pred in list(self.graph.predecessors(node_id))
+                if not pred.startswith("__unresolved__")
+            ]
             self._remove_node_lookups(node_id)
             self.graph.remove_node(node_id)
+        else:
+            incoming_edges = []
 
         # Add node with attributes
         self.graph.add_node(
@@ -181,6 +189,11 @@ class KnowledgeGraph:
                 if placeholder not in self.graph:
                     self.graph.add_node(placeholder, unresolved=True, link_text=link.target)
                 self.graph.add_edge(node_id, placeholder, link_text=link.target)
+
+        # Restore incoming edges from other documents that linked to this node before the update
+        for pred, edge_data in incoming_edges:
+            if pred in self.graph:
+                self.graph.add_edge(pred, node_id, **edge_data)
 
         # Resolve any previously unresolved links that now point to this document
         self._resolve_pending_links(doc)
