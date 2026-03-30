@@ -1139,19 +1139,20 @@ class KnowledgeManager:
                 path=doc.path,
             )
 
-            changed: list[str] = []
-            if content is not None:
-                changed.append("content")
-            if title is not None:
-                changed.append("title")
-            if not isinstance(tags, _UnsetType):
-                changed.append("tags")
-            logger.info(
-                "Document updated: doc_id=%s agent=%s changed=%s",
-                id,
-                agent,
-                changed or ["metadata"],
-            )
+            if logger.isEnabledFor(logging.INFO):
+                changed: list[str] = []
+                if content is not None:
+                    changed.append("content")
+                if title is not None:
+                    changed.append("title")
+                if not isinstance(tags, _UnsetType):
+                    changed.append("tags")
+                logger.info(
+                    "Document updated: doc_id=%s agent=%s changed=%s",
+                    id,
+                    agent,
+                    changed or ["metadata"],
+                )
             return WriteResult(status="updated", document=doc, warnings=warnings)
 
     @traced("lithos.knowledge.delete")

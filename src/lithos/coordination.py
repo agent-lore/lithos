@@ -848,7 +848,7 @@ class CoordinationService:
             await db.commit()
 
         logger.info(
-            "Finding posted: task_id=%s agent=%s finding_id=%s summary=%.80r",
+            "Finding posted: task_id=%s agent=%s finding_id=%s summary=%.80s",
             task_id,
             agent,
             finding_id,
