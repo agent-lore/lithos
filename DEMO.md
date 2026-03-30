@@ -1,49 +1,25 @@
-# Logging Demo — coordination.py and knowledge.py
+# Fix #121: lithos_read FileNotFoundError → structured error
 
-*2026-03-30T02:19:02Z by Showboat 0.6.1*
-<!-- showboat-id: b223cd41-6ec0-462d-80d7-b03d07b29906 -->
+*2026-03-30T02:19:16Z by Showboat 0.6.1*
+<!-- showboat-id: 8ed53acc-770a-493a-9b94-9bd548b02db0 -->
 
-Demonstrates that DEBUG-level log lines fire correctly in both `coordination.py` and `knowledge.py` after the fix/issues-91-92-logging changes.
-
-### knowledge.py — slugify DEBUG
+PR fix/issue-121-lithos-read-filenotfound ensures lithos_read never raises a raw FileNotFoundError. Non-existent documents (by id or path) always return a structured error envelope with status=error and code=doc_not_found.
 
 ```bash
-uv run python3 -c "
-import logging, sys
-logging.basicConfig(level=logging.DEBUG, stream=sys.stdout, format=\"%(name)s %(levelname)s %(message)s\")
-logging.getLogger(\"lithos.knowledge\").setLevel(logging.DEBUG)
-from lithos.knowledge import slugify
-result = slugify(\"Hello World Test\")
-print(f\"slug={result}\")
-" 2>&1 | grep -E "^lithos|^slug"
+uv run --extra dev pytest tests/test_server.py::TestKnowledgeToolWorkflow::test_lithos_read_nonexistent_doc_does_not_raise tests/test_server.py::TestKnowledgeToolWorkflow::test_lithos_read_missing_id_returns_structured_error tests/test_server.py::TestKnowledgeToolWorkflow::test_lithos_read_missing_path_returns_structured_error -v 2>&1 | sed 's/[0-9]*\.[0-9]*s *(0:[0-9:]*)//g' | sed 's/ in [0-9]*\.[0-9]*s/ in Xs/g' | sed 's|-- /.*\.venv/bin/python|-- .venv/bin/python|g' | sed 's|rootdir: /.*|rootdir: .|g'
 ```
 
 ```output
-lithos.knowledge DEBUG slugify: title='Hello World Test' slug='hello-world-test'
-slug=hello-world-test
-```
+platform darwin -- Python 3.12.12, pytest-9.0.2, pluggy-1.6.0 -- .venv/bin/python
+cachedir: .pytest_cache
+rootdir: .
+configfile: pyproject.toml
+plugins: anyio-4.12.1, asyncio-1.3.0, cov-7.0.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 3 items
 
-### coordination.py — ensure_agent_known DEBUG
+tests/test_server.py::TestKnowledgeToolWorkflow::test_lithos_read_nonexistent_doc_does_not_raise PASSED [ 33%]
+tests/test_server.py::TestKnowledgeToolWorkflow::test_lithos_read_missing_id_returns_structured_error PASSED [ 66%]
+tests/test_server.py::TestKnowledgeToolWorkflow::test_lithos_read_missing_path_returns_structured_error PASSED [100%]
 
-```bash
-uv run python3 -c "
-import logging, sys, asyncio, tempfile
-from pathlib import Path
-logging.basicConfig(level=logging.DEBUG, stream=sys.stdout, format=\"%(name)s %(levelname)s %(message)s\")
-logging.getLogger(\"lithos.coordination\").setLevel(logging.DEBUG)
-from lithos.coordination import CoordinationService
-from lithos.config import LithosConfig
-async def run():
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cfg = LithosConfig()
-        svc = CoordinationService(config=cfg)
-        svc._db_path = Path(tmpdir) / \"coord.db\"
-        await svc.initialize()
-        await svc.ensure_agent_known(\"demo-agent\")
-asyncio.run(run())
-" 2>&1 | grep "^lithos.coordination"
-```
-
-```output
-lithos.coordination DEBUG ensure_agent_known: agent_id=demo-agent
 ```
