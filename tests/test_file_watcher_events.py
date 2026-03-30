@@ -122,3 +122,50 @@ class TestFileWatcherEventEmission:
 
         # Should not raise even though emit fails
         await server.handle_file_change(file_path, deleted=True)
+
+    async def test_file_change_update_rebuilds_graph_edges(self, server: LithosServer) -> None:
+        """handle_file_change rebuilds graph edges when a file is modified."""
+        target_alpha = (
+            await server.knowledge.create(
+                title="Target Alpha",
+                content="Alpha target document.",
+                agent="test-agent",
+                path="watched",
+            )
+        ).document
+        target_beta = (
+            await server.knowledge.create(
+                title="Target Beta",
+                content="Beta target document.",
+                agent="test-agent",
+                path="watched",
+            )
+        ).document
+        server.graph.add_document(target_alpha)
+        server.graph.add_document(target_beta)
+
+        source = (
+            await server.knowledge.create(
+                title="Source Doc",
+                content="Links to [[target-alpha]].",
+                agent="test-agent",
+                path="watched",
+            )
+        ).document
+        server.graph.add_document(source)
+
+        assert server.graph.has_edge(source.id, target_alpha.id)
+
+        # Update the file on disk to link to target-beta instead, but skip graph.add_document
+        # to simulate a file-watcher-only update path
+        await server.knowledge.update(
+            id=source.id,
+            agent="test-agent",
+            content="Now links to [[target-beta]].",
+        )
+
+        file_path = server.config.storage.knowledge_path / source.path
+        await server.handle_file_change(file_path, deleted=False)
+
+        assert not server.graph.has_edge(source.id, target_alpha.id)
+        assert server.graph.has_edge(source.id, target_beta.id)

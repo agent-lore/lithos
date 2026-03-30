@@ -23,5 +23,4 @@ tests/test_server.py::TestKnowledgeToolWorkflow::test_lithos_read_nonexistent_do
 tests/test_server.py::TestKnowledgeToolWorkflow::test_lithos_read_missing_id_returns_structured_error PASSED [ 66%]
 tests/test_server.py::TestKnowledgeToolWorkflow::test_lithos_read_missing_path_returns_structured_error PASSED [100%]
 
-============================== 3 passed in Xs ===============================
 ```

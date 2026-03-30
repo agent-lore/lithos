@@ -139,6 +139,55 @@ Updated watcher content with unique phrase.
         assert server.graph.has_node(doc.id)
 
     @pytest.mark.asyncio
+    async def test_handle_file_change_update_rebuilds_outgoing_links(self, server: LithosServer):
+        """Updating a document via file change rebuilds its outgoing wiki-links in the graph."""
+        # Create target document
+        target = (
+            await server.knowledge.create(
+                title="Watcher Target",
+                content="This is the target.",
+                agent="watcher-agent",
+            )
+        ).document
+        server.graph.add_document(target)
+
+        # Create source document WITHOUT wiki-links
+        source = (
+            await server.knowledge.create(
+                title="Watcher Source",
+                content="No links here.",
+                agent="watcher-agent",
+            )
+        ).document
+        server.graph.add_document(source)
+
+        assert not server.graph.has_edge(source.id, target.id)
+
+        # Write updated content WITH a wiki-link to target
+        file_path = server.config.storage.knowledge_path / source.path
+        file_path.write_text(
+            f"""---
+id: {source.id}
+title: Watcher Source
+author: watcher-agent
+created_at: {source.metadata.created_at.isoformat()}
+updated_at: {source.metadata.updated_at.isoformat()}
+tags: []
+aliases: []
+confidence: 1.0
+contributors: []
+---
+# Watcher Source
+
+Now linking to [[watcher-target]].
+"""
+        )
+
+        await server.handle_file_change(file_path, deleted=False)
+
+        assert server.graph.has_edge(source.id, target.id)
+
+    @pytest.mark.asyncio
     async def test_file_change_handler_event_methods_route_events(self):
         """Event callbacks dispatch to schedule method with expected deleted flag."""
 
@@ -279,6 +328,44 @@ class TestKnowledgeToolWorkflow:
         # Verify backlinks work
         incoming = server.graph.get_incoming_links(target.id)
         assert any(n["id"] == source.id for n in incoming)
+
+    @pytest.mark.asyncio
+    async def test_update_via_lithos_write_rebuilds_outgoing_links(self, server: LithosServer):
+        """Updating a document via lithos_write with wiki-links rebuilds outgoing graph edges."""
+        tool = await server.mcp.get_tool("lithos_write")
+
+        # Create target document
+        target = (
+            await server.knowledge.create(
+                title="Write Target",
+                content="This is the write target.",
+                agent="agent",
+            )
+        ).document
+        server.graph.add_document(target)
+
+        # Create source document WITHOUT wiki-links
+        source = (
+            await server.knowledge.create(
+                title="Write Source",
+                content="No links here.",
+                agent="agent",
+            )
+        ).document
+        server.graph.add_document(source)
+
+        assert not server.graph.has_edge(source.id, target.id)
+
+        # Update source via lithos_write with a wiki-link to target
+        result = await tool.fn(
+            id=source.id,
+            title="Write Source",
+            content="Now linking to [[write-target]].",
+            agent="agent",
+        )
+        assert result["status"] == "updated"
+
+        assert server.graph.has_edge(source.id, target.id)
 
     @pytest.mark.asyncio
     async def test_lithos_list_filters_and_returns_updated(self, server: LithosServer):
