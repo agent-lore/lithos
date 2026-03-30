@@ -823,7 +823,7 @@ class KnowledgeManager:
             )
 
             logger.info(
-                "Document created: doc_id=%s title=%.60r agent=%s",
+                "Document created: doc_id=%s title=%.60s agent=%s",
                 doc_id,
                 title,
                 agent,
