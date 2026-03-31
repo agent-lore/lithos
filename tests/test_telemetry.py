@@ -1115,3 +1115,43 @@ class TestFileWatcherEventsCounter:
         with patch.object(counter, "add") as mock_add:
             await server.handle_file_change(new_file, deleted=False)
             mock_add.assert_called_once_with(1, {"event_type": "created"})
+
+
+class TestSSEMetrics:
+    """Tests for SSE client metrics (issue #97)."""
+
+    def test_register_sse_active_clients_observer_no_raise_without_otel(self):
+        """register_sse_active_clients_observer must not raise when OTEL is inactive."""
+        from lithos.telemetry import register_sse_active_clients_observer
+
+        # Should be a clean no-op when _initialized is False
+        register_sse_active_clients_observer(lambda: 3)
+
+    def test_sse_events_delivered_counter_no_raise_without_otel(self):
+        """lithos_metrics.sse_events_delivered.add() must not raise when OTEL is inactive."""
+        from lithos.telemetry import lithos_metrics
+
+        # Instrument is created lazily; calling add() on the no-op meter must not raise
+        lithos_metrics.sse_events_delivered.add(1)
+
+    def test_sse_active_clients_observer_registered_in_server(self):
+        """LithosServer must export register_sse_active_clients_observer in its import set."""
+        import inspect
+
+        import lithos.server as server_module
+
+        src = inspect.getsource(server_module)
+        assert "register_sse_active_clients_observer" in src, (
+            "register_sse_active_clients_observer should be imported and used in server.py"
+        )
+
+    def test_sse_events_delivered_wired_in_event_stream(self):
+        """_event_stream must reference sse_events_delivered to increment the counter."""
+        import inspect
+
+        from lithos.server import LithosServer
+
+        src = inspect.getsource(LithosServer._sse_endpoint)
+        assert "sse_events_delivered" in src, (
+            "sse_events_delivered counter should be incremented inside _sse_endpoint / _event_stream"
+        )

@@ -44,6 +44,7 @@ from lithos.telemetry import (
     lithos_metrics,
     register_active_claims_observer,
     register_resource_gauges,
+    register_sse_active_clients_observer,
     tool_metrics,
 )
 
@@ -328,6 +329,7 @@ class LithosServer:
                                     continue
                                 replay_count += 1
                                 yield _format_sse(evt)
+                                lithos_metrics.sse_events_delivered.add(1)
                             replay_span.set_attribute("lithos.sse.replayed", replay_count)
 
                     # Stream live events
@@ -335,6 +337,7 @@ class LithosServer:
                         try:
                             evt = await asyncio.wait_for(queue.get(), timeout=15.0)
                             yield _format_sse(evt)
+                            lithos_metrics.sse_events_delivered.add(1)
                         except asyncio.TimeoutError:
                             # Send keepalive comment to prevent proxy/firewall disconnects
                             yield ": keepalive\n\n"
@@ -374,6 +377,9 @@ class LithosServer:
 
                 # Register active claims gauge observer
                 register_active_claims_observer(lambda: self._cached_active_claims)
+
+                # Register SSE active clients gauge observer
+                register_sse_active_clients_observer(lambda: self._sse_client_count)
 
                 # Register resource-level OTEL gauges
                 register_resource_gauges(
