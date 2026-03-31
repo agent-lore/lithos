@@ -17,7 +17,7 @@ import frontmatter
 
 from lithos.config import LithosConfig, get_config
 from lithos.errors import SlugCollisionError
-from lithos.telemetry import lithos_metrics, traced
+from lithos.telemetry import lithos_metrics, timed_write, traced
 
 logger = logging.getLogger(__name__)
 
@@ -666,6 +666,7 @@ class KnowledgeManager:
         return full_path.relative_to(base_path), full_path
 
     @traced("lithos.knowledge.create")
+    @timed_write("create")
     async def create(
         self,
         title: str,
@@ -915,6 +916,7 @@ class KnowledgeManager:
                     del self._unresolved_provenance[source_id]
 
     @traced("lithos.knowledge.update")
+    @timed_write("update")
     async def update(
         self,
         id: str,

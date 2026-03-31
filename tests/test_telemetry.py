@@ -310,3 +310,85 @@ class TestTelemetryIntegration:
         assert prov_attrs.get("lithos.depth") == 1
         assert "lithos.sources_count" in prov_attrs
         assert "lithos.derived_count" in prov_attrs
+
+
+class TestWriteDurationHistogram:
+    """Tests for lithos.knowledge.write_duration_ms histogram (issue #89)."""
+
+    def test_timed_write_decorator_on_sync_function(self):
+        """@timed_write wraps sync functions and does not raise."""
+        from lithos.telemetry import timed_write
+
+        @timed_write("create")
+        def my_fn() -> str:
+            return "ok"
+
+        assert my_fn() == "ok"
+
+    @pytest.mark.asyncio
+    async def test_timed_write_decorator_on_async_function(self):
+        """@timed_write wraps async functions and does not raise."""
+        from lithos.telemetry import timed_write
+
+        @timed_write("update")
+        async def my_async_fn() -> int:
+            return 42
+
+        assert await my_async_fn() == 42
+
+    @pytest.mark.asyncio
+    async def test_timed_write_marks_failure_on_exception(self):
+        """@timed_write re-raises exceptions and marks success=False."""
+
+        from lithos.telemetry import timed_write
+
+        calls: list[dict] = []
+
+        @timed_write("create")
+        async def failing_fn() -> None:
+            raise RuntimeError("boom")
+
+        # Patch lithos_metrics to capture the recording
+        from lithos import telemetry as tel
+
+        original_histogram = tel.lithos_metrics._knowledge_write_duration
+
+        class _FakeHistogram:
+            def record(self, value: float, attrs: dict) -> None:
+                calls.append({"value": value, "attrs": attrs})
+
+        tel.lithos_metrics._knowledge_write_duration = _FakeHistogram()
+        try:
+            with pytest.raises(RuntimeError, match="boom"):
+                await failing_fn()
+        finally:
+            tel.lithos_metrics._knowledge_write_duration = original_histogram
+
+        assert len(calls) == 1
+        assert calls[0]["attrs"]["success"] is False
+        assert calls[0]["attrs"]["op"] == "create"
+        assert calls[0]["value"] >= 0
+
+    def test_knowledge_create_has_timed_write(self):
+        """KnowledgeManager.create carries the @timed_write decorator."""
+        from lithos.knowledge import KnowledgeManager
+
+        # @timed_write uses functools.wraps, so __wrapped__ is set
+        assert hasattr(KnowledgeManager.create, "__wrapped__"), (
+            "KnowledgeManager.create is missing @timed_write"
+        )
+
+    def test_knowledge_update_has_timed_write(self):
+        """KnowledgeManager.update carries the @timed_write decorator."""
+        from lithos.knowledge import KnowledgeManager
+
+        assert hasattr(KnowledgeManager.update, "__wrapped__"), (
+            "KnowledgeManager.update is missing @timed_write"
+        )
+
+    def test_write_duration_histogram_registered(self):
+        """lithos_metrics.knowledge_write_duration returns a histogram-like object."""
+        from lithos.telemetry import lithos_metrics
+
+        hist = lithos_metrics.knowledge_write_duration
+        assert hasattr(hist, "record"), "knowledge_write_duration must have a .record() method"
