@@ -1,13 +1,13 @@
 """Lithos CLI - Command-line interface."""
 
 import asyncio
-import logging
 import sys
 from pathlib import Path
 
 import click
 
 from lithos.config import LithosConfig, load_config, set_config
+from lithos.logging_config import setup_logging
 
 
 @click.group()
@@ -78,8 +78,6 @@ def serve(
 
     config: LithosConfig = ctx.obj["config"]
     server = create_server(config)
-    log_fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    log_datefmt = "%Y-%m-%dT%H:%M:%S%z"
 
     async def run_server() -> None:
         # Initialize server
@@ -97,7 +95,10 @@ def serve(
             # Run with stdio transport
             await server.mcp.run_stdio_async(show_banner=False)
         else:
-            # Run with SSE transport using run_http_async
+            # Run with SSE transport using run_http_async.
+            # Uvicorn loggers propagate to the root logger, which already has the
+            # JSON handler installed by setup_logging() below.  No separate
+            # uvicorn log_config is needed.
             click.echo(f"Listening on http://{host}:{port}")
             await server.mcp.run_http_async(
                 transport="sse",
@@ -109,41 +110,17 @@ def serve(
                     "log_config": {
                         "version": 1,
                         "disable_existing_loggers": False,
-                        "formatters": {
-                            "default": {"fmt": log_fmt, "datefmt": log_datefmt},
-                            "access": {"fmt": log_fmt, "datefmt": log_datefmt},
-                        },
-                        "handlers": {
-                            "default": {
-                                "formatter": "default",
-                                "class": "logging.StreamHandler",
-                                "stream": "ext://sys.stderr",
-                            },
-                            "access": {
-                                "formatter": "access",
-                                "class": "logging.StreamHandler",
-                                "stream": "ext://sys.stdout",
-                            },
-                        },
                         "loggers": {
-                            "uvicorn": {
-                                "handlers": ["default"],
-                                "level": "INFO",
-                                "propagate": False,
-                            },
-                            "uvicorn.error": {"level": "INFO", "propagate": False},
-                            "uvicorn.access": {
-                                "handlers": ["access"],
-                                "level": "INFO",
-                                "propagate": False,
-                            },
+                            "uvicorn": {"level": "INFO", "propagate": True},
+                            "uvicorn.error": {"level": "INFO", "propagate": True},
+                            "uvicorn.access": {"level": "INFO", "propagate": True},
                         },
                     },
                 },
             )
 
     try:
-        logging.basicConfig(level=logging.INFO, format=log_fmt, datefmt=log_datefmt)
+        setup_logging()
         setup_telemetry(config)
         asyncio.run(run_server())
     except KeyboardInterrupt:
