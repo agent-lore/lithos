@@ -13,6 +13,7 @@ import networkx as nx
 
 from lithos.config import LithosConfig, get_config
 from lithos.knowledge import KnowledgeDocument
+from lithos.telemetry import traced
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ class KnowledgeGraph:
             self._graph = nx.DiGraph()
         return self._graph
 
+    @traced("lithos.graph.load_cache")
     def load_cache(self) -> bool:
         """Load graph from cache.
 
@@ -107,6 +109,7 @@ class KnowledgeGraph:
             logger.exception("Failed to load graph cache")
             return False
 
+    @traced("lithos.graph.save_cache")
     def save_cache(self) -> None:
         """Save graph to cache atomically (write to temp file, then rename)."""
         cache_path = self.graph_cache_path
@@ -134,6 +137,7 @@ class KnowledgeGraph:
                 os.unlink(tmp_path)
             raise
 
+    @traced("lithos.graph.add_document")
     def add_document(self, doc: KnowledgeDocument) -> None:
         """Add or update a document in the graph.
 
@@ -277,6 +281,7 @@ class KnowledgeGraph:
             self._remove_node_lookups(node_id)
             self.graph.remove_node(node_id)
 
+    @traced("lithos.graph.resolve_link")
     def _resolve_link(self, target: str) -> str | None:
         """Resolve a wiki-link target to a node ID.
 
@@ -322,6 +327,7 @@ class KnowledgeGraph:
 
         return None
 
+    @traced("lithos.graph.get_links")
     def get_links(
         self,
         doc_id: str,
@@ -363,6 +369,9 @@ class KnowledgeGraph:
     ) -> list[LinkedDocument]:
         """Get all reachable nodes within depth.
 
+        Creates a root OTEL span for multi-hop BFS traversals (depth > 1) to
+        aid trace-based latency debugging.
+
         Args:
             start_node: Starting node ID
             depth: Maximum traversal depth
@@ -371,41 +380,53 @@ class KnowledgeGraph:
         Returns:
             List of linked documents (deduplicated)
         """
-        visited: set[str] = {start_node}
-        current_level: set[str] = {start_node}
-        result: list[LinkedDocument] = []
+        from lithos.telemetry import get_tracer
 
-        for _ in range(depth):
-            next_level: set[str] = set()
-            for node in current_level:
-                if forward:
-                    neighbors = self.graph.successors(node)
-                else:
-                    neighbors = self.graph.predecessors(node)
+        tracer = get_tracer()
+        direction = "outgoing" if forward else "incoming"
+        with tracer.start_as_current_span("lithos.graph.bfs_traversal") as span:
+            span.set_attribute("lithos.graph.start_node", start_node)
+            span.set_attribute("lithos.graph.depth", depth)
+            span.set_attribute("lithos.graph.direction", direction)
 
-                for neighbor in neighbors:
-                    if neighbor not in visited:
-                        visited.add(neighbor)
-                        next_level.add(neighbor)
+            visited: set[str] = {start_node}
+            current_level: set[str] = {start_node}
+            result: list[LinkedDocument] = []
 
-                        # Skip unresolved placeholder nodes
-                        if neighbor.startswith("__unresolved__"):
-                            continue
+            for hop in range(depth):
+                next_level: set[str] = set()
+                for node in current_level:
+                    if forward:
+                        neighbors = self.graph.successors(node)
+                    else:
+                        neighbors = self.graph.predecessors(node)
 
-                        node_data = self.graph.nodes.get(neighbor, {})
-                        if not node_data.get("unresolved"):
-                            result.append(
-                                LinkedDocument(
-                                    id=neighbor,
-                                    title=node_data.get("title", ""),
+                    for neighbor in neighbors:
+                        if neighbor not in visited:
+                            visited.add(neighbor)
+                            next_level.add(neighbor)
+
+                            # Skip unresolved placeholder nodes
+                            if neighbor.startswith("__unresolved__"):
+                                continue
+
+                            node_data = self.graph.nodes.get(neighbor, {})
+                            if not node_data.get("unresolved"):
+                                result.append(
+                                    LinkedDocument(
+                                        id=neighbor,
+                                        title=node_data.get("title", ""),
+                                    )
                                 )
-                            )
 
-            current_level = next_level
-            if not current_level:
-                break
+                current_level = next_level
+                if not current_level:
+                    break
+                _ = hop  # used by range()
 
-        return result
+            span.set_attribute("lithos.graph.nodes_visited", len(visited))
+            span.set_attribute("lithos.graph.results_count", len(result))
+            return result
 
     def get_broken_links(self) -> list[tuple[str, str, str]]:
         """Get all broken/unresolved links.

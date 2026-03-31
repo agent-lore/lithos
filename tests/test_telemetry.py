@@ -392,3 +392,86 @@ class TestWriteDurationHistogram:
 
         hist = lithos_metrics.knowledge_write_duration
         assert hasattr(hist, "record"), "knowledge_write_duration must have a .record() method"
+
+
+class TestTracingCoverage:
+    """Regression tests that verify @traced decorators are present on key methods."""
+
+    def test_knowledge_list_all_is_traced(self):
+        """list_all must carry a @traced decorator."""
+        from lithos.knowledge import KnowledgeManager
+
+        # After @traced wraps the function, __wrapped__ is set by functools.wraps
+        assert hasattr(KnowledgeManager.list_all, "__wrapped__"), (
+            "KnowledgeManager.list_all is missing @traced"
+        )
+
+    def test_graph_load_cache_is_traced(self):
+        from lithos.graph import KnowledgeGraph
+
+        assert hasattr(KnowledgeGraph.load_cache, "__wrapped__"), (
+            "KnowledgeGraph.load_cache is missing @traced"
+        )
+
+    def test_graph_save_cache_is_traced(self):
+        from lithos.graph import KnowledgeGraph
+
+        assert hasattr(KnowledgeGraph.save_cache, "__wrapped__"), (
+            "KnowledgeGraph.save_cache is missing @traced"
+        )
+
+    def test_graph_add_document_is_traced(self):
+        from lithos.graph import KnowledgeGraph
+
+        assert hasattr(KnowledgeGraph.add_document, "__wrapped__"), (
+            "KnowledgeGraph.add_document is missing @traced"
+        )
+
+    def test_graph_get_links_is_traced(self):
+        from lithos.graph import KnowledgeGraph
+
+        assert hasattr(KnowledgeGraph.get_links, "__wrapped__"), (
+            "KnowledgeGraph.get_links is missing @traced"
+        )
+
+    def test_coordination_initialize_is_traced(self):
+        from lithos.coordination import CoordinationService
+
+        assert hasattr(CoordinationService.initialize, "__wrapped__"), (
+            "CoordinationService.initialize is missing @traced"
+        )
+
+    def test_coordination_ensure_agent_known_is_traced(self):
+        from lithos.coordination import CoordinationService
+
+        assert hasattr(CoordinationService.ensure_agent_known, "__wrapped__"), (
+            "CoordinationService.ensure_agent_known is missing @traced"
+        )
+
+    def test_coordination_get_task_is_traced(self):
+        from lithos.coordination import CoordinationService
+
+        assert hasattr(CoordinationService.get_task, "__wrapped__"), (
+            "CoordinationService.get_task is missing @traced"
+        )
+
+    def test_coordination_get_task_status_is_traced(self):
+        from lithos.coordination import CoordinationService
+
+        assert hasattr(CoordinationService.get_task_status, "__wrapped__"), (
+            "CoordinationService.get_task_status is missing @traced"
+        )
+
+    def test_coordination_post_finding_is_traced(self):
+        from lithos.coordination import CoordinationService
+
+        assert hasattr(CoordinationService.post_finding, "__wrapped__"), (
+            "CoordinationService.post_finding is missing @traced"
+        )
+
+    def test_coordination_list_findings_is_traced(self):
+        from lithos.coordination import CoordinationService
+
+        assert hasattr(CoordinationService.list_findings, "__wrapped__"), (
+            "CoordinationService.list_findings is missing @traced"
+        )

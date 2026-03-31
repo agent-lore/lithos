@@ -1210,6 +1210,7 @@ class KnowledgeManager:
             logger.info("Document deleted: doc_id=%s path=%s", id, file_path)
             return True, str(file_path)
 
+    @traced("lithos.knowledge.list_all")
     async def list_all(
         self,
         path_prefix: str | None = None,

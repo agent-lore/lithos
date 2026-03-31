@@ -174,6 +174,7 @@ class CoordinationService:
             return self._db_path
         return self.config.storage.coordination_db_path
 
+    @traced("lithos.coordination.initialize")
     async def initialize(self) -> None:
         """Initialize database schema."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,6 +194,7 @@ class CoordinationService:
 
     # ==================== Agent Operations ====================
 
+    @traced("lithos.coordination.ensure_agent_known")
     async def ensure_agent_known(self, agent_id: str) -> None:
         """Ensure agent is registered, auto-registering if needed."""
         logger.debug("ensure_agent_known: agent_id=%s", agent_id)
@@ -380,6 +382,7 @@ class CoordinationService:
         logger.info("Task created: task_id=%s agent=%s", task_id, agent)
         return task_id
 
+    @traced("lithos.coordination.get_task")
     async def get_task(self, task_id: str) -> Task | None:
         """Get task by ID."""
         import json
@@ -585,6 +588,7 @@ class CoordinationService:
 
             return results
 
+    @traced("lithos.coordination.get_task_status")
     async def get_task_status(
         self,
         task_id: str | None = None,
@@ -820,6 +824,7 @@ class CoordinationService:
 
     # ==================== Finding Operations ====================
 
+    @traced("lithos.coordination.post_finding")
     async def post_finding(
         self,
         task_id: str,
@@ -856,6 +861,7 @@ class CoordinationService:
         )
         return finding_id
 
+    @traced("lithos.coordination.list_findings")
     async def list_findings(
         self,
         task_id: str,

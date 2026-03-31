@@ -217,17 +217,27 @@ class LithosServer:
         self._sse_client_count += 1
 
         async def _event_stream():
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.sse.connect") as conn_span:
+                conn_span.set_attribute("lithos.sse.since_id", since_id or "")
+                conn_span.set_attribute(
+                    "lithos.sse.event_types", ",".join(event_types) if event_types else ""
+                )
             try:
                 # Replay buffered events if a since_id was provided
                 if since_id:
-                    replayed = self.event_bus.get_buffered_since(since_id)
-                    for evt in replayed:
-                        # Apply the same filters to replayed events
-                        if event_types and evt.type not in event_types:
-                            continue
-                        if tag_filter and not any(t in evt.tags for t in tag_filter):
-                            continue
-                        yield _format_sse(evt)
+                    with tracer.start_as_current_span("lithos.sse.replay") as replay_span:
+                        replayed = self.event_bus.get_buffered_since(since_id)
+                        replay_count = 0
+                        for evt in replayed:
+                            # Apply the same filters to replayed events
+                            if event_types and evt.type not in event_types:
+                                continue
+                            if tag_filter and not any(t in evt.tags for t in tag_filter):
+                                continue
+                            replay_count += 1
+                            yield _format_sse(evt)
+                        replay_span.set_attribute("lithos.sse.replayed", replay_count)
 
                 # Stream live events
                 while True:
@@ -244,6 +254,8 @@ class LithosServer:
             finally:
                 self._sse_client_count -= 1
                 self.event_bus.unsubscribe(queue)
+                with tracer.start_as_current_span("lithos.sse.disconnect"):
+                    pass  # root span captures disconnect lifecycle
 
         return StreamingResponse(
             _event_stream(),
@@ -256,6 +268,11 @@ class LithosServer:
 
     async def initialize(self) -> None:
         """Initialize all components."""
+        tracer = get_tracer()
+        with tracer.start_as_current_span("lithos.server.initialize") as span:
+            span.set_attribute("lithos.server.host", self._config.server.host)
+            span.set_attribute("lithos.server.port", self._config.server.port)
+
         # Ensure directories exist
         self.config.ensure_directories()
 
@@ -285,10 +302,14 @@ class LithosServer:
 
     async def _prewarm_embeddings(self) -> None:
         """Pre-warm the embedding model, logging errors instead of crashing."""
-        try:
-            await self.search.ensure_embeddings_loaded()
-        except Exception:
-            logger.warning("Background embedding model pre-warm failed", exc_info=True)
+        tracer = get_tracer()
+        with tracer.start_as_current_span("lithos.embeddings.prewarm") as span:
+            try:
+                await self.search.ensure_embeddings_loaded()
+                span.set_attribute("lithos.embeddings.status", "ok")
+            except Exception:
+                span.set_attribute("lithos.embeddings.status", "failed")
+                logger.warning("Background embedding model pre-warm failed", exc_info=True)
 
     async def _rebuild_indices(self) -> None:
         """Rebuild all search indices from files."""
