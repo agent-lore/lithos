@@ -12,6 +12,7 @@ import asyncio
 import functools
 import logging
 import os
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -363,6 +364,71 @@ def traced(
     return decorator
 
 
+# --- @timed_write decorator ---
+
+
+def timed_write(op: str) -> Callable[[F], F]:
+    """Decorator that records knowledge write duration to ``lithos.knowledge.write_duration_ms``.
+
+    Designed to stack with ``@traced``:
+
+    .. code-block:: python
+
+        @traced("lithos.knowledge.create")
+        @timed_write("create")
+        async def create(self, ...) -> WriteResult:
+            ...
+
+    Records on every exit (normal return *and* exception).  The ``success``
+    attribute is ``True`` when no exception propagates (i.e. even if the
+    returned ``WriteResult`` has ``status="error"`` — that is a controlled
+    outcome, not a crash).
+
+    Args:
+        op: Operation name — ``"create"`` or ``"update"``.
+    """
+
+    def decorator(func: F) -> F:
+        if asyncio.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                _t0 = time.perf_counter()
+                _success = True
+                try:
+                    return await func(*args, **kwargs)
+                except Exception:
+                    _success = False
+                    raise
+                finally:
+                    elapsed_ms = (time.perf_counter() - _t0) * 1000
+                    lithos_metrics.knowledge_write_duration.record(
+                        elapsed_ms, {"op": op, "success": _success}
+                    )
+
+            return async_wrapper  # type: ignore[return-value]
+        else:
+
+            @functools.wraps(func)
+            def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
+                _t0 = time.perf_counter()
+                _success = True
+                try:
+                    return func(*args, **kwargs)
+                except Exception:
+                    _success = False
+                    raise
+                finally:
+                    elapsed_ms = (time.perf_counter() - _t0) * 1000
+                    lithos_metrics.knowledge_write_duration.record(
+                        elapsed_ms, {"op": op, "success": _success}
+                    )
+
+            return sync_wrapper  # type: ignore[return-value]
+
+    return decorator  # type: ignore[return-value]
+
+
 # --- Lazy metric instruments ---
 
 
@@ -371,6 +437,7 @@ class _LithosMetrics:
 
     def __init__(self) -> None:
         self._knowledge_ops: Any = None
+        self._knowledge_write_duration: Any = None
         self._search_ops: Any = None
         self._search_duration: Any = None
         self._coordination_ops: Any = None
@@ -387,6 +454,22 @@ class _LithosMetrics:
                 description="Knowledge CRUD operations",
             )
         return self._knowledge_ops
+
+    @property
+    def knowledge_write_duration(self) -> Any:
+        """Histogram tracking create/update latency in milliseconds.
+
+        Attributes:
+            op:      "create" | "update"
+            success: bool (True = no exception raised)
+        """
+        if self._knowledge_write_duration is None:
+            self._knowledge_write_duration = get_meter().create_histogram(
+                "lithos.knowledge.write_duration_ms",
+                description="Knowledge write (create/update) latency in milliseconds",
+                unit="ms",
+            )
+        return self._knowledge_write_duration
 
     @property
     def search_ops(self) -> Any:
