@@ -91,6 +91,9 @@ class LithosServer:
         # Mount HTTP health endpoint
         self.mcp.custom_route("/health", methods=["GET"])(self._health_endpoint)
 
+        # Mount read-access audit log endpoint
+        self.mcp.custom_route("/audit", methods=["GET"])(self._audit_endpoint)
+
     @property
     def config(self) -> LithosConfig:
         """Get configuration."""
@@ -149,6 +152,45 @@ class LithosServer:
         result = await self._get_health()
         status_code = 200 if result["status"] == "ok" else 503
         return JSONResponse(result, status_code=status_code)
+
+    async def _audit_endpoint(self, request: Request) -> Response:
+        """Read-access audit log HTTP endpoint.
+
+        ``GET /audit`` — returns a JSON list of access log entries.
+
+        Query parameters:
+            agent_id: Filter entries to this agent (optional).
+            after: ISO-8601 timestamp; only entries after this time (optional).
+            limit: Max entries to return (default: 100, max: 1000).
+        """
+        from starlette.responses import JSONResponse
+
+        agent_id = request.query_params.get("agent_id")
+        after = request.query_params.get("after")
+        try:
+            limit = int(request.query_params.get("limit", "100"))
+        except ValueError:
+            limit = 100
+
+        entries = await self.coordination.get_audit_log(
+            agent_id=agent_id,
+            after=after,
+            limit=limit,
+        )
+        return JSONResponse(
+            {
+                "entries": [
+                    {
+                        "id": e.id,
+                        "agent_id": e.agent_id,
+                        "doc_id": e.doc_id,
+                        "operation": e.operation,
+                        "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+                    }
+                    for e in entries
+                ]
+            }
+        )
 
     async def _sse_endpoint(self, request: Request) -> Response:
         """Server-Sent Events delivery endpoint.
@@ -724,6 +766,7 @@ class LithosServer:
             id: str | None = None,
             path: str | None = None,
             max_length: int | None = None,
+            agent_id: str | None = None,
         ) -> dict[str, Any]:
             """Read a knowledge file by ID or path.
 
@@ -731,9 +774,11 @@ class LithosServer:
                 id: UUID of knowledge item
                 path: File path relative to knowledge/
                 max_length: Truncate content to N characters
+                agent_id: Caller identity for audit logging (optional)
 
             Returns:
-                Dict with id, title, content, metadata, links, truncated
+                Dict with id, title, content, metadata, links, truncated,
+                retrieval_count
             """
             logger.info("lithos_read id=%s path=%s", id, path)
             tracer = get_tracer()
@@ -755,6 +800,19 @@ class LithosServer:
                         "message": str(e),
                     }
 
+                # Audit log — fire-and-forget, never blocks the response
+                audit_agent = agent_id or "unknown"
+                asyncio.ensure_future(  # noqa: RUF006
+                    self.coordination.log_access(
+                        doc_id=doc.id,
+                        operation="read",
+                        agent_id=audit_agent,
+                    )
+                )
+
+                # Retrieval count — how many times this doc has been read
+                retrieval_count = await self.coordination.get_retrieval_count(doc.id)
+
                 span.set_attribute("lithos.truncated", truncated)
                 meta = doc.metadata.to_dict()
                 meta["source_url"] = doc.metadata.source_url  # null when None
@@ -768,6 +826,7 @@ class LithosServer:
                         {"target": link.target, "display": link.display} for link in doc.links
                     ],
                     "truncated": truncated,
+                    "retrieval_count": retrieval_count,
                 }
 
         @self.mcp.tool()
@@ -826,6 +885,7 @@ class LithosServer:
             threshold: float | None = None,
             seed_ids: list[str] | None = None,
             graph_depth: int = 2,
+            agent_id: str | None = None,
         ) -> dict[str, Any]:
             """Search across the knowledge base.
 
@@ -854,6 +914,7 @@ class LithosServer:
                 seed_ids: Starting document IDs for graph mode.  If omitted,
                           seeds are discovered via hybrid search.
                 graph_depth: BFS hop depth for graph mode (1-3, default: 2)
+                agent_id: Caller identity for audit logging (optional)
 
             Returns:
                 Dict with results list containing id, title, snippet, score, path,
@@ -951,6 +1012,18 @@ class LithosServer:
 
                 span.set_attribute("lithos.result_count", len(results_payload))
                 logger.info("lithos_search mode=%s results=%d", mode, len(results_payload))
+
+                # Audit log every returned document — fire-and-forget
+                audit_agent = agent_id or "unknown"
+                for result in results_payload:
+                    asyncio.ensure_future(  # noqa: RUF006
+                        self.coordination.log_access(
+                            doc_id=result["id"],
+                            operation="search_result",
+                            agent_id=audit_agent,
+                        )
+                    )
+
                 return {"results": results_payload}
 
         @self.mcp.tool()

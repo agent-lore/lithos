@@ -61,11 +61,22 @@ CREATE TABLE IF NOT EXISTS findings (
     FOREIGN KEY (task_id) REFERENCES tasks(id)
 );
 
+-- Read access audit log
+CREATE TABLE IF NOT EXISTS access_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL DEFAULT 'unknown',
+    doc_id TEXT NOT NULL,
+    operation TEXT NOT NULL CHECK(operation IN ('read', 'search_result')),
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_claims_task_id ON claims(task_id);
 CREATE INDEX IF NOT EXISTS idx_claims_expires_at ON claims(expires_at);
 CREATE INDEX IF NOT EXISTS idx_findings_task_id ON findings(task_id);
+CREATE INDEX IF NOT EXISTS idx_access_log_agent_id ON access_log(agent_id);
+CREATE INDEX IF NOT EXISTS idx_access_log_timestamp ON access_log(timestamp);
 """
 
 
@@ -130,6 +141,17 @@ class TaskStatus:
     title: str
     status: str
     claims: list[Claim]
+
+
+@dataclass
+class AccessLogEntry:
+    """A single read-access audit log entry."""
+
+    id: int
+    agent_id: str
+    doc_id: str
+    operation: Literal["read", "search_result"]
+    timestamp: datetime | None = None
 
 
 def _parse_datetime(value: str | datetime | None) -> datetime | None:
@@ -889,6 +911,105 @@ class CoordinationService:
             ]
 
     # ==================== Statistics ====================
+
+    # ==================== Audit Log ====================
+
+    async def log_access(
+        self,
+        doc_id: str,
+        operation: Literal["read", "search_result"],
+        agent_id: str = "unknown",
+    ) -> None:
+        """Append a read-access entry to the audit log.
+
+        Failures are swallowed — audit logging must never degrade the hot path.
+
+        Args:
+            doc_id: The document that was accessed.
+            operation: ``"read"`` (direct lithos_read call) or
+                       ``"search_result"`` (document returned in search results).
+            agent_id: The agent that triggered the access (default: ``"unknown"``).
+        """
+        now = _format_datetime(datetime.now(timezone.utc))
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute(
+                    "INSERT INTO access_log (agent_id, doc_id, operation, timestamp) VALUES (?, ?, ?, ?)",
+                    (agent_id, doc_id, operation, now),
+                )
+                await db.commit()
+        except Exception:
+            logger.debug("audit log_access failed (non-fatal)", exc_info=True)
+
+    async def get_audit_log(
+        self,
+        agent_id: str | None = None,
+        after: str | None = None,
+        limit: int = 100,
+    ) -> list[AccessLogEntry]:
+        """Query the read-access audit log.
+
+        Args:
+            agent_id: Filter to entries from this agent (optional).
+            after: ISO-8601 timestamp; only return entries after this time (optional).
+            limit: Maximum number of entries to return (default: 100, max: 1000).
+
+        Returns:
+            List of :class:`AccessLogEntry` objects, most-recent first.
+        """
+        limit = max(1, min(1000, limit))
+        conditions: list[str] = []
+        params: list[str | int] = []
+
+        if agent_id:
+            conditions.append("agent_id = ?")
+            params.append(agent_id)
+        if after:
+            conditions.append("timestamp > ?")
+            params.append(after)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"SELECT id, agent_id, doc_id, operation, timestamp "
+                f"FROM access_log {where} ORDER BY timestamp DESC LIMIT ?",
+                params,
+            )
+            rows = await cursor.fetchall()
+
+        return [
+            AccessLogEntry(
+                id=row[0],
+                agent_id=row[1],
+                doc_id=row[2],
+                operation=row[3],
+                timestamp=_parse_datetime(row[4]),
+            )
+            for row in rows
+        ]
+
+    async def get_retrieval_count(self, doc_id: str) -> int:
+        """Return how many times a document has been directly read (operation='read').
+
+        Args:
+            doc_id: Document ID to count reads for.
+
+        Returns:
+            Number of ``read`` entries in the audit log for this document.
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM access_log WHERE doc_id = ? AND operation = 'read'",
+                    (doc_id,),
+                )
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+        except Exception:
+            logger.debug("get_retrieval_count failed (non-fatal)", exc_info=True)
+            return 0
 
     async def get_stats(self) -> dict[str, int]:
         """Get coordination statistics."""

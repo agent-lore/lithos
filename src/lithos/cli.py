@@ -638,6 +638,57 @@ def inspect_doc(ctx: click.Context, identifier: str, content: bool) -> None:
     asyncio.run(run())
 
 
+@cli.command()
+@click.option(
+    "--agent",
+    "-a",
+    default=None,
+    help="Filter entries by agent ID",
+)
+@click.option(
+    "--since",
+    "-s",
+    default=None,
+    help="Only show entries after this ISO-8601 timestamp (e.g. 2026-01-01T00:00:00)",
+)
+@click.option(
+    "--limit",
+    "-n",
+    type=int,
+    default=50,
+    help="Maximum number of entries to show (default: 50)",
+)
+@click.pass_context
+def audit(ctx: click.Context, agent: str | None, since: str | None, limit: int) -> None:
+    """Show the read-access audit log.
+
+    Displays documents that have been read or returned in search results,
+    with the agent that triggered each access.
+    """
+    import asyncio
+
+    from lithos.coordination import CoordinationService
+
+    config: LithosConfig = ctx.obj["config"]
+
+    async def run() -> None:
+        service = CoordinationService(config)
+        await service.initialize()
+        entries = await service.get_audit_log(agent_id=agent, after=since, limit=limit)
+
+        if not entries:
+            click.echo("No audit log entries found.")
+            return
+
+        click.echo(f"{'ID':>6}  {'TIMESTAMP':<27}  {'AGENT':<20}  {'OP':<14}  DOC ID")
+        click.echo("-" * 95)
+        for e in entries:
+            ts = e.timestamp.isoformat() if e.timestamp else "unknown"
+            click.echo(f"{e.id:>6}  {ts:<27}  {e.agent_id:<20}  {e.operation:<14}  {e.doc_id}")
+
+    asyncio.run(run())
+
+
 def main() -> None:
     """Main entry point."""
     cli()
