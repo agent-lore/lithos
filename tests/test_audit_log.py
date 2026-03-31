@@ -209,3 +209,67 @@ class TestAuditLogNonFatal:
         service = CoordinationService(config)
         # Must not raise
         await service.log_access(doc_id="x", operation="read", agent_id="ag")
+
+
+class TestLogAccessBatch:
+    """Tests for log_access_batch."""
+
+    @pytest.mark.asyncio
+    async def test_batch_logs_all_doc_ids(self, coordination_service: CoordinationService):
+        """log_access_batch logs every doc_id in a single call and all are queryable."""
+        doc_ids = ["batch-doc-1", "batch-doc-2", "batch-doc-3"]
+        await coordination_service.log_access_batch(
+            doc_ids=doc_ids,
+            operation="search_result",
+            agent_id="batch-agent",
+        )
+
+        entries = await coordination_service.get_audit_log(agent_id="batch-agent")
+        logged_doc_ids = {e.doc_id for e in entries}
+        for doc_id in doc_ids:
+            assert doc_id in logged_doc_ids, f"{doc_id!r} not found in audit log"
+
+    @pytest.mark.asyncio
+    async def test_batch_all_entries_have_correct_operation(
+        self, coordination_service: CoordinationService
+    ):
+        """log_access_batch stores the correct operation for all entries."""
+        doc_ids = ["op-doc-1", "op-doc-2"]
+        await coordination_service.log_access_batch(
+            doc_ids=doc_ids,
+            operation="search_result",
+            agent_id="op-agent",
+        )
+
+        entries = await coordination_service.get_audit_log(agent_id="op-agent")
+        for entry in entries:
+            assert entry.operation == "search_result"
+
+    @pytest.mark.asyncio
+    async def test_batch_empty_list_is_noop(self, coordination_service: CoordinationService):
+        """log_access_batch with empty doc_ids list does not raise and logs nothing."""
+        before = await coordination_service.get_audit_log()
+        before_count = len(before)
+
+        await coordination_service.log_access_batch(
+            doc_ids=[],
+            operation="read",
+            agent_id="noop-agent",
+        )
+
+        after = await coordination_service.get_audit_log()
+        assert len(after) == before_count
+
+    @pytest.mark.asyncio
+    async def test_batch_silent_on_bad_db(self):
+        """log_access_batch swallows errors when the DB path is invalid."""
+        from lithos.config import LithosConfig, StorageConfig
+
+        config = LithosConfig(storage=StorageConfig(data_dir="/nonexistent/path/xyz"))
+        service = CoordinationService(config)
+        # Must not raise
+        await service.log_access_batch(
+            doc_ids=["d1", "d2"],
+            operation="search_result",
+            agent_id="ag",
+        )

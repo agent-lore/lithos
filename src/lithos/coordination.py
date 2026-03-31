@@ -1011,13 +1011,17 @@ class CoordinationService:
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         params.append(limit)
 
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                f"SELECT id, agent_id, doc_id, operation, timestamp "
-                f"FROM access_log {where} ORDER BY timestamp DESC LIMIT ?",
-                params,
-            )
-            rows = await cursor.fetchall()
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute(
+                    f"SELECT id, agent_id, doc_id, operation, timestamp "
+                    f"FROM access_log {where} ORDER BY timestamp DESC LIMIT ?",
+                    params,
+                )
+                rows = await cursor.fetchall()
+        except Exception:
+            logger.error("get_audit_log failed (non-fatal)", exc_info=True)
+            return []
 
         return [
             AccessLogEntry(

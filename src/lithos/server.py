@@ -185,12 +185,38 @@ class LithosServer:
         except ValueError:
             limit = 100
 
-        entries = await self.coordination.get_audit_log(
-            agent_id=agent_id,
-            after=after,
-            limit=limit,
-            doc_id=doc_id,
-        )
+        # Validate `after` before passing to the coordination layer.
+        if after is not None:
+            from datetime import datetime as _datetime
+
+            try:
+                _datetime.fromisoformat(after.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                return JSONResponse(
+                    {
+                        "error": "invalid_after",
+                        "message": f"'after' could not be parsed as a datetime: {after!r}",
+                    },
+                    status_code=400,
+                )
+
+        try:
+            entries = await self.coordination.get_audit_log(
+                agent_id=agent_id,
+                after=after,
+                limit=limit,
+                doc_id=doc_id,
+            )
+        except Exception:
+            import logging as _logging
+
+            _logging.getLogger(__name__).error(
+                "_audit_endpoint: get_audit_log raised unexpectedly", exc_info=True
+            )
+            return JSONResponse(
+                {"error": "audit_log_unavailable", "entries": []},
+                status_code=503,
+            )
         return JSONResponse(
             {
                 "entries": [
@@ -814,8 +840,10 @@ class LithosServer:
                         "message": str(e),
                     }
 
-                # Audit log — awaited here so the current read is committed before
-                # we query the retrieval count (avoids TOCTOU off-by-one).
+                # Audit log — awaited so the write is committed before we query
+                # retrieval_count (avoids TOCTOU off-by-one). lithos_search uses
+                # fire-and-forget (asyncio.create_task) for its batch write since
+                # retrieval_count accuracy is not required there.
                 audit_agent = agent_id or "unknown"
                 await self.coordination.log_access(
                     doc_id=doc.id,
@@ -1028,9 +1056,9 @@ class LithosServer:
 
                 # Audit log every returned document in a single batch write — fire-and-forget.
                 # Using log_access_batch avoids N concurrent SQLite connections (previously
-                # one asyncio.ensure_future per result document).
+                # one asyncio.create_task per result document).
                 audit_agent = agent_id or "unknown"
-                asyncio.ensure_future(  # noqa: RUF006
+                asyncio.create_task(  # noqa: RUF006
                     self.coordination.log_access_batch(
                         doc_ids=[r["id"] for r in results_payload],
                         operation="search_result",
