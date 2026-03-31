@@ -387,7 +387,9 @@ def slugify(text: str) -> str:
     slug = re.sub(r"-+", "-", slug)
     # Strip leading/trailing hyphens
     slug = slug.strip("-")
-    return slug or "untitled"
+    result = slug or "untitled"
+    logger.debug("slugify: title=%r slug=%r", text, result)
+    return result
 
 
 def generate_slug(title: str) -> str:
@@ -701,6 +703,12 @@ class KnowledgeManager:
                 if existing_id is not None:
                     try:
                         existing_doc, _ = await self.read(id=existing_id)
+                        logger.warning(
+                            "Duplicate URL rejected: url=%s existing_owner=%s rejected_doc title=%r",
+                            norm_url,
+                            existing_id,
+                            title,
+                        )
                         return WriteResult(
                             status="duplicate",
                             duplicate_of=DuplicateInfo(
@@ -792,6 +800,11 @@ class KnowledgeManager:
                     if source_id not in self._unresolved_provenance:
                         self._unresolved_provenance[source_id] = set()
                     self._unresolved_provenance[source_id].add(doc_id)
+                    logger.warning(
+                        "Provenance resolution failed: source_id=%s dependent_doc_id=%s",
+                        source_id,
+                        doc_id,
+                    )
                     warnings.append(f"derived_from_ids contains missing document: {source_id}")
 
             # Auto-resolve: check if any existing docs had unresolved refs to this new doc
@@ -809,6 +822,12 @@ class KnowledgeManager:
                 path=file_path,
             )
 
+            logger.info(
+                "Document created: doc_id=%s title=%.60s agent=%s",
+                doc_id,
+                title,
+                agent,
+            )
             return WriteResult(status="created", document=doc, warnings=warnings)
 
     @traced("lithos.knowledge.read")
@@ -840,6 +859,7 @@ class KnowledgeManager:
             raise FileNotFoundError(f"Document not found: {file_path}")
 
         post = frontmatter.load(str(full_path))
+        logger.debug("Frontmatter parsed: path=%s title=%r", file_path, post.metadata.get("title"))
         metadata = KnowledgeMetadata.from_dict(post.metadata)
 
         # Extract title and content from body
@@ -943,6 +963,12 @@ class KnowledgeManager:
             doc, _ = await self.read(id=id)
 
             if expected_version is not None and doc.metadata.version != expected_version:
+                logger.warning(
+                    "Version conflict: doc_id=%s expected_version=%d actual_version=%d",
+                    id,
+                    expected_version,
+                    doc.metadata.version,
+                )
                 return WriteResult(
                     status="error",
                     error_code="version_conflict",
@@ -990,6 +1016,12 @@ class KnowledgeManager:
                     if existing_owner is not None and existing_owner != id:
                         try:
                             existing_doc, _ = await self.read(id=existing_owner)
+                            logger.warning(
+                                "Duplicate URL rejected: url=%s existing_owner=%s rejected_doc_id=%s",
+                                new_norm,
+                                existing_owner,
+                                id,
+                            )
                             return WriteResult(
                                 status="duplicate",
                                 duplicate_of=DuplicateInfo(
@@ -1048,6 +1080,11 @@ class KnowledgeManager:
                             if source_id not in self._unresolved_provenance:
                                 self._unresolved_provenance[source_id] = set()
                             self._unresolved_provenance[source_id].add(id)
+                            logger.warning(
+                                "Provenance resolution failed: source_id=%s dependent_doc_id=%s",
+                                source_id,
+                                id,
+                            )
                             warnings.append(
                                 f"derived_from_ids contains missing document: {source_id}"
                             )
@@ -1102,6 +1139,20 @@ class KnowledgeManager:
                 path=doc.path,
             )
 
+            if logger.isEnabledFor(logging.INFO):
+                changed: list[str] = []
+                if content is not None:
+                    changed.append("content")
+                if title is not None:
+                    changed.append("title")
+                if not isinstance(tags, _UnsetType):
+                    changed.append("tags")
+                logger.info(
+                    "Document updated: doc_id=%s agent=%s changed=%s",
+                    id,
+                    agent,
+                    changed or ["metadata"],
+                )
             return WriteResult(status="updated", document=doc, warnings=warnings)
 
     @traced("lithos.knowledge.delete")
@@ -1154,6 +1205,7 @@ class KnowledgeManager:
             self._id_to_title.pop(id, None)
             self._meta_cache.pop(id, None)
 
+            logger.info("Document deleted: doc_id=%s path=%s", id, file_path)
             return True, str(file_path)
 
     async def list_all(
@@ -1249,6 +1301,7 @@ class KnowledgeManager:
             raise FileNotFoundError(f"File not found: {file_path}")
 
         post = frontmatter.load(str(full_path))
+        logger.debug("Frontmatter parsed: path=%s title=%r", file_path, post.metadata.get("title"))
         metadata = KnowledgeMetadata.from_dict(post.metadata)
 
         # Extract title and content from body

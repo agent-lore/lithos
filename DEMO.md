@@ -10,7 +10,6 @@ uv run --extra dev pytest tests/test_server.py::TestKnowledgeToolWorkflow::test_
 ```
 
 ```output
-============================= test session starts ==============================
 platform darwin -- Python 3.12.12, pytest-9.0.2, pluggy-1.6.0 -- .venv/bin/python
 cachedir: .pytest_cache
 rootdir: .
