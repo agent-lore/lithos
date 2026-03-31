@@ -620,6 +620,32 @@ class KnowledgeGraph:
         results.sort(key=lambda x: x["incoming_count"], reverse=True)
         return results[:limit]
 
+    def get_subgraph(self, node_ids: list[str]) -> "nx.DiGraph":
+        """Return a copy of the induced subgraph for the given node IDs.
+
+        Returns a snapshot (copy), so mutations to the live graph do not affect
+        the returned subgraph.  This makes it safe to run PageRank or other
+        read-only algorithms concurrently with ongoing ingestion.
+
+        Args:
+            node_ids: Node IDs to include in the subgraph.
+
+        Returns:
+            A new DiGraph containing only the specified nodes and edges between them.
+        """
+        return nx.DiGraph(self.graph.subgraph(node_ids))
+
+    def get_node_data(self, node_id: str) -> dict:
+        """Return attribute data for a node.
+
+        Args:
+            node_id: The node/document ID.
+
+        Returns:
+            Dict of node attributes, or empty dict if node doesn't exist.
+        """
+        return dict(self.graph.nodes.get(node_id, {}))
+
     def get_unresolved_links(self) -> list[tuple[str, str]]:
         """Get all unresolved link targets.
 

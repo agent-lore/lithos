@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import chromadb
+import networkx as nx
 import tantivy
 from sentence_transformers import SentenceTransformer
 
@@ -1099,6 +1100,10 @@ class SearchEngine:
         depth: int = 2,
         limit: int = 10,
         fuse_semantic: bool = True,
+        tags: list[str] | None = None,
+        author: str | None = None,
+        path_prefix: str | None = None,
+        threshold: float | None = None,
     ) -> list[SearchResult]:
         """Graph-traversal search using wiki-link topology.
 
@@ -1123,11 +1128,27 @@ class SearchEngine:
             fuse_semantic: Whether to include semantic similarity as a ranking
                            signal.  Set to *False* in unit tests to avoid
                            loading the embedding model.
+            tags: Accepted for API compatibility but **ignored** in graph mode.
+            author: Accepted for API compatibility but **ignored** in graph mode.
+            path_prefix: Accepted for API compatibility but **ignored** in graph mode.
+            threshold: Accepted for API compatibility but **ignored** in graph mode.
 
         Returns:
             Ranked list of :class:`SearchResult` objects.
         """
-        import networkx as nx
+        # Warn callers if they pass filter params that graph mode cannot honour.
+        ignored = [
+            p
+            for p, v in {
+                "tags": tags,
+                "author": author,
+                "path_prefix": path_prefix,
+                "threshold": threshold,
+            }.items()
+            if v is not None
+        ]
+        if ignored:
+            logger.warning("graph mode ignores filter params: %s", ignored)
 
         start = time.perf_counter()
         success = True
@@ -1174,10 +1195,13 @@ class SearchEngine:
 
             # ── Step 3: compute ranking signals ──────────────────────────────
 
-            # 3a. PageRank centrality on induced subgraph
+            # 3a. PageRank centrality on induced subgraph.
+            # Snapshot (copy) the subgraph before computing PageRank so the
+            # computation runs on an immutable graph — safe against concurrent
+            # ingestion mutating the live DiGraph via asyncio.to_thread().
             centrality: dict[str, float] = {}
             try:
-                subgraph = graph.graph.subgraph(candidate_ids)
+                subgraph = graph.get_subgraph(candidate_ids)
                 if len(subgraph) > 1:
                     centrality = nx.pagerank(subgraph, alpha=0.85)
                 else:
@@ -1187,7 +1211,7 @@ class SearchEngine:
                     "graph_search: PageRank failed, falling back to in-degree", exc_info=True
                 )
                 try:
-                    subgraph = graph.graph.subgraph(candidate_ids)
+                    subgraph = graph.get_subgraph(candidate_ids)
                     centrality = nx.in_degree_centrality(subgraph)
                 except Exception:
                     centrality = {}
@@ -1197,7 +1221,10 @@ class SearchEngine:
             if fuse_semantic:
                 try:
                     sem_results = self.chroma.search(
-                        query, limit=len(candidate_ids) + 10, threshold=0.0
+                        query,
+                        limit=len(candidate_ids) + 10,
+                        threshold=0.0,  # include all candidates regardless of similarity score —
+                        # ranking is done via RRF, not threshold filtering
                     )
                     sem_by_id = {r.id: r for r in sem_results if r.id in visited}
                 except Exception:
@@ -1225,7 +1252,7 @@ class SearchEngine:
             # ── Step 4: build SearchResult objects ───────────────────────────
             results: list[SearchResult] = []
             for doc_id in ranked_ids:
-                node_data = graph.graph.nodes.get(doc_id, {})
+                node_data = graph.get_node_data(doc_id)
                 title = str(node_data.get("title", doc_id))
                 path = str(node_data.get("path", ""))
 

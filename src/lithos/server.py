@@ -930,6 +930,10 @@ class LithosServer:
                         seed_ids=seed_ids,
                         depth=graph_depth,
                         limit=limit,
+                        tags=tags,
+                        author=author,
+                        path_prefix=path_prefix,
+                        threshold=threshold,
                     )
                     results_payload = [_build_result(r) for r in graph_results]
                 else:
