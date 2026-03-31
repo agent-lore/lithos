@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- **Structured JSON logging** (`logging_config.py`): all log output is now
+  emitted as single-line JSON objects with fields `timestamp`, `level`,
+  `logger`, and `message`.  OTEL trace-context extras (`otelTraceID` etc.)
+  appear automatically when tracing is active.
+  - New dependency: `python-json-logger >= 3.0`.
+  - Escape hatch: set `LITHOS_LOG_FORMAT=text` to revert to plain human-readable
+    output (useful for local dev or stdio transport).
+  - Timestamps always use ISO 8601 with colon-separated UTC offset (`+00:00`).
+
 ### Breaking Changes
 
 - **`lithos_semantic` MCP tool removed.** Use `lithos_search` with `mode="semantic"`
