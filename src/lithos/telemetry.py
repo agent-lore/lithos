@@ -57,6 +57,7 @@ _initialized = False
 _tracer_provider: Any = None  # TracerProvider when active
 _meter_provider: Any = None  # MeterProvider when active
 _log_provider: Any = None  # LoggerProvider when active
+_trace_context_filter: _TraceContextFilter | None = None  # installed on root logger
 
 
 # --- No-op stubs for when OTEL is absent or disabled ---
@@ -209,6 +210,7 @@ def setup_telemetry(config: LithosConfig, *, _test_span_exporter: Any = None) ->
         metrics.set_meter_provider(_meter_provider)
 
     # --- Logs ---
+    # Step 2: full OTEL log export when an endpoint is configured.
     logs_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
     if not logs_endpoint and endpoint:
         logs_endpoint = _signal_endpoint(endpoint, "logs")
@@ -227,11 +229,23 @@ def setup_telemetry(config: LithosConfig, *, _test_span_exporter: Any = None) ->
         )
         set_logger_provider(_log_provider)
 
-        # Attach OTEL handler to the root logger so all Python logs are exported
+        # Attach OTEL handler to the root logger so all Python logs are exported.
+        # The LoggingHandler also enriches records with trace context, but the
+        # _inject_trace_context_into_logs() filter installed below ensures
+        # trace_id/span_id are available even without an export endpoint.
         otel_handler = LoggingHandler(level=logging.DEBUG, logger_provider=_log_provider)
         logging.getLogger().addHandler(otel_handler)
 
+    # Mark initialized before installing the filter so the filter sees a
+    # consistent state from the moment it becomes active.
     _initialized = True
+
+    # Step 1 (always active when tracing is on): inject trace_id + span_id into
+    # every Python log record via a lightweight logging.Filter.  This enables
+    # trace-log correlation in any log aggregator (Loki, Datadog, Elastic, etc.)
+    # with zero additional dependencies.
+    _inject_trace_context_into_logs(config.telemetry.service_name)
+
     logger.info("OpenTelemetry initialized (endpoint=%s)", endpoint)
 
 
@@ -241,7 +255,7 @@ def shutdown_telemetry() -> None:
     Ensures in-flight spans are exported before the process terminates.
     Safe to call if telemetry was never initialized.
     """
-    global _initialized, _tracer_provider, _meter_provider, _log_provider
+    global _initialized, _tracer_provider, _meter_provider, _log_provider, _trace_context_filter
 
     if not _initialized:
         return
@@ -260,8 +274,79 @@ def shutdown_telemetry() -> None:
         _log_provider.shutdown()
         _log_provider = None
 
+    # Remove trace-context filter from root logger
+    if _trace_context_filter is not None:
+        logging.getLogger().removeFilter(_trace_context_filter)
+        _trace_context_filter = None
+
     _initialized = False
     logger.debug("OpenTelemetry shut down")
+
+
+class _TraceContextFilter(logging.Filter):
+    """Logging filter that injects OTEL trace/span IDs into every log record.
+
+    After installation, every ``LogRecord`` carries:
+
+    * ``otelTraceID`` (str, 32 hex chars) — current trace ID, or ``"0" * 32``
+    * ``otelSpanID``  (str, 16 hex chars) — current span ID, or ``"0" * 16``
+    * ``otelTraceSampled`` (bool) — whether the current span is sampled
+    * ``otelServiceName`` (str) — the configured service name
+
+    These fields can be referenced in a log format string:
+
+    .. code-block:: python
+
+        "%(message)s traceId=%(otelTraceID)s spanId=%(otelSpanID)s"
+
+    They are also forwarded to structured logging backends (Loki, Datadog,
+    Elastic, etc.) that read ``LogRecord`` extras.
+
+    This filter is installed once by :func:`_inject_trace_context_into_logs`
+    and removed by :func:`shutdown_telemetry`.
+    """
+
+    def __init__(self, service_name: str = "lithos") -> None:
+        super().__init__()
+        self._service_name = service_name
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Inject trace context into *record*.  Always returns True (pass-through)."""
+        if _initialized:
+            span = trace.get_current_span()
+            span_context = span.get_span_context()
+            if span_context is not None and span_context.is_valid:
+                record.otelTraceID = format(span_context.trace_id, "032x")
+                record.otelSpanID = format(span_context.span_id, "016x")
+                record.otelTraceSampled = span_context.trace_flags.sampled
+            else:
+                record.otelTraceID = "0" * 32
+                record.otelSpanID = "0" * 16
+                record.otelTraceSampled = False
+        else:
+            record.otelTraceID = "0" * 32
+            record.otelSpanID = "0" * 16
+            record.otelTraceSampled = False
+        record.otelServiceName = self._service_name
+        return True
+
+
+def _inject_trace_context_into_logs(service_name: str = "lithos") -> None:
+    """Install :class:`_TraceContextFilter` on the root logger.
+
+    Idempotent: a second call is a no-op if already installed.
+    Injected fields: ``otelTraceID``, ``otelSpanID``, ``otelTraceSampled``,
+    ``otelServiceName``.
+    """
+    global _trace_context_filter
+
+    if _trace_context_filter is not None:
+        return  # already installed
+
+    root_logger = logging.getLogger()
+    _trace_context_filter = _TraceContextFilter(service_name=service_name)
+    root_logger.addFilter(_trace_context_filter)
+    logger.debug("OTEL trace-context log filter installed")
 
 
 def _get_package_version() -> str:
@@ -561,11 +646,14 @@ lithos_metrics = _LithosMetrics()
 
 def _reset_for_testing() -> None:
     """Reset module state. For tests only."""
-    global _initialized, _tracer_provider, _meter_provider, _log_provider
+    global _initialized, _tracer_provider, _meter_provider, _log_provider, _trace_context_filter
     _initialized = False
     _tracer_provider = None
     _meter_provider = None
     _log_provider = None
+    if _trace_context_filter is not None:
+        logging.getLogger().removeFilter(_trace_context_filter)
+        _trace_context_filter = None
 
     # Reset global OTEL providers so set_tracer_provider() can be called again
     if _HAS_OTEL:
