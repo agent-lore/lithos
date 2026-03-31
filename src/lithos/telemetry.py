@@ -638,6 +638,70 @@ def register_active_claims_observer(get_active_claim_count: Callable[[], int]) -
     )
 
 
+def register_resource_gauges(
+    *,
+    get_document_count: Callable[[], int],
+    get_stale_document_count: Callable[[], int],
+    get_tantivy_document_count: Callable[[], int],
+    get_chroma_chunk_count: Callable[[], int],
+    get_graph_node_count: Callable[[], int],
+    get_graph_edge_count: Callable[[], int],
+    get_agent_count: Callable[[], int],
+) -> None:
+    """Register OTEL observable gauges for all resource-level metrics.
+
+    All callbacks must be **synchronous** and cheap to call — they run inside
+    the OTEL SDK metric collection loop.  Use cached values for anything backed
+    by async I/O.
+
+    Gauges registered:
+        - ``lithos.knowledge.document_count``
+        - ``lithos.knowledge.stale_document_count``
+        - ``lithos.search.tantivy_document_count``
+        - ``lithos.search.chroma_chunk_count``
+        - ``lithos.graph.node_count``
+        - ``lithos.graph.edge_count``
+        - ``lithos.agents.active_count``
+    """
+    meter = get_meter()
+
+    meter.create_observable_gauge(
+        "lithos.knowledge.document_count",
+        callbacks=[lambda _: [Observation(int(get_document_count()))]],
+        description="Total number of documents in the knowledge store",
+    )
+    meter.create_observable_gauge(
+        "lithos.knowledge.stale_document_count",
+        callbacks=[lambda _: [Observation(int(get_stale_document_count()))]],
+        description="Documents whose expires_at is set and in the past",
+    )
+    meter.create_observable_gauge(
+        "lithos.search.tantivy_document_count",
+        callbacks=[lambda _: [Observation(int(get_tantivy_document_count()))]],
+        description="Number of documents indexed in Tantivy (full-text)",
+    )
+    meter.create_observable_gauge(
+        "lithos.search.chroma_chunk_count",
+        callbacks=[lambda _: [Observation(int(get_chroma_chunk_count()))]],
+        description="Number of embedding chunks in ChromaDB",
+    )
+    meter.create_observable_gauge(
+        "lithos.graph.node_count",
+        callbacks=[lambda _: [Observation(int(get_graph_node_count()))]],
+        description="Number of nodes in the wiki-link knowledge graph",
+    )
+    meter.create_observable_gauge(
+        "lithos.graph.edge_count",
+        callbacks=[lambda _: [Observation(int(get_graph_edge_count()))]],
+        description="Number of edges in the wiki-link knowledge graph",
+    )
+    meter.create_observable_gauge(
+        "lithos.agents.active_count",
+        callbacks=[lambda _: [Observation(int(get_agent_count()))]],
+        description="Number of agents registered in the coordination store",
+    )
+
+
 lithos_metrics = _LithosMetrics()
 
 

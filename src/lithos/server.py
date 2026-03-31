@@ -37,7 +37,13 @@ from lithos.events import (
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import _UNSET, KnowledgeManager, _UnsetType
 from lithos.search import SearchEngine
-from lithos.telemetry import StatusCode, get_tracer, lithos_metrics, register_active_claims_observer
+from lithos.telemetry import (
+    StatusCode,
+    get_tracer,
+    lithos_metrics,
+    register_active_claims_observer,
+    register_resource_gauges,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +67,9 @@ class LithosServer:
         self.coordination = CoordinationService(self._config)
         self.event_bus = EventBus(self._config.events)
 
-        # Cached active claims count for the OTEL observable gauge callback
+        # Cached count fields for synchronous OTEL observable gauge callbacks
         self._cached_active_claims: int = 0
+        self._cached_agent_count: int = 0
 
         # Background tasks (kept to prevent garbage collection)
         self._background_tasks: set[asyncio.Task[None]] = set()
@@ -365,6 +372,17 @@ class LithosServer:
                 # Register active claims gauge observer
                 register_active_claims_observer(lambda: self._cached_active_claims)
 
+                # Register resource-level OTEL gauges
+                register_resource_gauges(
+                    get_document_count=lambda: self.knowledge.document_count,
+                    get_stale_document_count=lambda: self.knowledge.stale_document_count,
+                    get_tantivy_document_count=lambda: self._safe_tantivy_count(),
+                    get_chroma_chunk_count=lambda: self._safe_chroma_count(),
+                    get_graph_node_count=lambda: len(self.graph.graph.nodes),
+                    get_graph_edge_count=lambda: len(self.graph.graph.edges),
+                    get_agent_count=lambda: self._cached_agent_count,
+                )
+
                 # Load or build indices.
                 # Force access to the tantivy property so schema version check runs.
                 tantivy_needs_rebuild = self.search.tantivy.needs_rebuild
@@ -386,6 +404,20 @@ class LithosServer:
                 span.record_exception(exc)
                 span.set_status(StatusCode.ERROR, str(exc))
                 raise
+
+    def _safe_tantivy_count(self) -> int:
+        """Return Tantivy document count, 0 on any error."""
+        try:
+            return self.search.tantivy.count_docs()
+        except Exception:
+            return 0
+
+    def _safe_chroma_count(self) -> int:
+        """Return ChromaDB chunk count, 0 on any error."""
+        try:
+            return self.search.chroma.count_chunks()
+        except Exception:
+            return 0
 
     async def _prewarm_embeddings(self) -> None:
         """Pre-warm the embedding model, logging errors instead of crashing."""
@@ -2167,8 +2199,9 @@ class LithosServer:
                 # Get coordination stats
                 coord_stats = await self.coordination.get_stats()
 
-                # Update cached active claims for OTEL gauge
+                # Update cached fields for synchronous OTEL gauge callbacks
                 self._cached_active_claims = coord_stats.get("open_claims", 0)
+                self._cached_agent_count = coord_stats.get("agents", 0)
 
                 # Get tag count
                 tags = await self.knowledge.get_all_tags()

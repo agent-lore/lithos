@@ -475,6 +475,7 @@ class _CachedMeta:
     tags: list[str]
     updated_at: datetime
     path: Path
+    expires_at: datetime | None = None
 
 
 class _UnsetType:
@@ -586,12 +587,23 @@ class KnowledgeManager:
                         updated_at = datetime.now(timezone.utc)
                     raw_tags: list[str] = post.metadata.get("tags", [])  # type: ignore[assignment]
                     raw_author: str = post.metadata.get("author", "")  # type: ignore[assignment]
+                    raw_expires: str | datetime | None = post.metadata.get("expires_at")  # type: ignore[assignment]
+                    if isinstance(raw_expires, str):
+                        try:
+                            cached_expires: datetime | None = datetime.fromisoformat(raw_expires)
+                        except ValueError:
+                            cached_expires = None
+                    elif isinstance(raw_expires, datetime):
+                        cached_expires = raw_expires
+                    else:
+                        cached_expires = None
                     self._meta_cache[doc_id] = _CachedMeta(
                         title=title,
                         author=raw_author if isinstance(raw_author, str) else "",
                         tags=raw_tags if isinstance(raw_tags, list) else [],
                         updated_at=updated_at,
                         path=rel_path,
+                        expires_at=cached_expires,
                     )
 
                     # Populate source_url -> id map
@@ -821,6 +833,7 @@ class KnowledgeManager:
                 tags=list(metadata.tags),
                 updated_at=metadata.updated_at,
                 path=file_path,
+                expires_at=metadata.expires_at,
             )
 
             logger.info(
@@ -1139,6 +1152,7 @@ class KnowledgeManager:
                 tags=list(doc.metadata.tags),
                 updated_at=doc.metadata.updated_at,
                 path=doc.path,
+                expires_at=doc.metadata.expires_at,
             )
 
             if logger.isEnabledFor(logging.INFO):
@@ -1426,6 +1440,7 @@ class KnowledgeManager:
             tags=list(metadata.tags),
             updated_at=metadata.updated_at,
             path=file_path,
+            expires_at=metadata.expires_at,
         )
 
         return doc
@@ -1479,6 +1494,23 @@ class KnowledgeManager:
     def has_document(self, doc_id: str) -> bool:
         """Check whether a document ID exists."""
         return doc_id in self._id_to_path
+
+    @property
+    def document_count(self) -> int:
+        """Synchronous count of known documents (from in-memory cache)."""
+        return len(self._meta_cache)
+
+    @property
+    def stale_document_count(self) -> int:
+        """Synchronous count of documents whose expires_at is set and in the past."""
+        now = datetime.now(timezone.utc)
+        count = 0
+        for cached in self._meta_cache.values():
+            if cached.expires_at is not None:
+                exp = _normalize_datetime(cached.expires_at)
+                if exp < now:
+                    count += 1
+        return count
 
     def rescan(self) -> None:
         """Public wrapper around _scan_existing() for index rebuilds."""
