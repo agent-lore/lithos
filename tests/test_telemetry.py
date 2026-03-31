@@ -673,3 +673,85 @@ class TestTraceLogCorrelation:
         finally:
             shutdown_telemetry()
             _reset_for_testing()
+
+
+class TestResourceGauges:
+    """Tests for register_resource_gauges (issue #87)."""
+
+    def test_register_resource_gauges_no_raise_without_otel(self):
+        """register_resource_gauges must not raise when OTEL is inactive."""
+        from lithos.telemetry import register_resource_gauges
+
+        # Should be a clean no-op when _initialized is False
+        register_resource_gauges(
+            get_document_count=lambda: 5,
+            get_stale_document_count=lambda: 1,
+            get_tantivy_document_count=lambda: 5,
+            get_chroma_chunk_count=lambda: 20,
+            get_graph_node_count=lambda: 5,
+            get_graph_edge_count=lambda: 4,
+            get_agent_count=lambda: 2,
+        )
+
+    def test_knowledge_manager_document_count_property(self, tmp_path):
+        """KnowledgeManager.document_count returns len(_meta_cache)."""
+        from lithos.config import LithosConfig, StorageConfig
+        from lithos.knowledge import KnowledgeManager
+
+        config = LithosConfig(storage=StorageConfig(data_dir=str(tmp_path)))
+        km = KnowledgeManager(config)
+        assert km.document_count == 0
+
+    def test_knowledge_manager_stale_document_count_zero_when_no_expiry(self, tmp_path):
+        """stale_document_count is 0 when no documents have expires_at set."""
+        from lithos.config import LithosConfig, StorageConfig
+        from lithos.knowledge import KnowledgeManager
+
+        config = LithosConfig(storage=StorageConfig(data_dir=str(tmp_path)))
+        km = KnowledgeManager(config)
+        assert km.stale_document_count == 0
+
+    @pytest.mark.asyncio
+    async def test_stale_document_count_increments_for_expired_doc(self, tmp_path):
+        """stale_document_count counts docs whose expires_at is in the past."""
+        from datetime import timedelta
+
+        from lithos.config import LithosConfig, StorageConfig
+        from lithos.knowledge import KnowledgeManager
+
+        config = LithosConfig(storage=StorageConfig(data_dir=str(tmp_path)))
+        km = KnowledgeManager(config)
+
+        # Create a doc that expires in the past
+        from datetime import datetime, timezone
+
+        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        await km.create(
+            title="Stale Doc",
+            content="This doc is stale.",
+            agent="test",
+            expires_at=past,
+        )
+        assert km.stale_document_count == 1
+
+    @pytest.mark.asyncio
+    async def test_non_stale_doc_not_counted(self, tmp_path):
+        """stale_document_count does not count docs that haven't expired yet."""
+        from datetime import timedelta
+
+        from lithos.config import LithosConfig, StorageConfig
+        from lithos.knowledge import KnowledgeManager
+
+        config = LithosConfig(storage=StorageConfig(data_dir=str(tmp_path)))
+        km = KnowledgeManager(config)
+
+        from datetime import datetime, timezone
+
+        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        await km.create(
+            title="Fresh Doc",
+            content="Not expired yet.",
+            agent="test",
+            expires_at=future,
+        )
+        assert km.stale_document_count == 0
