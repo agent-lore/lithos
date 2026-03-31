@@ -111,9 +111,12 @@ def serve(
                         "version": 1,
                         "disable_existing_loggers": False,
                         "loggers": {
-                            "uvicorn": {"level": "INFO", "propagate": True},
-                            "uvicorn.error": {"level": "INFO", "propagate": True},
-                            "uvicorn.access": {"level": "INFO", "propagate": True},
+                            # handlers=[] prevents uvicorn from attaching its own
+                            # StreamHandler; propagate=True routes records to the
+                            # root logger's JSON handler instead, avoiding double-emission.
+                            "uvicorn": {"handlers": [], "level": "INFO", "propagate": True},
+                            "uvicorn.error": {"handlers": [], "level": "INFO", "propagate": True},
+                            "uvicorn.access": {"handlers": [], "level": "INFO", "propagate": True},
                         },
                     },
                 },

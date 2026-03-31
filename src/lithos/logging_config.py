@@ -4,6 +4,10 @@ Installs a JSON formatter on the root logger so every log record is
 emitted as a single-line JSON object.  Lithos is a server; operators
 running locally can pipe stdout/stderr through ``jq`` for readability.
 
+Set the environment variable ``LITHOS_LOG_FORMAT=text`` to use a plain
+human-readable formatter instead of JSON.  Useful for local dev or when
+using stdio transport where JSON is inconvenient.
+
 The OTEL log bridge already injects ``otelTraceID``, ``otelSpanID``,
 ``otelServiceName``, and ``otelTraceSampled`` as ``LogRecord`` extras.
 Because the JSON formatter serialises all extras, those fields appear
@@ -22,27 +26,24 @@ Usage::
 
     setup_logging()          # configures root logger, idempotent
     setup_logging(level=logging.DEBUG)
+    # or, for plain text output:
+    # LITHOS_LOG_FORMAT=text lithos serve ...
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from typing import Any
 
-try:
-    # python-json-logger >= 3.2 moved to pythonjsonlogger.json
-    from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
-except ImportError:  # pragma: no cover
-    from pythonjsonlogger.jsonlogger import (
-        JsonFormatter as _JsonFormatter,  # pyright: ignore[reportPrivateImportUsage]
-    )
+from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
 
 __all__ = ["LithosJsonFormatter", "setup_logging"]
 
 # Sentinel: name of the marker attribute placed on the root logger's first
-# JsonHandler so setup_logging() can detect its own previous install and
+# handler so setup_logging() can detect its own previous install and
 # avoid adding duplicate handlers.
 _HANDLER_MARKER = "_lithos_json_handler"
 
@@ -52,7 +53,7 @@ class LithosJsonFormatter(_JsonFormatter):
 
     Field names:
 
-    * ``timestamp`` — ISO 8601 with UTC offset (``%Y-%m-%dT%H:%M:%S%z``)
+    * ``timestamp`` — ISO 8601 with UTC offset (``+00:00``)
     * ``level``     — upper-case level name (``INFO``, ``WARNING``, …)
     * ``logger``    — logger name (``lithos.server``, etc.)
     * ``message``   — formatted log message
@@ -60,6 +61,11 @@ class LithosJsonFormatter(_JsonFormatter):
 
     All other standard ``LogRecord`` attributes (``asctime``, ``levelname``,
     ``name``) are renamed to avoid redundant keys.
+
+    Typical output::
+
+        {"timestamp": "2026-03-31T12:34:56+00:00", "level": "INFO",
+         "logger": "lithos.server", "message": "OpenTelemetry initialized"}
     """
 
     def add_fields(
@@ -71,14 +77,14 @@ class LithosJsonFormatter(_JsonFormatter):
         """Populate ``log_data`` with renamed / cleaned-up fields."""
         super().add_fields(log_data, record, message_dict)
 
-        # Rename asctime → timestamp (already formatted by the handler's datefmt)
-        if "asctime" in log_data:
-            log_data["timestamp"] = log_data.pop("asctime")
-        else:
-            # Fallback: produce ISO 8601 from the record's created time.
-            log_data["timestamp"] = datetime.fromtimestamp(
-                record.created, tz=timezone.utc
-            ).isoformat(timespec="seconds")
+        # Always produce the timestamp from the record's created time using
+        # datetime.isoformat() so we always get the +00:00 form (not +0000).
+        log_data["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(
+            timespec="seconds"
+        )
+
+        # Remove asctime if present (we replaced it above)
+        log_data.pop("asctime", None)
 
         # Rename levelname → level
         if "levelname" in log_data:
@@ -90,15 +96,19 @@ class LithosJsonFormatter(_JsonFormatter):
 
 
 def setup_logging(level: int = logging.INFO, stream: Any = None) -> None:
-    """Configure the root logger to emit structured JSON.
+    """Configure the root logger to emit structured JSON (or plain text).
 
     Idempotent: a second call with the same (or no) arguments is a no-op
-    if a Lithos JSON handler is already installed on the root logger.
+    if a Lithos handler is already installed on the root logger.
 
     Args:
         level:  Root logger level (default: ``logging.INFO``).
         stream: Output stream (default: ``sys.stderr``).  Tests may pass an
                 ``io.StringIO`` instance to capture output.
+
+    Environment variables:
+        LITHOS_LOG_FORMAT: Set to ``text`` for a plain human-readable
+            formatter instead of JSON.  Defaults to ``json``.
     """
     root = logging.getLogger()
 
@@ -114,12 +124,20 @@ def setup_logging(level: int = logging.INFO, stream: Any = None) -> None:
     # Mark so we can detect it on subsequent calls.
     setattr(handler, _HANDLER_MARKER, True)
 
-    formatter = LithosJsonFormatter(
-        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S%z",
-    )
+    log_format = os.environ.get("LITHOS_LOG_FORMAT", "json").lower()
+    if log_format == "text":
+        formatter: logging.Formatter = logging.Formatter(
+            fmt="%(asctime)s %(levelname)-8s %(name)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S%z",
+        )
+    else:
+        # JSON formatter: no datefmt — timestamp is always produced via
+        # datetime.isoformat() in add_fields() to guarantee +00:00 form.
+        formatter = LithosJsonFormatter(
+            fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
     handler.setFormatter(formatter)
-    handler.setLevel(level)
-
+    # Only root.setLevel() is needed; handler-level filtering is redundant
+    # because the root logger gates all records before they reach handlers.
     root.setLevel(level)
     root.addHandler(handler)

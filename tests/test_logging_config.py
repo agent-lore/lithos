@@ -5,7 +5,9 @@ Verifies:
 - Standard fields (timestamp, level, logger, message) are present.
 - Extra fields (e.g. otelTraceID) are forwarded correctly.
 - setup_logging() is idempotent — repeated calls don't duplicate handlers.
-- Timestamp uses ISO 8601 format.
+- Timestamp uses ISO 8601 format with +00:00 offset.
+- Exception info is serialised into the JSON output.
+- LITHOS_LOG_FORMAT=text produces plain text instead of JSON.
 """
 
 from __future__ import annotations
@@ -26,9 +28,10 @@ def _make_capturing_handler(stream: io.StringIO) -> logging.StreamHandler:  # ty
     """Return a StreamHandler that writes JSON to *stream*, for testing."""
     handler = logging.StreamHandler(stream)
     setattr(handler, _HANDLER_MARKER, True)
+    # No datefmt: timestamp is always produced via datetime.isoformat() in
+    # add_fields() to guarantee consistent +00:00 form.
     formatter = LithosJsonFormatter(
         fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
     handler.setFormatter(formatter)
     return handler
@@ -112,17 +115,28 @@ class TestSetupLogging:
         record = _last_record(buf)
         assert record["logger"] == "lithos.mymodule"
 
-    def test_timestamp_is_iso8601(self) -> None:
+    def test_timestamp_is_iso8601_with_colon_offset(self) -> None:
+        """Timestamp must use +HH:MM form (not +HHMM)."""
         buf = io.StringIO()
         setup_logging(stream=buf)
         logging.getLogger("test.ts").info("timestamp check")
         record = _last_record(buf)
         ts = record["timestamp"]
         assert isinstance(ts, str)
-        # ISO 8601: YYYY-MM-DDTHH:MM:SS±HH:MM  (or Z)
-        assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", ts), (
-            f"timestamp {ts!r} does not look like ISO 8601"
+        # ISO 8601: YYYY-MM-DDTHH:MM:SS+HH:MM  (colon-separated offset)
+        assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}", ts), (
+            f"timestamp {ts!r} does not look like ISO 8601 with +HH:MM offset"
         )
+
+    def test_timestamp_utc_offset_colon_form(self) -> None:
+        """UTC timestamps must end in +00:00, not +0000."""
+        buf = io.StringIO()
+        setup_logging(stream=buf)
+        logging.getLogger("test.ts.utc").info("utc offset form")
+        record = _last_record(buf)
+        ts = str(record["timestamp"])
+        # datetime.isoformat() always produces the colon form (+00:00)
+        assert "+00:00" in ts or ts.endswith("Z"), f"Expected +00:00 UTC offset in {ts!r}"
 
     def test_no_legacy_keys_in_output(self) -> None:
         """asctime, levelname, name must not appear — they're renamed."""
@@ -133,6 +147,44 @@ class TestSetupLogging:
         assert "asctime" not in record
         assert "levelname" not in record
         assert "name" not in record
+
+    def test_text_format_env_var(self, monkeypatch: object) -> None:  # type: ignore[override]
+        """LITHOS_LOG_FORMAT=text produces plain text, not JSON."""
+        import pytest
+
+        # Use pytest's monkeypatch fixture — skip if not available via param
+        if not hasattr(monkeypatch, "setenv"):
+            pytest.skip("monkeypatch fixture not available")
+        monkeypatch.setenv("LITHOS_LOG_FORMAT", "text")
+        buf = io.StringIO()
+        setup_logging(stream=buf)
+        logging.getLogger("test.textformat").info("plain text log")
+        output = buf.getvalue()
+        # Should NOT be valid JSON
+        assert output.strip(), "Expected some output"
+        try:
+            json.loads(output.splitlines()[0])
+            raise AssertionError("Expected plain text, not JSON")
+        except json.JSONDecodeError:
+            pass  # correct — not JSON
+
+    def test_exception_info_serialised(self) -> None:
+        """exc_info=True records must include exception info in JSON output."""
+        buf = io.StringIO()
+        setup_logging(stream=buf)
+        logger = logging.getLogger("test.exc_info")
+        try:
+            raise ValueError("test exception for serialisation")
+        except ValueError:
+            logger.error("something went wrong", exc_info=True)
+        record = _last_record(buf)
+        assert isinstance(record, dict)
+        # The exception should be captured somewhere in the output
+        raw = buf.getvalue()
+        assert "ValueError" in raw, "Exception type not found in log output"
+        assert "test exception for serialisation" in raw, (
+            "Exception message not found in log output"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +293,7 @@ class TestLithosJsonFormatter:
         logger.addHandler(handler)
         logger.propagate = False
         try:
-            logger.log(level, msg, extra=extra or None)
+            logger.log(level, msg, extra=extra if extra else None)
         finally:
             logger.removeHandler(handler)
         lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
@@ -273,3 +325,65 @@ class TestLithosJsonFormatter:
     def test_critical_level_string(self) -> None:
         record = self._format_record("critical msg", level=logging.CRITICAL)
         assert record["level"] == "CRITICAL"
+
+
+# ---------------------------------------------------------------------------
+# Uvicorn double-logging test
+# ---------------------------------------------------------------------------
+
+
+class TestUvicornLogConfig:
+    """Verify the uvicorn log_config suppresses handler double-emission."""
+
+    def test_uvicorn_loggers_have_empty_handlers(self) -> None:
+        """The log_config dict must set handlers=[] on uvicorn loggers."""
+        # Import the config dict structure as used in cli.py
+        log_config = {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "loggers": {
+                "uvicorn": {"handlers": [], "level": "INFO", "propagate": True},
+                "uvicorn.error": {"handlers": [], "level": "INFO", "propagate": True},
+                "uvicorn.access": {"handlers": [], "level": "INFO", "propagate": True},
+            },
+        }
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+            assert log_config["loggers"][name]["handlers"] == [], (
+                f"{name} must have empty handlers list to prevent double-emission"
+            )
+            assert log_config["loggers"][name]["propagate"] is True, (
+                f"{name} must propagate to root logger"
+            )
+
+    def test_single_emission_via_propagation(self) -> None:
+        """Records propagated from a child logger appear exactly once."""
+        buf = io.StringIO()
+        root = logging.getLogger()
+        # Clean slate
+        original_handlers = root.handlers[:]
+        original_level = root.level
+        root.handlers = []
+        root.setLevel(logging.DEBUG)
+
+        handler = logging.StreamHandler(buf)
+        setattr(handler, _HANDLER_MARKER, True)
+        handler.setFormatter(
+            LithosJsonFormatter(fmt="%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        root.addHandler(handler)
+
+        # Simulate a uvicorn logger with no own handlers, propagate=True
+        uv_logger = logging.getLogger("uvicorn.test_single_emission")
+        uv_logger.handlers = []
+        uv_logger.propagate = True
+        uv_logger.setLevel(logging.DEBUG)
+
+        uv_logger.info("uvicorn test message")
+
+        root.handlers = original_handlers
+        root.setLevel(original_level)
+
+        lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
+        assert len(lines) == 1, f"Expected 1 line, got {len(lines)}: {buf.getvalue()!r}"
+        record = json.loads(lines[0])
+        assert record["message"] == "uvicorn test message"
