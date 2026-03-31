@@ -20,7 +20,7 @@ services:
       - LITHOS_OTEL_ENABLED=${LITHOS_OTEL_ENABLED:-true}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 8765)); s.close()"]
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
       interval: 10s
       timeout: 10s
       retries: 3
