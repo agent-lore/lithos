@@ -124,6 +124,35 @@ class TestAuditLogFilters:
         entries = await coordination_service.get_audit_log(limit=9999)
         assert isinstance(entries, list)
 
+    @pytest.mark.asyncio
+    async def test_audit_log_filter_by_doc_id(self, coordination_service: CoordinationService):
+        """doc_id filter returns only entries for that document, across all agents."""
+        await coordination_service.log_access(doc_id="target-doc", operation="read", agent_id="agent-x")
+        await coordination_service.log_access(doc_id="target-doc", operation="search_result", agent_id="agent-y")
+        await coordination_service.log_access(doc_id="other-doc", operation="read", agent_id="agent-x")
+
+        entries = await coordination_service.get_audit_log(doc_id="target-doc")
+        assert len(entries) == 2
+        assert all(e.doc_id == "target-doc" for e in entries)
+        # Both agents present
+        agent_ids = {e.agent_id for e in entries}
+        assert "agent-x" in agent_ids
+        assert "agent-y" in agent_ids
+        # other-doc must not appear
+        assert not any(e.doc_id == "other-doc" for e in entries)
+
+    @pytest.mark.asyncio
+    async def test_audit_log_filter_by_agent_and_doc_id(self, coordination_service: CoordinationService):
+        """Filtering by both agent_id and doc_id returns only the intersection."""
+        await coordination_service.log_access(doc_id="shared-doc", operation="read", agent_id="alice")
+        await coordination_service.log_access(doc_id="shared-doc", operation="read", agent_id="bob")
+        await coordination_service.log_access(doc_id="other-doc", operation="read", agent_id="alice")
+
+        entries = await coordination_service.get_audit_log(agent_id="alice", doc_id="shared-doc")
+        assert len(entries) == 1
+        assert entries[0].agent_id == "alice"
+        assert entries[0].doc_id == "shared-doc"
+
 
 class TestRetrievalCount:
     """Tests for get_retrieval_count."""

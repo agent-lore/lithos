@@ -946,6 +946,7 @@ class CoordinationService:
         agent_id: str | None = None,
         after: str | None = None,
         limit: int = 100,
+        doc_id: str | None = None,
     ) -> list[AccessLogEntry]:
         """Query the read-access audit log.
 
@@ -953,6 +954,7 @@ class CoordinationService:
             agent_id: Filter to entries from this agent (optional).
             after: ISO-8601 timestamp; only return entries after this time (optional).
             limit: Maximum number of entries to return (default: 100, max: 1000).
+            doc_id: Filter to entries for this document (optional).
 
         Returns:
             List of :class:`AccessLogEntry` objects, most-recent first.
@@ -967,6 +969,9 @@ class CoordinationService:
         if after:
             conditions.append("timestamp > ?")
             params.append(after)
+        if doc_id:
+            conditions.append("doc_id = ?")
+            params.append(doc_id)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         params.append(limit)

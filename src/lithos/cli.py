@@ -658,8 +658,13 @@ def inspect_doc(ctx: click.Context, identifier: str, content: bool) -> None:
     default=50,
     help="Maximum number of entries to show (default: 50)",
 )
+@click.option(
+    "--doc",
+    default=None,
+    help="Filter entries by document ID",
+)
 @click.pass_context
-def audit(ctx: click.Context, agent: str | None, since: str | None, limit: int) -> None:
+def audit(ctx: click.Context, agent: str | None, since: str | None, limit: int, doc: str | None) -> None:
     """Show the read-access audit log.
 
     Displays documents that have been read or returned in search results,
@@ -674,7 +679,7 @@ def audit(ctx: click.Context, agent: str | None, since: str | None, limit: int) 
     async def run() -> None:
         service = CoordinationService(config)
         await service.initialize()
-        entries = await service.get_audit_log(agent_id=agent, after=since, limit=limit)
+        entries = await service.get_audit_log(agent_id=agent, after=since, limit=limit, doc_id=doc)
 
         if not entries:
             click.echo("No audit log entries found.")

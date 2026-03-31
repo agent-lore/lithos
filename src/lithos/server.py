@@ -167,6 +167,7 @@ class LithosServer:
 
         agent_id = request.query_params.get("agent_id")
         after = request.query_params.get("after")
+        doc_id = request.query_params.get("doc_id")
         try:
             limit = int(request.query_params.get("limit", "100"))
         except ValueError:
@@ -176,6 +177,7 @@ class LithosServer:
             agent_id=agent_id,
             after=after,
             limit=limit,
+            doc_id=doc_id,
         )
         return JSONResponse(
             {
