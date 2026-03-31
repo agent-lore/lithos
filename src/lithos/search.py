@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import re
 import shutil
@@ -1149,14 +1150,15 @@ class SearchEngine:
             visited: set[str] = set()
             hop_distance: dict[str, int] = {}
 
-            queue: list[tuple[str, int]] = [(sid, 0) for sid in effective_seeds]
+            queue: collections.deque[tuple[str, int]] = collections.deque()
             for sid in effective_seeds:
                 if graph.has_node(sid):
                     visited.add(sid)
                     hop_distance[sid] = 0
+                    queue.append((sid, 0))
 
             while queue:
-                node_id, hop = queue.pop(0)
+                node_id, hop = queue.popleft()
                 if hop >= depth:
                     continue
                 link_info = graph.get_links(node_id, direction="both", depth=1)
