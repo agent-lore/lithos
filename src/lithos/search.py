@@ -22,9 +22,7 @@ from lithos.knowledge import KnowledgeDocument
 from lithos.telemetry import lithos_metrics, traced
 
 if TYPE_CHECKING:
-    import numpy as np
     from chromadb.api import ClientAPI
-    from numpy.typing import NDArray
 
 logger = logging.getLogger(__name__)
 
@@ -522,17 +520,6 @@ class ChromaIndex:
         async with self._model_lock:
             if self._model is None:
                 self._model = await asyncio.to_thread(SentenceTransformer, self.model_name)
-
-    async def embed_async(self, texts: list[str]) -> NDArray[np.float32]:
-        """Generate embeddings asynchronously without blocking the event loop.
-
-        NOTE: This method is currently unused (dead code).  It is kept here as
-        preparatory work for a follow-up PR that will migrate the search layer to
-        fully async embedding generation.  Remove this note once the follow-up
-        lands, or remove the method if the approach changes.
-        """
-        await self.ensure_model_loaded()
-        return await asyncio.to_thread(self.model.encode, texts)
 
     def health_check(self) -> None:
         """Probe the embedding model (warm-up / liveness). Raises on failure."""
