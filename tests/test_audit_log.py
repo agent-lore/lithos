@@ -127,9 +127,15 @@ class TestAuditLogFilters:
     @pytest.mark.asyncio
     async def test_audit_log_filter_by_doc_id(self, coordination_service: CoordinationService):
         """doc_id filter returns only entries for that document, across all agents."""
-        await coordination_service.log_access(doc_id="target-doc", operation="read", agent_id="agent-x")
-        await coordination_service.log_access(doc_id="target-doc", operation="search_result", agent_id="agent-y")
-        await coordination_service.log_access(doc_id="other-doc", operation="read", agent_id="agent-x")
+        await coordination_service.log_access(
+            doc_id="target-doc", operation="read", agent_id="agent-x"
+        )
+        await coordination_service.log_access(
+            doc_id="target-doc", operation="search_result", agent_id="agent-y"
+        )
+        await coordination_service.log_access(
+            doc_id="other-doc", operation="read", agent_id="agent-x"
+        )
 
         entries = await coordination_service.get_audit_log(doc_id="target-doc")
         assert len(entries) == 2
@@ -142,11 +148,17 @@ class TestAuditLogFilters:
         assert not any(e.doc_id == "other-doc" for e in entries)
 
     @pytest.mark.asyncio
-    async def test_audit_log_filter_by_agent_and_doc_id(self, coordination_service: CoordinationService):
+    async def test_audit_log_filter_by_agent_and_doc_id(
+        self, coordination_service: CoordinationService
+    ):
         """Filtering by both agent_id and doc_id returns only the intersection."""
-        await coordination_service.log_access(doc_id="shared-doc", operation="read", agent_id="alice")
+        await coordination_service.log_access(
+            doc_id="shared-doc", operation="read", agent_id="alice"
+        )
         await coordination_service.log_access(doc_id="shared-doc", operation="read", agent_id="bob")
-        await coordination_service.log_access(doc_id="other-doc", operation="read", agent_id="alice")
+        await coordination_service.log_access(
+            doc_id="other-doc", operation="read", agent_id="alice"
+        )
 
         entries = await coordination_service.get_audit_log(agent_id="alice", doc_id="shared-doc")
         assert len(entries) == 1

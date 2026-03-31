@@ -664,7 +664,9 @@ def inspect_doc(ctx: click.Context, identifier: str, content: bool) -> None:
     help="Filter entries by document ID",
 )
 @click.pass_context
-def audit(ctx: click.Context, agent: str | None, since: str | None, limit: int, doc: str | None) -> None:
+def audit(
+    ctx: click.Context, agent: str | None, since: str | None, limit: int, doc: str | None
+) -> None:
     """Show the read-access audit log.
 
     Displays documents that have been read or returned in search results,
