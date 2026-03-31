@@ -83,3 +83,6 @@ scripts/ralph/CLAUDE.md
 scripts/ralph/prd.json
 scripts/ralph/progress.txt
 /tasks/
+# Showboat proof-of-work docs (must never be committed — post as PR comment instead)
+demo.md
+DEMO.md
