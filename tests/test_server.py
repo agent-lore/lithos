@@ -1063,7 +1063,7 @@ Based on [[api-research-notes]].
         coord_stats = await server.coordination.get_stats()
 
         # Verify stats are populated
-        assert search_stats["chunks"] >= 3
+        assert search_stats["chroma_chunk_count"] >= 3
         assert graph_stats["nodes"] >= 3
         assert coord_stats["agents"] >= 1
         assert coord_stats["active_tasks"] >= 1

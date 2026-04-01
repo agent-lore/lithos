@@ -448,8 +448,8 @@ class TestSearchEngineIntegration:
 
         stats = search_engine.get_stats()
 
-        assert "chunks" in stats
-        assert stats["chunks"] >= 1
+        assert "chroma_chunk_count" in stats
+        assert stats["chroma_chunk_count"] >= 1
 
 
 class TestChromaIndexFilters:

@@ -1075,7 +1075,7 @@ class SearchEngine:
     def get_stats(self) -> dict[str, int]:
         """Get search index statistics."""
         return {
-            "chunks": self.chroma.count_chunks(),
+            "chroma_chunk_count": self.chroma.count_chunks(),
         }
 
     @traced("lithos.search.graph")

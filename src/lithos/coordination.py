@@ -1084,8 +1084,17 @@ class CoordinationService:
             row = await cursor.fetchone()
             open_claims = row[0] if row else 0
 
+            # Count expired claims (still on disk, not yet cleaned up)
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM claims WHERE expires_at <= ?",
+                (now,),
+            )
+            row = await cursor.fetchone()
+            expired_claims = row[0] if row else 0
+
             return {
                 "agents": agents,
                 "active_tasks": active_tasks,
                 "open_claims": open_claims,
+                "expired_claims": expired_claims,
             }

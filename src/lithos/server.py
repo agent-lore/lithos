@@ -2224,22 +2224,44 @@ class LithosServer:
 
         @self.mcp.tool()
         @tool_metrics()
-        async def lithos_stats() -> dict[str, int]:
-            """Get knowledge base statistics.
+        async def lithos_stats() -> dict[str, Any]:
+            """Get knowledge base statistics and health indicators.
 
             Returns:
-                Dict with documents, chunks, agents, active_tasks, open_claims, tags counts
+                Dict with document counts, search index stats, coordination
+                stats, and health signals (index drift, broken links, expired
+                claims, last-updated timestamps).
             """
             logger.info("lithos_stats")
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.stats") as span:
                 span.set_attribute("lithos.tool", "lithos_stats")
 
-                # Get document count
-                _, total_docs = await self.knowledge.list_all(limit=0)
+                # Get document count (from in-memory cache — always available)
+                total_docs = self.knowledge.document_count
 
                 # Get search stats
                 search_stats = self.search.get_stats()
+                chroma_chunk_count: int = search_stats.get("chroma_chunk_count", 0)
+
+                # Tantivy document count with None-sentinel on failure.
+                # NOTE: this deliberately diverges from _safe_tantivy_count(),
+                # which returns *0* on error (used by OTEL gauge probes where a
+                # numeric value is always required).  Here we return *None* so
+                # callers can distinguish "index not yet written / unavailable"
+                # from "zero documents indexed" — a meaningful difference for
+                # drift detection and health reporting.  If you need the 0-on-
+                # error behaviour, use _safe_tantivy_count() instead.
+                tantivy_doc_count: int | None
+                try:
+                    tantivy_doc_count = self.search.tantivy.count_docs()
+                except Exception:
+                    tantivy_doc_count = None
+
+                # Index drift: knowledge corpus vs Tantivy index
+                index_drift_detected = (
+                    tantivy_doc_count is not None and tantivy_doc_count != total_docs
+                )
 
                 # Get coordination stats
                 coord_stats = await self.coordination.get_stats()
@@ -2251,14 +2273,51 @@ class LithosServer:
                 # Get tag count
                 tags = await self.knowledge.get_all_tags()
 
+                # Unresolved wiki-links: nodes in the graph that have no
+                # matching document (represented as __unresolved__ placeholders)
+                graph_stats = self.graph.get_stats()
+                unresolved_links: int = graph_stats.get("unresolved_links", 0)
+
+                # Stale (expired) documents
+                expired_docs = self.knowledge.stale_document_count
+
+                # Index last-updated timestamps from filesystem mtime
+                def _dir_mtime(path: Path) -> str | None:
+                    try:
+                        mtime = path.stat().st_mtime
+                        return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+                    except OSError:
+                        return None
+
+                tantivy_last_updated = _dir_mtime(self._config.storage.tantivy_path)
+                chroma_last_updated = _dir_mtime(self._config.storage.chroma_path)
+
                 return {
+                    # Core counts
                     "documents": total_docs,
-                    "chunks": search_stats.get("chunks", 0),
+                    "chroma_chunk_count": chroma_chunk_count,
                     "agents": coord_stats.get("agents", 0),
                     "active_tasks": coord_stats.get("active_tasks", 0),
                     "open_claims": coord_stats.get("open_claims", 0),
                     "tags": len(tags),
                     "duplicate_urls": self.knowledge.duplicate_url_count,
+                    # Health indicators
+                    "index_drift_detected": index_drift_detected,
+                    "tantivy_doc_count": tantivy_doc_count,
+                    "unresolved_links": unresolved_links,
+                    "expired_docs": expired_docs,
+                    "expired_claims": coord_stats.get("expired_claims", 0),
+                    "tantivy_last_updated": tantivy_last_updated,
+                    "chroma_last_updated": chroma_last_updated,
+                    # Graph stats
+                    "graph_node_count": graph_stats.get("nodes", 0),
+                    # graph_edge_count reflects ALL edges in the NetworkX graph,
+                    # including edges that point to __unresolved__ placeholder
+                    # nodes (i.e. wiki-links whose target document does not yet
+                    # exist).  It therefore equals resolved_edges + unresolved_links,
+                    # not just resolved edges.  Compare with unresolved_links above
+                    # to infer the resolved-only edge count if needed.
+                    "graph_edge_count": graph_stats.get("edges", 0),
                 }
 
 
