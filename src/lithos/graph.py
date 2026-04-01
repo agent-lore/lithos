@@ -236,11 +236,17 @@ class KnowledgeGraph:
             doc: The newly added document
         """
         # Possible targets that could match this document
+        # TODO: slug formula doesn't strip punctuation — pre-existing behaviour
+        title_slug = doc.title.lower().replace(" ", "-")
+        # Fires on every document add; intentional for DEBUG-level tracing
+        logger.debug(
+            "computing slug for pending-link resolution: title=%r slug=%r", doc.title, title_slug
+        )
         possible_targets = [
             doc.path.stem,  # filename without extension
             str(doc.path),  # full path
             doc.id,  # document ID
-            doc.title.lower().replace(" ", "-"),  # slugified title
+            title_slug,  # slugified title
         ]
         # Add aliases
         possible_targets.extend([a.lower() for a in doc.metadata.aliases])
@@ -300,11 +306,15 @@ class KnowledgeGraph:
         # 1. Exact path (with or without .md extension)
         path_target = target if target.endswith(".md") else f"{target}.md"
         if path_target in self._path_to_node:
-            return self._path_to_node[path_target]
+            resolved = self._path_to_node[path_target]
+            logger.debug("resolving link %r → %r (path match, .md-normalised)", target, resolved)
+            return resolved
 
         # Also try without .md for paths that might include it
         if target in self._path_to_node:
-            return self._path_to_node[target]
+            resolved = self._path_to_node[target]
+            logger.debug("resolving link %r → %r (path match, verbatim)", target, resolved)
+            return resolved
 
         # 2. Filename match
         filename = target.split("/")[-1]  # Get last component
@@ -313,18 +323,27 @@ class KnowledgeGraph:
         if filename in self._filename_to_nodes:
             nodes = self._filename_to_nodes[filename]
             if len(nodes) == 1:
+                logger.debug("resolving link %r → %r (filename match)", target, nodes[0])
                 return nodes[0]
             # Ambiguous - return None (could raise error)
+            logger.debug(
+                "resolving link %r → None (ambiguous filename: %d matches)", target, len(nodes)
+            )
             return None
 
         # 3. UUID match
         if target in self._id_to_node:
-            return self._id_to_node[target]
+            resolved = self._id_to_node[target]
+            logger.debug("resolving link %r → %r (uuid match)", target, resolved)
+            return resolved
 
         # 4. Alias match
         if target.lower() in self._alias_to_node:
-            return self._alias_to_node[target.lower()]
+            resolved = self._alias_to_node[target.lower()]
+            logger.debug("resolving link %r → %r (alias match)", target, resolved)
+            return resolved
 
+        logger.debug("resolving link %r → None (unresolved)", target)
         return None
 
     @traced("lithos.graph.get_links")

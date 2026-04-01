@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from lithos.config import EventsConfig
 
-from lithos.telemetry import get_tracer, lithos_metrics
+from lithos.telemetry import get_tracer, lithos_metrics, register_event_bus_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,7 @@ class _Subscriber:
     queue: asyncio.Queue[LithosEvent]
     event_types: list[str] | None
     tag_filter: list[str] | None
+    subscriber_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     drops: int = 0
 
 
@@ -93,6 +94,7 @@ class EventBus:
 
         self._buffer: deque[LithosEvent] = deque(maxlen=self._buffer_size)
         self._subscribers: list[_Subscriber] = []
+        register_event_bus_metrics(self)
 
     @property
     def enabled(self) -> bool:
@@ -128,6 +130,9 @@ class EventBus:
                 except asyncio.QueueFull:
                     sub.drops += 1
                     lithos_metrics.event_bus_ops.add(1, {"op": "drop", "event_type": event.type})
+                    lithos_metrics.event_bus_subscriber_drops.add(
+                        1, {"subscriber_id": sub.subscriber_id}
+                    )
                 except Exception:
                     logger.exception("EventBus.emit: failed to deliver to subscriber")
 
@@ -166,6 +171,25 @@ class EventBus:
             if sub.queue is queue:
                 return sub.drops
         return 0
+
+    def get_subscriber_id(self, queue: asyncio.Queue[LithosEvent]) -> str | None:
+        """Return the subscriber_id for a given queue, or None if not found."""
+        for sub in self._subscribers:
+            if sub.queue is queue:
+                return sub.subscriber_id
+        return None
+
+    def get_buffer_utilisation(self) -> list[tuple[str, float]]:
+        """Return per-subscriber buffer utilisation as (subscriber_id, ratio) pairs.
+
+        The ratio is the current queue fill fraction in the range [0.0, 1.0].
+        """
+        result = []
+        for sub in self._subscribers:
+            maxsize = sub.queue.maxsize
+            if maxsize > 0:
+                result.append((sub.subscriber_id, sub.queue.qsize() / maxsize))
+        return result
 
     def get_buffered_since(self, since_id: str) -> list[LithosEvent]:
         """Return buffered events that occurred after the event with the given ID.

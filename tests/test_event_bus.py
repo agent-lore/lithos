@@ -218,6 +218,107 @@ class TestUnsubscribe:
         assert bus.get_drop_count(queue) == 0
 
 
+class TestSubscriberIdAndMetrics:
+    """Tests for subscriber_id and the new OTEL metric instruments."""
+
+    def test_subscribe_assigns_subscriber_id(self) -> None:
+        """Each subscribe() call assigns a unique subscriber_id."""
+        bus = EventBus()
+        q1 = bus.subscribe()
+        q2 = bus.subscribe()
+        id1 = bus.get_subscriber_id(q1)
+        id2 = bus.get_subscriber_id(q2)
+        assert id1 is not None
+        assert id2 is not None
+        assert id1 != id2
+        # UUID v4 format (36 chars)
+        assert len(id1) == 36
+        assert len(id2) == 36
+
+    def test_get_subscriber_id_unknown_queue_returns_none(self) -> None:
+        """get_subscriber_id returns None for an unregistered queue."""
+        import asyncio
+
+        bus = EventBus()
+        orphan: asyncio.Queue = asyncio.Queue(maxsize=10)
+        assert bus.get_subscriber_id(orphan) is None
+
+    def test_get_buffer_utilisation_empty_queues(self) -> None:
+        """Buffer utilisation is 0.0 when all queues are empty."""
+        bus = EventBus()
+        bus.subscribe()
+        bus.subscribe()
+        utilisation = bus.get_buffer_utilisation()
+        assert len(utilisation) == 2
+        for sub_id, ratio in utilisation:
+            assert ratio == 0.0
+            assert isinstance(sub_id, str)
+
+    async def test_get_buffer_utilisation_partial_fill(self) -> None:
+        """Buffer utilisation reflects partial queue fill correctly."""
+        from lithos.config import EventsConfig
+
+        config = EventsConfig(subscriber_queue_size=4)
+        bus = EventBus(config)
+        bus.subscribe()
+        # Emit 2 events — queue size 4, so utilisation should be 0.5
+        for _ in range(2):
+            await bus.emit(LithosEvent(type=NOTE_CREATED))
+        utilisation = bus.get_buffer_utilisation()
+        assert len(utilisation) == 1
+        _, ratio = utilisation[0]
+        assert ratio == 0.5
+
+    async def test_get_buffer_utilisation_full_queue(self) -> None:
+        """Buffer utilisation is 1.0 when queue is full."""
+        from lithos.config import EventsConfig
+
+        config = EventsConfig(subscriber_queue_size=3)
+        bus = EventBus(config)
+        bus.subscribe()
+        # Emit 10 events to overflow the queue of size 3
+        for _ in range(10):
+            await bus.emit(LithosEvent(type=NOTE_CREATED))
+        utilisation = bus.get_buffer_utilisation()
+        assert len(utilisation) == 1
+        _, ratio = utilisation[0]
+        assert ratio == 1.0
+
+    async def test_subscriber_id_consistent_across_drops(self) -> None:
+        """The subscriber_id used in drop tracking is stable."""
+        from lithos.config import EventsConfig
+
+        config = EventsConfig(subscriber_queue_size=1)
+        bus = EventBus(config)
+        queue = bus.subscribe()
+        sub_id = bus.get_subscriber_id(queue)
+        assert sub_id is not None
+        # Cause a drop
+        for _ in range(5):
+            await bus.emit(LithosEvent(type=NOTE_CREATED))
+        assert bus.get_drop_count(queue) > 0
+        # Subscriber id is still stable
+        assert bus.get_subscriber_id(queue) == sub_id
+
+    def test_register_event_bus_metrics_no_raise_without_otel(self) -> None:
+        """register_event_bus_metrics must not raise when OTEL is inactive."""
+        from lithos.telemetry import register_event_bus_metrics
+
+        bus = EventBus()
+        bus.subscribe()
+        # Should be a clean no-op when _initialized is False
+        register_event_bus_metrics(bus)
+
+    def test_event_bus_subscriber_drops_counter_accessible(self) -> None:
+        """lithos_metrics.event_bus_subscriber_drops is always available."""
+        from lithos.telemetry import lithos_metrics
+
+        counter = lithos_metrics.event_bus_subscriber_drops
+        assert counter is not None
+        # Must support .add() without raising
+        counter.add(1, {"subscriber_id": "test-id"})
+
+
 class TestEventTypeConstants:
     """Verify all event type constants are defined."""
 
