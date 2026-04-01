@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 import collections
 import logging
+import os
 import re
 import shutil
+import subprocess
+import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -508,13 +512,19 @@ class ChromaIndex:
         self._collection: chromadb.Collection | None = None
         self._model: SentenceTransformer | None = None
         self._model_lock: asyncio.Lock | None = None
+        self._sync_model_lock = threading.Lock()
+
+    def _load_model_sync(self) -> SentenceTransformer:
+        """Load the embedding model exactly once across sync and async callers."""
+        with self._sync_model_lock:
+            if self._model is None:
+                self._model = SentenceTransformer(self.model_name)
+            return self._model
 
     @property
     def model(self) -> SentenceTransformer:
         """Get embedding model, loading if needed (synchronous, for backward compatibility)."""
-        if self._model is None:
-            self._model = SentenceTransformer(self.model_name)
-        return self._model
+        return self._load_model_sync()
 
     async def ensure_model_loaded(self) -> None:
         """Ensure the embedding model is loaded, using a thread pool to avoid blocking."""
@@ -523,7 +533,70 @@ class ChromaIndex:
             self._model_lock = asyncio.Lock()
         async with self._model_lock:
             if self._model is None:
-                self._model = await asyncio.to_thread(SentenceTransformer, self.model_name)
+                await asyncio.to_thread(self._load_model_sync)
+
+    def probe_store(self, timeout_seconds: float = 10.0) -> tuple[bool, str | None]:
+        """Validate that the persisted Chroma store can be opened safely.
+
+        The probe runs in a subprocess so a corrupted Chroma store cannot take
+        down the active server process.
+        """
+        probe = """
+import os
+import chromadb
+
+path = os.environ["LITHOS_CHROMA_PATH"]
+client = chromadb.PersistentClient(path=path)
+collection = client.get_or_create_collection(
+    name="knowledge",
+    metadata={"hnsw:space": "cosine"},
+)
+collection.count()
+"""
+        env = os.environ.copy()
+        env["LITHOS_CHROMA_PATH"] = str(self.chroma_path)
+        try:
+            completed = subprocess.run(
+                [sys.executable, "-c", probe],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"probe timed out after {timeout_seconds:.1f}s"
+        except Exception as exc:
+            return False, f"probe failed to start: {exc}"
+
+        if completed.returncode == 0:
+            return True, None
+
+        details = (completed.stderr or completed.stdout or "").strip()
+        if details:
+            details = details.splitlines()[-1]
+        else:
+            details = f"probe exited with code {completed.returncode}"
+        return False, details
+
+    def quarantine_store(self) -> Path | None:
+        """Move an unreadable Chroma store aside and create a clean directory."""
+        backup_path: Path | None = None
+        if self.chroma_path.exists():
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = self.chroma_path.with_name(f"{self.chroma_path.name}.corrupt-{timestamp}")
+            suffix = 1
+            while backup_path.exists():
+                backup_path = self.chroma_path.with_name(
+                    f"{self.chroma_path.name}.corrupt-{timestamp}-{suffix}"
+                )
+                suffix += 1
+            self.chroma_path.rename(backup_path)
+
+        self.chroma_path.mkdir(parents=True, exist_ok=True)
+        self._client = None
+        self._collection = None
+        return backup_path
 
     def health_check(self) -> None:
         """Probe the embedding model (warm-up / liveness). Raises on failure."""
@@ -758,6 +831,10 @@ class SearchEngine:
         self._config = config
         self._tantivy: TantivyIndex | None = None
         self._chroma: ChromaIndex | None = None
+        self._semantic_probe_lock = threading.Lock()
+        self._semantic_store_checked = False
+        self._semantic_store_healthy = True
+        self._semantic_store_error: str | None = None
 
     @property
     def config(self) -> LithosConfig:
@@ -781,6 +858,35 @@ class SearchEngine:
                 self.config.search.embedding_model,
             )
         return self._chroma
+
+    def ensure_semantic_backend_healthy(self) -> tuple[bool, Path | None]:
+        """Repair a corrupted Chroma store before touching it in-process."""
+        if self._semantic_store_checked:
+            return self._semantic_store_healthy, None
+
+        with self._semantic_probe_lock:
+            if self._semantic_store_checked:
+                return self._semantic_store_healthy, None
+
+            healthy, error = self.chroma.probe_store()
+            backup_path: Path | None = None
+
+            if not healthy:
+                logger.warning("Chroma store probe failed: %s", error)
+                backup_path = self.chroma.quarantine_store()
+                healthy, error = self.chroma.probe_store()
+                if healthy:
+                    logger.warning(
+                        "Quarantined unreadable Chroma store%s and created a clean replacement",
+                        f" at {backup_path}" if backup_path else "",
+                    )
+                else:
+                    logger.error("Fresh Chroma store probe failed after quarantine: %s", error)
+
+            self._semantic_store_checked = True
+            self._semantic_store_healthy = healthy
+            self._semantic_store_error = error
+            return healthy, backup_path
 
     async def ensure_embeddings_loaded(self) -> None:
         """Pre-warm the embedding model asynchronously."""
@@ -809,15 +915,24 @@ class SearchEngine:
             errors["tantivy"] = exc
 
         chunks = 0
-        try:
-            chunks = self.chroma.add_document(
-                doc,
-                self.config.search.chunk_size,
-                self.config.search.chunk_max,
+        healthy, _ = self.ensure_semantic_backend_healthy()
+        if healthy:
+            try:
+                chunks = self.chroma.add_document(
+                    doc,
+                    self.config.search.chunk_size,
+                    self.config.search.chunk_max,
+                )
+            except Exception as exc:
+                logger.warning("Semantic indexing failed for doc %s: %s", doc.id, exc)
+                errors["chroma"] = exc
+        else:
+            logger.warning(
+                "Skipping semantic indexing for doc %s because the Chroma store is unhealthy: %s",
+                doc.id,
+                self._semantic_store_error,
             )
-        except Exception as exc:
-            logger.warning("Semantic indexing failed for doc %s: %s", doc.id, exc)
-            errors["chroma"] = exc
+            errors["chroma"] = RuntimeError(self._semantic_store_error or "semantic backend unavailable")
 
         if len(errors) == 2:
             raise IndexingError(
@@ -845,11 +960,20 @@ class SearchEngine:
             logger.warning("Full-text removal failed for doc %s: %s", doc_id, exc)
             errors["tantivy"] = exc
 
-        try:
-            self.chroma.remove_document(doc_id)
-        except Exception as exc:
-            logger.warning("Semantic removal failed for doc %s: %s", doc_id, exc)
-            errors["chroma"] = exc
+        healthy, _ = self.ensure_semantic_backend_healthy()
+        if healthy:
+            try:
+                self.chroma.remove_document(doc_id)
+            except Exception as exc:
+                logger.warning("Semantic removal failed for doc %s: %s", doc_id, exc)
+                errors["chroma"] = exc
+        else:
+            logger.warning(
+                "Skipping semantic removal for doc %s because the Chroma store is unhealthy: %s",
+                doc_id,
+                self._semantic_store_error,
+            )
+            errors["chroma"] = RuntimeError(self._semantic_store_error or "semantic backend unavailable")
 
         if len(errors) == 2:
             raise IndexingError(
@@ -927,6 +1051,16 @@ class SearchEngine:
         start = time.perf_counter()
         success = True
         try:
+            healthy, _ = self.ensure_semantic_backend_healthy()
+            if not healthy:
+                raise SearchBackendError(
+                    "Semantic search backend (chroma) is unavailable",
+                    {
+                        "chroma": RuntimeError(
+                            self._semantic_store_error or "semantic backend unavailable"
+                        )
+                    },
+                )
             return self.chroma.search(
                 query=query,
                 limit=limit,
@@ -989,19 +1123,27 @@ class SearchEngine:
                 logger.warning("Hybrid search: full-text backend failed: %s", exc)
                 ft_failed = True
 
-            try:
-                sem_results = self.chroma.search(
-                    query=query,
-                    limit=limit,
-                    threshold=threshold
-                    if threshold is not None
-                    else self.config.search.semantic_threshold,
-                    tags=tags,
-                    author=author,
-                    path_prefix=path_prefix,
+            healthy, _ = self.ensure_semantic_backend_healthy()
+            if healthy:
+                try:
+                    sem_results = self.chroma.search(
+                        query=query,
+                        limit=limit,
+                        threshold=threshold
+                        if threshold is not None
+                        else self.config.search.semantic_threshold,
+                        tags=tags,
+                        author=author,
+                        path_prefix=path_prefix,
+                    )
+                except Exception as exc:
+                    logger.warning("Hybrid search: semantic backend failed: %s", exc)
+                    sem_failed = True
+            else:
+                logger.warning(
+                    "Hybrid search: semantic backend unavailable, falling back to full-text only: %s",
+                    self._semantic_store_error,
                 )
-            except Exception as exc:
-                logger.warning("Hybrid search: semantic backend failed: %s", exc)
                 sem_failed = True
 
             if ft_failed and sem_failed:
@@ -1070,12 +1212,15 @@ class SearchEngine:
     def clear_all(self) -> None:
         """Clear all indices."""
         self.tantivy.clear()
-        self.chroma.clear()
+        healthy, _ = self.ensure_semantic_backend_healthy()
+        if healthy:
+            self.chroma.clear()
 
     def get_stats(self) -> dict[str, int]:
         """Get search index statistics."""
+        healthy, _ = self.ensure_semantic_backend_healthy()
         return {
-            "chroma_chunk_count": self.chroma.count_chunks(),
+            "chroma_chunk_count": self.chroma.count_chunks() if healthy else 0,
         }
 
     @traced("lithos.search.graph")
@@ -1285,10 +1430,14 @@ class SearchEngine:
         except Exception as exc:
             status["tantivy"] = f"unavailable: {exc}"
 
-        try:
-            _ = self.chroma.collection.count()
-            status["chroma"] = "ok"
-        except Exception as exc:
-            status["chroma"] = f"unavailable: {exc}"
+        healthy, _ = self.ensure_semantic_backend_healthy()
+        if healthy:
+            try:
+                _ = self.chroma.collection.count()
+                status["chroma"] = "ok"
+            except Exception as exc:
+                status["chroma"] = f"unavailable: {exc}"
+        else:
+            status["chroma"] = f"unavailable: {self._semantic_store_error}"
 
         return status

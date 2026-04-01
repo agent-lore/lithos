@@ -648,6 +648,53 @@ class TestChromaIndexFilters:
 class TestSearchEngineResiliency:
     """Tests for error propagation and partial-failure handling in SearchEngine."""
 
+    def test_ensure_semantic_backend_quarantines_corrupt_store(
+        self, search_engine: SearchEngine, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A broken persisted Chroma store is moved aside before in-process access."""
+        marker = search_engine.chroma.chroma_path / "corrupt-marker.txt"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("bad-store")
+
+        calls = {"count": 0}
+
+        def _probe(timeout_seconds: float = 10.0):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return False, "simulated corruption"
+            return True, None
+
+        monkeypatch.setattr(search_engine.chroma, "probe_store", _probe)
+
+        healthy, backup = search_engine.ensure_semantic_backend_healthy()
+
+        assert healthy is True
+        assert backup is not None
+        assert backup.exists()
+        assert (backup / "corrupt-marker.txt").exists()
+        assert search_engine.chroma.chroma_path.exists()
+        assert not marker.exists()
+        assert calls["count"] == 2
+
+    def test_ensure_semantic_backend_caches_successful_probe(
+        self, search_engine: SearchEngine, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The Chroma probe only runs once after a successful health check."""
+        calls = {"count": 0}
+
+        def _probe(timeout_seconds: float = 10.0):
+            calls["count"] += 1
+            return True, None
+
+        monkeypatch.setattr(search_engine.chroma, "probe_store", _probe)
+
+        first = search_engine.ensure_semantic_backend_healthy()
+        second = search_engine.ensure_semantic_backend_healthy()
+
+        assert first == (True, None)
+        assert second == (True, None)
+        assert calls["count"] == 1
+
     @pytest.mark.asyncio
     async def test_full_text_search_raises_on_backend_error(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
@@ -689,6 +736,24 @@ class TestSearchEngineResiliency:
 
         assert "chroma" in exc_info.value.backend_errors
         assert isinstance(exc_info.value.backend_errors["chroma"], RuntimeError)
+
+    @pytest.mark.asyncio
+    async def test_semantic_search_raises_when_store_is_unhealthy(
+        self, search_engine: SearchEngine, monkeypatch: pytest.MonkeyPatch
+    ):
+        """semantic_search reports backend unavailability when the store cannot be repaired."""
+
+        def _unhealthy():
+            search_engine._semantic_store_error = "simulated corruption"
+            return False, None
+
+        monkeypatch.setattr(search_engine, "ensure_semantic_backend_healthy", _unhealthy)
+
+        with pytest.raises(SearchBackendError) as exc_info:
+            search_engine.semantic_search("anything")
+
+        assert "chroma" in exc_info.value.backend_errors
+        assert "simulated corruption" in str(exc_info.value.backend_errors["chroma"])
 
     @pytest.mark.asyncio
     async def test_search_backend_error_is_lithos_error(self, search_engine: SearchEngine):

@@ -396,10 +396,24 @@ class LithosServer:
                     get_agent_count=lambda: self._cached_agent_count,
                 )
 
+                # Probe the persisted semantic index out-of-process before any
+                # in-process Chroma access. If the store is unreadable,
+                # quarantine it and rebuild from source documents.
+                semantic_healthy, semantic_backup = self.search.ensure_semantic_backend_healthy()
+                if not semantic_healthy:
+                    logger.warning(
+                        "Semantic search backend remains unavailable after repair attempt: %s",
+                        self.search._semantic_store_error,
+                    )
+
                 # Load or build indices.
                 # Force access to the tantivy property so schema version check runs.
                 tantivy_needs_rebuild = self.search.tantivy.needs_rebuild
-                if self.config.index.rebuild_on_start or tantivy_needs_rebuild:
+                if (
+                    self.config.index.rebuild_on_start
+                    or tantivy_needs_rebuild
+                    or semantic_backup is not None
+                ):
                     await self._rebuild_indices()
                 else:
                     # Try to load cached graph
@@ -434,6 +448,9 @@ class LithosServer:
     def _safe_chroma_count(self) -> int:
         """Return ChromaDB chunk count, 0 on any error."""
         try:
+            healthy, _ = self.search.ensure_semantic_backend_healthy()
+            if not healthy:
+                return 0
             return self.search.chroma.count_chunks()
         except Exception:
             return 0

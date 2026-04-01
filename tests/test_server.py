@@ -1,6 +1,7 @@
 """Integration tests for MCP server - full tool workflows."""
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,6 +62,49 @@ class TestServerInitialization:
 
         await server.initialize()
         rebuild.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_initialize_rebuilds_after_semantic_store_quarantine(self, test_config):
+        """Initialization rebuilds indices after semantic-store quarantine succeeds."""
+        server = LithosServer(test_config)
+        rebuild = AsyncMock()
+        backup_path = test_config.storage.data_dir / ".chroma.corrupt-test"
+
+        server._rebuild_indices = rebuild  # type: ignore[assignment]
+        server.search.ensure_semantic_backend_healthy = MagicMock(  # type: ignore[method-assign]
+            return_value=(True, backup_path)
+        )
+        server.search._tantivy = SimpleNamespace(needs_rebuild=False)
+        server.search._chroma = SimpleNamespace(_model=object())
+
+        await server.initialize()
+
+        rebuild.assert_awaited_once()
+        server.search.ensure_semantic_backend_healthy.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_initialize_warns_but_stays_up_when_semantic_backend_unavailable(
+        self, test_config, caplog
+    ):
+        """Initialization logs degraded semantic search without crashing the server."""
+        server = LithosServer(test_config)
+        rebuild = AsyncMock()
+
+        server._rebuild_indices = rebuild  # type: ignore[assignment]
+        server.search.ensure_semantic_backend_healthy = MagicMock(  # type: ignore[method-assign]
+            return_value=(False, None)
+        )
+        server.search._semantic_store_error = "simulated corruption"
+        server.search._tantivy = SimpleNamespace(needs_rebuild=False)
+        server.search._chroma = SimpleNamespace(_model=object())
+        server.graph.load_cache = MagicMock(return_value=True)  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.WARNING, logger="lithos.server"):
+            await server.initialize()
+
+        rebuild.assert_not_awaited()
+        server.graph.load_cache.assert_called_once_with()
+        assert "Semantic search backend remains unavailable after repair attempt" in caplog.text
 
     def test_start_file_watcher_requires_running_loop(self, test_config):
         """Watcher startup without a running loop raises a clear RuntimeError."""
