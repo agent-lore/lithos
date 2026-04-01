@@ -769,18 +769,28 @@ class TestStartupDurationMetric:
         # Should not raise on the no-op path
         lithos_metrics.startup_duration.record(42.0)
 
-    async def test_initialize_records_startup_duration(self, server: "LithosServer") -> None:  # noqa: F821
-        """initialize() records startup_duration_ms after components are ready.
+    async def test_initialize_records_startup_duration(self, test_config) -> None:
+        """initialize() must call startup_duration.record() with a positive elapsed time."""
+        from unittest.mock import MagicMock
 
-        We verify that the metric instrument is accessible and that the
-        recorded value is a non-negative float (i.e. the call ran without error).
-        """
-        from lithos.telemetry import lithos_metrics
+        import lithos.telemetry as tel_module
+        from lithos.server import LithosServer
 
-        # The server fixture calls initialize() already; just confirm the
-        # instrument was accessed and returns without error when called directly.
-        lithos_metrics._startup_duration = None  # clear cached instance
-        lithos_metrics.startup_duration.record(123.4)
+        mock_hist = MagicMock()
+        orig = tel_module.lithos_metrics._startup_duration
+        tel_module.lithos_metrics._startup_duration = mock_hist
+        try:
+            srv = LithosServer(test_config)
+            await srv.initialize()
+            srv.stop_file_watcher()
+        finally:
+            tel_module.lithos_metrics._startup_duration = orig
+
+        mock_hist.record.assert_called_once()
+        recorded_value = mock_hist.record.call_args[0][0]
+        assert recorded_value > 0, (
+            f"Expected a positive startup duration, got {recorded_value!r}"
+        )
 
 
 class TestFileWatcherEventsCounter:
@@ -798,7 +808,7 @@ class TestFileWatcherEventsCounter:
         lithos_metrics.file_watcher_events.add(1, {"event_type": "deleted"})
 
     async def test_handle_file_change_increments_deleted_counter(
-        self, server: "LithosServer"  # noqa: F821
+        self, server: "LithosServer"
     ) -> None:
         """handle_file_change(deleted=True) increments the counter with event_type=deleted."""
         from unittest.mock import patch
@@ -826,7 +836,7 @@ class TestFileWatcherEventsCounter:
             mock_add.assert_called_once_with(1, {"event_type": "deleted"})
 
     async def test_handle_file_change_increments_updated_counter(
-        self, server: "LithosServer"  # noqa: F821
+        self, server: "LithosServer"
     ) -> None:
         """handle_file_change(deleted=False) on existing file increments updated counter."""
         from unittest.mock import patch
@@ -851,3 +861,22 @@ class TestFileWatcherEventsCounter:
         with patch.object(counter, "add") as mock_add:
             await server.handle_file_change(file_path, deleted=False)
             mock_add.assert_called_once_with(1, {"event_type": "updated"})
+
+    async def test_handle_file_change_increments_created_counter(
+        self, server: "LithosServer"
+    ) -> None:
+        """handle_file_change(deleted=False) on a NEW file increments the counter with event_type=created."""
+        from unittest.mock import patch
+
+        from lithos.telemetry import lithos_metrics
+
+        lithos_metrics._file_watcher_events = None
+        counter = lithos_metrics.file_watcher_events  # prime no-op instance
+
+        # Write a brand-new .md file directly — no existing document in the store
+        new_file = server.config.storage.knowledge_path / "new-test-file.md"
+        new_file.write_text("---\ntitle: Brand New Doc\nagent: test-agent\n---\nHello.\n")
+
+        with patch.object(counter, "add") as mock_add:
+            await server.handle_file_change(new_file, deleted=False)
+            mock_add.assert_called_once_with(1, {"event_type": "created"})

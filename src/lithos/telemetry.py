@@ -638,7 +638,7 @@ class _LithosMetrics:
         """
         if self._startup_duration is None:
             self._startup_duration = get_meter().create_histogram(
-                "lithos.startup_duration_ms",
+                "lithos.startup_duration",
                 description="Server startup duration from initialize() start to ready",
                 unit="ms",
             )

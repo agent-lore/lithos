@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import math
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -357,9 +358,7 @@ class LithosServer:
 
     async def initialize(self) -> None:
         """Initialize all components."""
-        import time as _time
-
-        _init_start = _time.perf_counter()
+        _init_start = time.perf_counter()
         tracer = get_tracer()
         with tracer.start_as_current_span("lithos.server.initialize") as span:
             span.set_attribute("lithos.server.host", self._config.server.host)
@@ -404,14 +403,15 @@ class LithosServer:
                     self._background_tasks.add(task)
                     task.add_done_callback(self._background_tasks.discard)
 
-                # Record startup duration now that all components are ready.
-                elapsed_ms = (_time.perf_counter() - _init_start) * 1000
-                lithos_metrics.startup_duration.record(elapsed_ms)
-                span.set_attribute("lithos.startup_duration_ms", elapsed_ms)
             except Exception as exc:
                 span.record_exception(exc)
                 span.set_status(StatusCode.ERROR, str(exc))
                 raise
+            finally:
+                # Record startup duration whether initialisation succeeded or failed.
+                elapsed_ms = (time.perf_counter() - _init_start) * 1000
+                lithos_metrics.startup_duration.record(elapsed_ms)
+                span.set_attribute("lithos.startup_duration", elapsed_ms)
 
     def _safe_tantivy_count(self) -> int:
         """Return Tantivy document count, 0 on any error."""
@@ -1192,9 +1192,7 @@ class LithosServer:
                     "message": "min_confidence must be between 0.0 and 1.0.",
                 }
 
-            import time as _time
-
-            _lookup_start = _time.perf_counter()
+            _lookup_start = time.perf_counter()
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.cache_lookup") as span:
                 span.set_attribute("lithos.tool", "lithos_cache_lookup")
@@ -1229,7 +1227,7 @@ class LithosServer:
                         candidates = [r.id for r in sem_results[:limit]]
                     except SearchBackendError as exc:
                         span.set_attribute("cache.search_error", True)
-                        elapsed_ms = (_time.perf_counter() - _lookup_start) * 1000
+                        elapsed_ms = (time.perf_counter() - _lookup_start) * 1000
                         lithos_metrics.cache_lookup_duration.record(elapsed_ms)
                         lithos_metrics.cache_lookups.add(1, {"outcome": "error_search_backend"})
                         return {
@@ -1281,7 +1279,7 @@ class LithosServer:
 
                 span.set_attribute("cache.candidates_evaluated", candidates_evaluated)
 
-                elapsed_ms = (_time.perf_counter() - _lookup_start) * 1000
+                elapsed_ms = (time.perf_counter() - _lookup_start) * 1000
                 lithos_metrics.cache_lookup_duration.record(elapsed_ms)
 
                 if best_hit is not None:
