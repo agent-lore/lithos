@@ -1115,3 +1115,170 @@ class TestFileWatcherEventsCounter:
         with patch.object(counter, "add") as mock_add:
             await server.handle_file_change(new_file, deleted=False)
             mock_add.assert_called_once_with(1, {"event_type": "created"})
+
+
+class TestSSEMetrics:
+    """Tests for SSE client metrics (issue #97)."""
+
+    def test_register_sse_active_clients_observer_no_raise_without_otel(self):
+        """register_sse_active_clients_observer must not raise when OTEL is inactive."""
+        from lithos.telemetry import register_sse_active_clients_observer
+
+        # Should be a clean no-op when _initialized is False
+        register_sse_active_clients_observer(lambda: 3)
+
+    def test_sse_events_delivered_counter_no_raise_without_otel(self):
+        """lithos_metrics.sse_events_delivered.add() must not raise when OTEL is inactive."""
+        from lithos.telemetry import lithos_metrics
+
+        # Instrument is created lazily; calling add() on the no-op meter must not raise
+        lithos_metrics.sse_events_delivered.add(1)
+
+    def test_sse_gauge_callback_reads_client_count(self):
+        """Observable gauge callback must return [Observation(count)] for the current value."""
+        from opentelemetry.metrics import Observation
+
+        from lithos.telemetry import register_sse_active_clients_observer
+
+        captured_callback: list = []
+
+        # Capture the callback by temporarily monkey-patching create_observable_gauge
+        from unittest.mock import MagicMock, patch
+
+        import lithos.telemetry as tel_module
+
+        mock_meter = MagicMock()
+
+        def _capture_gauge(name, *, callbacks, **kwargs):
+            captured_callback.extend(callbacks)
+
+        mock_meter.create_observable_gauge.side_effect = _capture_gauge
+
+        with patch.object(tel_module, "get_meter", return_value=mock_meter):
+            # Reset the sentinel so the gauge is re-registered in this isolated call
+            orig = tel_module._sse_active_clients_gauge_registered
+            tel_module._sse_active_clients_gauge_registered = False
+            try:
+                count_holder = [7]
+                register_sse_active_clients_observer(lambda: count_holder[0])
+            finally:
+                tel_module._sse_active_clients_gauge_registered = orig
+
+        assert len(captured_callback) == 1, "Expected exactly one callback to be registered"
+        result = captured_callback[0](None)
+        assert result == [Observation(7)], f"Expected [Observation(7)], got {result!r}"
+
+        # Verify callback reflects updated count
+        count_holder[0] = 42
+        assert captured_callback[0](None) == [Observation(42)]
+
+    def test_sse_events_delivered_counter_increments(self):
+        """sse_events_delivered.add() must be called once per event yielded."""
+        from unittest.mock import MagicMock
+
+        import lithos.telemetry as tel_module
+
+        mock_counter = MagicMock()
+        # sse_events_delivered is a lazy property backed by _sse_events_delivered
+        orig = tel_module.lithos_metrics._sse_events_delivered
+        tel_module.lithos_metrics._sse_events_delivered = mock_counter
+        try:
+            for _ in range(3):
+                tel_module.lithos_metrics.sse_events_delivered.add(1)
+        finally:
+            tel_module.lithos_metrics._sse_events_delivered = orig
+
+        assert mock_counter.add.call_count == 3
+
+    async def test_sse_client_count_decrements_on_disconnect(self):
+        """_sse_client_count must decrement when the SSE async generator is closed early."""
+        from unittest.mock import MagicMock
+
+        from starlette.requests import Request
+
+        import lithos.telemetry as tel_module
+        from lithos.config import LithosConfig
+        from lithos.events import EventBus, LithosEvent
+        from lithos.server import LithosServer
+
+        # Build a minimal server skeleton — avoid full initialise()
+        server = LithosServer.__new__(LithosServer)
+        server._sse_client_count = 0
+
+        cfg = LithosConfig()
+        server._config = cfg
+
+        # No auth needed
+        server.mcp = MagicMock()
+        server.mcp.auth = None
+
+        bus = EventBus()
+        server.event_bus = bus
+
+        # Enqueue one event so the generator has something to yield before we close it
+        evt = LithosEvent(type="test", agent="forge")
+        await bus.emit(evt)
+
+        # Build a minimal Starlette Request from a raw scope dict (no real socket)
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/events",
+            "query_string": b"",
+            "headers": [],
+        }
+        request = Request(scope)
+
+        # Patch the lazy counter backing field so real OTEL isn't needed
+        mock_counter = MagicMock()
+        orig = tel_module.lithos_metrics._sse_events_delivered
+        tel_module.lithos_metrics._sse_events_delivered = mock_counter
+        try:
+            response = await server._sse_endpoint(request)
+
+            # At this point the count must have been incremented
+            assert server._sse_client_count == 1, (
+                f"Expected _sse_client_count=1 before streaming, got {server._sse_client_count}"
+            )
+
+            body_iter = response.body_iterator
+
+            # Consume one chunk then explicitly close the async generator to
+            # trigger GeneratorExit and run the finally block
+            import contextlib
+
+            async with contextlib.AsyncExitStack():
+                with contextlib.suppress(StopAsyncIteration):
+                    await body_iter.__anext__()
+
+            # Explicitly close the generator (triggers GeneratorExit → finally block)
+            if hasattr(body_iter, "aclose"):
+                await body_iter.aclose()
+
+            # After closing, the finally block must have run and decremented
+            assert server._sse_client_count == 0, (
+                f"Expected _sse_client_count=0 after disconnect, got {server._sse_client_count}"
+            )
+        finally:
+            tel_module.lithos_metrics._sse_events_delivered = orig
+
+    def test_register_sse_active_clients_observer_idempotent(self):
+        """Calling register_sse_active_clients_observer twice must only register one gauge."""
+        from unittest.mock import MagicMock, patch
+
+        import lithos.telemetry as tel_module
+
+        mock_meter = MagicMock()
+
+        with patch.object(tel_module, "get_meter", return_value=mock_meter):
+            orig = tel_module._sse_active_clients_gauge_registered
+            tel_module._sse_active_clients_gauge_registered = False
+            try:
+                register_fn = tel_module.register_sse_active_clients_observer
+                register_fn(lambda: 0)
+                register_fn(lambda: 1)
+            finally:
+                tel_module._sse_active_clients_gauge_registered = orig
+
+        # create_observable_gauge must be called exactly once
+        assert mock_meter.create_observable_gauge.call_count == 1
