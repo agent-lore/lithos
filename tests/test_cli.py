@@ -10,7 +10,7 @@ from lithos.knowledge import KnowledgeManager
 
 def test_inspect_doc_shows_created_and_updated_timestamps(test_config):
     """`lithos inspect doc` should use the metadata timestamp field names that exist."""
-    knowledge = KnowledgeManager()
+    knowledge = KnowledgeManager(test_config)
     doc = asyncio.run(
         knowledge.create(
             title="CLI Inspect Test",

@@ -34,7 +34,7 @@ class TestCLIContracts:
         config.ensure_directories()
         set_config(config)
 
-        knowledge = KnowledgeManager()
+        knowledge = KnowledgeManager(config)
 
         async def _seed() -> None:
             await knowledge.create(
@@ -65,7 +65,7 @@ class TestCLIContracts:
         config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
         config.ensure_directories()
         set_config(config)
-        knowledge = KnowledgeManager()
+        knowledge = KnowledgeManager(config)
 
         async def _seed():
             return (
@@ -97,7 +97,7 @@ class TestCLIContracts:
         config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
         config.ensure_directories()
         set_config(config)
-        knowledge = KnowledgeManager()
+        knowledge = KnowledgeManager(config)
 
         async def _seed():
             await knowledge.create(

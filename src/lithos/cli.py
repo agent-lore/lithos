@@ -149,7 +149,7 @@ def reindex(ctx: click.Context, clear: bool) -> None:
     config: LithosConfig = ctx.obj["config"]
     config.ensure_directories()
 
-    knowledge = KnowledgeManager()
+    knowledge = KnowledgeManager(config)
     search = SearchEngine(config)
     graph = KnowledgeGraph(config)
 
@@ -210,7 +210,7 @@ def validate(ctx: click.Context, fix: bool) -> None:
     config: LithosConfig = ctx.obj["config"]
     config.ensure_directories()
 
-    knowledge = KnowledgeManager()
+    knowledge = KnowledgeManager(config)
     graph = KnowledgeGraph(config)
 
     async def do_validate() -> None:
@@ -323,7 +323,7 @@ def stats(ctx: click.Context) -> None:
 
     config: LithosConfig = ctx.obj["config"]
 
-    knowledge = KnowledgeManager()
+    knowledge = KnowledgeManager(config)
     search = SearchEngine(config)
     graph = KnowledgeGraph(config)
     coordination = CoordinationService(config)
@@ -579,8 +579,10 @@ def inspect_doc(ctx: click.Context, identifier: str, content: bool) -> None:
     """Inspect a knowledge document by ID or path."""
     from lithos.knowledge import KnowledgeManager
 
+    config: LithosConfig = ctx.obj["config"]
+
     async def run() -> None:
-        knowledge = KnowledgeManager()
+        knowledge = KnowledgeManager(config)
 
         # Try by ID first, then by path
         try:

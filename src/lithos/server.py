@@ -64,7 +64,7 @@ class LithosServer:
         set_config(self._config)
 
         # Initialize components
-        self.knowledge = KnowledgeManager()
+        self.knowledge = KnowledgeManager(self._config)
         self.search = SearchEngine(self._config)
         self.graph = KnowledgeGraph(self._config)
         self.coordination = CoordinationService(self._config)

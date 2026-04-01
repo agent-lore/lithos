@@ -56,7 +56,7 @@ def test_config(
 @pytest.fixture
 def knowledge_manager(test_config: LithosConfig) -> KnowledgeManager:
     """Create knowledge manager for testing."""
-    return KnowledgeManager()
+    return KnowledgeManager(test_config)
 
 
 @pytest.fixture

@@ -451,7 +451,7 @@ class TestScanConformance:
         (knowledge_path / "doc-a.md").write_text(fm.dumps(post_a))
         (knowledge_path / "doc-b.md").write_text(fm.dumps(post_b))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
 
         # Forward reference resolved (A references B, B exists)
         assert mgr._doc_to_sources[id_a] == [id_b]
@@ -475,7 +475,7 @@ class TestScanConformance:
         (knowledge_path / "x.md").write_text(fm.dumps(post_x))
         (knowledge_path / "y.md").write_text(fm.dumps(post_y))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
         snap1 = (
             dict(mgr._doc_to_sources),
             {k: set(v) for k, v in mgr._source_to_derived.items()},

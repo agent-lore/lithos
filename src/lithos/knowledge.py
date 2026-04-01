@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import frontmatter
 
-from lithos.config import LithosConfig, get_config
+from lithos.config import LithosConfig
 from lithos.errors import SlugCollisionError
 from lithos.telemetry import lithos_metrics, timed_write, traced
 
@@ -496,14 +496,16 @@ _UNSET = _UnsetType()
 class KnowledgeManager:
     """Manages knowledge documents - CRUD operations."""
 
-    def __init__(self, config: LithosConfig | None = None):
+    def __init__(self, config: LithosConfig):
         """Initialize knowledge manager.
 
         Args:
-            config: Optional LithosConfig instance.  When omitted the global
-                    config (via ``get_config()``) is used.
+            config: LithosConfig instance.  Must be provided explicitly — no
+                    global fallback.  CLI entry points should pass the result
+                    of ``get_config()``; tests should construct an isolated
+                    ``LithosConfig`` with a temporary ``data_dir``.
         """
-        self.config = config if config is not None else get_config()
+        self.config = config
         self.knowledge_path = self.config.storage.knowledge_path
         self._id_to_path: dict[str, Path] = {}
         self._path_to_id: dict[Path, str] = {}

@@ -489,7 +489,7 @@ class TestDocumentPersistence:
         doc_id = created.id
 
         # Create new manager instance
-        new_manager = KnowledgeManager()
+        new_manager = KnowledgeManager(knowledge_manager.config)
         doc, _ = await new_manager.read(id=doc_id)
 
         assert doc.title == "Persistent Doc"
@@ -905,7 +905,7 @@ class TestDedupMapAndLock:
     async def test_scan_populates_source_url_map(self, test_config):
         """_scan_existing populates _source_url_to_id from on-disk documents."""
         # Create a doc with source_url using a first manager
-        mgr1 = KnowledgeManager()
+        mgr1 = KnowledgeManager(test_config)
         await mgr1.create(
             title="Scanned Doc",
             content="Content.",
@@ -914,14 +914,14 @@ class TestDedupMapAndLock:
         )
 
         # Create a new manager that scans on init
-        mgr2 = KnowledgeManager()
+        mgr2 = KnowledgeManager(test_config)
         norm = normalize_url("https://example.com/scanned")
         assert norm in mgr2._source_url_to_id
 
     @pytest.mark.asyncio
     async def test_scan_normalizes_urls_on_load(self, test_config):
         """_scan_existing normalizes URLs when building the map."""
-        mgr1 = KnowledgeManager()
+        mgr1 = KnowledgeManager(test_config)
         await mgr1.create(
             title="Case Doc",
             content="Content.",
@@ -929,21 +929,21 @@ class TestDedupMapAndLock:
             source_url="https://EXAMPLE.COM/Page",
         )
 
-        mgr2 = KnowledgeManager()
+        mgr2 = KnowledgeManager(test_config)
         # Should be stored with normalized URL
         assert "https://example.com/Page" in mgr2._source_url_to_id
 
     @pytest.mark.asyncio
     async def test_scan_skips_docs_without_source_url(self, test_config):
         """_scan_existing doesn't add entries for docs without source_url."""
-        mgr1 = KnowledgeManager()
+        mgr1 = KnowledgeManager(test_config)
         await mgr1.create(
             title="No URL",
             content="No source URL.",
             agent="agent",
         )
 
-        mgr2 = KnowledgeManager()
+        mgr2 = KnowledgeManager(test_config)
         assert len(mgr2._source_url_to_id) == 0
 
 
@@ -955,7 +955,7 @@ class TestStartupDuplicateAudit:
         """Two docs with same source_url are detected as collision at startup."""
         import logging
 
-        mgr1 = KnowledgeManager()
+        mgr1 = KnowledgeManager(test_config)
         await mgr1.create(
             title="First Doc",
             content="First.",
@@ -976,7 +976,7 @@ class TestStartupDuplicateAudit:
         file2.write_text(raw)
 
         with caplog.at_level(logging.WARNING, logger="lithos.knowledge"):
-            mgr2 = KnowledgeManager()
+            mgr2 = KnowledgeManager(test_config)
 
         assert mgr2.duplicate_url_count >= 1
         assert "Duplicate source_url" in caplog.text
@@ -984,7 +984,7 @@ class TestStartupDuplicateAudit:
     @pytest.mark.asyncio
     async def test_first_seen_wins(self, test_config):
         """First document (sorted by path) wins the map entry on collision."""
-        mgr1 = KnowledgeManager()
+        mgr1 = KnowledgeManager(test_config)
         # Create two docs - "aaa" sorts before "zzz"
         doc_a = (
             await mgr1.create(
@@ -1007,7 +1007,7 @@ class TestStartupDuplicateAudit:
         raw = raw.replace("---\n", "---\nsource_url: https://example.com/collision\n", 1)
         file_z.write_text(raw)
 
-        mgr2 = KnowledgeManager()
+        mgr2 = KnowledgeManager(test_config)
         norm = normalize_url("https://example.com/collision")
         # First-seen (sorted path) should win
         assert mgr2._source_url_to_id[norm] == doc_a.id
@@ -1015,7 +1015,7 @@ class TestStartupDuplicateAudit:
     @pytest.mark.asyncio
     async def test_startup_does_not_fail_on_collisions(self, test_config):
         """Startup completes successfully even with URL collisions."""
-        mgr1 = KnowledgeManager()
+        mgr1 = KnowledgeManager(test_config)
         doc1 = (
             await mgr1.create(
                 title="Doc One",
@@ -1038,7 +1038,7 @@ class TestStartupDuplicateAudit:
         file2.write_text(raw)
 
         # Should not raise
-        mgr2 = KnowledgeManager()
+        mgr2 = KnowledgeManager(test_config)
         assert mgr2.duplicate_url_count >= 1
         # Both docs are accessible
         d1, _ = await mgr2.read(id=doc1.id)
@@ -1048,7 +1048,7 @@ class TestStartupDuplicateAudit:
 
     def test_no_collisions_gives_zero_count(self, test_config):
         """With no duplicates, duplicate_url_count is 0."""
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
         assert mgr.duplicate_url_count == 0
 
 
@@ -1658,7 +1658,7 @@ class TestProvenanceIndexes:
         )
         (kp / "derived-c.md").write_text(fm.dumps(post_c))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
 
         # _doc_to_sources: C -> [A, B]; A -> []; B -> []
         assert mgr._doc_to_sources[id_c] == [id_a, id_b]
@@ -1722,7 +1722,7 @@ class TestProvenanceIndexes:
         )
         (kp / "doc-b.md").write_text(fm.dumps(post_b))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
 
         # A references B — B exists, so it's resolved
         assert mgr._doc_to_sources[id_a] == [id_b]
@@ -1756,7 +1756,7 @@ class TestProvenanceIndexes:
         )
         (kp / "doc-a.md").write_text(fm.dumps(post_a))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
 
         assert mgr._doc_to_sources[id_a] == [missing_id]
         assert missing_id not in mgr._source_to_derived
@@ -1806,7 +1806,7 @@ class TestProvenanceIndexes:
         )
         (kp / "derived-b.md").write_text(fm.dumps(post_b))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
 
         # Capture state after first scan
         doc_to_sources_1 = dict(mgr._doc_to_sources)
@@ -1826,7 +1826,7 @@ class TestProvenanceIndexes:
     @pytest.mark.asyncio
     async def test_scan_no_provenance_has_empty_indexes(self, test_config):
         """Docs without provenance have empty _doc_to_sources entries."""
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
         result = await mgr.create(
             title="Simple Doc",
             content="No provenance.",
@@ -1836,7 +1836,7 @@ class TestProvenanceIndexes:
         assert doc is not None
 
         # Re-scan from disk
-        mgr2 = KnowledgeManager()
+        mgr2 = KnowledgeManager(test_config)
         assert mgr2._doc_to_sources[doc.id] == []
         assert len(mgr2._source_to_derived) == 0
         assert len(mgr2._unresolved_provenance) == 0
@@ -1865,7 +1865,7 @@ class TestProvenanceIndexes:
         )
         (kp / "doc-a.md").write_text(fm.dumps(post_a))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
         assert id_a in mgr._id_to_title
 
         # Remove file and re-scan — stale entry should be gone
@@ -2183,7 +2183,7 @@ class TestCreateProvenance:
         assert fm_data["derived_from_ids"] == [src.id]
 
         # Verify survives reload
-        mgr2 = KnowledgeManager()
+        mgr2 = KnowledgeManager(test_config)
         doc2, _ = await mgr2.read(id=doc.id)
         assert doc2.metadata.derived_from_ids == [src.id]
 
@@ -2633,7 +2633,7 @@ class TestScanExistingNormalization:
         )
         (knowledge_path / "derived.md").write_text(fm.dumps(post_derived))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
 
         # The stored derived_from_ids should be normalized (lowercase)
         assert mgr._doc_to_sources[derived_id] == [source_id]
@@ -2659,7 +2659,7 @@ class TestScanExistingNormalization:
         post_src = fm.Post("# Src\n\nContent.", id=valid_ref, title="Src")
         (knowledge_path / "src.md").write_text(fm.dumps(post_src))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
 
         # Only the valid UUID should be stored
         assert mgr._doc_to_sources[doc_id] == [valid_ref]
@@ -2677,7 +2677,7 @@ class TestScanExistingNormalization:
         )
         (knowledge_path / "doc.md").write_text(fm.dumps(post))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
         assert mgr._doc_to_sources[doc_id] == []
 
 
@@ -2697,7 +2697,7 @@ class TestDuplicateUrlCountReset:
         (knowledge_path / "a.md").write_text(fm.dumps(post_a))
         (knowledge_path / "b.md").write_text(fm.dumps(post_b))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
         assert mgr.duplicate_url_count > 0
 
         # Fix by removing the duplicate
@@ -2726,7 +2726,7 @@ class TestSyncFromDiskSourceUrlCollision:
         post_b = fm.Post("# B\n\nContent.", id=id_b, title="B")
         (knowledge_path / "b.md").write_text(fm.dumps(post_b))
 
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
         norm = normalize_url(url)
         assert mgr._source_url_to_id[norm] == id_a
 
@@ -2753,7 +2753,7 @@ class TestSyncFromDiskWriteLock:
         derived_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
         # Create source doc via manager
-        mgr = KnowledgeManager()
+        mgr = KnowledgeManager(test_config)
         post_src = fm.Post("# Source\n\nContent.", id=source_id, title="Source")
         (knowledge_path / "source.md").write_text(fm.dumps(post_src))
         await mgr.sync_from_disk(Path("source.md"))
@@ -3323,7 +3323,7 @@ class TestSlugCollision:
         """_scan_existing() logs a warning when two docs share the same slug."""
         import logging
 
-        mgr1 = KnowledgeManager()
+        mgr1 = KnowledgeManager(test_config)
         doc1 = (await mgr1.create(title="My Document", content="First.", agent="agent")).document
         # Bypass dedup by directly writing a second doc with same slug title
         doc2 = (
@@ -3337,7 +3337,7 @@ class TestSlugCollision:
         file2.write_text(raw)
 
         with caplog.at_level(logging.WARNING, logger="lithos.knowledge"):
-            mgr2 = KnowledgeManager()
+            mgr2 = KnowledgeManager(test_config)
 
         assert "Slug collision detected" in caplog.text
         # First-seen-wins: scan is sorted by relative path for determinism, but
