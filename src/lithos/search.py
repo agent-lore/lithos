@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import gc
 import logging
 import os
 import re
@@ -580,7 +581,24 @@ collection.count()
         return False, details
 
     def quarantine_store(self) -> Path | None:
-        """Move an unreadable Chroma store aside and create a clean directory."""
+        """Move an unreadable Chroma store aside and create a clean directory.
+
+        Any in-process Chroma client is released first so that open file handles
+        do not block the rename (notably on Windows) and so that subsequent
+        access cannot keep operating against the now-renamed directory through a
+        stale client reference.
+        """
+        if self._client is not None or self._collection is not None:
+            logger.warning(
+                "quarantine_store called while a Chroma client was still open; "
+                "releasing it before renaming the store",
+            )
+        self._collection = None
+        self._client = None
+        # Force collection of any lingering chromadb internals (sqlite handles,
+        # hnsw memory maps) before the rename so the directory is not held open.
+        gc.collect()
+
         backup_path: Path | None = None
         if self.chroma_path.exists():
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -594,8 +612,6 @@ collection.count()
             self.chroma_path.rename(backup_path)
 
         self.chroma_path.mkdir(parents=True, exist_ok=True)
-        self._client = None
-        self._collection = None
         return backup_path
 
     def health_check(self) -> None:
@@ -932,7 +948,9 @@ class SearchEngine:
                 doc.id,
                 self._semantic_store_error,
             )
-            errors["chroma"] = RuntimeError(self._semantic_store_error or "semantic backend unavailable")
+            errors["chroma"] = RuntimeError(
+                self._semantic_store_error or "semantic backend unavailable"
+            )
 
         if len(errors) == 2:
             raise IndexingError(
@@ -973,7 +991,9 @@ class SearchEngine:
                 doc_id,
                 self._semantic_store_error,
             )
-            errors["chroma"] = RuntimeError(self._semantic_store_error or "semantic backend unavailable")
+            errors["chroma"] = RuntimeError(
+                self._semantic_store_error or "semantic backend unavailable"
+            )
 
         if len(errors) == 2:
             raise IndexingError(
