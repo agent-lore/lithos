@@ -88,6 +88,13 @@ _KNOWN_METADATA_KEYS = frozenset(
         "derived_from_ids",
         "expires_at",
         "version",
+        # LCMA fields
+        "schema_version",
+        "namespace",
+        "access_scope",
+        "note_type",
+        "status",
+        "summaries",
     }
 )
 
@@ -234,6 +241,15 @@ class KnowledgeMetadata:
     expires_at: datetime | None = None
     extra: dict = field(default_factory=dict)
     version: int = 1
+    # LCMA fields — optional, defaults applied at read time by callers with path context
+    schema_version: int | None = None
+    namespace: str | None = None
+    access_scope: str | None = None  # shared | task | agent_private
+    note_type: str | None = (
+        None  # observation | agent_finding | summary | concept | task_record | hypothesis
+    )
+    status: str | None = None  # active | archived | quarantined
+    summaries: dict | None = None  # {short: str, long: str}
 
     @property
     def is_stale(self) -> bool:
@@ -269,6 +285,19 @@ class KnowledgeMetadata:
             result["expires_at"] = self.expires_at.isoformat()
         if self.derived_from_ids:
             result["derived_from_ids"] = self.derived_from_ids
+        # LCMA fields — only include when explicitly set
+        if self.schema_version is not None:
+            result["schema_version"] = self.schema_version
+        if self.namespace is not None:
+            result["namespace"] = self.namespace
+        if self.access_scope is not None:
+            result["access_scope"] = self.access_scope
+        if self.note_type is not None:
+            result["note_type"] = self.note_type
+        if self.status is not None:
+            result["status"] = self.status
+        if self.summaries is not None:
+            result["summaries"] = self.summaries
         # Merge unknown fields — known keys always take precedence.
         for key, value in self.extra.items():
             if key not in result:
@@ -306,6 +335,20 @@ class KnowledgeMetadata:
 
         extra = {k: v for k, v in data.items() if k not in _KNOWN_METADATA_KEYS}
 
+        # Parse LCMA fields — only unpack what is present; defaults applied by caller
+        schema_version_raw = data.get("schema_version")
+        schema_version: int | None = None
+        if schema_version_raw is not None:
+            try:
+                schema_version = int(schema_version_raw)
+            except (TypeError, ValueError):
+                schema_version = None
+
+        summaries_raw = data.get("summaries")
+        summaries: dict | None = None
+        if isinstance(summaries_raw, dict):
+            summaries = summaries_raw
+
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             title=data.get("title", "Untitled"),
@@ -323,6 +366,12 @@ class KnowledgeMetadata:
             expires_at=expires_at,
             extra=extra,
             version=_parse_version(data.get("version", 1)),
+            schema_version=schema_version,
+            namespace=data.get("namespace"),
+            access_scope=data.get("access_scope"),
+            note_type=data.get("note_type"),
+            status=data.get("status"),
+            summaries=summaries,
         )
 
 
@@ -395,6 +444,37 @@ def slugify(text: str) -> str:
 def generate_slug(title: str) -> str:
     """Generate slug from title (alias for slugify)."""
     return slugify(title)
+
+
+def derive_namespace(relative_path: Path) -> str:
+    """Derive namespace from a note's path relative to knowledge_path.
+
+    Subdirectory components are joined by ``/``.  Files directly under the
+    knowledge root return ``"default"``.
+    """
+    parts = relative_path.parent.parts
+    if not parts or parts == (".",):
+        return "default"
+    return "/".join(parts)
+
+
+def apply_lcma_defaults(metadata: KnowledgeMetadata, relative_path: Path) -> None:
+    """Apply LCMA read-time defaults in-place.
+
+    Only fills fields that are ``None`` (i.e. absent from frontmatter).
+    Namespace is derived from the note's relative path unless explicitly set.
+    """
+    if metadata.schema_version is None:
+        metadata.schema_version = 1
+    if metadata.namespace is None:
+        metadata.namespace = derive_namespace(relative_path)
+    if metadata.access_scope is None:
+        metadata.access_scope = "shared"
+    if metadata.note_type is None:
+        metadata.note_type = "observation"
+    if metadata.status is None:
+        metadata.status = "active"
+    # summaries left as None if not provided — no default
 
 
 def parse_wiki_links(content: str) -> list[WikiLink]:
@@ -878,6 +958,9 @@ class KnowledgeManager:
         logger.debug("Frontmatter parsed: path=%s title=%r", file_path, post.metadata.get("title"))
         metadata = KnowledgeMetadata.from_dict(post.metadata)
 
+        # Apply LCMA read-time defaults (namespace derived from relative path)
+        apply_lcma_defaults(metadata, file_path)
+
         # Extract title and content from body
         title, content = extract_title_from_content(post.content)
         if not title:
@@ -1322,6 +1405,9 @@ class KnowledgeManager:
         post = frontmatter.load(str(full_path))
         logger.debug("Frontmatter parsed: path=%s title=%r", file_path, post.metadata.get("title"))
         metadata = KnowledgeMetadata.from_dict(post.metadata)
+
+        # Apply LCMA read-time defaults (namespace derived from relative path)
+        apply_lcma_defaults(metadata, file_path)
 
         # Extract title and content from body
         title, content = extract_title_from_content(post.content)
