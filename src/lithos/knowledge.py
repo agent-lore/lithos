@@ -98,6 +98,13 @@ _KNOWN_METADATA_KEYS = frozenset(
     }
 )
 
+# Valid LCMA enum values
+VALID_ACCESS_SCOPES = frozenset({"shared", "task", "agent_private"})
+VALID_NOTE_TYPES = frozenset(
+    {"observation", "agent_finding", "summary", "concept", "task_record", "hypothesis"}
+)
+VALID_STATUSES = frozenset({"active", "archived", "quarantined"})
+
 
 _TRACKING_PARAMS = frozenset(
     {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid"}
@@ -773,6 +780,12 @@ class KnowledgeManager:
         source_url: str | None = None,
         derived_from_ids: list[str] | None = None,
         expires_at: datetime | None = None,
+        schema_version: int | None = None,
+        namespace: str | None = None,
+        access_scope: str | None = None,
+        note_type: str | None = None,
+        lcma_status: str | None = None,
+        summaries: dict | None = None,
     ) -> WriteResult:
         """Create a new knowledge document.
 
@@ -845,6 +858,12 @@ class KnowledgeManager:
                 source_url=norm_url,
                 derived_from_ids=normalized_provenance,
                 expires_at=expires_at,
+                schema_version=schema_version if schema_version is not None else 1,
+                namespace=namespace,
+                access_scope=access_scope if access_scope is not None else "shared",
+                note_type=note_type if note_type is not None else "observation",
+                status=lcma_status if lcma_status is not None else "active",
+                summaries=summaries,
             )
 
             # Determine file path
@@ -1027,6 +1046,13 @@ class KnowledgeManager:
         derived_from_ids: list[str] | None | _UnsetType = _UNSET,
         expires_at: datetime | None | _UnsetType = _UNSET,
         expected_version: int | None = None,
+        source: str | None | _UnsetType = _UNSET,
+        schema_version: int | _UnsetType = _UNSET,
+        namespace: str | None | _UnsetType = _UNSET,
+        access_scope: str | None | _UnsetType = _UNSET,
+        note_type: str | None | _UnsetType = _UNSET,
+        lcma_status: str | None | _UnsetType = _UNSET,
+        summaries: dict | None | _UnsetType = _UNSET,
     ) -> WriteResult:
         """Update an existing document.
 
@@ -1192,6 +1218,33 @@ class KnowledgeManager:
             # Handle expires_at update
             if not isinstance(expires_at, _UnsetType):
                 doc.metadata.expires_at = expires_at
+
+            # Handle source (task) update
+            if not isinstance(source, _UnsetType):
+                doc.metadata.source = source
+
+            # Handle LCMA field updates — preserve existing when _UNSET
+            if not isinstance(schema_version, _UnsetType):
+                doc.metadata.schema_version = schema_version
+            elif doc.metadata.schema_version is None:
+                doc.metadata.schema_version = 1
+            if not isinstance(namespace, _UnsetType):
+                doc.metadata.namespace = namespace
+            # namespace: no default on update — derived at read time
+            if not isinstance(access_scope, _UnsetType):
+                doc.metadata.access_scope = access_scope
+            elif doc.metadata.access_scope is None:
+                doc.metadata.access_scope = "shared"
+            if not isinstance(note_type, _UnsetType):
+                doc.metadata.note_type = note_type
+            elif doc.metadata.note_type is None:
+                doc.metadata.note_type = "observation"
+            if not isinstance(lcma_status, _UnsetType):
+                doc.metadata.status = lcma_status
+            elif doc.metadata.status is None:
+                doc.metadata.status = "active"
+            if not isinstance(summaries, _UnsetType):
+                doc.metadata.summaries = summaries
 
             # Update fields
             if content is not None:

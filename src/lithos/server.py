@@ -36,7 +36,14 @@ from lithos.events import (
     LithosEvent,
 )
 from lithos.graph import KnowledgeGraph
-from lithos.knowledge import _UNSET, KnowledgeManager, _UnsetType
+from lithos.knowledge import (
+    _UNSET,
+    VALID_ACCESS_SCOPES,
+    VALID_NOTE_TYPES,
+    VALID_STATUSES,
+    KnowledgeManager,
+    _UnsetType,
+)
 from lithos.search import SearchEngine
 from lithos.telemetry import (
     StatusCode,
@@ -649,6 +656,12 @@ class LithosServer:
             ttl_hours: float | None = None,
             expires_at: str | None = None,
             expected_version: int | None = None,
+            schema_version: int | None = None,
+            namespace: str | None = None,
+            access_scope: str | None = None,
+            note_type: str | None = None,
+            status: str | None = None,
+            summaries: dict | None = None,
         ) -> dict[str, Any]:
             """Create or update a knowledge file.
 
@@ -676,6 +689,15 @@ class LithosServer:
                 expected_version: If provided on update, reject with version_conflict if the
                     document's current version differs. Omit to skip version checking.
                     On create, this parameter is silently ignored.
+                schema_version: LCMA schema version (default 1 on create).
+                namespace: LCMA namespace. Persisted only if explicitly passed;
+                    derived at read time otherwise.
+                access_scope: shared|task|agent_private (default shared on create).
+                    task requires source_task.
+                note_type: observation|agent_finding|summary|concept|task_record|hypothesis
+                    (default observation on create).
+                status: active|archived|quarantined (default active on create).
+                summaries: Optional dict with short/long summary strings.
 
             Returns:
                 Dict with status envelope: created/updated/duplicate
@@ -721,6 +743,58 @@ class LithosServer:
                         "message": "ttl_hours must be a finite positive number.",
                         "warnings": [],
                     }
+
+                # Validate LCMA enum fields
+                if access_scope is not None and access_scope not in VALID_ACCESS_SCOPES:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"Invalid access_scope: {access_scope!r}. "
+                        f"Must be one of {sorted(VALID_ACCESS_SCOPES)}",
+                        "warnings": [],
+                    }
+                if note_type is not None and note_type not in VALID_NOTE_TYPES:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"Invalid note_type: {note_type!r}. "
+                        f"Must be one of {sorted(VALID_NOTE_TYPES)}",
+                        "warnings": [],
+                    }
+                if status is not None and status not in VALID_STATUSES:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"Invalid status: {status!r}. "
+                        f"Must be one of {sorted(VALID_STATUSES)}",
+                        "warnings": [],
+                    }
+
+                # Validate task-scope invariant
+                if access_scope == "task":
+                    if id is None:
+                        # Create: require source_task
+                        if not source_task:
+                            return {
+                                "status": "error",
+                                "code": "invalid_input",
+                                "message": "access_scope='task' requires source_task",
+                                "warnings": [],
+                            }
+                    else:
+                        # Update: require source_task or existing metadata.source
+                        if not source_task:
+                            try:
+                                existing_doc, _ = await self.knowledge.read(id=id)
+                                if not existing_doc.metadata.source:
+                                    return {
+                                        "status": "error",
+                                        "code": "invalid_input",
+                                        "message": "access_scope='task' requires source_task",
+                                        "warnings": [],
+                                    }
+                            except FileNotFoundError:
+                                pass  # Will be caught in update()
 
                 # Emit freshness span attributes
                 if ttl_hours is not None:
@@ -797,6 +871,25 @@ class LithosServer:
                         # confidence: None (omitted) → _UNSET (preserve), float → set
                         conf_arg: float | _UnsetType = _UNSET if confidence is None else confidence
 
+                        # source_task: None (omitted) → _UNSET (preserve), str → set
+                        source_arg: str | None | _UnsetType = (
+                            _UNSET if source_task is None else source_task
+                        )
+
+                        # LCMA fields: None (omitted) → _UNSET (preserve)
+                        sv_arg: int | _UnsetType = (
+                            _UNSET if schema_version is None else schema_version
+                        )
+                        ns_arg: str | None | _UnsetType = _UNSET if namespace is None else namespace
+                        as_arg: str | None | _UnsetType = (
+                            _UNSET if access_scope is None else access_scope
+                        )
+                        nt_arg: str | None | _UnsetType = _UNSET if note_type is None else note_type
+                        st_arg: str | None | _UnsetType = _UNSET if status is None else status
+                        sum_arg: dict | None | _UnsetType = (
+                            _UNSET if summaries is None else summaries
+                        )
+
                         result = await self.knowledge.update(
                             id=id,
                             agent=agent,
@@ -808,6 +901,13 @@ class LithosServer:
                             derived_from_ids=prov_arg,
                             expires_at=expires_at_dt,
                             expected_version=expected_version,
+                            source=source_arg,
+                            schema_version=sv_arg,
+                            namespace=ns_arg,
+                            access_scope=as_arg,
+                            note_type=nt_arg,
+                            lcma_status=st_arg,
+                            summaries=sum_arg,
                         )
                     else:
                         # Create new — default confidence to 1.0 when not specified
@@ -822,6 +922,12 @@ class LithosServer:
                             source_url=source_url or None,
                             derived_from_ids=derived_from_ids,
                             expires_at=expires_at_dt,  # type: ignore[arg-type]
+                            schema_version=schema_version,
+                            namespace=namespace,
+                            access_scope=access_scope,
+                            note_type=note_type,
+                            lcma_status=status,
+                            summaries=summaries,
                         )
                 except SlugCollisionError as exc:
                     span.set_attribute("lithos.write_status", "error")
