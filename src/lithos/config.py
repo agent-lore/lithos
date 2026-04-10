@@ -60,6 +60,11 @@ class StorageConfig(BaseModel):
         """Get path to LCMA edges database."""
         return self.lithos_store_path / "edges.db"
 
+    @property
+    def stats_db_path(self) -> Path:
+        """Get path to LCMA stats database."""
+        return self.lithos_store_path / "stats.db"
+
 
 class SearchConfig(BaseModel):
     """Search configuration."""

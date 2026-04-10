@@ -1,0 +1,149 @@
+"""LCMA stats store — lazily-created SQLite database for retrieval stats.
+
+Follows the coordination.db / edges.db pattern: async via aiosqlite,
+single-writer safe, corrupt-DB quarantine with automatic recreation.
+
+Tables (MVP 1):
+  node_stats      — per-node retrieval counts and salience
+  coactivation    — pairwise co-occurrence counts from result sets
+  enrich_queue    — queue for deferred enrichment jobs
+  working_memory  — per-task node activation tracking
+  receipts        — audit trail for every lithos_retrieve call
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+import aiosqlite
+
+from lithos.config import LithosConfig, get_config
+
+logger = logging.getLogger(__name__)
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS node_stats (
+    node_id TEXT PRIMARY KEY,
+    retrieval_count INTEGER NOT NULL DEFAULT 0,
+    last_retrieved_at TIMESTAMP,
+    salience REAL NOT NULL DEFAULT 0.5
+);
+
+CREATE TABLE IF NOT EXISTS coactivation (
+    node_a TEXT NOT NULL,
+    node_b TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    last_at TIMESTAMP,
+    PRIMARY KEY (node_a, node_b, namespace)
+);
+
+CREATE TABLE IF NOT EXISTS enrich_queue (
+    id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL,
+    enrich_type TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'pending'
+);
+
+CREATE TABLE IF NOT EXISTS working_memory (
+    task_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    activation_count INTEGER NOT NULL DEFAULT 0,
+    last_seen_at TIMESTAMP,
+    last_receipt_id TEXT,
+    PRIMARY KEY (task_id, node_id)
+);
+
+CREATE TABLE IF NOT EXISTS receipts (
+    id TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    "limit" INTEGER NOT NULL,
+    namespace_filter TEXT,
+    scouts_fired TEXT NOT NULL,
+    final_nodes TEXT NOT NULL,
+    conflicts_surfaced TEXT NOT NULL,
+    temperature REAL NOT NULL,
+    terrace_reached INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    agent_id TEXT,
+    task_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_receipts_created_at ON receipts(created_at);
+CREATE INDEX IF NOT EXISTS idx_working_memory_task_id ON working_memory(task_id);
+CREATE INDEX IF NOT EXISTS idx_enrich_queue_status ON enrich_queue(status);
+CREATE INDEX IF NOT EXISTS idx_coactivation_namespace ON coactivation(namespace);
+"""
+
+
+def _generate_receipt_id() -> str:
+    """Generate a receipt ID in the form ``rcpt_<short-uuid>``."""
+    return f"rcpt_{uuid.uuid4().hex[:12]}"
+
+
+class StatsStore:
+    """Lazily-created SQLite store for LCMA retrieval statistics.
+
+    The database file is created on the first call to :meth:`open`.
+    Corrupt databases are quarantined (renamed) and recreated with an
+    empty schema.
+    """
+
+    def __init__(self, config: LithosConfig | None = None) -> None:
+        self._config = config
+
+    @property
+    def config(self) -> LithosConfig:
+        return self._config or get_config()
+
+    @property
+    def db_path(self) -> Path:
+        return self.config.storage.stats_db_path
+
+    async def open(self) -> None:
+        """Ensure stats.db exists with the correct schema.
+
+        Idempotent — safe to call multiple times.  If the file is corrupt
+        it is quarantined and a fresh database is created.
+        """
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if self.db_path.exists():
+            healthy = await self._probe(self.db_path)
+            if not healthy:
+                self._quarantine(self.db_path)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executescript(SCHEMA)
+            await db.commit()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _probe(path: Path) -> bool:
+        """Return True if *path* is a usable SQLite database."""
+        try:
+            async with aiosqlite.connect(path) as db:
+                await db.execute("PRAGMA integrity_check")
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _quarantine(path: Path) -> Path:
+        """Rename a corrupt database file and return the backup path."""
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = path.with_name(f"{path.name}.corrupt-{timestamp}")
+        suffix = 1
+        while backup.exists():
+            backup = path.with_name(f"{path.name}.corrupt-{timestamp}-{suffix}")
+            suffix += 1
+        path.rename(backup)
+        logger.warning("Quarantined corrupt stats.db → %s", backup)
+        return backup
