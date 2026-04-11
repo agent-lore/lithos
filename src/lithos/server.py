@@ -1368,6 +1368,128 @@ class LithosServer:
 
         @self.mcp.tool()
         @tool_metrics()
+        async def lithos_edge_upsert(
+            from_id: str,
+            to_id: str,
+            type: str,
+            weight: float,
+            namespace: str,
+            provenance_actor: str | None = None,
+            provenance_type: str | None = None,
+            evidence: Any = None,
+            conflict_state: str | None = None,
+        ) -> dict[str, Any]:
+            """Create or update a typed edge in edges.db.
+
+            Upsert key is (from_id, to_id, type, namespace).
+
+            Args:
+                from_id: Source node ID
+                to_id: Target node ID
+                type: Edge type (e.g. 'derived_from', 'related_to')
+                weight: Edge weight (float)
+                namespace: Namespace for the edge (required)
+                provenance_actor: Agent/process that created the edge
+                provenance_type: How the edge was derived
+                evidence: Supporting evidence (dict or list only, not scalars)
+                conflict_state: Conflict state marker
+
+            Returns:
+                Status envelope with edge_id.
+            """
+            logger.info("lithos_edge_upsert from=%s to=%s type=%s", from_id, to_id, type)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.edge_upsert") as span:
+                span.set_attribute("lithos.tool", "lithos_edge_upsert")
+
+                if not namespace:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": "namespace is required",
+                    }
+
+                # Validate evidence type
+                if evidence is not None and not isinstance(evidence, (dict, list)):
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": "evidence must be a dict, list, or null — scalars are not accepted",
+                    }
+
+                evidence_str = json.dumps(evidence) if evidence is not None else None
+
+                edge_id = await self.edge_store.upsert(
+                    from_id=from_id,
+                    to_id=to_id,
+                    edge_type=type,
+                    weight=weight,
+                    namespace=namespace,
+                    provenance_actor=provenance_actor,
+                    provenance_type=provenance_type,
+                    evidence=evidence_str,
+                    conflict_state=conflict_state,
+                )
+
+                # Publish edge.upserted event
+                from lithos.events import EDGE_UPSERTED
+
+                await self._emit(
+                    LithosEvent(
+                        type=EDGE_UPSERTED,
+                        payload={
+                            "edge_id": edge_id,
+                            "from_id": from_id,
+                            "to_id": to_id,
+                            "type": type,
+                            "namespace": namespace,
+                        },
+                    )
+                )
+
+                return {
+                    "status": "ok",
+                    "edge_id": edge_id,
+                }
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_edge_list(
+            from_id: str | None = None,
+            to_id: str | None = None,
+            type: str | None = None,
+            namespace: str | None = None,
+        ) -> dict[str, Any]:
+            """Query edges from edges.db by optional filters.
+
+            Args:
+                from_id: Filter by source node ID
+                to_id: Filter by target node ID
+                type: Filter by edge type
+                namespace: Filter by namespace
+
+            Returns:
+                Dict with results list of edge dicts.
+            """
+            logger.info(
+                "lithos_edge_list from=%s to=%s type=%s ns=%s", from_id, to_id, type, namespace
+            )
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.edge_list") as span:
+                span.set_attribute("lithos.tool", "lithos_edge_list")
+
+                edges = await self.edge_store.list_edges(
+                    from_id=from_id,
+                    to_id=to_id,
+                    edge_type=type,
+                    namespace=namespace,
+                )
+
+                span.set_attribute("lithos.result_count", len(edges))
+                return {"results": edges}
+
+        @self.mcp.tool()
+        @tool_metrics()
         async def lithos_cache_lookup(
             query: str,
             source_url: str | None = None,
