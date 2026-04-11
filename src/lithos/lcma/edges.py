@@ -10,10 +10,14 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import aiosqlite
 
 from lithos.config import LithosConfig, get_config
+
+if TYPE_CHECKING:
+    from lithos.knowledge import KnowledgeManager
 
 logger = logging.getLogger(__name__)
 
@@ -243,3 +247,77 @@ class EdgeStore:
             cursor = await db.execute(sql, params)
             row = await cursor.fetchone()
             return row[0] if row else 0
+
+    async def delete_edges(self, *, edge_ids: list[str]) -> int:
+        """Delete edges by their IDs.  Returns the number of rows deleted."""
+        if not edge_ids:
+            return 0
+        placeholders = ",".join("?" for _ in edge_ids)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"DELETE FROM edges WHERE edge_id IN ({placeholders})", edge_ids
+            )
+            await db.commit()
+            return cursor.rowcount
+
+
+async def _project_provenance_to_edges(
+    edge_store: EdgeStore,
+    knowledge: KnowledgeManager,
+) -> dict[str, int]:
+    """Project ``derived_from_ids`` from frontmatter into edges.db.
+
+    For every document that has ``derived_from_ids``, ensures a
+    ``type='derived_from'`` edge exists from the document to each source.
+    Removes orphan ``derived_from`` edges that no longer correspond to any
+    document's frontmatter.
+
+    Returns ``{"created": N, "removed": M}`` summarising changes.
+
+    No-op (returns ``{"created": 0, "removed": 0}``) when edges.db does not
+    exist on disk.
+    """
+    if not edge_store.db_path.exists():
+        return {"created": 0, "removed": 0}
+
+    from lithos.knowledge import derive_namespace
+
+    # Build the desired set of (from_id, to_id, namespace) from frontmatter
+    desired: set[tuple[str, str, str]] = set()
+    for doc_id, sources in knowledge._doc_to_sources.items():
+        if not sources:
+            continue
+        cached = knowledge._meta_cache.get(doc_id)
+        ns = derive_namespace(cached.path) if cached else "default"
+        for source_id in sources:
+            desired.add((doc_id, source_id, ns))
+
+    # Read existing derived_from edges from edges.db
+    existing_edges = await edge_store.list_edges(edge_type="derived_from")
+    existing_map: dict[tuple[str, str, str], str] = {}
+    for e in existing_edges:
+        key = (str(e["from_id"]), str(e["to_id"]), str(e["namespace"]))
+        existing_map[key] = str(e["edge_id"])
+
+    existing_keys = set(existing_map.keys())
+
+    # Create missing edges
+    to_create = desired - existing_keys
+    created = 0
+    for from_id, to_id, ns in to_create:
+        await edge_store.upsert(
+            from_id=from_id,
+            to_id=to_id,
+            edge_type="derived_from",
+            weight=1.0,
+            namespace=ns,
+            provenance_type="frontmatter",
+        )
+        created += 1
+
+    # Remove orphan edges
+    to_remove = existing_keys - desired
+    orphan_ids = [existing_map[k] for k in to_remove]
+    removed = await edge_store.delete_edges(edge_ids=orphan_ids)
+
+    return {"created": created, "removed": removed}
