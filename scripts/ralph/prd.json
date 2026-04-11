@@ -185,7 +185,7 @@
         "Pyright, ruff, all Done Criteria pass"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

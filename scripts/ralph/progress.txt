@@ -162,3 +162,15 @@ Started: Thu Apr  9 02:36:23 UTC 2026
   - When LcmaConfig.enabled=False, error envelope returned immediately, no receipt written
   - Phase A scouts use asyncio.gather with return_exceptions=True to handle individual scout failures gracefully
 ---
+
+## 2026-04-11 - US-010
+- Implemented lithos_edge_upsert and lithos_edge_list MCP tools
+- Files changed:
+  - `src/lithos/server.py`: Added lithos_edge_upsert and lithos_edge_list tool registrations; edge_upsert publishes edge.upserted event, validates evidence type and namespace
+  - `tests/test_edge_tools.py`: 14 integration tests covering create, update-by-composite-key, dict/list evidence, idempotent upsert, missing namespace error, scalar evidence error, query by each dimension, empty results, all keys present, event emission
+- **Learnings for future iterations:**
+  - evidence parameter uses `Any` type (not `dict | list | None`) to allow our handler to return error envelope for scalars instead of Pydantic raising ValidationError
+  - Evidence is stored as JSON string in edges.db via json.dumps()
+  - lithos_edge_upsert publishes EDGE_UPSERTED event after successful upsert with edge_id, from_id, to_id, type, namespace in payload
+  - EdgeStore.upsert() returns the same edge_id on update, new edge_id on create
+---
