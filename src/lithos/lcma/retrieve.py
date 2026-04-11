@@ -16,6 +16,8 @@ This module implements the ``lithos_retrieve`` pipeline:
 from __future__ import annotations
 
 import asyncio
+import collections
+import itertools
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -117,6 +119,28 @@ def _rerank_fast(
 
     scored.sort(key=lambda t: t[0], reverse=True)
     return [c for _, c in scored]
+
+
+def _dominant_namespace(
+    node_ids: list[str],
+    knowledge: KnowledgeManager,
+) -> str:
+    """Return the most common namespace among node_ids; ties broken alphabetically."""
+    ns_counts: dict[str, int] = collections.Counter()
+    for nid in node_ids:
+        cached = knowledge._meta_cache.get(nid)
+        if cached:
+            from lithos.knowledge import derive_namespace
+
+            ns = derive_namespace(cached.path)
+            ns_counts[ns] += 1
+        else:
+            ns_counts["default"] += 1
+    if not ns_counts:
+        return "default"
+    max_count = max(ns_counts.values())
+    # Among those with max count, pick alphabetically first
+    return min(ns for ns, c in ns_counts.items() if c == max_count)
 
 
 async def compute_temperature(
@@ -309,3 +333,18 @@ async def run_retrieve(
             )
         except Exception:
             logger.error("Failed to write receipt %s", receipt_id, exc_info=True)
+
+        # ── Coactivation + node_stats (after receipt) ─────────────
+        if final_nodes:
+            try:
+                dom_ns = _dominant_namespace(final_nodes, knowledge)
+
+                # Increment node_stats for every node in final_nodes
+                for nid in final_nodes:
+                    await stats_store.increment_node_stats(node_id=nid)
+
+                # Increment coactivation for every unordered pair
+                for a, b in itertools.combinations(final_nodes, 2):
+                    await stats_store.increment_coactivation(node_a=a, node_b=b, namespace=dom_ns)
+            except Exception:
+                logger.warning("Coactivation/node_stats update failed", exc_info=True)

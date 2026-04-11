@@ -193,6 +193,53 @@ class StatsStore:
             await db.commit()
 
     # ------------------------------------------------------------------
+    # Coactivation operations
+    # ------------------------------------------------------------------
+
+    async def increment_coactivation(
+        self,
+        *,
+        node_a: str,
+        node_b: str,
+        namespace: str,
+    ) -> None:
+        """Increment coactivation count for an unordered pair."""
+        # Ensure consistent ordering for unordered pairs
+        a, b = (node_a, node_b) if node_a <= node_b else (node_b, node_a)
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO coactivation (node_a, node_b, namespace, count, last_at)
+                   VALUES (?, ?, ?, 1, ?)
+                   ON CONFLICT(node_a, node_b, namespace) DO UPDATE SET
+                     count = count + 1,
+                     last_at = excluded.last_at""",
+                (a, b, namespace, now),
+            )
+            await db.commit()
+
+    # ------------------------------------------------------------------
+    # Node stats operations
+    # ------------------------------------------------------------------
+
+    async def increment_node_stats(self, *, node_id: str) -> None:
+        """Increment retrieval_count and update last_retrieved_at for a node.
+
+        Inserts with salience=0.5 on first touch.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, retrieval_count, last_retrieved_at, salience)
+                   VALUES (?, 1, ?, 0.5)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     retrieval_count = retrieval_count + 1,
+                     last_retrieved_at = excluded.last_retrieved_at""",
+                (node_id, now),
+            )
+            await db.commit()
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
