@@ -372,6 +372,16 @@ class TestUvicornLogConfig:
         )
         root.addHandler(handler)
 
+        # Ensure the intermediate "uvicorn" logger also propagates cleanly,
+        # just like the production log_config sets handlers=[], propagate=True.
+        # Without this, uvicorn's import-time logger setup may intercept the
+        # record before it reaches root.
+        parent_logger = logging.getLogger("uvicorn")
+        saved_parent_handlers = parent_logger.handlers[:]
+        saved_parent_propagate = parent_logger.propagate
+        parent_logger.handlers = []
+        parent_logger.propagate = True
+
         # Simulate a uvicorn logger with no own handlers, propagate=True
         uv_logger = logging.getLogger("uvicorn.test_single_emission")
         uv_logger.handlers = []
@@ -382,6 +392,8 @@ class TestUvicornLogConfig:
 
         root.handlers = original_handlers
         root.setLevel(original_level)
+        parent_logger.handlers = saved_parent_handlers
+        parent_logger.propagate = saved_parent_propagate
 
         lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
         assert len(lines) == 1, f"Expected 1 line, got {len(lines)}: {buf.getvalue()!r}"

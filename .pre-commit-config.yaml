@@ -1,0 +1,12 @@
+# Run `pre-commit install` once to enable these hooks locally.
+# CI does not run pre-commit; the lockfile check is enforced there by the
+# Docker build's `uv sync --locked` step.
+repos:
+  - repo: local
+    hooks:
+      - id: uv-lock-check
+        name: uv lock is in sync with pyproject.toml
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false

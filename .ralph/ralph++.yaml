@@ -9,6 +9,12 @@ orchestrated:
   test_commands:
     - uv run --extra dev pytest tests/
 
+prd_review:
+  max_cycles: 10
+
+prd_json_review:
+  max_cycles: 10
+
 hooks:
   post_worktree_create:
     - "uv sync --extra dev"
