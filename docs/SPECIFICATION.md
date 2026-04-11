@@ -127,13 +127,21 @@ data/
 │   │   └── *.md
 │   └── *.md
 ├── .lithos/                     # Authoritative state (cannot be rebuilt — back up)
-│   └── coordination.db          # SQLite: tasks, claims, agents, findings
+│   ├── coordination.db          # SQLite: tasks, claims, agents, findings
+│   ├── edges.db                 # SQLite: LCMA typed edges (created lazily on first edge upsert)
+│   └── stats.db                 # SQLite: LCMA retrieval stats, receipts, working memory (created lazily on first retrieve)
 ├── .tantivy/                    # Rebuildable index (full-text search)
 ├── .chroma/                     # Rebuildable index (semantic embeddings)
 └── .graph/                      # Rebuildable cache (wiki-link graph)
 ```
 
 **Authoritative vs. rebuildable:** `knowledge/` and `.lithos/` contain data that cannot be regenerated — they must be backed up and preserved. The index directories (`.tantivy/`, `.chroma/`, `.graph/`) are derived from `knowledge/` files and can be rebuilt from scratch via `lithos reindex --clear`.
+
+**LCMA SQLite stores under `.lithos/`:**
+
+- **`coordination.db`** — agents, tasks, claims, findings (pre-LCMA, unchanged).
+- **`edges.db`** — LCMA typed/weighted edges. Tables: `edges` (`edge_id`, `from_id`, `to_id`, `type`, `weight`, `namespace`, `created_at`, `updated_at`, `provenance_actor`, `provenance_type`, `evidence`, `conflict_state`). Created lazily on the first `lithos_edge_upsert` call. Separate from the `.graph/` NetworkX wiki-link cache — `edges.db` carries semantic/learned relationships, NetworkX continues to power `lithos_links`.
+- **`stats.db`** — LCMA retrieval state. Tables: `node_stats`, `coactivation`, `enrich_queue`, `working_memory`, `receipts`. Created lazily on the first `lithos_retrieve` call (when the first receipt is written). The `enrich_queue` and reinforcement columns in `node_stats` are placeholders for the MVP 2 `lithos-enrich` worker.
 
 ### 3.2 Knowledge File Format
 
@@ -163,6 +171,24 @@ derived_from_ids:                 # Optional: Declared lineage (list of UUIDs)
 expires_at: <ISO 8601 datetime>   # Optional: Freshness deadline (UTC); null = never expires
 supersedes: <uuid>                # Optional: ID of document this replaces
 version: <int>                    # Managed by Lithos; starts at 1 and increments on update
+# --- LCMA fields (additive, optional, with defaults applied at read time) ---
+schema_version: <int>             # Optional: LCMA schema version (default: 1)
+namespace: <string>               # Optional: LCMA namespace. When absent, derived from path:
+                                  #   knowledge/foo.md         → "default"
+                                  #   knowledge/shared/foo.md  → "shared"
+                                  #   knowledge/project/x/y.md → "project/x"
+                                  # An explicit value overrides path derivation and is
+                                  # persisted only when passed to lithos_write.
+access_scope: <enum>              # Optional: shared | task | agent_private (default: shared)
+                                  # Advisory visibility — not a security control. `task`
+                                  # requires source_task; `agent_private` filters by author.
+note_type: <enum>                 # Optional: observation | agent_finding | summary |
+                                  #           concept | task_record | hypothesis
+                                  # (default: observation)
+status: <enum>                    # Optional: active | archived | quarantined (default: active)
+summaries:                        # Optional: nested object with short/long summaries
+  short: <string>                 # Optional, agent-written
+  long: <string>                  # Optional, agent-written
 ---
 
 # Title
@@ -277,6 +303,12 @@ Create or update a knowledge file.
 | `ttl_hours` | float | No | Relative freshness window; converted to `expires_at` |
 | `expires_at` | string | No | Absolute ISO datetime freshness deadline |
 | `expected_version` | int | No | Optimistic-locking guard for updates; ignored on create |
+| `schema_version` | int | No | LCMA schema version (default: 1 on create). Preserved on update if omitted. |
+| `namespace` | string | No | LCMA namespace. Persisted only when explicitly passed; derived from path at read time otherwise. |
+| `access_scope` | enum | No | `shared` \| `task` \| `agent_private` (default: `shared` on create). `task` requires `source_task`. |
+| `note_type` | enum | No | `observation` \| `agent_finding` \| `summary` \| `concept` \| `task_record` \| `hypothesis` (default: `observation` on create). |
+| `status` | enum | No | `active` \| `archived` \| `quarantined` (default: `active` on create). |
+| `summaries` | object | No | Nested `{short, long}` object. Both keys optional, both must be strings if present. |
 
 **Returns (status envelope):**
 
@@ -702,7 +734,91 @@ Get knowledge base statistics.
 
 **Use case:** Allows agents to understand knowledge base scale before issuing broad queries.
 
-### 5.6 HTTP Endpoints
+### 5.6 LCMA Operations (Phase 7 MVP 1)
+
+These tools are additive to the pre-LCMA surface — they do not replace `lithos_search`, `lithos_read`, or `lithos_links`. See `docs/plans/lcma-design.md` for the design rationale.
+
+#### `lithos_retrieve`
+
+PTS-style retrieval orchestrating seven scouts in parallel and reranking via a fast Terrace 1 pass. Returns `lithos_search`-compatible results plus LCMA-only audit metadata.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | Yes | Free-text query. |
+| `limit` | int | No | Max results (default: 10). |
+| `namespace_filter` | string[] | No | Restrict candidates to these LCMA namespaces. Honors explicit `namespace` overrides in frontmatter. |
+| `agent_id` | string | No | Caller agent ID; used for `agent_private` access scope gating. |
+| `task_id` | string | No | When set, enables `scout_task_context`, `task`-scope gating, and per-`(task_id, node_id)` working-memory upserts. |
+| `surface_conflicts` | bool | No | Recorded in the receipt (default: `false`). Contradiction surfacing activates in MVP 2. |
+| `max_context_nodes` | int | No | Phase B seed size (default: `limit`). |
+| `tags` | string[] | No | Global tag filter applied to **every** scout. |
+| `path_prefix` | string | No | Global path-prefix filter applied to **every** scout. |
+
+**Returns:**
+
+```json
+{
+  "results": [
+    {
+      "id": "...",
+      "title": "...",
+      "snippet": "...",
+      "score": 0.42,
+      "path": "shared/note.md",
+      "source_url": "",
+      "updated_at": "2026-03-18T12:00:00+00:00",
+      "is_stale": false,
+      "derived_from_ids": [],
+      "reasons": ["lexical match score 0.91"],
+      "scouts": ["scout_lexical"],
+      "salience": 0.42
+    }
+  ],
+  "temperature": 0.5,
+  "terrace_reached": 1,
+  "receipt_id": "rcpt_<short-uuid>"
+}
+```
+
+The `id`/`title`/`snippet`/`score`/`path`/`source_url`/`updated_at`/`is_stale`/`derived_from_ids` keys mirror the `lithos_search` shape so clients that read only those fields work unchanged. `reasons`/`scouts`/`salience` are LCMA-only additive fields.
+
+**Receipt audit trail:** every call writes a row to `stats.db.receipts` with columns including `id`, `ts`, `query`, `namespace_filter`, `scouts_fired` (canonical names of every scout that ran cleanly — empty results still count as fired), `candidates_considered`, `final_nodes` (JSON array of `{id, reasons, scouts}` objects), `surface_conflicts`, `temperature`, and `terrace_reached`.
+
+**Working memory:** when `task_id` is set, each result is upserted into `stats.db.working_memory` keyed on `(task_id, node_id)`, incrementing `activation_count` and tracking `first_seen_at` / `last_seen_at`.
+
+**MVP 1 limits:** `temperature` always returns `LcmaConfig.temperature_default` (0.5). Coherence-based computation activates in MVP 3 once `edges.db` carries enough typed edges.
+
+#### `lithos_edge_upsert`
+
+Insert or update a typed weighted edge in `edges.db`. The unique key is `(from_id, to_id, type, namespace)`.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `from_id` | string | Yes | Source node UUID. |
+| `to_id` | string | Yes | Target node UUID. |
+| `type` | string | Yes | Edge type (e.g. `related_to`, `supports`, `contradicts`, `derived_from`). |
+| `weight` | float | Yes | Edge weight 0..1. |
+| `namespace` | string | Yes | LCMA namespace this edge belongs to. |
+| `provenance_actor` | string | No | Agent or rule ID that authored the edge. |
+| `provenance_type` | string | No | `human` \| `agent` \| `rule` \| `frontmatter`. |
+| `evidence` | object \| string | No | Anchors/snippets supporting the edge. |
+| `conflict_state` | string | No | Reserved for `contradicts` edges (MVP 2). |
+
+**Returns:** `{ "status": "ok", "edge_id": "edge_<short-uuid>" }`.
+
+**Side effect:** emits an `edge.upserted` event on the in-memory event bus (see §8.2).
+
+#### `lithos_edge_list`
+
+Query edges by node, type, or namespace.
+
+**Arguments:** `from_id`, `to_id`, `type`, `namespace` — all optional. Filters compose as `AND`.
+
+**Returns:** `{ "results": [ { edge_id, from_id, to_id, type, weight, namespace, created_at, updated_at, provenance_actor, provenance_type, evidence, conflict_state } ] }`.
+
+### 5.7 HTTP Endpoints
 
 These endpoints are standard HTTP routes mounted alongside the MCP transport. They are **not** MCP tools and do not appear in `tools/list`.
 
@@ -784,12 +900,12 @@ Lithos provides an operator-facing reconcile path that repairs derived state wit
 
 - `indices`: detect drift between markdown corpus and Tantivy/Chroma projections and rebuild affected backends
 - `graph`: detect graph cache drift and rebuild `.graph/graph.json`
-- `provenance_projection`: deterministic no-op placeholder until LCMA projection storage is enabled
+- `provenance_projection`: project `derived_from_ids` from frontmatter into the LCMA `edges.db` as `type='derived_from'` edges, and remove orphan projections that no longer match any document. Returns `supported=false` (and is a no-op) when `edges.db` does not exist on disk. When `edges.db` exists, the action payload reports `{created: N, removed: M}`.
 - `all`: runs the scopes above in order and aggregates status
 
 **Operational behavior:**
 
-- `dry_run=true` computes actions without applying repairs
+- `dry_run=true` computes the planned actions using the same diff logic as a real run, but applies no writes. For `provenance_projection`, dry-run reports the same `{created, removed}` counts the live run would have applied.
 - authoritative markdown/frontmatter is never rewritten
 - repeated runs are expected to be idempotent when no drift exists
 - the CLI command is `lithos reconcile`
@@ -1079,7 +1195,7 @@ These are explicitly not part of the initial implementation but may be considere
 - Agent Zero memory sync/bridge
 - Knowledge versioning (beyond git)
 - Multi-node deployment
-- Access control / namespaces
+- ~~Access control / namespaces~~ (LCMA MVP 1 introduces advisory `namespace` and `access_scope` frontmatter fields enforced inside `lithos_retrieve`'s scouts. Legacy `lithos_search`/`lithos_read`/`lithos_list` remain unrestricted — caller-context-aware enforcement on those tools is deferred. Not a security control.)
 - ~~Knowledge expiration / TTL~~ (Implemented in Phase 4 via `expires_at`, `ttl_hours`, `lithos_cache_lookup`, and `is_stale` in search results)
 - Automated knowledge quality scoring
 - Contradictory knowledge resolution
@@ -1156,9 +1272,10 @@ These are explicitly not part of the initial implementation but may be considere
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`, `lithos_finding_post`, `lithos_finding_list` |
 | System | `lithos_stats` |
-| HTTP | `GET /health` (not an MCP tool; see §5.6) |
+| LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list` |
+| HTTP | `GET /health` (not an MCP tool; see §5.7) |
 
-**Total: 24 MCP tools + 1 HTTP endpoint**
+**Total: 27 MCP tools + 1 HTTP endpoint** (24 pre-LCMA + 3 LCMA MVP 1 additive)
 
 ---
 

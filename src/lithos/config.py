@@ -2,11 +2,29 @@
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Canonical LCMA note_type values — must match VALID_NOTE_TYPES in knowledge.py
+_LCMA_NOTE_TYPES = frozenset(
+    {"observation", "agent_finding", "summary", "concept", "task_record", "hypothesis"}
+)
+
+# Default rerank weights keyed by scout name (minus scout_ prefix)
+_DEFAULT_RERANK_WEIGHTS: dict[str, float] = {
+    "vector": 0.35,
+    "lexical": 0.25,
+    "exact_alias": 0.15,
+    "tags_recency": 0.10,
+    "freshness": 0.05,
+    "provenance": 0.05,
+    "task_context": 0.05,
+}
+
+_DEFAULT_NOTE_TYPE_PRIORS: dict[str, float] = {nt: 0.5 for nt in sorted(_LCMA_NOTE_TYPES)}
 
 
 class ServerConfig(BaseModel):
@@ -55,6 +73,16 @@ class StorageConfig(BaseModel):
         """Get path to coordination database."""
         return self.lithos_store_path / "coordination.db"
 
+    @property
+    def edges_db_path(self) -> Path:
+        """Get path to LCMA edges database."""
+        return self.lithos_store_path / "edges.db"
+
+    @property
+    def stats_db_path(self) -> Path:
+        """Get path to LCMA stats database."""
+        return self.lithos_store_path / "stats.db"
+
 
 class SearchConfig(BaseModel):
     """Search configuration."""
@@ -102,6 +130,45 @@ class EventsConfig(BaseModel):
     max_sse_clients: int = 50
 
 
+class LcmaConfig(BaseModel):
+    """LCMA (Lithos Cognitive Memory Architecture) configuration subtree."""
+
+    enabled: bool = True
+    enrich_drain_interval_minutes: int = 5
+    rerank_weights: dict[str, float] = Field(default_factory=lambda: dict(_DEFAULT_RERANK_WEIGHTS))
+    note_type_priors: dict[str, float] = Field(
+        default_factory=lambda: dict(_DEFAULT_NOTE_TYPE_PRIORS)
+    )
+    temperature_default: float = 0.5
+    temperature_edge_threshold: int = 50
+    wm_eviction_days: int = 7
+    llm_provider: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_and_validate_note_type_priors(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        priors = data.get("note_type_priors")
+        if priors is None:
+            return data
+        if not isinstance(priors, dict):
+            return data
+        # Reject unknown keys
+        unknown = set(priors.keys()) - _LCMA_NOTE_TYPES
+        if unknown:
+            raise ValueError(
+                f"Unknown note_type_priors keys: {sorted(unknown)}. "
+                f"Allowed keys: {sorted(_LCMA_NOTE_TYPES)}"
+            )
+        # Fill missing keys with default 0.5
+        for nt in _LCMA_NOTE_TYPES:
+            if nt not in priors:
+                priors[nt] = 0.5
+        data["note_type_priors"] = priors
+        return data
+
+
 class LithosConfig(BaseSettings):
     """Main Lithos configuration."""
 
@@ -118,6 +185,7 @@ class LithosConfig(BaseSettings):
     index: IndexConfig = Field(default_factory=IndexConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     events: EventsConfig = Field(default_factory=EventsConfig)
+    lcma: LcmaConfig = Field(default_factory=LcmaConfig)
 
     @model_validator(mode="after")
     def _apply_backward_compat_env_overrides(self) -> "LithosConfig":

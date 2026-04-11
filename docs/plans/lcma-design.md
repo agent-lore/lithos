@@ -680,11 +680,22 @@ def scout_exact_alias(q: QueryContext, k: int) -> list[Candidate]:
     ...
 
 def scout_task_context(q: QueryContext, k: int) -> list[Candidate]:
-    # Notes linked by the same task_id via findings and claims in coordination.db.
-    # Only activated when q.task_id is provided.
-    # Uses existing indexes: idx_findings_task_id, task/claim tables.
-    # Returns notes referenced in findings for this task, notes written by
-    # agents working on the same task, and notes linked by claimed aspects.
+    # Notes linked to this task. Only activated when q.task_id is provided.
+    #
+    # MVP 1 sources (implemented):
+    #   1. Notes referenced in findings for this task — pulled from
+    #      CoordinationService.list_findings(task_id) where finding.knowledge_id
+    #      is set. Uses idx_findings_task_id.
+    #   2. Notes whose frontmatter `source` field equals task_id — i.e. notes
+    #      that were authored *for* this task and recorded the task as their
+    #      provenance source.
+    #
+    # MVP 2+ sources (deferred): notes "linked by claimed aspects" requires
+    # an aspect→note linkage that does not yet exist in coordination.db. A
+    # prior implementation that pulled in *every* note authored by *any*
+    # agent with a non-expired claim on the task was removed because it
+    # flooded results with unrelated notes from long-lived agents — wait
+    # for a real aspect→note index before re-introducing claim-based context.
     ...
 
 def scout_freshness(q: QueryContext, k: int) -> list[Candidate]:
@@ -746,6 +757,8 @@ Notes:
 ## 5.3 Temperature (Coherence)
 
 Reviewer suggestion, implemented as coherence among top candidates (by edges).
+
+**MVP 1 implementation note.** `compute_temperature` in `src/lithos/lcma/retrieve.py` unconditionally returns `LcmaConfig.temperature_default` (0.5). The `edge_store` argument is preserved in the signature for forward compatibility but never read. Coherence-based computation activates in MVP 3 once `edges.db` has enough typed edges for `compute_coherence` to be meaningful.
 
 ```python
 def compute_coherence(top_node_ids: list[str], namespace: str) -> float:
@@ -956,6 +969,8 @@ def rerank_fast(q: QueryContext, pool: list[Candidate]) -> list[Candidate]:
     # Diversity: MMR-style removal of near-duplicates
     return mmr_diversify(out, lambda a,b: similarity(a.node_id, b.node_id), top_n=200)
 ```
+
+**MVP 1 implementation note.** The actual MVP 1 `_rerank_fast` in `src/lithos/lcma/retrieve.py` uses a slightly different weighted combination: scout-name-keyed weights pulled from `LcmaConfig.rerank_weights` (e.g. `vector: 0.35`, `lexical: 0.25`) rather than prior-name-keyed weights (`type_prior`, `scope`, `graph`, ...). It applies a greedy MMR pass over the top 30 candidates using title-token Jaccard as the similarity metric — no embedding lookups in the hot path. The prior-name formula above captures the MVP 2+ target; differentiated priors and graph/salience features from `stats.db` are layered in as reinforcement data becomes available.
 
 ### `note_type_prior()` definition
 

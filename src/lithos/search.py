@@ -427,36 +427,7 @@ class TantivyIndex:
 
     def _generate_snippet(self, content: str, query: str, context_chars: int = 150) -> str:
         """Generate a snippet showing query terms in context."""
-        # Extract query terms (simple tokenization)
-        terms = re.findall(r"\w+", query.lower())
-        content_lower = content.lower()
-
-        # Find first occurrence of any term
-        best_pos = len(content)
-        for term in terms:
-            pos = content_lower.find(term)
-            if 0 <= pos < best_pos:
-                best_pos = pos
-
-        if best_pos == len(content):
-            # No term found, return beginning
-            return (
-                content[: context_chars * 2] + "..."
-                if len(content) > context_chars * 2
-                else content
-            )
-
-        # Extract context around match
-        start = max(0, best_pos - context_chars)
-        end = min(len(content), best_pos + context_chars)
-
-        snippet = content[start:end]
-        if start > 0:
-            snippet = "..." + snippet
-        if end < len(content):
-            snippet = snippet + "..."
-
-        return snippet
+        return generate_snippet(content, query, context_chars)
 
     def count_docs(self) -> int:
         """Return the number of documents in the index."""
@@ -495,6 +466,36 @@ class TantivyIndex:
         writer.commit()
         del writer  # Release lock
         self.index.reload()
+
+
+def generate_snippet(content: str, query: str, context_chars: int = 150) -> str:
+    """Generate a snippet showing query terms in context.
+
+    Shared by ``SearchEngine`` and ``lithos_retrieve`` to guarantee
+    identical snippet output for the same (content, query) pair.
+    """
+    terms = re.findall(r"\w+", query.lower())
+    content_lower = content.lower()
+
+    best_pos = len(content)
+    for term in terms:
+        pos = content_lower.find(term)
+        if 0 <= pos < best_pos:
+            best_pos = pos
+
+    if best_pos == len(content):
+        return content[: context_chars * 2] + "..." if len(content) > context_chars * 2 else content
+
+    start = max(0, best_pos - context_chars)
+    end = min(len(content), best_pos + context_chars)
+
+    snippet = content[start:end]
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(content):
+        snippet = snippet + "..."
+
+    return snippet
 
 
 class ChromaIndex:

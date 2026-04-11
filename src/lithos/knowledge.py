@@ -88,8 +88,22 @@ _KNOWN_METADATA_KEYS = frozenset(
         "derived_from_ids",
         "expires_at",
         "version",
+        # LCMA fields
+        "schema_version",
+        "namespace",
+        "access_scope",
+        "note_type",
+        "status",
+        "summaries",
     }
 )
+
+# Valid LCMA enum values
+VALID_ACCESS_SCOPES = frozenset({"shared", "task", "agent_private"})
+VALID_NOTE_TYPES = frozenset(
+    {"observation", "agent_finding", "summary", "concept", "task_record", "hypothesis"}
+)
+VALID_STATUSES = frozenset({"active", "archived", "quarantined"})
 
 
 _TRACKING_PARAMS = frozenset(
@@ -234,6 +248,15 @@ class KnowledgeMetadata:
     expires_at: datetime | None = None
     extra: dict = field(default_factory=dict)
     version: int = 1
+    # LCMA fields — optional, defaults applied at read time by callers with path context
+    schema_version: int | None = None
+    namespace: str | None = None
+    access_scope: str | None = None  # shared | task | agent_private
+    note_type: str | None = (
+        None  # observation | agent_finding | summary | concept | task_record | hypothesis
+    )
+    status: str | None = None  # active | archived | quarantined
+    summaries: dict | None = None  # {short: str, long: str}
 
     @property
     def is_stale(self) -> bool:
@@ -269,6 +292,19 @@ class KnowledgeMetadata:
             result["expires_at"] = self.expires_at.isoformat()
         if self.derived_from_ids:
             result["derived_from_ids"] = self.derived_from_ids
+        # LCMA fields — only include when explicitly set
+        if self.schema_version is not None:
+            result["schema_version"] = self.schema_version
+        if self.namespace is not None:
+            result["namespace"] = self.namespace
+        if self.access_scope is not None:
+            result["access_scope"] = self.access_scope
+        if self.note_type is not None:
+            result["note_type"] = self.note_type
+        if self.status is not None:
+            result["status"] = self.status
+        if self.summaries is not None:
+            result["summaries"] = self.summaries
         # Merge unknown fields — known keys always take precedence.
         for key, value in self.extra.items():
             if key not in result:
@@ -306,6 +342,20 @@ class KnowledgeMetadata:
 
         extra = {k: v for k, v in data.items() if k not in _KNOWN_METADATA_KEYS}
 
+        # Parse LCMA fields — only unpack what is present; defaults applied by caller
+        schema_version_raw = data.get("schema_version")
+        schema_version: int | None = None
+        if schema_version_raw is not None:
+            try:
+                schema_version = int(schema_version_raw)
+            except (TypeError, ValueError):
+                schema_version = None
+
+        summaries_raw = data.get("summaries")
+        summaries: dict | None = None
+        if isinstance(summaries_raw, dict):
+            summaries = summaries_raw
+
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             title=data.get("title", "Untitled"),
@@ -323,6 +373,12 @@ class KnowledgeMetadata:
             expires_at=expires_at,
             extra=extra,
             version=_parse_version(data.get("version", 1)),
+            schema_version=schema_version,
+            namespace=data.get("namespace"),
+            access_scope=data.get("access_scope"),
+            note_type=data.get("note_type"),
+            status=data.get("status"),
+            summaries=summaries,
         )
 
 
@@ -397,6 +453,37 @@ def generate_slug(title: str) -> str:
     return slugify(title)
 
 
+def derive_namespace(relative_path: Path) -> str:
+    """Derive namespace from a note's path relative to knowledge_path.
+
+    Subdirectory components are joined by ``/``.  Files directly under the
+    knowledge root return ``"default"``.
+    """
+    parts = relative_path.parent.parts
+    if not parts or parts == (".",):
+        return "default"
+    return "/".join(parts)
+
+
+def apply_lcma_defaults(metadata: KnowledgeMetadata, relative_path: Path) -> None:
+    """Apply LCMA read-time defaults in-place.
+
+    Only fills fields that are ``None`` (i.e. absent from frontmatter).
+    Namespace is derived from the note's relative path unless explicitly set.
+    """
+    if metadata.schema_version is None:
+        metadata.schema_version = 1
+    if metadata.namespace is None:
+        metadata.namespace = derive_namespace(relative_path)
+    if metadata.access_scope is None:
+        metadata.access_scope = "shared"
+    if metadata.note_type is None:
+        metadata.note_type = "observation"
+    if metadata.status is None:
+        metadata.status = "active"
+    # summaries left as None if not provided — no default
+
+
 def parse_wiki_links(content: str) -> list[WikiLink]:
     """Extract wiki-links from content."""
     links = []
@@ -468,14 +555,24 @@ def truncate_content(content: str, max_length: int) -> tuple[str, bool]:
 
 @dataclass
 class _CachedMeta:
-    """Lightweight metadata cache for filtering without disk I/O."""
+    """Lightweight metadata cache for filtering without disk I/O.
+
+    ``namespace`` is the resolved LCMA namespace — either an explicit value
+    from frontmatter or the path-derived default. Callers MUST read this
+    field rather than re-deriving from ``path`` so explicit overrides are
+    honored consistently across the retrieval pipeline.
+    """
 
     title: str
     author: str
     tags: list[str]
     updated_at: datetime
     path: Path
+    namespace: str
     expires_at: datetime | None = None
+    access_scope: str | None = None
+    source: str | None = None
+    note_type: str | None = None
 
 
 class _UnsetType:
@@ -599,13 +696,28 @@ class KnowledgeManager:
                         cached_expires = raw_expires
                     else:
                         cached_expires = None
+                    raw_access_scope: str | None = post.metadata.get("access_scope")  # type: ignore[assignment]
+                    raw_source: str | None = post.metadata.get("source")  # type: ignore[assignment]
+                    raw_note_type: str | None = post.metadata.get("note_type")  # type: ignore[assignment]
+                    raw_namespace: str | None = post.metadata.get("namespace")  # type: ignore[assignment]
+                    cached_namespace = (
+                        raw_namespace
+                        if isinstance(raw_namespace, str) and raw_namespace
+                        else derive_namespace(rel_path)
+                    )
                     self._meta_cache[doc_id] = _CachedMeta(
                         title=title,
                         author=raw_author if isinstance(raw_author, str) else "",
                         tags=raw_tags if isinstance(raw_tags, list) else [],
                         updated_at=updated_at,
                         path=rel_path,
+                        namespace=cached_namespace,
                         expires_at=cached_expires,
+                        access_scope=raw_access_scope
+                        if isinstance(raw_access_scope, str)
+                        else None,
+                        source=raw_source if isinstance(raw_source, str) else None,
+                        note_type=raw_note_type if isinstance(raw_note_type, str) else None,
                     )
 
                     # Populate source_url -> id map
@@ -693,6 +805,12 @@ class KnowledgeManager:
         source_url: str | None = None,
         derived_from_ids: list[str] | None = None,
         expires_at: datetime | None = None,
+        schema_version: int | None = None,
+        namespace: str | None = None,
+        access_scope: str | None = None,
+        note_type: str | None = None,
+        lcma_status: str | None = None,
+        summaries: dict | None = None,
     ) -> WriteResult:
         """Create a new knowledge document.
 
@@ -765,6 +883,12 @@ class KnowledgeManager:
                 source_url=norm_url,
                 derived_from_ids=normalized_provenance,
                 expires_at=expires_at,
+                schema_version=schema_version if schema_version is not None else 1,
+                namespace=namespace,
+                access_scope=access_scope if access_scope is not None else "shared",
+                note_type=note_type if note_type is not None else "observation",
+                status=lcma_status if lcma_status is not None else "active",
+                summaries=summaries,
             )
 
             # Determine file path
@@ -829,13 +953,21 @@ class KnowledgeManager:
                     self._source_to_derived[doc_id] = set()
                 self._source_to_derived[doc_id].update(resolved_docs)
 
+            # Resolve namespace: explicit override if set, otherwise derive
+            # from path (matches apply_lcma_defaults at read time).
+            cached_namespace = metadata.namespace or derive_namespace(file_path)
+
             self._meta_cache[doc_id] = _CachedMeta(
                 title=title,
                 author=metadata.author,
                 tags=list(metadata.tags),
                 updated_at=metadata.updated_at,
                 path=file_path,
+                namespace=cached_namespace,
                 expires_at=metadata.expires_at,
+                access_scope=metadata.access_scope,
+                source=metadata.source,
+                note_type=metadata.note_type,
             )
 
             logger.info(
@@ -877,6 +1009,9 @@ class KnowledgeManager:
         post = frontmatter.load(str(full_path))
         logger.debug("Frontmatter parsed: path=%s title=%r", file_path, post.metadata.get("title"))
         metadata = KnowledgeMetadata.from_dict(post.metadata)
+
+        # Apply LCMA read-time defaults (namespace derived from relative path)
+        apply_lcma_defaults(metadata, file_path)
 
         # Extract title and content from body
         title, content = extract_title_from_content(post.content)
@@ -944,6 +1079,13 @@ class KnowledgeManager:
         derived_from_ids: list[str] | None | _UnsetType = _UNSET,
         expires_at: datetime | None | _UnsetType = _UNSET,
         expected_version: int | None = None,
+        source: str | None | _UnsetType = _UNSET,
+        schema_version: int | _UnsetType = _UNSET,
+        namespace: str | None | _UnsetType = _UNSET,
+        access_scope: str | None | _UnsetType = _UNSET,
+        note_type: str | None | _UnsetType = _UNSET,
+        lcma_status: str | None | _UnsetType = _UNSET,
+        summaries: dict | None | _UnsetType = _UNSET,
     ) -> WriteResult:
         """Update an existing document.
 
@@ -1110,6 +1252,33 @@ class KnowledgeManager:
             if not isinstance(expires_at, _UnsetType):
                 doc.metadata.expires_at = expires_at
 
+            # Handle source (task) update
+            if not isinstance(source, _UnsetType):
+                doc.metadata.source = source
+
+            # Handle LCMA field updates — preserve existing when _UNSET
+            if not isinstance(schema_version, _UnsetType):
+                doc.metadata.schema_version = schema_version
+            elif doc.metadata.schema_version is None:
+                doc.metadata.schema_version = 1
+            if not isinstance(namespace, _UnsetType):
+                doc.metadata.namespace = namespace
+            # namespace: no default on update — derived at read time
+            if not isinstance(access_scope, _UnsetType):
+                doc.metadata.access_scope = access_scope
+            elif doc.metadata.access_scope is None:
+                doc.metadata.access_scope = "shared"
+            if not isinstance(note_type, _UnsetType):
+                doc.metadata.note_type = note_type
+            elif doc.metadata.note_type is None:
+                doc.metadata.note_type = "observation"
+            if not isinstance(lcma_status, _UnsetType):
+                doc.metadata.status = lcma_status
+            elif doc.metadata.status is None:
+                doc.metadata.status = "active"
+            if not isinstance(summaries, _UnsetType):
+                doc.metadata.summaries = summaries
+
             # Update fields
             if content is not None:
                 doc.content = content
@@ -1148,13 +1317,18 @@ class KnowledgeManager:
                 self._id_to_title[id] = title
 
             # Update metadata cache
+            cached_namespace = doc.metadata.namespace or derive_namespace(doc.path)
             self._meta_cache[id] = _CachedMeta(
                 title=doc.metadata.title,
                 author=doc.metadata.author,
                 tags=list(doc.metadata.tags),
                 updated_at=doc.metadata.updated_at,
                 path=doc.path,
+                namespace=cached_namespace,
                 expires_at=doc.metadata.expires_at,
+                access_scope=doc.metadata.access_scope,
+                source=doc.metadata.source,
+                note_type=doc.metadata.note_type,
             )
 
             if logger.isEnabledFor(logging.INFO):
@@ -1323,6 +1497,9 @@ class KnowledgeManager:
         logger.debug("Frontmatter parsed: path=%s title=%r", file_path, post.metadata.get("title"))
         metadata = KnowledgeMetadata.from_dict(post.metadata)
 
+        # Apply LCMA read-time defaults (namespace derived from relative path)
+        apply_lcma_defaults(metadata, file_path)
+
         # Extract title and content from body
         title, content = extract_title_from_content(post.content)
         if not title:
@@ -1436,13 +1613,18 @@ class KnowledgeManager:
                 self._source_to_derived[doc_id].update(resolved_docs)
 
         # Update metadata cache
+        cached_namespace = metadata.namespace or derive_namespace(file_path)
         self._meta_cache[doc_id] = _CachedMeta(
             title=title,
             author=metadata.author,
             tags=list(metadata.tags),
             updated_at=metadata.updated_at,
             path=file_path,
+            namespace=cached_namespace,
             expires_at=metadata.expires_at,
+            access_scope=metadata.access_scope,
+            source=metadata.source,
+            note_type=metadata.note_type,
         )
 
         return doc

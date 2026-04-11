@@ -36,7 +36,14 @@ from lithos.events import (
     LithosEvent,
 )
 from lithos.graph import KnowledgeGraph
-from lithos.knowledge import _UNSET, KnowledgeManager, _UnsetType
+from lithos.knowledge import (
+    _UNSET,
+    VALID_ACCESS_SCOPES,
+    VALID_NOTE_TYPES,
+    VALID_STATUSES,
+    KnowledgeManager,
+    _UnsetType,
+)
 from lithos.search import SearchEngine
 from lithos.telemetry import (
     StatusCode,
@@ -73,6 +80,12 @@ class LithosServer:
         self.graph = KnowledgeGraph(self._config)
         self.coordination = CoordinationService(self._config)
         self.event_bus = EventBus(self._config.events)
+
+        from lithos.lcma.edges import EdgeStore
+        from lithos.lcma.stats import StatsStore
+
+        self.edge_store = EdgeStore(self._config)
+        self.stats_store = StatsStore(self._config)
 
         # Cached count fields for synchronous OTEL observable gauge callbacks
         self._cached_active_claims: int = 0
@@ -649,6 +662,12 @@ class LithosServer:
             ttl_hours: float | None = None,
             expires_at: str | None = None,
             expected_version: int | None = None,
+            schema_version: int | None = None,
+            namespace: str | None = None,
+            access_scope: str | None = None,
+            note_type: str | None = None,
+            status: str | None = None,
+            summaries: dict | None = None,
         ) -> dict[str, Any]:
             """Create or update a knowledge file.
 
@@ -676,6 +695,15 @@ class LithosServer:
                 expected_version: If provided on update, reject with version_conflict if the
                     document's current version differs. Omit to skip version checking.
                     On create, this parameter is silently ignored.
+                schema_version: LCMA schema version (default 1 on create).
+                namespace: LCMA namespace. Persisted only if explicitly passed;
+                    derived at read time otherwise.
+                access_scope: shared|task|agent_private (default shared on create).
+                    task requires source_task.
+                note_type: observation|agent_finding|summary|concept|task_record|hypothesis
+                    (default observation on create).
+                status: active|archived|quarantined (default active on create).
+                summaries: Optional dict with short/long summary strings.
 
             Returns:
                 Dict with status envelope: created/updated/duplicate
@@ -721,6 +749,88 @@ class LithosServer:
                         "message": "ttl_hours must be a finite positive number.",
                         "warnings": [],
                     }
+
+                # Validate LCMA enum fields
+                if access_scope is not None and access_scope not in VALID_ACCESS_SCOPES:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"Invalid access_scope: {access_scope!r}. "
+                        f"Must be one of {sorted(VALID_ACCESS_SCOPES)}",
+                        "warnings": [],
+                    }
+                if note_type is not None and note_type not in VALID_NOTE_TYPES:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"Invalid note_type: {note_type!r}. "
+                        f"Must be one of {sorted(VALID_NOTE_TYPES)}",
+                        "warnings": [],
+                    }
+                if status is not None and status not in VALID_STATUSES:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"Invalid status: {status!r}. "
+                        f"Must be one of {sorted(VALID_STATUSES)}",
+                        "warnings": [],
+                    }
+
+                # Validate summaries shape
+                if summaries is not None:
+                    if not isinstance(summaries, dict):
+                        return {
+                            "status": "error",
+                            "code": "invalid_input",
+                            "message": "summaries must be an object with "
+                            "'short' and/or 'long' string fields.",
+                            "warnings": [],
+                        }
+                    unknown_keys = set(summaries.keys()) - {"short", "long"}
+                    if unknown_keys:
+                        return {
+                            "status": "error",
+                            "code": "invalid_input",
+                            "message": f"summaries has unknown keys: "
+                            f"{sorted(unknown_keys)}. "
+                            f"Allowed keys: ['long', 'short'].",
+                            "warnings": [],
+                        }
+                    for k, v in summaries.items():
+                        if not isinstance(v, str):
+                            return {
+                                "status": "error",
+                                "code": "invalid_input",
+                                "message": f"summaries.{k} must be a string, "
+                                f"got {type(v).__name__}.",
+                                "warnings": [],
+                            }
+
+                # Validate task-scope invariant
+                if access_scope == "task":
+                    if id is None:
+                        # Create: require source_task
+                        if not source_task:
+                            return {
+                                "status": "error",
+                                "code": "invalid_input",
+                                "message": "access_scope='task' requires source_task",
+                                "warnings": [],
+                            }
+                    else:
+                        # Update: require source_task or existing metadata.source
+                        if not source_task:
+                            try:
+                                existing_doc, _ = await self.knowledge.read(id=id)
+                                if not existing_doc.metadata.source:
+                                    return {
+                                        "status": "error",
+                                        "code": "invalid_input",
+                                        "message": "access_scope='task' requires source_task",
+                                        "warnings": [],
+                                    }
+                            except FileNotFoundError:
+                                pass  # Will be caught in update()
 
                 # Emit freshness span attributes
                 if ttl_hours is not None:
@@ -797,6 +907,25 @@ class LithosServer:
                         # confidence: None (omitted) → _UNSET (preserve), float → set
                         conf_arg: float | _UnsetType = _UNSET if confidence is None else confidence
 
+                        # source_task: None (omitted) → _UNSET (preserve), str → set
+                        source_arg: str | None | _UnsetType = (
+                            _UNSET if source_task is None else source_task
+                        )
+
+                        # LCMA fields: None (omitted) → _UNSET (preserve)
+                        sv_arg: int | _UnsetType = (
+                            _UNSET if schema_version is None else schema_version
+                        )
+                        ns_arg: str | None | _UnsetType = _UNSET if namespace is None else namespace
+                        as_arg: str | None | _UnsetType = (
+                            _UNSET if access_scope is None else access_scope
+                        )
+                        nt_arg: str | None | _UnsetType = _UNSET if note_type is None else note_type
+                        st_arg: str | None | _UnsetType = _UNSET if status is None else status
+                        sum_arg: dict | None | _UnsetType = (
+                            _UNSET if summaries is None else summaries
+                        )
+
                         result = await self.knowledge.update(
                             id=id,
                             agent=agent,
@@ -808,6 +937,13 @@ class LithosServer:
                             derived_from_ids=prov_arg,
                             expires_at=expires_at_dt,
                             expected_version=expected_version,
+                            source=source_arg,
+                            schema_version=sv_arg,
+                            namespace=ns_arg,
+                            access_scope=as_arg,
+                            note_type=nt_arg,
+                            lcma_status=st_arg,
+                            summaries=sum_arg,
                         )
                     else:
                         # Create new — default confidence to 1.0 when not specified
@@ -822,6 +958,12 @@ class LithosServer:
                             source_url=source_url or None,
                             derived_from_ids=derived_from_ids,
                             expires_at=expires_at_dt,  # type: ignore[arg-type]
+                            schema_version=schema_version,
+                            namespace=namespace,
+                            access_scope=access_scope,
+                            note_type=note_type,
+                            lcma_status=status,
+                            summaries=summaries,
                         )
                 except SlugCollisionError as exc:
                     span.set_attribute("lithos.write_status", "error")
@@ -1169,6 +1311,208 @@ class LithosServer:
                 )
 
                 return {"results": results_payload}
+
+        # ==================== LCMA Retrieval ====================
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_retrieve(
+            query: str,
+            limit: int = 10,
+            namespace_filter: list[str] | None = None,
+            agent_id: str | None = None,
+            task_id: str | None = None,
+            surface_conflicts: bool = False,
+            max_context_nodes: int | None = None,
+            tags: list[str] | None = None,
+            path_prefix: str | None = None,
+        ) -> dict[str, Any]:
+            """LCMA cognitive retrieval — runs seven scouts with reranking.
+
+            Orchestrates parallel scouts against the knowledge base, applies
+            merge-and-normalize, Terrace 1 reranking, and writes an audit
+            receipt on every call.
+
+            Args:
+                query: Search query string (required)
+                limit: Max results (default: 10)
+                namespace_filter: Restrict to these namespaces
+                agent_id: Caller identity for access-scope gating and audit
+                task_id: Task context — activates task_context scout and
+                    working-memory tracking
+                surface_conflicts: Reserved for MVP 2 contradiction surfacing
+                max_context_nodes: Provenance seed count (defaults to limit)
+                tags: Filter by tags (AND semantics)
+                path_prefix: Filter by path prefix
+
+            Returns:
+                Dict with results list (superset of lithos_search result
+                schema), temperature, terrace_reached, and receipt_id.
+            """
+            logger.info("lithos_retrieve query_len=%d limit=%d", len(query), limit)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.retrieve") as span:
+                span.set_attribute("lithos.tool", "lithos_retrieve")
+                span.set_attribute("lithos.query.length", len(query))
+                span.set_attribute("lithos.limit", limit)
+
+                # Check LCMA enabled
+                lcma_config = self._config.lcma
+                if not lcma_config.enabled:
+                    return {
+                        "status": "error",
+                        "code": "lcma_disabled",
+                        "message": "LCMA is disabled via configuration",
+                    }
+
+                from lithos.lcma.retrieve import run_retrieve
+
+                result = await run_retrieve(
+                    query=query,
+                    search=self.search,
+                    knowledge=self.knowledge,
+                    graph=self.graph,
+                    coordination=self.coordination,
+                    edge_store=self.edge_store,
+                    stats_store=self.stats_store,
+                    lcma_config=lcma_config,
+                    limit=limit,
+                    namespace_filter=namespace_filter,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    surface_conflicts=surface_conflicts,
+                    max_context_nodes=max_context_nodes,
+                    tags=tags,
+                    path_prefix=path_prefix,
+                )
+
+                span.set_attribute(
+                    "lithos.result_count",
+                    len(result.get("results", [])),  # type: ignore[union-attr]
+                )
+                return result  # type: ignore[return-value]
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_edge_upsert(
+            from_id: str,
+            to_id: str,
+            type: str,
+            weight: float,
+            namespace: str,
+            provenance_actor: str | None = None,
+            provenance_type: str | None = None,
+            evidence: Any = None,
+            conflict_state: str | None = None,
+        ) -> dict[str, Any]:
+            """Create or update a typed edge in edges.db.
+
+            Upsert key is (from_id, to_id, type, namespace).
+
+            Args:
+                from_id: Source node ID
+                to_id: Target node ID
+                type: Edge type (e.g. 'derived_from', 'related_to')
+                weight: Edge weight (float)
+                namespace: Namespace for the edge (required)
+                provenance_actor: Agent/process that created the edge
+                provenance_type: How the edge was derived
+                evidence: Supporting evidence (dict or list only, not scalars)
+                conflict_state: Conflict state marker
+
+            Returns:
+                Status envelope with edge_id.
+            """
+            logger.info("lithos_edge_upsert from=%s to=%s type=%s", from_id, to_id, type)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.edge_upsert") as span:
+                span.set_attribute("lithos.tool", "lithos_edge_upsert")
+
+                if not namespace:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": "namespace is required",
+                    }
+
+                # Validate evidence type
+                if evidence is not None and not isinstance(evidence, (dict, list)):
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": "evidence must be a dict, list, or null — scalars are not accepted",
+                    }
+
+                evidence_str = json.dumps(evidence) if evidence is not None else None
+
+                edge_id = await self.edge_store.upsert(
+                    from_id=from_id,
+                    to_id=to_id,
+                    edge_type=type,
+                    weight=weight,
+                    namespace=namespace,
+                    provenance_actor=provenance_actor,
+                    provenance_type=provenance_type,
+                    evidence=evidence_str,
+                    conflict_state=conflict_state,
+                )
+
+                # Publish edge.upserted event
+                from lithos.events import EDGE_UPSERTED
+
+                await self._emit(
+                    LithosEvent(
+                        type=EDGE_UPSERTED,
+                        payload={
+                            "edge_id": edge_id,
+                            "from_id": from_id,
+                            "to_id": to_id,
+                            "type": type,
+                            "namespace": namespace,
+                        },
+                    )
+                )
+
+                return {
+                    "status": "ok",
+                    "edge_id": edge_id,
+                }
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_edge_list(
+            from_id: str | None = None,
+            to_id: str | None = None,
+            type: str | None = None,
+            namespace: str | None = None,
+        ) -> dict[str, Any]:
+            """Query edges from edges.db by optional filters.
+
+            Args:
+                from_id: Filter by source node ID
+                to_id: Filter by target node ID
+                type: Filter by edge type
+                namespace: Filter by namespace
+
+            Returns:
+                Dict with results list of edge dicts.
+            """
+            logger.info(
+                "lithos_edge_list from=%s to=%s type=%s ns=%s", from_id, to_id, type, namespace
+            )
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.edge_list") as span:
+                span.set_attribute("lithos.tool", "lithos_edge_list")
+
+                edges = await self.edge_store.list_edges(
+                    from_id=from_id,
+                    to_id=to_id,
+                    edge_type=type,
+                    namespace=namespace,
+                )
+
+                span.set_attribute("lithos.result_count", len(edges))
+                return {"results": edges}
 
         @self.mcp.tool()
         @tool_metrics()
