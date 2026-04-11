@@ -13,6 +13,7 @@ Tables (MVP 1):
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -119,6 +120,76 @@ class StatsStore:
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            await db.commit()
+
+    # ------------------------------------------------------------------
+    # Receipt operations
+    # ------------------------------------------------------------------
+
+    async def insert_receipt(
+        self,
+        *,
+        receipt_id: str,
+        query: str,
+        limit: int,
+        namespace_filter: list[str] | None,
+        scouts_fired: list[str],
+        final_nodes: list[str],
+        conflicts_surfaced: list[str],
+        temperature: float,
+        terrace_reached: int,
+        agent_id: str | None = None,
+        task_id: str | None = None,
+    ) -> None:
+        """Insert a single receipt row."""
+        ns_json = json.dumps(namespace_filter) if namespace_filter is not None else None
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO receipts
+                   (id, query, "limit", namespace_filter, scouts_fired,
+                    final_nodes, conflicts_surfaced, temperature,
+                    terrace_reached, agent_id, task_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    receipt_id,
+                    query,
+                    limit,
+                    ns_json,
+                    json.dumps(scouts_fired),
+                    json.dumps(final_nodes),
+                    json.dumps(conflicts_surfaced),
+                    temperature,
+                    terrace_reached,
+                    agent_id,
+                    task_id,
+                ),
+            )
+            await db.commit()
+
+    # ------------------------------------------------------------------
+    # Working-memory operations
+    # ------------------------------------------------------------------
+
+    async def upsert_working_memory(
+        self,
+        *,
+        task_id: str,
+        node_id: str,
+        receipt_id: str,
+    ) -> None:
+        """Upsert a working-memory row, incrementing activation_count."""
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO working_memory
+                   (task_id, node_id, activation_count, last_seen_at, last_receipt_id)
+                   VALUES (?, ?, 1, ?, ?)
+                   ON CONFLICT(task_id, node_id) DO UPDATE SET
+                     activation_count = activation_count + 1,
+                     last_seen_at = excluded.last_seen_at,
+                     last_receipt_id = excluded.last_receipt_id""",
+                (task_id, node_id, now, receipt_id),
+            )
             await db.commit()
 
     # ------------------------------------------------------------------

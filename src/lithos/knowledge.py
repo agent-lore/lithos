@@ -565,6 +565,7 @@ class _CachedMeta:
     expires_at: datetime | None = None
     access_scope: str | None = None
     source: str | None = None
+    note_type: str | None = None
 
 
 class _UnsetType:
@@ -690,6 +691,7 @@ class KnowledgeManager:
                         cached_expires = None
                     raw_access_scope: str | None = post.metadata.get("access_scope")  # type: ignore[assignment]
                     raw_source: str | None = post.metadata.get("source")  # type: ignore[assignment]
+                    raw_note_type: str | None = post.metadata.get("note_type")  # type: ignore[assignment]
                     self._meta_cache[doc_id] = _CachedMeta(
                         title=title,
                         author=raw_author if isinstance(raw_author, str) else "",
@@ -701,6 +703,7 @@ class KnowledgeManager:
                         if isinstance(raw_access_scope, str)
                         else None,
                         source=raw_source if isinstance(raw_source, str) else None,
+                        note_type=raw_note_type if isinstance(raw_note_type, str) else None,
                     )
 
                     # Populate source_url -> id map
@@ -945,6 +948,7 @@ class KnowledgeManager:
                 expires_at=metadata.expires_at,
                 access_scope=metadata.access_scope,
                 source=metadata.source,
+                note_type=metadata.note_type,
             )
 
             logger.info(
@@ -1303,6 +1307,7 @@ class KnowledgeManager:
                 expires_at=doc.metadata.expires_at,
                 access_scope=doc.metadata.access_scope,
                 source=doc.metadata.source,
+                note_type=doc.metadata.note_type,
             )
 
             if logger.isEnabledFor(logging.INFO):
@@ -1596,6 +1601,7 @@ class KnowledgeManager:
             expires_at=metadata.expires_at,
             access_scope=metadata.access_scope,
             source=metadata.source,
+            note_type=metadata.note_type,
         )
 
         return doc

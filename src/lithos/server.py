@@ -81,6 +81,12 @@ class LithosServer:
         self.coordination = CoordinationService(self._config)
         self.event_bus = EventBus(self._config.events)
 
+        from lithos.lcma.edges import EdgeStore
+        from lithos.lcma.stats import StatsStore
+
+        self.edge_store = EdgeStore(self._config)
+        self.stats_store = StatsStore(self._config)
+
         # Cached count fields for synchronous OTEL observable gauge callbacks
         self._cached_active_claims: int = 0
         self._cached_agent_count: int = 0
@@ -385,6 +391,10 @@ class LithosServer:
 
                 # Initialize coordination database
                 await self.coordination.initialize()
+
+                # Initialize LCMA stores
+                await self.edge_store.open()
+                await self.stats_store.open()
 
                 # Register active claims gauge observer
                 register_active_claims_observer(lambda: self._cached_active_claims)
@@ -1275,6 +1285,86 @@ class LithosServer:
                 )
 
                 return {"results": results_payload}
+
+        # ==================== LCMA Retrieval ====================
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_retrieve(
+            query: str,
+            limit: int = 10,
+            namespace_filter: list[str] | None = None,
+            agent_id: str | None = None,
+            task_id: str | None = None,
+            surface_conflicts: bool = False,
+            max_context_nodes: int | None = None,
+            tags: list[str] | None = None,
+            path_prefix: str | None = None,
+        ) -> dict[str, Any]:
+            """LCMA cognitive retrieval — runs seven scouts with reranking.
+
+            Orchestrates parallel scouts against the knowledge base, applies
+            merge-and-normalize, Terrace 1 reranking, and writes an audit
+            receipt on every call.
+
+            Args:
+                query: Search query string (required)
+                limit: Max results (default: 10)
+                namespace_filter: Restrict to these namespaces
+                agent_id: Caller identity for access-scope gating and audit
+                task_id: Task context — activates task_context scout and
+                    working-memory tracking
+                surface_conflicts: Reserved for MVP 2 contradiction surfacing
+                max_context_nodes: Provenance seed count (defaults to limit)
+                tags: Filter by tags (AND semantics)
+                path_prefix: Filter by path prefix
+
+            Returns:
+                Dict with results list (superset of lithos_search result
+                schema), temperature, terrace_reached, and receipt_id.
+            """
+            logger.info("lithos_retrieve query_len=%d limit=%d", len(query), limit)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.retrieve") as span:
+                span.set_attribute("lithos.tool", "lithos_retrieve")
+                span.set_attribute("lithos.query.length", len(query))
+                span.set_attribute("lithos.limit", limit)
+
+                # Check LCMA enabled
+                lcma_config = self._config.lcma
+                if not lcma_config.enabled:
+                    return {
+                        "status": "error",
+                        "code": "lcma_disabled",
+                        "message": "LCMA is disabled via configuration",
+                    }
+
+                from lithos.lcma.retrieve import run_retrieve
+
+                result = await run_retrieve(
+                    query=query,
+                    search=self.search,
+                    knowledge=self.knowledge,
+                    graph=self.graph,
+                    coordination=self.coordination,
+                    edge_store=self.edge_store,
+                    stats_store=self.stats_store,
+                    lcma_config=lcma_config,
+                    limit=limit,
+                    namespace_filter=namespace_filter,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    surface_conflicts=surface_conflicts,
+                    max_context_nodes=max_context_nodes,
+                    tags=tags,
+                    path_prefix=path_prefix,
+                )
+
+                span.set_attribute(
+                    "lithos.result_count",
+                    len(result.get("results", [])),  # type: ignore[union-attr]
+                )
+                return result  # type: ignore[return-value]
 
         @self.mcp.tool()
         @tool_metrics()
