@@ -555,13 +555,20 @@ def truncate_content(content: str, max_length: int) -> tuple[str, bool]:
 
 @dataclass
 class _CachedMeta:
-    """Lightweight metadata cache for filtering without disk I/O."""
+    """Lightweight metadata cache for filtering without disk I/O.
+
+    ``namespace`` is the resolved LCMA namespace — either an explicit value
+    from frontmatter or the path-derived default. Callers MUST read this
+    field rather than re-deriving from ``path`` so explicit overrides are
+    honored consistently across the retrieval pipeline.
+    """
 
     title: str
     author: str
     tags: list[str]
     updated_at: datetime
     path: Path
+    namespace: str
     expires_at: datetime | None = None
     access_scope: str | None = None
     source: str | None = None
@@ -692,12 +699,19 @@ class KnowledgeManager:
                     raw_access_scope: str | None = post.metadata.get("access_scope")  # type: ignore[assignment]
                     raw_source: str | None = post.metadata.get("source")  # type: ignore[assignment]
                     raw_note_type: str | None = post.metadata.get("note_type")  # type: ignore[assignment]
+                    raw_namespace: str | None = post.metadata.get("namespace")  # type: ignore[assignment]
+                    cached_namespace = (
+                        raw_namespace
+                        if isinstance(raw_namespace, str) and raw_namespace
+                        else derive_namespace(rel_path)
+                    )
                     self._meta_cache[doc_id] = _CachedMeta(
                         title=title,
                         author=raw_author if isinstance(raw_author, str) else "",
                         tags=raw_tags if isinstance(raw_tags, list) else [],
                         updated_at=updated_at,
                         path=rel_path,
+                        namespace=cached_namespace,
                         expires_at=cached_expires,
                         access_scope=raw_access_scope
                         if isinstance(raw_access_scope, str)
@@ -939,12 +953,17 @@ class KnowledgeManager:
                     self._source_to_derived[doc_id] = set()
                 self._source_to_derived[doc_id].update(resolved_docs)
 
+            # Resolve namespace: explicit override if set, otherwise derive
+            # from path (matches apply_lcma_defaults at read time).
+            cached_namespace = metadata.namespace or derive_namespace(file_path)
+
             self._meta_cache[doc_id] = _CachedMeta(
                 title=title,
                 author=metadata.author,
                 tags=list(metadata.tags),
                 updated_at=metadata.updated_at,
                 path=file_path,
+                namespace=cached_namespace,
                 expires_at=metadata.expires_at,
                 access_scope=metadata.access_scope,
                 source=metadata.source,
@@ -1298,12 +1317,14 @@ class KnowledgeManager:
                 self._id_to_title[id] = title
 
             # Update metadata cache
+            cached_namespace = doc.metadata.namespace or derive_namespace(doc.path)
             self._meta_cache[id] = _CachedMeta(
                 title=doc.metadata.title,
                 author=doc.metadata.author,
                 tags=list(doc.metadata.tags),
                 updated_at=doc.metadata.updated_at,
                 path=doc.path,
+                namespace=cached_namespace,
                 expires_at=doc.metadata.expires_at,
                 access_scope=doc.metadata.access_scope,
                 source=doc.metadata.source,
@@ -1592,12 +1613,14 @@ class KnowledgeManager:
                 self._source_to_derived[doc_id].update(resolved_docs)
 
         # Update metadata cache
+        cached_namespace = metadata.namespace or derive_namespace(file_path)
         self._meta_cache[doc_id] = _CachedMeta(
             title=title,
             author=metadata.author,
             tags=list(metadata.tags),
             updated_at=metadata.updated_at,
             path=file_path,
+            namespace=cached_namespace,
             expires_at=metadata.expires_at,
             access_scope=metadata.access_scope,
             source=metadata.source,

@@ -680,11 +680,22 @@ def scout_exact_alias(q: QueryContext, k: int) -> list[Candidate]:
     ...
 
 def scout_task_context(q: QueryContext, k: int) -> list[Candidate]:
-    # Notes linked by the same task_id via findings and claims in coordination.db.
-    # Only activated when q.task_id is provided.
-    # Uses existing indexes: idx_findings_task_id, task/claim tables.
-    # Returns notes referenced in findings for this task, notes written by
-    # agents working on the same task, and notes linked by claimed aspects.
+    # Notes linked to this task. Only activated when q.task_id is provided.
+    #
+    # MVP 1 sources (implemented):
+    #   1. Notes referenced in findings for this task — pulled from
+    #      CoordinationService.list_findings(task_id) where finding.knowledge_id
+    #      is set. Uses idx_findings_task_id.
+    #   2. Notes whose frontmatter `source` field equals task_id — i.e. notes
+    #      that were authored *for* this task and recorded the task as their
+    #      provenance source.
+    #
+    # MVP 2+ sources (deferred): notes "linked by claimed aspects" requires
+    # an aspect→note linkage that does not yet exist in coordination.db. A
+    # prior implementation that pulled in *every* note authored by *any*
+    # agent with a non-expired claim on the task was removed because it
+    # flooded results with unrelated notes from long-lived agents — wait
+    # for a real aspect→note index before re-introducing claim-based context.
     ...
 
 def scout_freshness(q: QueryContext, k: int) -> list[Candidate]:

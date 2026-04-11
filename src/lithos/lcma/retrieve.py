@@ -173,15 +173,16 @@ def _dominant_namespace(
     node_ids: list[str],
     knowledge: KnowledgeManager,
 ) -> str:
-    """Return the most common namespace among node_ids; ties broken alphabetically."""
+    """Return the most common namespace among node_ids; ties broken alphabetically.
+
+    Reads ``namespace`` from the metadata cache (which honors explicit
+    frontmatter overrides) — never re-derived from path.
+    """
     ns_counts: dict[str, int] = collections.Counter()
     for nid in node_ids:
         cached = knowledge._meta_cache.get(nid)
         if cached:
-            from lithos.knowledge import derive_namespace
-
-            ns = derive_namespace(cached.path)
-            ns_counts[ns] += 1
+            ns_counts[cached.namespace] += 1
         else:
             ns_counts["default"] += 1
     if not ns_counts:
@@ -237,47 +238,62 @@ async def run_retrieve(
 
     receipt_id = _generate_receipt_id()
     scouts_fired: list[str] = []
-    final_nodes: list[str] = []
+    final_nodes: list[dict[str, object]] = []
+    final_node_ids: list[str] = []
     candidates_considered = 0
     terrace_reached = 0
     temperature: float = lcma_config.temperature_default
 
     try:
         # ── Phase A: parallel scouts ──────────────────────────────
-        common_kw = {
+        # All scouts receive the same set of caller-supplied filters
+        # (namespace, scope, tags, path_prefix) so they enforce a
+        # consistent global view, regardless of which backend they wrap.
+        scout_kw = {
             "namespace_filter": namespace_filter,
             "agent_id": agent_id,
             "task_id": task_id,
+            "tags": tags,
+            "path_prefix": path_prefix,
         }
-        search_kw = {**common_kw, "tags": tags, "path_prefix": path_prefix}
 
-        phase_a_coros = [
-            scout_vector(query, search, knowledge, limit=limit, **search_kw),
-            scout_lexical(query, search, knowledge, limit=limit, **search_kw),
-            scout_exact_alias(query, graph, knowledge, limit=limit, **common_kw),
-            scout_tags_recency(query, knowledge, limit=limit, **search_kw),
-            scout_freshness(query, knowledge, limit=limit, **common_kw),
+        # Phase A scout list — keep names parallel to coros so we can mark
+        # each one as "executed" if it ran without raising. A scout that
+        # ran and returned [] still counts as fired in the audit trail.
+        from collections.abc import Awaitable
+
+        phase_a_names: list[str] = [
+            "scout_vector",
+            "scout_lexical",
+            "scout_exact_alias",
+            "scout_tags_recency",
+            "scout_freshness",
+        ]
+        phase_a_coros: list[Awaitable[list[Candidate]]] = [
+            scout_vector(query, search, knowledge, limit=limit, **scout_kw),
+            scout_lexical(query, search, knowledge, limit=limit, **scout_kw),
+            scout_exact_alias(query, graph, knowledge, limit=limit, **scout_kw),
+            scout_tags_recency(query, knowledge, limit=limit, **scout_kw),
+            scout_freshness(query, knowledge, limit=limit, **scout_kw),
         ]
         # task_context only when task_id provided
         if task_id is not None:
+            phase_a_names.append("scout_task_context")
             phase_a_coros.append(
-                scout_task_context(coordination, knowledge, limit=limit, **common_kw)
+                scout_task_context(coordination, knowledge, limit=limit, **scout_kw)
             )
 
         phase_a_results = await asyncio.gather(*phase_a_coros, return_exceptions=True)
 
-        # Collect successful results
+        # Collect successful results AND track which scouts ran cleanly.
+        executed_scouts: set[str] = set()
         all_candidates: list[Candidate] = []
-        for result in phase_a_results:
+        for name, result in zip(phase_a_names, phase_a_results, strict=True):
             if isinstance(result, BaseException):
-                logger.warning("Phase A scout failed: %s", result)
+                logger.warning("Phase A scout %s failed: %s", name, result)
                 continue
+            executed_scouts.add(name)
             all_candidates.extend(result)
-
-        # Record which scouts fired
-        fired_set: set[str] = set()
-        for c in all_candidates:
-            fired_set.update(c.scouts)
 
         # ── Phase A normalisation for provenance seeding ──────────
         phase_a_normalised = merge_and_normalize(all_candidates)
@@ -288,19 +304,21 @@ async def run_retrieve(
         if seed_ids:
             try:
                 prov_candidates = await scout_provenance(
-                    seed_ids, knowledge, limit=limit, **common_kw
+                    seed_ids, knowledge, limit=limit, **scout_kw
                 )
+                executed_scouts.add("scout_provenance")
                 all_candidates.extend(prov_candidates)
-                for c in prov_candidates:
-                    fired_set.update(c.scouts)
             except Exception:
                 logger.warning("Phase B (provenance) failed", exc_info=True)
 
         # Contradictions stub (not counted)
         await scout_contradictions()
 
-        # Record scouts_fired using canonical names in order
-        scouts_fired = [s for s in ALL_SCOUT_NAMES if s in fired_set]
+        # Record scouts_fired using canonical names in order. A scout
+        # appears here iff it executed without raising — empty result
+        # sets still count as "fired" so the audit trail accurately
+        # reflects what the pipeline did.
+        scouts_fired = [s for s in ALL_SCOUT_NAMES if s in executed_scouts]
 
         # ── Merge & Normalise all candidates ──────────────────────
         merged = merge_and_normalize(all_candidates)
@@ -312,7 +330,17 @@ async def run_retrieve(
 
         # Apply limit
         final_candidates = reranked[:limit]
-        final_nodes = [c.node_id for c in final_candidates]
+        final_node_ids = [c.node_id for c in final_candidates]
+        # Build receipt-shaped final_nodes: id + reasons + scouts so the
+        # audit trail captures *why* each node was retrieved (design §4.6).
+        final_nodes = [
+            {
+                "id": c.node_id,
+                "reasons": list(c.reasons),
+                "scouts": list(c.scouts),
+            }
+            for c in final_candidates
+        ]
 
         # ── Temperature ───────────────────────────────────────────
         temperature = await compute_temperature(edge_store, lcma_config, namespace_filter)
@@ -386,16 +414,16 @@ async def run_retrieve(
             logger.error("Failed to write receipt %s", receipt_id, exc_info=True)
 
         # ── Coactivation + node_stats (after receipt) ─────────────
-        if final_nodes:
+        if final_node_ids:
             try:
-                dom_ns = _dominant_namespace(final_nodes, knowledge)
+                dom_ns = _dominant_namespace(final_node_ids, knowledge)
 
                 # Increment node_stats for every node in final_nodes
-                for nid in final_nodes:
+                for nid in final_node_ids:
                     await stats_store.increment_node_stats(node_id=nid)
 
                 # Increment coactivation for every unordered pair
-                for a, b in itertools.combinations(final_nodes, 2):
+                for a, b in itertools.combinations(final_node_ids, 2):
                     await stats_store.increment_coactivation(node_a=a, node_b=b, namespace=dom_ns)
             except Exception:
                 logger.warning("Coactivation/node_stats update failed", exc_info=True)

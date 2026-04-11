@@ -62,7 +62,7 @@ Exit criteria (all MVPs):
 - [ ] Implement exact/alias/path scout (wraps existing `KnowledgeGraph` link resolution: `_alias_to_node`, slugified title, UUID prefix, path/filename matching)
 - [ ] Implement tags/recency scout (wraps existing `KnowledgeManager.list_all()`)
 - [ ] Implement provenance scout (walk `derived_from_ids` forward and reverse via existing provenance index; sequential, needs Phase A seeds)
-- [ ] Implement task-context scout (notes linked by same `task_id` via findings/claims in `coordination.db`; only activated when `task_id` provided)
+- [ ] Implement task-context scout (notes linked by same `task_id` via findings (`finding.knowledge_id`) and notes whose frontmatter `source` equals `task_id`; only activated when `task_id` provided). Aspect-based claim linkage is deferred to MVP 2+ — coordination.db has no aspect→note index, and the prior "every note authored by any claiming agent" approach flooded results with unrelated notes.
 - [ ] Implement freshness scout (stale-but-relevant notes via existing `expires_at`/`is_stale`; activates more strongly on update/refresh/recheck query signals)
 - [ ] Implement Terrace 1 fast re-rank with `note_type` priors (all neutral 0.5 in MVP 1), diversity (MMR), and basic salience
 - [ ] Define `note_type_prior()` lookup table: all types = 0.5 in MVP 1 (configurable via `LcmaConfig.note_type_priors`; differentiated priors deferred to MVP 2+)

@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS working_memory (
 
 CREATE TABLE IF NOT EXISTS receipts (
     id TEXT PRIMARY KEY,
+    ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     query TEXT NOT NULL,
     "limit" INTEGER NOT NULL,
     namespace_filter TEXT,
@@ -78,12 +79,11 @@ CREATE TABLE IF NOT EXISTS receipts (
     surface_conflicts INTEGER NOT NULL DEFAULT 0,
     temperature REAL NOT NULL,
     terrace_reached INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     agent_id TEXT,
     task_id TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_receipts_created_at ON receipts(created_at);
+CREATE INDEX IF NOT EXISTS idx_receipts_ts ON receipts(ts);
 CREATE INDEX IF NOT EXISTS idx_receipts_task_id ON receipts(task_id);
 CREATE INDEX IF NOT EXISTS idx_receipts_agent_id ON receipts(agent_id);
 CREATE INDEX IF NOT EXISTS idx_working_memory_task_id ON working_memory(task_id);
@@ -155,7 +155,7 @@ class StatsStore:
         namespace_filter: list[str] | None,
         scouts_fired: list[str],
         candidates_considered: int,
-        final_nodes: list[str],
+        final_nodes: list[dict[str, object]],
         conflicts_surfaced: list[dict[str, object]],
         surface_conflicts: bool,
         temperature: float,
@@ -163,7 +163,14 @@ class StatsStore:
         agent_id: str | None = None,
         task_id: str | None = None,
     ) -> None:
-        """Insert a single receipt row."""
+        """Insert a single receipt row.
+
+        ``final_nodes`` is a JSON-serialisable list of objects, each with
+        at least an ``id`` field plus any explainability metadata
+        (typically ``reasons`` and ``scouts``). The shape matches design
+        §4.6 so future ``lithos_receipts`` queries can render audit trails
+        without re-walking the retrieval pipeline.
+        """
         await self._ensure_open()
         ns_json = json.dumps(namespace_filter) if namespace_filter is not None else None
         async with aiosqlite.connect(self.db_path) as db:

@@ -387,22 +387,11 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
             actions=[{"reason": "not_enabled"}],
         )
 
-    if dry_run:
-        # Dry-run reports that a run would execute but does not mutate state.
-        lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": "noop"})
-        return _make_result(
-            "provenance_projection",
-            dry_run,
-            supported=True,
-            status="noop",
-            actions=[{"reason": "dry_run"}],
-        )
-
     edge_store = EdgeStore(config=config)
     knowledge = KnowledgeManager(config=config)
 
     try:
-        counts = await _project_provenance_to_edges(edge_store, knowledge)
+        counts = await _project_provenance_to_edges(edge_store, knowledge, dry_run=dry_run)
     except Exception as exc:
         logger.error("provenance_projection reconcile failed: %s", exc)
         lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": "failed"})

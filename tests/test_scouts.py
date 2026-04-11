@@ -655,3 +655,195 @@ class TestScoutConstants:
         assert SCOUT_FRESHNESS == "scout_freshness"
         assert SCOUT_PROVENANCE == "scout_provenance"
         assert SCOUT_TASK_CONTEXT == "scout_task_context"
+
+
+# ---------------------------------------------------------------------------
+# Global tags / path_prefix filtering across all scouts
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalTagsAndPathFilters:
+    """All scouts must honor caller-supplied ``tags`` and ``path_prefix``
+    filters even when their underlying backend doesn't pre-filter.
+    """
+
+    @pytest.mark.asyncio
+    async def test_exact_alias_filters_on_tags(
+        self, seeded_km: KnowledgeManager, seeded_graph: KnowledgeGraph
+    ) -> None:
+        """exact_alias post-filters resolved candidates against tags."""
+        # _ID1 is "Note One" with tags=["testing", "alpha"], slug "note-one"
+        hits = await scout_exact_alias(
+            "note-one",
+            seeded_graph,
+            seeded_km,
+            tags=["testing"],
+        )
+        assert _ID1 in {c.node_id for c in hits}
+
+        # Filter requiring an unrelated tag should drop it.
+        hits = await scout_exact_alias(
+            "note-one",
+            seeded_graph,
+            seeded_km,
+            tags=["nonexistent"],
+        )
+        assert hits == []
+
+    @pytest.mark.asyncio
+    async def test_exact_alias_filters_on_path_prefix(
+        self, seeded_km: KnowledgeManager, seeded_graph: KnowledgeGraph
+    ) -> None:
+        """exact_alias drops notes whose path doesn't match the prefix."""
+        # _ID2 is "Note Two" under projects/note-two.md, slug "note-two"
+        hits = await scout_exact_alias(
+            "note-two",
+            seeded_graph,
+            seeded_km,
+            path_prefix="projects",
+        )
+        assert _ID2 in {c.node_id for c in hits}
+
+        hits = await scout_exact_alias(
+            "note-two",
+            seeded_graph,
+            seeded_km,
+            path_prefix="other",
+        )
+        assert hits == []
+
+    @pytest.mark.asyncio
+    async def test_provenance_filters_on_tags(self, seeded_km: KnowledgeManager) -> None:
+        """Provenance scout post-filters by tag.
+
+        _ID6 derives from _ID1; _ID1 has tags=["testing","alpha"], _ID6
+        has no tags. Filter requiring "testing" should drop _ID6 even if
+        the lineage walk returns it.
+        """
+        hits = await scout_provenance([_ID1], seeded_km, tags=["testing"])
+        # _ID6 derives from _ID1 but lacks the testing tag.
+        assert _ID6 not in {c.node_id for c in hits}
+
+    @pytest.mark.asyncio
+    async def test_provenance_filters_on_path_prefix(self, seeded_km: KnowledgeManager) -> None:
+        """Provenance scout drops candidates that fail the path prefix."""
+        # _ID6 lives at knowledge root (derived-note.md), so a path_prefix
+        # of "projects" must drop it.
+        hits = await scout_provenance([_ID1], seeded_km, path_prefix="projects")
+        assert _ID6 not in {c.node_id for c in hits}
+
+    @pytest.mark.asyncio
+    async def test_freshness_filters_on_tags(self, seeded_km: KnowledgeManager) -> None:
+        """Freshness scout passes tags down to list_all so the candidate
+        set is pre-filtered (and post-filtered as a defensive net).
+        """
+        # _ID5 is the stale note with tags=["stale"].
+        hits = await scout_freshness("please refresh data", seeded_km, tags=["stale"])
+        assert _ID5 in {c.node_id for c in hits}
+
+        hits = await scout_freshness("please refresh data", seeded_km, tags=["nonexistent"])
+        assert hits == []
+
+    @pytest.mark.asyncio
+    async def test_task_context_filters_on_tags(self, seeded_km: KnowledgeManager) -> None:
+        """task_context scout drops notes that fail the tag filter."""
+        from unittest.mock import AsyncMock
+
+        coordination = AsyncMock()
+        coordination.list_findings.return_value = []
+
+        # _ID3 has source="task-42" and tags=["task"]. Filtering on "task"
+        # should still surface it; filtering on "research" should drop it.
+        hits = await scout_task_context(coordination, seeded_km, task_id="task-42", tags=["task"])
+        assert _ID3 in {c.node_id for c in hits}
+
+        hits = await scout_task_context(
+            coordination, seeded_km, task_id="task-42", tags=["research"]
+        )
+        assert hits == []
+
+
+# ---------------------------------------------------------------------------
+# Explicit namespace override regression test
+# ---------------------------------------------------------------------------
+
+
+class TestExplicitNamespaceOverride:
+    """Notes with explicit ``namespace`` frontmatter must use that value
+    everywhere — not the path-derived default.
+
+    Regression test for the bug where the metadata cache stored only
+    ``path`` and consumers re-derived the namespace from the path,
+    silently dropping explicit overrides.
+    """
+
+    @pytest.fixture
+    def override_km(self, seeded_config: LithosConfig) -> KnowledgeManager:
+        kp = seeded_config.storage.knowledge_path
+        # Note in projects/ subdir whose path-derived namespace would be
+        # "projects" but whose frontmatter says "research/alpha".
+        override_dir = kp / "projects"
+        override_dir.mkdir(exist_ok=True)
+        post = fm.Post(
+            "# Override Note\n\nOverride content",
+            id="00000000-1111-4111-1111-111111111111",
+            title="Override Note",
+            author="agent-alpha",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            tags=["override"],
+            access_scope="shared",
+            namespace="research/alpha",  # explicit override
+        )
+        (override_dir / "override-note.md").write_text(fm.dumps(post))
+        km = KnowledgeManager(seeded_config)
+        return km
+
+    def test_cached_meta_keeps_explicit_namespace(self, override_km: KnowledgeManager) -> None:
+        cached = override_km._meta_cache["00000000-1111-4111-1111-111111111111"]
+        # Path-derived would be "projects"; explicit override is "research/alpha".
+        assert cached.namespace == "research/alpha"
+
+    @pytest.mark.asyncio
+    async def test_namespace_filter_honors_explicit_override(
+        self,
+        override_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+    ) -> None:
+        """A namespace_filter for the explicit value matches; the path-derived
+        value does NOT match (proves the override is being read everywhere).
+        """
+        from unittest.mock import patch
+
+        from lithos.search import SemanticResult
+
+        doc_id = "00000000-1111-4111-1111-111111111111"
+        mock_results = [
+            SemanticResult(
+                id=doc_id,
+                title="Override Note",
+                snippet="content",
+                similarity=0.9,
+                path="projects/override-note.md",
+            ),
+        ]
+
+        # 1. Filter on explicit namespace → match
+        with patch.object(seeded_search, "semantic_search", return_value=mock_results):
+            hits = await scout_vector(
+                "anything",
+                seeded_search,
+                override_km,
+                namespace_filter=["research/alpha"],
+            )
+        assert {c.node_id for c in hits} == {doc_id}
+
+        # 2. Filter on path-derived namespace → no match
+        with patch.object(seeded_search, "semantic_search", return_value=mock_results):
+            hits = await scout_vector(
+                "anything",
+                seeded_search,
+                override_km,
+                namespace_filter=["projects"],
+            )
+        assert hits == []

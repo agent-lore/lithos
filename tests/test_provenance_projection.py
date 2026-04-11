@@ -155,12 +155,51 @@ class TestForwardProjection:
     async def test_namespace_from_path(
         self, seeded_km: KnowledgeManager, edge_store: EdgeStore
     ) -> None:
-        """Edge namespace is derived from the document's relative path."""
+        """Edge namespace is derived from the document's relative path
+        when no explicit override is set in frontmatter."""
         await _project_provenance_to_edges(edge_store, seeded_km)
         edges = await edge_store.list_edges(edge_type="derived_from")
         # Gamma is in projects/ subdir → namespace = "projects"
         assert len(edges) == 1
         assert edges[0]["namespace"] == "projects"
+
+    @pytest.mark.asyncio
+    async def test_namespace_explicit_override_wins(
+        self, seeded_config: LithosConfig, edge_store: EdgeStore
+    ) -> None:
+        """An explicit ``namespace`` in frontmatter must override path
+        derivation when projecting derived_from edges.
+        """
+        kp = seeded_config.storage.knowledge_path
+        _write_note(kp, doc_id=_ID1, title="Source", content="Source content")
+
+        # Note 2 lives in projects/ (path-derived namespace = "projects")
+        # but explicitly overrides to "research/alpha".
+        now = datetime.now(timezone.utc).isoformat()
+        post = fm.Post(
+            "Override-namespaced derivation",
+            id=_ID2,
+            title="Derived Override",
+            author="test",
+            created_at=now,
+            updated_at=now,
+            tags=["test"],
+            access_scope="shared",
+            derived_from_ids=[_ID1],
+            namespace="research/alpha",
+        )
+        target = kp / "projects"
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "derived-override.md").write_text(fm.dumps(post))
+
+        km = KnowledgeManager(seeded_config)
+
+        result = await _project_provenance_to_edges(edge_store, km)
+        assert result["created"] == 1
+
+        edges = await edge_store.list_edges(edge_type="derived_from")
+        assert len(edges) == 1
+        assert edges[0]["namespace"] == "research/alpha"
 
 
 # ---------------------------------------------------------------------------
@@ -319,22 +358,53 @@ class TestReconcileWireUp:
         assert len(edges) >= 1
 
     @pytest.mark.asyncio
-    async def test_reconcile_dry_run_does_not_mutate(
+    async def test_reconcile_dry_run_reports_plan_without_mutating(
         self, seeded_config: LithosConfig, seeded_km: KnowledgeManager
     ) -> None:
-        """Dry-run must not write any edges."""
+        """Dry-run computes the planned create/remove counts using the
+        same diff logic as a real run, but applies nothing.
+        """
+        from lithos.reconcile import reconcile
+
+        store = EdgeStore(seeded_config)
+        await store.open()
+        _ = seeded_km  # seed Alpha/Beta/Gamma; Gamma derives from Alpha
+
+        result = await reconcile(scope="provenance_projection", dry_run=True, config=seeded_config)
+        assert result["supported"] is True
+        # Dry-run reports the planned non-zero delta — status is "ok"
+        # because there is real work the run would have done.
+        assert result["status"] == "ok"
+        assert result["summary"]["repaired"] == 1
+        assert result["actions"] == [{"created": 1, "removed": 0}]
+
+        # No edges were actually written.
+        edges = await store.list_edges(edge_type="derived_from")
+        assert len(edges) == 0
+
+    @pytest.mark.asyncio
+    async def test_reconcile_dry_run_noop_when_already_in_sync(
+        self, seeded_config: LithosConfig, seeded_km: KnowledgeManager
+    ) -> None:
+        """When the projection is already in sync, dry-run reports zero
+        planned actions and status=noop.
+        """
         from lithos.reconcile import reconcile
 
         store = EdgeStore(seeded_config)
         await store.open()
         _ = seeded_km
 
-        result = await reconcile(scope="provenance_projection", dry_run=True, config=seeded_config)
-        assert result["supported"] is True
-        assert result["status"] == "noop"
+        # Apply the projection so the store is in sync.
+        await reconcile(scope="provenance_projection", config=seeded_config)
+        edges_after_real = await store.list_edges(edge_type="derived_from")
+        assert len(edges_after_real) == 1
 
-        edges = await store.list_edges(edge_type="derived_from")
-        assert len(edges) == 0
+        # Dry-run now plans nothing.
+        result = await reconcile(scope="provenance_projection", dry_run=True, config=seeded_config)
+        assert result["status"] == "noop"
+        assert result["summary"]["repaired"] == 0
+        assert result["actions"] == [{"created": 0, "removed": 0}]
 
     @pytest.mark.asyncio
     async def test_reconcile_unsupported_when_edges_db_missing(

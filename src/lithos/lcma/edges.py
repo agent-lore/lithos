@@ -277,6 +277,8 @@ class EdgeStore:
 async def _project_provenance_to_edges(
     edge_store: EdgeStore,
     knowledge: KnowledgeManager,
+    *,
+    dry_run: bool = False,
 ) -> dict[str, int]:
     """Project ``derived_from_ids`` from frontmatter into edges.db.
 
@@ -285,7 +287,9 @@ async def _project_provenance_to_edges(
     Removes orphan ``derived_from`` edges that no longer correspond to any
     document's frontmatter.
 
-    Returns ``{"created": N, "removed": M}`` summarising changes.
+    Returns ``{"created": N, "removed": M}`` summarising the planned (or
+    applied) delta. When ``dry_run=True`` the same diff is computed but no
+    inserts or deletes are issued — useful for the reconcile dry-run path.
 
     No-op (returns ``{"created": 0, "removed": 0}``) when edges.db does not
     exist on disk.
@@ -293,15 +297,15 @@ async def _project_provenance_to_edges(
     if not edge_store.db_path.exists():
         return {"created": 0, "removed": 0}
 
-    from lithos.knowledge import derive_namespace
-
-    # Build the desired set of (from_id, to_id, namespace) from frontmatter
+    # Build the desired set of (from_id, to_id, namespace) from frontmatter.
+    # Namespace comes from the metadata cache so explicit frontmatter
+    # overrides are honored — never re-derived from path here.
     desired: set[tuple[str, str, str]] = set()
     for doc_id, sources in knowledge._doc_to_sources.items():
         if not sources:
             continue
         cached = knowledge._meta_cache.get(doc_id)
-        ns = derive_namespace(cached.path) if cached else "default"
+        ns = cached.namespace if cached else "default"
         for source_id in sources:
             desired.add((doc_id, source_id, ns))
 
@@ -314,9 +318,16 @@ async def _project_provenance_to_edges(
 
     existing_keys = set(existing_map.keys())
 
-    # Create missing edges
+    # Compute the diff. Dry-run reports planned counts without writing.
     to_create = desired - existing_keys
-    created = 0
+    to_remove = existing_keys - desired
+    created_count = len(to_create)
+    removed_count = len(to_remove)
+
+    if dry_run:
+        return {"created": created_count, "removed": removed_count}
+
+    # Apply the create side of the diff.
     for from_id, to_id, ns in to_create:
         await edge_store.upsert(
             from_id=from_id,
@@ -326,11 +337,10 @@ async def _project_provenance_to_edges(
             namespace=ns,
             provenance_type="frontmatter",
         )
-        created += 1
 
-    # Remove orphan edges
-    to_remove = existing_keys - desired
+    # Apply the remove side; trust the planned count rather than re-counting.
     orphan_ids = [existing_map[k] for k in to_remove]
-    removed = await edge_store.delete_edges(edge_ids=orphan_ids)
+    if orphan_ids:
+        await edge_store.delete_edges(edge_ids=orphan_ids)
 
-    return {"created": created, "removed": removed}
+    return {"created": created_count, "removed": removed_count}

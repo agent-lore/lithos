@@ -92,6 +92,31 @@ def _passes_access_scope(
     return True
 
 
+def _passes_tags_filter(meta_tags: list[str] | None, tags: list[str] | None) -> bool:
+    """Return True if the note has at least one of the requested tags.
+
+    ``tags=None`` (the common case) means "no filter" — all notes pass.
+    Empty list also means "no filter".
+    """
+    if not tags:
+        return True
+    if not meta_tags:
+        return False
+    return any(t in meta_tags for t in tags)
+
+
+def _passes_path_prefix(meta_path: object | None, path_prefix: str | None) -> bool:
+    """Return True if the note's path starts with ``path_prefix``.
+
+    ``path_prefix=None`` or empty string means "no filter" — all notes pass.
+    """
+    if not path_prefix:
+        return True
+    if meta_path is None:
+        return False
+    return str(meta_path).startswith(path_prefix)
+
+
 # ---------------------------------------------------------------------------
 # Scout implementations
 # ---------------------------------------------------------------------------
@@ -131,6 +156,10 @@ async def scout_vector(
             agent_id,
             task_id,
         ):
+            continue
+        if not _passes_tags_filter(meta.tags if meta else None, tags):
+            continue
+        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         candidates.append(
             Candidate(
@@ -180,6 +209,10 @@ async def scout_lexical(
             task_id,
         ):
             continue
+        if not _passes_tags_filter(meta.tags if meta else None, tags):
+            continue
+        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
+            continue
         candidates.append(
             Candidate(
                 node_id=doc_id,
@@ -202,6 +235,8 @@ async def scout_exact_alias(
     namespace_filter: list[str] | None = None,
     agent_id: str | None = None,
     task_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
 ) -> list[Candidate]:
     """Resolve query via wiki-link resolution, UUID-prefix, and slug matching."""
     found_ids: list[str] = []
@@ -236,6 +271,10 @@ async def scout_exact_alias(
             agent_id,
             task_id,
         ):
+            continue
+        if not _passes_tags_filter(meta.tags if meta else None, tags):
+            continue
+        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         candidates.append(
             Candidate(
@@ -304,12 +343,19 @@ async def scout_freshness(
     namespace_filter: list[str] | None = None,
     agent_id: str | None = None,
     task_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
 ) -> list[Candidate]:
     """Boost notes with expires_at/is_stale, keyword-triggered."""
     if not _FRESHNESS_KEYWORDS.search(query):
         return []
 
-    docs, _ = await knowledge.list_all(limit=limit * 5)
+    # Push tag/path filters down to list_all so the candidate set is narrower.
+    docs, _ = await knowledge.list_all(
+        tags=tags,
+        path_prefix=path_prefix,
+        limit=limit * 5,
+    )
     candidates: list[Candidate] = []
     for doc in docs:
         meta = doc.metadata
@@ -343,6 +389,8 @@ async def scout_provenance(
     namespace_filter: list[str] | None = None,
     agent_id: str | None = None,
     task_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
 ) -> list[Candidate]:
     """Forward/reverse walk of derived_from_ids provenance index."""
     seen: set[str] = set(seed_ids)
@@ -379,6 +427,10 @@ async def scout_provenance(
             task_id,
         ):
             continue
+        if not _passes_tags_filter(meta.tags if meta else None, tags):
+            continue
+        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
+            continue
         # All provenance hits get equal raw score
         candidates.append(
             Candidate(
@@ -401,6 +453,8 @@ async def scout_task_context(
     limit: int = 10,
     namespace_filter: list[str] | None = None,
     agent_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
 ) -> list[Candidate]:
     """Pull notes linked to this task via findings or by authorship.
 
@@ -445,6 +499,10 @@ async def scout_task_context(
             task_id,
         ):
             continue
+        if not _passes_tags_filter(meta.tags if meta else None, tags):
+            continue
+        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
+            continue
         candidates.append(
             Candidate(
                 node_id=doc_id,
@@ -476,19 +534,24 @@ class _CachedMetaView:
     access_scope: str
     author: str
     source: str | None
+    tags: list[str]
+    path: object  # Path, but kept loose to avoid an import cycle
 
 
 def _get_cached_meta(knowledge: KnowledgeManager, doc_id: str) -> _CachedMetaView | None:
-    """Read lightweight metadata from KnowledgeManager's in-memory cache."""
+    """Read lightweight metadata from KnowledgeManager's in-memory cache.
+
+    The namespace comes directly from the cache (which honors explicit
+    frontmatter overrides) — never re-derived from path here.
+    """
     cached = knowledge._meta_cache.get(doc_id)
     if cached is None:
         return None
-    from lithos.knowledge import derive_namespace
-
-    rel_path = cached.path
     return _CachedMetaView(
-        namespace=derive_namespace(rel_path),
+        namespace=cached.namespace,
         access_scope=cached.access_scope or "shared",
         author=cached.author,
         source=cached.source,
+        tags=list(cached.tags),
+        path=cached.path,
     )

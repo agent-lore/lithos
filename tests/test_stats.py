@@ -117,6 +117,7 @@ class TestStatsStoreCreation:
         conn.close()
         assert columns == {
             "id",
+            "ts",
             "query",
             "limit",
             "namespace_filter",
@@ -127,20 +128,19 @@ class TestStatsStoreCreation:
             "surface_conflicts",
             "temperature",
             "terrace_reached",
-            "created_at",
             "agent_id",
             "task_id",
         }
 
     async def test_receipts_indexes(self, stats_store: StatsStore) -> None:
-        """receipts has indexes on created_at, task_id, agent_id."""
+        """receipts has indexes on ts, task_id, agent_id."""
         conn = sqlite3.connect(str(stats_store.db_path))
         cursor = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='receipts'"
         )
         indexes = {row[0] for row in cursor.fetchall()}
         conn.close()
-        assert "idx_receipts_created_at" in indexes
+        assert "idx_receipts_ts" in indexes
         assert "idx_receipts_task_id" in indexes
         assert "idx_receipts_agent_id" in indexes
 
@@ -284,13 +284,14 @@ class TestInsertSelectRoundTrip:
         async with aiosqlite.connect(stats_store.db_path) as db:
             await db.execute(
                 "INSERT INTO receipts "
-                '(id, query, "limit", namespace_filter, scouts_fired, '
+                '(id, ts, query, "limit", namespace_filter, scouts_fired, '
                 " candidates_considered, final_nodes, conflicts_surfaced, "
                 " surface_conflicts, temperature, terrace_reached, "
-                " created_at, agent_id, task_id) "
+                " agent_id, task_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     "rcpt_test1",
+                    now,
                     "test query",
                     10,
                     None,
@@ -301,7 +302,6 @@ class TestInsertSelectRoundTrip:
                     1,
                     0.5,
                     1,
-                    now,
                     "agent_1",
                     "task_1",
                 ),

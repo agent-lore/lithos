@@ -728,6 +728,161 @@ class TestMmrDiversity:
 # ---------------------------------------------------------------------------
 
 
+class TestScoutsFiredAuditTrail:
+    """``receipts.scouts_fired`` records every scout that ran cleanly,
+    not just scouts that produced candidates. A scout that returns []
+    must still appear in the audit trail.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_scouts_still_fire(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """When every scout returns [], scouts_fired must still list them."""
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            patch.object(seeded_search, "full_text_search", return_value=[]),
+        ):
+            result = await run_retrieve(
+                query="zzzz_no_match_anywhere",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT scouts_fired FROM receipts WHERE id = ?",
+                (result["receipt_id"],),
+            )
+            row = await cursor.fetchone()
+        assert row is not None
+        fired = json.loads(row["scouts_fired"])
+        # Five Phase A scouts ran (no task_id, so no scout_task_context).
+        # All of them returned [] but they all executed without raising,
+        # so all five must appear in the audit trail.
+        assert "scout_vector" in fired
+        assert "scout_lexical" in fired
+        assert "scout_exact_alias" in fired
+        assert "scout_tags_recency" in fired
+        assert "scout_freshness" in fired
+
+    @pytest.mark.asyncio
+    async def test_failing_scout_omitted_from_audit(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """A scout that raises must NOT appear in scouts_fired."""
+        with (
+            patch.object(seeded_search, "semantic_search", side_effect=RuntimeError("boom")),
+            patch.object(seeded_search, "full_text_search", return_value=[]),
+        ):
+            result = await run_retrieve(
+                query="anything",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT scouts_fired FROM receipts WHERE id = ?",
+                (result["receipt_id"],),
+            )
+            row = await cursor.fetchone()
+        assert row is not None
+        fired = json.loads(row["scouts_fired"])
+        assert "scout_vector" not in fired  # raised
+        assert "scout_lexical" in fired  # ran cleanly with []
+
+
+class TestReceiptFinalNodesShape:
+    """``receipts.final_nodes`` is a JSON array of {id, reasons, scouts}
+    objects per design §4.6 — bare ID arrays drop the explainability
+    metadata that downstream tooling needs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_final_nodes_carries_reasons(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        from lithos.search import SearchResult
+
+        tantivy_hits = [
+            SearchResult(id=_ID1, title="Alpha Note", snippet="", score=0.9, path="alpha-note.md"),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
+        ):
+            result = await run_retrieve(
+                query="alpha",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT final_nodes FROM receipts WHERE id = ?",
+                (result["receipt_id"],),
+            )
+            row = await cursor.fetchone()
+        assert row is not None
+        nodes = json.loads(row["final_nodes"])
+        assert isinstance(nodes, list)
+        assert len(nodes) >= 1
+        first = nodes[0]
+        assert isinstance(first, dict)
+        assert "id" in first
+        assert "reasons" in first
+        assert "scouts" in first
+        assert first["id"] == _ID1
+        # Lexical scout produces a "lexical match score ..." reason.
+        assert any("lexical" in r for r in first["reasons"])
+
+
 class TestReceiptFields:
     @pytest.mark.asyncio
     async def test_candidates_considered_populated(
