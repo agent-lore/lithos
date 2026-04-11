@@ -563,6 +563,8 @@ class _CachedMeta:
     updated_at: datetime
     path: Path
     expires_at: datetime | None = None
+    access_scope: str | None = None
+    source: str | None = None
 
 
 class _UnsetType:
@@ -686,6 +688,8 @@ class KnowledgeManager:
                         cached_expires = raw_expires
                     else:
                         cached_expires = None
+                    raw_access_scope: str | None = post.metadata.get("access_scope")  # type: ignore[assignment]
+                    raw_source: str | None = post.metadata.get("source")  # type: ignore[assignment]
                     self._meta_cache[doc_id] = _CachedMeta(
                         title=title,
                         author=raw_author if isinstance(raw_author, str) else "",
@@ -693,6 +697,10 @@ class KnowledgeManager:
                         updated_at=updated_at,
                         path=rel_path,
                         expires_at=cached_expires,
+                        access_scope=raw_access_scope
+                        if isinstance(raw_access_scope, str)
+                        else None,
+                        source=raw_source if isinstance(raw_source, str) else None,
                     )
 
                     # Populate source_url -> id map
@@ -935,6 +943,8 @@ class KnowledgeManager:
                 updated_at=metadata.updated_at,
                 path=file_path,
                 expires_at=metadata.expires_at,
+                access_scope=metadata.access_scope,
+                source=metadata.source,
             )
 
             logger.info(
@@ -1291,6 +1301,8 @@ class KnowledgeManager:
                 updated_at=doc.metadata.updated_at,
                 path=doc.path,
                 expires_at=doc.metadata.expires_at,
+                access_scope=doc.metadata.access_scope,
+                source=doc.metadata.source,
             )
 
             if logger.isEnabledFor(logging.INFO):
@@ -1582,6 +1594,8 @@ class KnowledgeManager:
             updated_at=metadata.updated_at,
             path=file_path,
             expires_at=metadata.expires_at,
+            access_scope=metadata.access_scope,
+            source=metadata.source,
         )
 
         return doc

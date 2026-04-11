@@ -77,6 +77,9 @@ Started: Thu Apr  9 02:36:23 UTC 2026
 - LithosConfig env vars for nested models use `__` delimiter: e.g. `LITHOS_LCMA__ENABLED=false`
 - EventBus.subscribe() accepts optional `maxsize` param; default from EventsConfig.subscriber_queue_size; ENRICH_SUBSCRIBER_QUEUE_SIZE = 10_000 for large queues
 - All sync SearchEngine methods (full_text_search, semantic_search, hybrid_search) are called via `asyncio.to_thread()` from async server code; sync CLI/internal calls don't need wrapping
+- Scout canonical names: `scout_vector`, `scout_lexical`, `scout_exact_alias`, `scout_tags_recency`, `scout_freshness`, `scout_provenance`, `scout_task_context` — these are values in receipts.scouts_fired
+- `_CachedMeta` in knowledge.py now includes `access_scope` and `source` fields for access_scope gating
+- `_resolve_link` returns node_id which IS doc_id (graph uses `node_id = doc.id`); use `knowledge.has_document(resolved)` to verify
 ---
 
 ## 2026-04-11 - US-005
@@ -119,4 +122,21 @@ Started: Thu Apr  9 02:36:23 UTC 2026
   - All server.py search call sites were already wrapped in asyncio.to_thread() — the wrapping was done in a prior iteration
   - graph_search in search.py internally calls hybrid_search synchronously; this is fine since graph_search itself is called via asyncio.to_thread from server.py
   - CLI search calls are synchronous (Click commands) — no wrapping needed
+---
+
+## 2026-04-11 - US-008
+- Implemented seven MVP 1 scouts in src/lithos/lcma/scouts.py
+- Files changed:
+  - `src/lithos/lcma/scouts.py`: New file with 7 async scout functions (scout_vector, scout_lexical, scout_exact_alias, scout_tags_recency, scout_freshness, scout_provenance, scout_task_context) + scout_contradictions stub + gating helpers
+  - `src/lithos/lcma/__init__.py`: Updated to export scout constants (SCOUT_VECTOR, etc., ALL_SCOUT_NAMES)
+  - `src/lithos/knowledge.py`: Extended _CachedMeta with access_scope and source fields for proper access_scope gating in scouts
+  - `tests/test_scouts.py`: 30 tests covering each scout individually with seeded data — raw scores, namespace filter, access_scope gating, edge cases
+- **Learnings for future iterations:**
+  - Scout canonical names include `scout_` prefix: `scout_vector`, `scout_lexical`, etc. — these appear in receipts.scouts_fired
+  - _CachedMeta now includes access_scope and source fields; all 4 construction sites updated
+  - Scouts use _get_cached_meta() which returns _CachedMetaView typed dataclass (avoids pyright dict[str, object] issues)
+  - _resolve_link returns node_id which IS doc_id (node_id = doc.id in graph.py:147)
+  - derived_from_ids must be valid UUIDs — non-UUID IDs like "note-001" are silently skipped during scan
+  - scout_freshness is keyword-triggered: only fires on queries containing update/refresh/recheck/verify
+  - scout_tags_recency returns [] when both tags and path_prefix are absent (explicit no-op)
 ---

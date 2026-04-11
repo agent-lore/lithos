@@ -1,0 +1,494 @@
+"""LCMA Scout functions — seven MVP 1 scouts.
+
+Each scout wraps existing Lithos infrastructure and returns a list of
+``Candidate`` objects with raw (pre-normalisation) scores.  Normalisation
+is handled by ``merge_and_normalize`` in the retrieval pipeline.
+
+All scouts are async-safe: synchronous backends (Tantivy, ChromaDB) are
+wrapped with ``asyncio.to_thread()``.
+
+Every scout applies **namespace_filter** gating and **access_scope** gating
+before returning candidates.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from lithos.lcma.utils import Candidate
+
+if TYPE_CHECKING:
+    from lithos.coordination import CoordinationService
+    from lithos.graph import KnowledgeGraph
+    from lithos.knowledge import KnowledgeManager
+    from lithos.search import SearchEngine
+
+logger = logging.getLogger(__name__)
+
+# Canonical scout names — used in receipts.scouts_fired
+SCOUT_VECTOR = "scout_vector"
+SCOUT_LEXICAL = "scout_lexical"
+SCOUT_EXACT_ALIAS = "scout_exact_alias"
+SCOUT_TAGS_RECENCY = "scout_tags_recency"
+SCOUT_FRESHNESS = "scout_freshness"
+SCOUT_PROVENANCE = "scout_provenance"
+SCOUT_TASK_CONTEXT = "scout_task_context"
+
+ALL_SCOUT_NAMES = [
+    SCOUT_VECTOR,
+    SCOUT_LEXICAL,
+    SCOUT_EXACT_ALIAS,
+    SCOUT_TAGS_RECENCY,
+    SCOUT_FRESHNESS,
+    SCOUT_PROVENANCE,
+    SCOUT_TASK_CONTEXT,
+]
+
+# Keywords that trigger freshness boost
+_FRESHNESS_KEYWORDS = re.compile(r"\b(update|refresh|recheck|verify)\b", re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------
+# Gating helpers
+# ---------------------------------------------------------------------------
+
+
+def _passes_namespace_filter(namespace: str | None, namespace_filter: list[str] | None) -> bool:
+    """Return True if namespace passes the filter (or no filter is set)."""
+    if namespace_filter is None:
+        return True
+    if namespace is None:
+        return False
+    return namespace in namespace_filter
+
+
+def _passes_access_scope(
+    access_scope: str | None,
+    author: str | None,
+    source: str | None,
+    agent_id: str | None,
+    task_id: str | None,
+) -> bool:
+    """Return True if the note's access_scope allows this caller to see it.
+
+    - ``shared``: always visible
+    - ``task``: visible only if caller's task_id matches note's source
+    - ``agent_private``: visible only if caller's agent_id matches note's author
+    """
+    if access_scope is None or access_scope == "shared":
+        return True
+    if access_scope == "task":
+        if not task_id or not source:
+            return False
+        return source == task_id
+    if access_scope == "agent_private":
+        if not agent_id or not author:
+            return False
+        return author == agent_id
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Scout implementations
+# ---------------------------------------------------------------------------
+
+
+async def scout_vector(
+    query: str,
+    search: SearchEngine,
+    knowledge: KnowledgeManager,
+    *,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
+) -> list[Candidate]:
+    """ChromaDB semantic search via asyncio.to_thread."""
+    results = await asyncio.to_thread(
+        search.semantic_search,
+        query=query,
+        limit=limit * 3,  # over-fetch to allow for gating
+        tags=tags,
+        path_prefix=path_prefix,
+    )
+    candidates: list[Candidate] = []
+    for r in results:
+        doc_id = r.id
+        meta = _get_cached_meta(knowledge, doc_id)
+        ns = meta.namespace if meta else None
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(
+            meta.access_scope if meta else None,
+            meta.author if meta else None,
+            meta.source if meta else None,
+            agent_id,
+            task_id,
+        ):
+            continue
+        candidates.append(
+            Candidate(
+                node_id=doc_id,
+                score=r.similarity,
+                reasons=[f"semantic similarity {r.similarity:.3f}"],
+                scouts=[SCOUT_VECTOR],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+async def scout_lexical(
+    query: str,
+    search: SearchEngine,
+    knowledge: KnowledgeManager,
+    *,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
+) -> list[Candidate]:
+    """Tantivy full-text search via asyncio.to_thread."""
+    results = await asyncio.to_thread(
+        search.full_text_search,
+        query=query,
+        limit=limit * 3,
+        tags=tags,
+        path_prefix=path_prefix,
+    )
+    candidates: list[Candidate] = []
+    for r in results:
+        doc_id = r.id
+        meta = _get_cached_meta(knowledge, doc_id)
+        ns = meta.namespace if meta else None
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(
+            meta.access_scope if meta else None,
+            meta.author if meta else None,
+            meta.source if meta else None,
+            agent_id,
+            task_id,
+        ):
+            continue
+        candidates.append(
+            Candidate(
+                node_id=doc_id,
+                score=r.score,
+                reasons=[f"lexical match score {r.score:.3f}"],
+                scouts=[SCOUT_LEXICAL],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+async def scout_exact_alias(
+    query: str,
+    graph: KnowledgeGraph,
+    knowledge: KnowledgeManager,
+    *,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+) -> list[Candidate]:
+    """Resolve query via wiki-link resolution, UUID-prefix, and slug matching."""
+    found_ids: list[str] = []
+
+    # 1. KnowledgeGraph._resolve_link (node_id == doc_id in graph)
+    resolved = graph._resolve_link(query)
+    if resolved and knowledge.has_document(resolved):
+        found_ids.append(resolved)
+
+    # 2. UUID-prefix matching
+    query_lower = query.lower().strip()
+    for doc_id in knowledge._id_to_path:
+        if doc_id.lower().startswith(query_lower) and doc_id not in found_ids:
+            found_ids.append(doc_id)
+
+    # 3. Slug matching via KnowledgeManager.get_id_by_slug
+    slug_id = knowledge.get_id_by_slug(query)
+    if slug_id and slug_id not in found_ids:
+        found_ids.append(slug_id)
+
+    # Apply gating and build candidates
+    candidates: list[Candidate] = []
+    for doc_id in found_ids:
+        meta = _get_cached_meta(knowledge, doc_id)
+        ns = meta.namespace if meta else None
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(
+            meta.access_scope if meta else None,
+            meta.author if meta else None,
+            meta.source if meta else None,
+            agent_id,
+            task_id,
+        ):
+            continue
+        candidates.append(
+            Candidate(
+                node_id=doc_id,
+                score=1.0,
+                reasons=["exact alias/link match"],
+                scouts=[SCOUT_EXACT_ALIAS],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+async def scout_tags_recency(
+    query: str,
+    knowledge: KnowledgeManager,
+    *,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
+) -> list[Candidate]:
+    """Tag + path_prefix filter sorted by recency. Returns [] when both are absent."""
+    if not tags and not path_prefix:
+        return []
+
+    docs, _ = await knowledge.list_all(
+        tags=tags,
+        path_prefix=path_prefix,
+        limit=limit * 3,
+    )
+    # Sort by updated_at descending (most recent first)
+    docs.sort(key=lambda d: d.metadata.updated_at, reverse=True)
+
+    candidates: list[Candidate] = []
+    for i, doc in enumerate(docs):
+        meta = doc.metadata
+        ns = meta.namespace
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(meta.access_scope, meta.author, meta.source, agent_id, task_id):
+            continue
+        # Recency score: higher for more recent, decaying with rank
+        recency_score = 1.0 / (1.0 + i)
+        candidates.append(
+            Candidate(
+                node_id=meta.id,
+                score=recency_score,
+                reasons=[f"tag/path match, recency rank {i + 1}"],
+                scouts=[SCOUT_TAGS_RECENCY],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+async def scout_freshness(
+    query: str,
+    knowledge: KnowledgeManager,
+    *,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+) -> list[Candidate]:
+    """Boost notes with expires_at/is_stale, keyword-triggered."""
+    if not _FRESHNESS_KEYWORDS.search(query):
+        return []
+
+    docs, _ = await knowledge.list_all(limit=limit * 5)
+    candidates: list[Candidate] = []
+    for doc in docs:
+        meta = doc.metadata
+        if meta.expires_at is None:
+            continue
+        ns = meta.namespace
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(meta.access_scope, meta.author, meta.source, agent_id, task_id):
+            continue
+        # Stale notes get higher score (they need refreshing)
+        score = 1.0 if meta.is_stale else 0.5
+        candidates.append(
+            Candidate(
+                node_id=meta.id,
+                score=score,
+                reasons=["stale/expiring note" if meta.is_stale else "has expiry date"],
+                scouts=[SCOUT_FRESHNESS],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+async def scout_provenance(
+    seed_ids: list[str],
+    knowledge: KnowledgeManager,
+    *,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+) -> list[Candidate]:
+    """Forward/reverse walk of derived_from_ids provenance index."""
+    seen: set[str] = set(seed_ids)
+    related: list[tuple[str, str]] = []  # (doc_id, reason)
+
+    for seed_id in seed_ids:
+        # Forward: what does this doc derive from?
+        sources = knowledge.get_doc_sources(seed_id)
+        for src_id in sources:
+            if src_id not in seen:
+                seen.add(src_id)
+                related.append((src_id, f"source of {seed_id[:8]}"))
+
+        # Reverse: what derives from this doc?
+        derived = knowledge.get_derived_docs(seed_id)
+        for der_id in derived:
+            if der_id not in seen:
+                seen.add(der_id)
+                related.append((der_id, f"derived from {seed_id[:8]}"))
+
+    candidates: list[Candidate] = []
+    for doc_id, reason in related:
+        if not knowledge.has_document(doc_id):
+            continue
+        meta = _get_cached_meta(knowledge, doc_id)
+        ns = meta.namespace if meta else None
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(
+            meta.access_scope if meta else None,
+            meta.author if meta else None,
+            meta.source if meta else None,
+            agent_id,
+            task_id,
+        ):
+            continue
+        # All provenance hits get equal raw score
+        candidates.append(
+            Candidate(
+                node_id=doc_id,
+                score=1.0,
+                reasons=[reason],
+                scouts=[SCOUT_PROVENANCE],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+async def scout_task_context(
+    coordination: CoordinationService,
+    knowledge: KnowledgeManager,
+    *,
+    task_id: str | None = None,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+) -> list[Candidate]:
+    """Pull notes from task findings and agent claims. Returns [] when task_id is None."""
+    if task_id is None:
+        return []
+
+    found_ids: set[str] = set()
+
+    # 1. Findings with non-null knowledge_id
+    findings = await coordination.list_findings(task_id)
+    for f in findings:
+        if f.knowledge_id is not None:
+            found_ids.add(f.knowledge_id)
+
+    # 2. Notes authored by agents with non-expired claims for this task
+    try:
+        statuses = await coordination.get_task_status(task_id=task_id)
+        claiming_agents: set[str] = set()
+        for ts in statuses:
+            for claim in ts.claims:
+                claiming_agents.add(claim.agent)
+
+        if claiming_agents:
+            for doc_id, cached in knowledge._meta_cache.items():
+                if cached.author in claiming_agents:
+                    found_ids.add(doc_id)
+    except Exception:
+        logger.warning("scout_task_context: failed to query claims", exc_info=True)
+
+    candidates: list[Candidate] = []
+    for doc_id in found_ids:
+        if not knowledge.has_document(doc_id):
+            continue
+        meta = _get_cached_meta(knowledge, doc_id)
+        ns = meta.namespace if meta else None
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(
+            meta.access_scope if meta else None,
+            meta.author if meta else None,
+            meta.source if meta else None,
+            agent_id,
+            task_id,
+        ):
+            continue
+        candidates.append(
+            Candidate(
+                node_id=doc_id,
+                score=1.0,
+                reasons=["task context match"],
+                scouts=[SCOUT_TASK_CONTEXT],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+async def scout_contradictions() -> list[Candidate]:
+    """Non-counted stub — always returns []. Not included in receipts.scouts_fired."""
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _CachedMetaView:
+    """Typed view of cached metadata for gating decisions."""
+
+    namespace: str
+    access_scope: str
+    author: str
+    source: str | None
+
+
+def _get_cached_meta(knowledge: KnowledgeManager, doc_id: str) -> _CachedMetaView | None:
+    """Read lightweight metadata from KnowledgeManager's in-memory cache."""
+    cached = knowledge._meta_cache.get(doc_id)
+    if cached is None:
+        return None
+    from lithos.knowledge import derive_namespace
+
+    rel_path = cached.path
+    return _CachedMetaView(
+        namespace=derive_namespace(rel_path),
+        access_scope=cached.access_scope or "shared",
+        author=cached.author,
+        source=cached.source,
+    )
