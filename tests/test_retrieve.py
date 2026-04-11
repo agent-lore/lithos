@@ -18,7 +18,6 @@ from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
 from lithos.lcma.edges import EdgeStore
 from lithos.lcma.retrieve import (
-    _generate_snippet,
     _rerank_fast,
     compute_temperature,
     run_retrieve,
@@ -26,6 +25,7 @@ from lithos.lcma.retrieve import (
 from lithos.lcma.stats import StatsStore
 from lithos.lcma.utils import Candidate
 from lithos.search import SearchEngine
+from lithos.search import generate_snippet as _generate_snippet
 
 
 @pytest.fixture

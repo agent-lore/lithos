@@ -60,6 +60,7 @@ class EdgeStore:
 
     def __init__(self, config: LithosConfig | None = None) -> None:
         self._config = config
+        self._opened = False
 
     @property
     def config(self) -> LithosConfig:
@@ -75,6 +76,8 @@ class EdgeStore:
         Idempotent — safe to call multiple times.  If the file is corrupt
         it is quarantined and a fresh database is created.
         """
+        if self._opened:
+            return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         if self.db_path.exists():
@@ -85,6 +88,12 @@ class EdgeStore:
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
             await db.commit()
+        self._opened = True
+
+    async def _ensure_open(self) -> None:
+        """Lazily create the database on first use."""
+        if not self._opened:
+            await self.open()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -132,6 +141,7 @@ class EdgeStore:
         conflict_state: str | None = None,
     ) -> str:
         """Insert or update an edge.  Returns the ``edge_id``."""
+        await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             # Check for existing edge by composite key
@@ -194,6 +204,7 @@ class EdgeStore:
         namespace: str | None = None,
     ) -> list[dict[str, object]]:
         """Query edges by optional filter dimensions."""
+        await self._ensure_open()
         clauses: list[str] = []
         params: list[str] = []
         if from_id is not None:
@@ -237,6 +248,7 @@ class EdgeStore:
 
     async def count(self, *, namespace: str | None = None) -> int:
         """Return total edge count, optionally filtered by namespace."""
+        await self._ensure_open()
         if namespace is not None:
             sql = "SELECT COUNT(*) FROM edges WHERE namespace = ?"
             params: tuple[str, ...] = (namespace,)
@@ -250,6 +262,7 @@ class EdgeStore:
 
     async def delete_edges(self, *, edge_ids: list[str]) -> int:
         """Delete edges by their IDs.  Returns the number of rows deleted."""
+        await self._ensure_open()
         if not edge_ids:
             return 0
         placeholders = ",".join("?" for _ in edge_ids)

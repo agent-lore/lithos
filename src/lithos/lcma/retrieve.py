@@ -19,7 +19,6 @@ import asyncio
 import collections
 import itertools
 import logging
-import re
 from typing import TYPE_CHECKING
 
 from lithos.lcma.scouts import (
@@ -35,6 +34,7 @@ from lithos.lcma.scouts import (
 )
 from lithos.lcma.stats import StatsStore, _generate_receipt_id
 from lithos.lcma.utils import Candidate, merge_and_normalize
+from lithos.search import generate_snippet
 
 if TYPE_CHECKING:
     from lithos.config import LcmaConfig
@@ -45,39 +45,6 @@ if TYPE_CHECKING:
     from lithos.search import SearchEngine
 
 logger = logging.getLogger(__name__)
-
-# Snippet generation — mirrors SearchEngine._generate_snippet
-_SNIPPET_CONTEXT_CHARS = 150
-
-
-def _generate_snippet(content: str, query: str, context_chars: int = _SNIPPET_CONTEXT_CHARS) -> str:
-    """Generate a snippet showing query terms in context.
-
-    Mirrors ``SearchEngine._generate_snippet`` so that lithos_retrieve
-    produces snippets identical to lithos_search for the same note.
-    """
-    terms = re.findall(r"\w+", query.lower())
-    content_lower = content.lower()
-
-    best_pos = len(content)
-    for term in terms:
-        pos = content_lower.find(term)
-        if 0 <= pos < best_pos:
-            best_pos = pos
-
-    if best_pos == len(content):
-        return content[: context_chars * 2] + "..." if len(content) > context_chars * 2 else content
-
-    start = max(0, best_pos - context_chars)
-    end = min(len(content), best_pos + context_chars)
-
-    snippet = content[start:end]
-    if start > 0:
-        snippet = "..." + snippet
-    if end < len(content):
-        snippet = snippet + "..."
-
-    return snippet
 
 
 def _rerank_fast(
@@ -274,7 +241,7 @@ async def run_retrieve(
             try:
                 doc, _ = await knowledge.read(id=c.node_id)
                 meta = doc.metadata
-                snippet = _generate_snippet(doc.content, query)
+                snippet = generate_snippet(doc.content, query)
                 results.append(
                     {
                         "id": doc.id,

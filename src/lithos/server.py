@@ -392,10 +392,6 @@ class LithosServer:
                 # Initialize coordination database
                 await self.coordination.initialize()
 
-                # Initialize LCMA stores
-                await self.edge_store.open()
-                await self.stats_store.open()
-
                 # Register active claims gauge observer
                 register_active_claims_observer(lambda: self._cached_active_claims)
 

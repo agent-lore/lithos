@@ -258,12 +258,13 @@ class TestLcmaDisabled:
             assert result["status"] == "error"
             assert result["code"] == "lcma_disabled"
 
-            # No receipt should be written
+            # No receipt should be written — DB may not exist (lazy init)
             stats_path = server.config.storage.stats_db_path
-            async with aiosqlite.connect(stats_path) as db:
-                cursor = await db.execute("SELECT COUNT(*) FROM receipts")
-                row = await cursor.fetchone()
-                assert row is not None
-                assert row[0] == 0
+            if stats_path.exists():
+                async with aiosqlite.connect(stats_path) as db:
+                    cursor = await db.execute("SELECT COUNT(*) FROM receipts")
+                    row = await cursor.fetchone()
+                    assert row is not None
+                    assert row[0] == 0
         finally:
             server.config.lcma.enabled = original

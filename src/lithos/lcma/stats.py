@@ -96,6 +96,7 @@ class StatsStore:
 
     def __init__(self, config: LithosConfig | None = None) -> None:
         self._config = config
+        self._opened = False
 
     @property
     def config(self) -> LithosConfig:
@@ -111,6 +112,8 @@ class StatsStore:
         Idempotent — safe to call multiple times.  If the file is corrupt
         it is quarantined and a fresh database is created.
         """
+        if self._opened:
+            return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         if self.db_path.exists():
@@ -121,6 +124,12 @@ class StatsStore:
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
             await db.commit()
+        self._opened = True
+
+    async def _ensure_open(self) -> None:
+        """Lazily create the database on first use."""
+        if not self._opened:
+            await self.open()
 
     # ------------------------------------------------------------------
     # Receipt operations
@@ -142,6 +151,7 @@ class StatsStore:
         task_id: str | None = None,
     ) -> None:
         """Insert a single receipt row."""
+        await self._ensure_open()
         ns_json = json.dumps(namespace_filter) if namespace_filter is not None else None
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -178,6 +188,7 @@ class StatsStore:
         receipt_id: str,
     ) -> None:
         """Upsert a working-memory row, incrementing activation_count."""
+        await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -204,7 +215,7 @@ class StatsStore:
         namespace: str,
     ) -> None:
         """Increment coactivation count for an unordered pair."""
-        # Ensure consistent ordering for unordered pairs
+        await self._ensure_open()
         a, b = (node_a, node_b) if node_a <= node_b else (node_b, node_a)
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
@@ -227,6 +238,7 @@ class StatsStore:
 
         Inserts with salience=0.5 on first touch.
         """
+        await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
