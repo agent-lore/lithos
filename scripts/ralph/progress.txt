@@ -1,0 +1,90 @@
+# Ralph Progress Log
+Started: Thu Apr  9 02:36:23 UTC 2026
+
+## Codebase Patterns
+- KnowledgeMetadata uses `_KNOWN_METADATA_KEYS` frozenset to separate known vs unknown (extra) fields — new metadata fields must be added there
+- `from_dict` only unpacks what it receives; read-time defaults are applied by callers with path context (not in from_dict)
+- `_resolve_safe_path` returns (relative_path, full_path) — relative_path is relative to knowledge_path
+- `to_dict` conditionally includes optional fields (only when not None) to keep frontmatter clean
+- Tests use `test_config` fixture (conftest.py) which creates isolated temp dirs; `knowledge_manager` fixture wraps it
+- Use `fm.Post(content, **kwargs)` + `fm.dumps(post)` to write test notes manually to disk
+- MCP boundary uses _UNSET sentinel: None from caller → _UNSET (preserve existing), value → pass through — used for all optional update fields
+- Integration tests use `server` fixture and `_call_tool(server, name, args)` helper to invoke MCP tools via `server.mcp._call_tool_mcp()`
+- LCMA enum constants: VALID_ACCESS_SCOPES, VALID_NOTE_TYPES, VALID_STATUSES exported from knowledge.py
+- EdgeStore follows coordination.db pattern: `async def open()` creates schema, `aiosqlite.connect(db_path)` per operation, no persistent connection
+- Corrupt DB detection uses `PRAGMA integrity_check` — `SELECT 1` doesn't read the file so can't detect corruption
+- `StorageConfig.edges_db_path` property gives the canonical path: `data_dir / ".lithos" / "edges.db"`
+- Quarantine naming: `edges.db.corrupt-{YYYYMMDDTHHMMSSZ}` with suffix disambiguation
+- `StorageConfig.stats_db_path` property gives `data_dir / ".lithos" / "stats.db"`
+- StatsStore follows the same pattern as EdgeStore: open(), _probe(), _quarantine(), aiosqlite per-op
+- receipts table: `"limit"` column name is a SQL keyword — must be quoted in INSERT/SELECT statements
+- receipts.namespace_filter is TEXT NULL (SQL NULL when None, JSON array string when provided)
+---
+
+## 2026-04-09 - US-001
+- Implemented LCMA frontmatter fields with lazy read-time defaults
+- Files changed:
+  - `src/lithos/knowledge.py`: Added 6 LCMA fields to KnowledgeMetadata, updated _KNOWN_METADATA_KEYS, from_dict, to_dict; added derive_namespace() and apply_lcma_defaults() helpers; applied defaults in read() and _sync_from_disk_unlocked()
+  - `tests/test_lcma_frontmatter.py`: New test file with 25 tests covering defaults, namespace derivation, from_dict, to_dict round-trip, read-time defaults via KnowledgeManager
+- **Learnings for future iterations:**
+  - LCMA defaults are NOT applied in from_dict — they're applied by callers (read/sync_from_disk) that have access to the note's relative path for namespace derivation
+  - Namespace derivation uses `Path.parent.parts` on the relative path; empty/root = "default", otherwise join with "/"
+  - All 210 existing test_knowledge.py tests pass unchanged — the LCMA fields default to None so pre-existing code is fully backward-compatible
+  - summaries has no default — left as None when not provided
+---
+
+## 2026-04-10 - US-002
+- Implemented lithos_write with optional LCMA field parameters
+- Files changed:
+  - `src/lithos/server.py`: Added schema_version, namespace, access_scope, note_type, status, summaries params to lithos_write; enum validation; task-scope invariant enforcement; LCMA field forwarding to create/update
+  - `src/lithos/knowledge.py`: Added LCMA params to create() and update() signatures; preserve/set semantics on update with _UNSET pattern; defaults for pre-LCMA notes on update
+  - `tests/test_lcma_write.py`: 17 integration tests covering create with LCMA fields, update preserving values, pre-LCMA note defaults, enum validation, task-scope invariant, envelope shape, source_task forwarding
+- **Learnings for future iterations:**
+  - lithos_write uses the _UNSET sentinel pattern: MCP boundary maps None → _UNSET (preserve), value → pass through for LCMA fields on update
+  - Tests use `_call_tool(server, "lithos_write", {...})` helper to invoke MCP tools — calls `server.mcp._call_tool_mcp()` internally
+  - The `server` fixture is an integration fixture that boots a full LithosServer with temp dirs
+  - On update, LCMA fields that were None in pre-LCMA notes get defaults written (schema_version=1, access_scope=shared, note_type=observation, status=active) — but NOT namespace (derived at read time)
+  - task-scope validation on update does an extra read to check existing metadata.source — be aware of the performance cost
+---
+
+## 2026-04-10 - US-003
+- Implemented edges.db with edges table, lazily created on first use
+- Files changed:
+  - `src/lithos/config.py`: Added `edges_db_path` property to `StorageConfig`
+  - `src/lithos/lcma/edges.py`: New EdgeStore class with open(), upsert(), list_edges(), count() methods; corrupt DB quarantine and recovery
+  - `tests/test_edges.py`: 15 unit tests covering schema creation, idempotent re-open, no-op when exists, corrupt recovery, store location, basic upsert/list
+- **Learnings for future iterations:**
+  - EdgeStore.open() is idempotent — call it before any operation or once at startup
+  - Corrupt DB detection requires `PRAGMA integrity_check`, not `SELECT 1` (SQLite connects to any file without error; `SELECT 1` is a pure expression that doesn't read the file)
+  - The upsert/list_edges/count methods are provided for US-010's lithos_edge_upsert and lithos_edge_list MCP tools to use directly
+  - edge_id format: `edge_{12-char-hex}` via uuid4().hex[:12]
+---
+
+## 2026-04-10 - US-004
+- Implemented stats.db with five MVP 1 tables lazily created on first use
+- Files changed:
+  - `src/lithos/config.py`: Added `stats_db_path` property to `StorageConfig`
+  - `src/lithos/lcma/stats.py`: New StatsStore class following EdgeStore pattern; open(), _probe(), _quarantine(); schema for node_stats, coactivation, enrich_queue, working_memory, receipts tables with indexes
+  - `tests/test_stats.py`: 19 unit tests covering schema creation (all 5 tables + columns), idempotent re-open, insert/select round-trip for each table, receipts.namespace_filter for both None and list, corrupt-file recovery, store location
+- **Learnings for future iterations:**
+  - StatsStore is a direct copy of EdgeStore's pattern — open/probe/quarantine are identical; future refactoring could extract a base class
+  - The `limit` column in receipts is a SQL reserved word — must quote as `"limit"` in SQL statements
+  - receipts.namespace_filter uses SQL NULL for None and JSON array string for list values — tests verify both paths
+  - receipt_id format: `rcpt_{12-char-hex}` via uuid4().hex[:12] (parallel to edge_id)
+  - JSON array columns (scouts_fired, final_nodes, conflicts_surfaced) are TEXT NOT NULL — always store json.dumps([]) even when empty
+  - coactivation PK is (node_a, node_b, namespace) — unordered pairs need consistent ordering at insert time (caller responsibility, not enforced by schema)
+- LcmaConfig uses `model_validator(mode="before")` for note_type_priors validation — fills missing keys with 0.5, rejects unknown keys
+- LithosConfig env vars for nested models use `__` delimiter: e.g. `LITHOS_LCMA__ENABLED=false`
+---
+
+## 2026-04-11 - US-005
+- Verified LcmaConfig configuration subtree (already implemented in prior iteration)
+- Files verified:
+  - `src/lithos/config.py`: LcmaConfig class with all MVP 1 fields, model_validator for note_type_priors, integrated into LithosConfig as `lcma` subtree
+  - `tests/test_lcma_config.py`: 19 tests covering defaults, note_type_priors filling/rejection, LithosConfig subtree integration, env var overrides, no side effects
+- All Done Criteria pass: 636 unit tests, 280 integration tests, ruff check, ruff format, pyright
+- **Learnings for future iterations:**
+  - LcmaConfig was already implemented and committed — only the PRD marker `passes: false` needed updating
+  - `_LCMA_NOTE_TYPES` frozenset in config.py is the canonical source for valid note types (mirrors VALID_NOTE_TYPES in knowledge.py)
+  - `_DEFAULT_RERANK_WEIGHTS` keys correspond to the seven scout names minus `scout_` prefix; weights sum to 1.0
+---
