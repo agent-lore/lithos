@@ -174,3 +174,16 @@ Started: Thu Apr  9 02:36:23 UTC 2026
   - lithos_edge_upsert publishes EDGE_UPSERTED event after successful upsert with edge_id, from_id, to_id, type, namespace in payload
   - EdgeStore.upsert() returns the same edge_id on update, new edge_id on create
 ---
+
+## 2026-04-11 - US-011
+- Implemented coactivation and node_stats updates on retrieval
+- Files changed:
+  - `src/lithos/lcma/retrieve.py`: Added `_dominant_namespace()` helper; added coactivation + node_stats logic in finally block after receipt
+  - `src/lithos/lcma/stats.py`: Added `increment_coactivation()` and `increment_node_stats()` methods
+  - `tests/test_coactivation.py`: 9 unit tests + 2 integration tests covering dominant namespace, single-call node_stats, coactivation pairs, salience default, multi-call increments
+- **Learnings for future iterations:**
+  - `_dominant_namespace()` uses collections.Counter on cached metadata paths; ties broken alphabetically with `min()`
+  - Coactivation uses consistent pair ordering (node_a <= node_b) via sort in `increment_coactivation()`
+  - `increment_node_stats()` inserts with salience=0.5 on first touch via ON CONFLICT
+  - Coactivation/node_stats update is in the `finally` block alongside receipt — runs even on partial failures
+---
