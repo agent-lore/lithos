@@ -76,6 +76,7 @@ Started: Thu Apr  9 02:36:23 UTC 2026
 - LcmaConfig uses `model_validator(mode="before")` for note_type_priors validation — fills missing keys with 0.5, rejects unknown keys
 - LithosConfig env vars for nested models use `__` delimiter: e.g. `LITHOS_LCMA__ENABLED=false`
 - EventBus.subscribe() accepts optional `maxsize` param; default from EventsConfig.subscriber_queue_size; ENRICH_SUBSCRIBER_QUEUE_SIZE = 10_000 for large queues
+- All sync SearchEngine methods (full_text_search, semantic_search, hybrid_search) are called via `asyncio.to_thread()` from async server code; sync CLI/internal calls don't need wrapping
 ---
 
 ## 2026-04-11 - US-005
@@ -100,4 +101,22 @@ Started: Thu Apr  9 02:36:23 UTC 2026
   - EventBus.subscribe() maxsize=None uses self._queue_size (from EventsConfig.subscriber_queue_size); explicit maxsize overrides
   - ENRICH_SUBSCRIBER_QUEUE_SIZE = 10_000 is a convenience constant for MVP 2's lithos-enrich subscriber
   - No existing subscribe() callers were modified — only one caller in server.py (SSE subscription) which doesn't use maxsize
+---
+
+## 2026-04-11 - US-007
+- Verified async wrapping of sync search calls — all async call sites in server.py already use asyncio.to_thread()
+- Files changed:
+  - `tests/test_async_search.py`: New test file with 3 tests: slow search non-blocking verification, parallel search execution timing, and static source-code verification that server.py uses asyncio.to_thread for all three search methods
+- Call sites verified:
+  - `server.py:1213` — full_text_search via asyncio.to_thread (lithos_search)
+  - `server.py:1223` — semantic_search via asyncio.to_thread (lithos_search)
+  - `server.py:1251` — hybrid_search via asyncio.to_thread (lithos_search)
+  - `server.py:1355` — semantic_search via asyncio.to_thread (lithos_cache_lookup)
+  - `server.py:1539` — full_text_search via asyncio.to_thread (lithos_list)
+- Sync call sites (cli.py:384/391, search.py:1314) are in sync functions — no wrapping needed
+- All Done Criteria pass: 645 unit tests, ruff, pyright
+- **Learnings for future iterations:**
+  - All server.py search call sites were already wrapped in asyncio.to_thread() — the wrapping was done in a prior iteration
+  - graph_search in search.py internally calls hybrid_search synchronously; this is fine since graph_search itself is called via asyncio.to_thread from server.py
+  - CLI search calls are synchronous (Click commands) — no wrapping needed
 ---
