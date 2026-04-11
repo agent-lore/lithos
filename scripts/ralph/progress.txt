@@ -140,3 +140,25 @@ Started: Thu Apr  9 02:36:23 UTC 2026
   - scout_freshness is keyword-triggered: only fires on queries containing update/refresh/recheck/verify
   - scout_tags_recency returns [] when both tags and path_prefix are absent (explicit no-op)
 ---
+
+## 2026-04-11 - US-009
+- Implemented lithos_retrieve MCP tool with full retrieval pipeline
+- Files changed:
+  - `src/lithos/lcma/retrieve.py`: New module with `run_retrieve()` pipeline, `_rerank_fast()` Terrace 1 reranker, `compute_temperature()`, `_generate_snippet()` (mirrors SearchEngine._generate_snippet)
+  - `src/lithos/lcma/stats.py`: Added `insert_receipt()` and `upsert_working_memory()` methods to StatsStore
+  - `src/lithos/server.py`: Registered `lithos_retrieve` MCP tool; added EdgeStore and StatsStore initialization in `__init__` and `initialize()`
+  - `src/lithos/knowledge.py`: Added `note_type` field to `_CachedMeta` for reranker note_type prior lookup; updated all 4 construction sites
+  - `tests/test_retrieve.py`: 19 unit tests covering snippet generation, reranking, temperature, Phase A/B, receipts, working memory, max_context_nodes
+  - `tests/test_lcma_retrieve_integration.py`: 7 integration tests covering store creation, 10 receipts, schema compatibility, semantic parity, working memory, scouts_fired, lcma_disabled
+- **Learnings for future iterations:**
+  - `run_retrieve()` in retrieve.py is the core pipeline — it takes all service dependencies as params, not self
+  - `common_kw` dict contains namespace_filter, agent_id, task_id — used with **common_kw for scouts. Don't pass task_id separately (duplicate keyword error)
+  - lithos_search uses SearchResult.updated_at (str), but KnowledgeMetadata.updated_at is datetime — must call `.isoformat()` in retrieve.py
+  - StatsStore.insert_receipt uses quoted `"limit"` for the SQL reserved word
+  - Temperature: cold-start returns lcma_config.temperature_default when edge_count < temperature_edge_threshold
+  - EdgeStore and StatsStore are initialized in LithosServer.__init__ and opened in initialize()
+  - `_CachedMeta` now has `note_type` field — used by `_rerank_fast()` for note_type prior scoring
+  - Receipt is always written in `finally` block even on exceptions (terrace_reached=0 on error)
+  - When LcmaConfig.enabled=False, error envelope returned immediately, no receipt written
+  - Phase A scouts use asyncio.gather with return_exceptions=True to handle individual scout failures gracefully
+---
