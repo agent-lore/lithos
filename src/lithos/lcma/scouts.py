@@ -49,7 +49,7 @@ ALL_SCOUT_NAMES = [
 ]
 
 # Keywords that trigger freshness boost
-_FRESHNESS_KEYWORDS = re.compile(r"\b(update|refresh|recheck|verify)\b", re.IGNORECASE)
+_FRESHNESS_KEYWORDS = re.compile(r"\b(update|refresh|recheck|verify|latest)\b", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +402,17 @@ async def scout_task_context(
     namespace_filter: list[str] | None = None,
     agent_id: str | None = None,
 ) -> list[Candidate]:
-    """Pull notes from task findings and agent claims. Returns [] when task_id is None."""
+    """Pull notes linked to this task via findings or by authorship.
+
+    Returns ``[]`` when ``task_id`` is None. Candidates come from two sources:
+
+    1. Findings for this task that carry a ``knowledge_id`` (from
+       ``CoordinationService.list_findings``).
+    2. Notes whose frontmatter ``source`` field matches ``task_id`` (i.e. the
+       note was authored *for* this task). This replaces a prior over-broad
+       sweep over every note authored by any agent with a non-expired claim,
+       which could flood results with unrelated notes from long-lived agents.
+    """
     if task_id is None:
         return []
 
@@ -414,20 +424,10 @@ async def scout_task_context(
         if f.knowledge_id is not None:
             found_ids.add(f.knowledge_id)
 
-    # 2. Notes authored by agents with non-expired claims for this task
-    try:
-        statuses = await coordination.get_task_status(task_id=task_id)
-        claiming_agents: set[str] = set()
-        for ts in statuses:
-            for claim in ts.claims:
-                claiming_agents.add(claim.agent)
-
-        if claiming_agents:
-            for doc_id, cached in knowledge._meta_cache.items():
-                if cached.author in claiming_agents:
-                    found_ids.add(doc_id)
-    except Exception:
-        logger.warning("scout_task_context: failed to query claims", exc_info=True)
+    # 2. Notes whose frontmatter source field points at this task_id
+    for doc_id, cached in knowledge._meta_cache.items():
+        if getattr(cached, "source", None) == task_id:
+            found_ids.add(doc_id)
 
     candidates: list[Candidate] = []
     for doc_id in found_ids:

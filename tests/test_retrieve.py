@@ -228,6 +228,10 @@ class TestRerankFast:
 
 
 class TestComputeTemperature:
+    """MVP 1 always returns ``temperature_default`` — coherence-based
+    computation is deferred to MVP 3 (see retrieve.py:compute_temperature).
+    """
+
     @pytest.mark.asyncio
     async def test_cold_start_returns_default(self, edge_store: EdgeStore) -> None:
         """Edge count below threshold returns temperature_default."""
@@ -242,13 +246,32 @@ class TestComputeTemperature:
         assert temp == 0.7
 
     @pytest.mark.asyncio
-    async def test_error_returns_default(self) -> None:
-        """When edge store raises, temperature_default is returned."""
+    async def test_edge_store_is_not_queried_in_mvp1(self) -> None:
+        """MVP 1 never reads from edge_store — a broken store must not matter."""
         broken_store = MagicMock(spec=EdgeStore)
         broken_store.count = AsyncMock(side_effect=Exception("db error"))
         lcma = LcmaConfig(temperature_default=0.6)
         temp = await compute_temperature(broken_store, lcma, None)
         assert temp == 0.6
+        broken_store.count.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_above_threshold_still_returns_default(
+        self, edge_store: EdgeStore, seeded_config: LithosConfig
+    ) -> None:
+        """Even with many edges present, MVP 1 returns temperature_default."""
+        # Populate edges beyond the threshold to prove MVP 1 does not ramp.
+        for i in range(60):
+            await edge_store.upsert(
+                from_id=f"n_{i}",
+                to_id=f"n_{i + 1}",
+                edge_type="related_to",
+                weight=0.5,
+                namespace="default",
+            )
+        lcma = LcmaConfig(temperature_default=0.5, temperature_edge_threshold=50)
+        temp = await compute_temperature(edge_store, lcma, None)
+        assert temp == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -645,3 +668,160 @@ class TestMaxContextNodes:
             if mock_prov.called:
                 seed_ids = mock_prov.call_args[0][0]
                 assert len(seed_ids) <= 5
+
+
+# ---------------------------------------------------------------------------
+# MMR diversity inside _rerank_fast
+# ---------------------------------------------------------------------------
+
+
+class TestMmrDiversity:
+    """_rerank_fast applies a greedy MMR pass to penalise near-duplicates."""
+
+    def test_mmr_spreads_duplicates(self, seeded_km: KnowledgeManager) -> None:
+        """Near-duplicate candidates must not monopolise the top ranks."""
+        from lithos.lcma import retrieve as retrieve_module
+
+        # Deterministic token sets: _ID1 and _ID3 are near-duplicates
+        # (share all tokens), _ID2 is fully disjoint.
+        tokens_by_id = {
+            _ID1: {"alpha", "testing"},
+            _ID3: {"alpha", "testing"},  # identical to _ID1
+            _ID2: {"completely", "different"},
+        }
+
+        def fake_tokens(_km: KnowledgeManager, node_id: str) -> set[str]:
+            return tokens_by_id.get(node_id, set())
+
+        ranked = [
+            Candidate(node_id=_ID1, score=1.00, scouts=["scout_vector"]),
+            Candidate(node_id=_ID3, score=0.99, scouts=["scout_vector"]),  # near-dup of _ID1
+            Candidate(node_id=_ID2, score=0.50, scouts=["scout_vector"]),  # distinct
+        ]
+        with patch.object(retrieve_module, "_title_tokens", side_effect=fake_tokens):
+            out = retrieve_module._mmr_diversify(ranked, seeded_km, window=3, lam=0.5)
+
+        # First is still the top-scoring item; the distinct item must beat
+        # the near-duplicate into second place thanks to the diversity penalty.
+        assert out[0].node_id == _ID1
+        assert out[1].node_id == _ID2
+        assert out[2].node_id == _ID3
+
+    def test_mmr_returns_same_length(self, seeded_km: KnowledgeManager) -> None:
+        from lithos.lcma.retrieve import _mmr_diversify
+
+        ranked = [
+            Candidate(node_id=_ID1, score=0.9, scouts=["scout_vector"]),
+            Candidate(node_id=_ID2, score=0.8, scouts=["scout_vector"]),
+        ]
+        out = _mmr_diversify(ranked, seeded_km)
+        assert len(out) == 2
+
+    def test_mmr_empty_input(self, seeded_km: KnowledgeManager) -> None:
+        from lithos.lcma.retrieve import _mmr_diversify
+
+        assert _mmr_diversify([], seeded_km) == []
+
+
+# ---------------------------------------------------------------------------
+# Receipt plumbing: candidates_considered, surface_conflicts
+# ---------------------------------------------------------------------------
+
+
+class TestReceiptFields:
+    @pytest.mark.asyncio
+    async def test_candidates_considered_populated(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """candidates_considered in the receipt matches len(merged_pool)."""
+        from lithos.search import SearchResult
+
+        tantivy_hits = [
+            SearchResult(id=_ID1, title="Alpha Note", snippet="", score=0.9, path="alpha-note.md"),
+            SearchResult(id=_ID2, title="Beta Note", snippet="", score=0.8, path="beta-note.md"),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
+        ):
+            result = await run_retrieve(
+                query="alpha",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+                surface_conflicts=True,
+            )
+
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT candidates_considered, surface_conflicts FROM receipts WHERE id = ?",
+                (result["receipt_id"],),
+            )
+            row = await cursor.fetchone()
+        assert row is not None
+        assert row["candidates_considered"] >= 2
+        assert row["surface_conflicts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Finally-block robustness
+# ---------------------------------------------------------------------------
+
+
+class TestFinallyBlockRobustness:
+    @pytest.mark.asyncio
+    async def test_receipt_written_when_pipeline_raises_early(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """If merge_and_normalize raises before temperature is assigned,
+        the finally block must still write a receipt (no UnboundLocalError).
+        """
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            patch.object(seeded_search, "full_text_search", return_value=[]),
+            patch(
+                "lithos.lcma.retrieve.merge_and_normalize",
+                side_effect=RuntimeError("boom"),
+            ),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await run_retrieve(
+                query="anything",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+            )
+
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            cursor = await db.execute("SELECT terrace_reached, temperature FROM receipts")
+            rows = await cursor.fetchall()
+        # A receipt was written with terrace_reached=0 and the default temp.
+        assert len(rows) == 1
+        assert rows[0][0] == 0
+        assert rows[0][1] == LcmaConfig().temperature_default

@@ -364,13 +364,19 @@ async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any
     )
 
 
-def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) -> dict[str, Any]:
-    """Reconcile projected LCMA provenance edges.
+async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) -> dict[str, Any]:
+    """Reconcile projected LCMA ``derived_from`` edges in ``edges.db``.
 
-    Returns supported=False before edges.db / LCMA projection storage exists.
-    Returns supported=True with status=noop once that storage is present
-    (full repair logic is deferred to after LCMA rollout).
+    Walks every note's frontmatter ``derived_from_ids`` and ensures
+    ``edges.db`` has a matching ``type='derived_from'`` edge, creating
+    missing edges and removing orphan projections. Returns
+    ``supported=False`` when ``edges.db`` does not exist (LCMA disabled).
+
+    Markdown/frontmatter is the source of truth — this function only
+    mutates the derived edge projection.
     """
+    from lithos.lcma.edges import EdgeStore, _project_provenance_to_edges
+
     edges_db = config.storage.data_dir / ".lithos" / "edges.db"
     if not edges_db.exists():
         return _make_result(
@@ -381,14 +387,46 @@ def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) -> dic
             actions=[{"reason": "not_enabled"}],
         )
 
-    # Projection store is present but full LCMA repair is not yet implemented.
-    lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": "noop"})
+    if dry_run:
+        # Dry-run reports that a run would execute but does not mutate state.
+        lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": "noop"})
+        return _make_result(
+            "provenance_projection",
+            dry_run,
+            supported=True,
+            status="noop",
+            actions=[{"reason": "dry_run"}],
+        )
+
+    edge_store = EdgeStore(config=config)
+    knowledge = KnowledgeManager(config=config)
+
+    try:
+        counts = await _project_provenance_to_edges(edge_store, knowledge)
+    except Exception as exc:
+        logger.error("provenance_projection reconcile failed: %s", exc)
+        lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": "failed"})
+        return _make_result(
+            "provenance_projection",
+            dry_run,
+            supported=True,
+            status="failed",
+            failed=1,
+            failures=[{"code": "internal_error", "detail": str(exc)}],
+        )
+
+    created = int(counts.get("created", 0))
+    removed = int(counts.get("removed", 0))
+    repaired = created + removed
+    status: ReconcileStatus = "ok" if repaired > 0 else "noop"
+    lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": status})
     return _make_result(
         "provenance_projection",
         dry_run,
         supported=True,
-        status="noop",
-        actions=[{"reason": "not_implemented"}],
+        status=status,
+        repaired=repaired,
+        actions=[{"created": created, "removed": removed}],
     )
 
 
@@ -431,7 +469,7 @@ async def reconcile(
             result = await _reconcile_graph(cfg, dry_run)
 
         elif scope == "provenance_projection":
-            result = _reconcile_provenance_projection(cfg, dry_run)
+            result = await _reconcile_provenance_projection(cfg, dry_run)
 
         elif scope == "all":
             # Run in prescribed order; errors in one scope must not prevent others.
@@ -466,7 +504,7 @@ async def reconcile(
                 )
 
             try:
-                sub_results.append(_reconcile_provenance_projection(cfg, dry_run))
+                sub_results.append(await _reconcile_provenance_projection(cfg, dry_run))
             except Exception as exc:
                 logger.error("Unhandled error in provenance_projection reconcile: %s", exc)
                 sub_results.append(

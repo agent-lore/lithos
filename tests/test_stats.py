@@ -28,7 +28,10 @@ class TestStatsStoreCreation:
 
     async def test_schema_has_all_tables(self, stats_store: StatsStore) -> None:
         conn = sqlite3.connect(str(stats_store.db_path))
-        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
         tables = {row[0] for row in cursor.fetchall()}
         conn.close()
         expected = {"node_stats", "coactivation", "enrich_queue", "working_memory", "receipts"}
@@ -39,21 +42,59 @@ class TestStatsStoreCreation:
         cursor = conn.execute("PRAGMA table_info(node_stats)")
         columns = {row[1] for row in cursor.fetchall()}
         conn.close()
-        assert columns == {"node_id", "retrieval_count", "last_retrieved_at", "salience"}
+        assert columns == {
+            "node_id",
+            "salience",
+            "retrieval_count",
+            "last_retrieved_at",
+            "last_used_at",
+            "ignored_count",
+            "misleading_count",
+            "decay_rate",
+            "spaced_rep_strength",
+        }
 
     async def test_coactivation_columns(self, stats_store: StatsStore) -> None:
         conn = sqlite3.connect(str(stats_store.db_path))
         cursor = conn.execute("PRAGMA table_info(coactivation)")
         columns = {row[1] for row in cursor.fetchall()}
         conn.close()
-        assert columns == {"node_a", "node_b", "namespace", "count", "last_at"}
+        assert columns == {"node_id_a", "node_id_b", "namespace", "count", "last_at"}
 
     async def test_enrich_queue_columns(self, stats_store: StatsStore) -> None:
         conn = sqlite3.connect(str(stats_store.db_path))
         cursor = conn.execute("PRAGMA table_info(enrich_queue)")
         columns = {row[1] for row in cursor.fetchall()}
         conn.close()
-        assert columns == {"id", "node_id", "enrich_type", "created_at", "status"}
+        assert columns == {
+            "id",
+            "trigger_type",
+            "node_id",
+            "task_id",
+            "triggered_at",
+            "processed_at",
+        }
+
+    async def test_enrich_queue_allows_null_node_id(self, stats_store: StatsStore) -> None:
+        """Task-level enrichment rows set node_id to NULL."""
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "INSERT INTO enrich_queue (trigger_type, node_id, task_id) VALUES (?, ?, ?)",
+                ("task.completed", None, "task_abc"),
+            )
+            await db.commit()
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT trigger_type, node_id, task_id, processed_at FROM enrich_queue"
+            )
+            row = await cursor.fetchone()
+        assert row is not None
+        assert row["trigger_type"] == "task.completed"
+        assert row["node_id"] is None
+        assert row["task_id"] == "task_abc"
+        assert row["processed_at"] is None
 
     async def test_working_memory_columns(self, stats_store: StatsStore) -> None:
         conn = sqlite3.connect(str(stats_store.db_path))
@@ -64,6 +105,7 @@ class TestStatsStoreCreation:
             "task_id",
             "node_id",
             "activation_count",
+            "first_seen_at",
             "last_seen_at",
             "last_receipt_id",
         }
@@ -79,14 +121,28 @@ class TestStatsStoreCreation:
             "limit",
             "namespace_filter",
             "scouts_fired",
+            "candidates_considered",
             "final_nodes",
             "conflicts_surfaced",
+            "surface_conflicts",
             "temperature",
             "terrace_reached",
             "created_at",
             "agent_id",
             "task_id",
         }
+
+    async def test_receipts_indexes(self, stats_store: StatsStore) -> None:
+        """receipts has indexes on created_at, task_id, agent_id."""
+        conn = sqlite3.connect(str(stats_store.db_path))
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='receipts'"
+        )
+        indexes = {row[0] for row in cursor.fetchall()}
+        conn.close()
+        assert "idx_receipts_created_at" in indexes
+        assert "idx_receipts_task_id" in indexes
+        assert "idx_receipts_agent_id" in indexes
 
 
 class TestIdempotentReopen:
@@ -149,7 +205,8 @@ class TestInsertSelectRoundTrip:
         now = "2026-04-10T12:00:00Z"
         async with aiosqlite.connect(stats_store.db_path) as db:
             await db.execute(
-                "INSERT INTO coactivation (node_a, node_b, namespace, count, last_at) "
+                "INSERT INTO coactivation "
+                "(node_id_a, node_id_b, namespace, count, last_at) "
                 "VALUES (?, ?, ?, ?, ?)",
                 ("a", "b", "default", 7, now),
             )
@@ -158,7 +215,7 @@ class TestInsertSelectRoundTrip:
         async with aiosqlite.connect(stats_store.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT * FROM coactivation WHERE node_a = ? AND node_b = ?", ("a", "b")
+                "SELECT * FROM coactivation WHERE node_id_a = ? AND node_id_b = ?", ("a", "b")
             )
             row = await cursor.fetchone()
         assert row is not None
@@ -170,21 +227,24 @@ class TestInsertSelectRoundTrip:
         import aiosqlite
 
         async with aiosqlite.connect(stats_store.db_path) as db:
-            await db.execute(
-                "INSERT INTO enrich_queue (id, node_id, enrich_type, status) VALUES (?, ?, ?, ?)",
-                ("eq_1", "node_1", "entity_extract", "pending"),
+            # id is INTEGER AUTOINCREMENT — do not bind it
+            cursor = await db.execute(
+                "INSERT INTO enrich_queue (trigger_type, node_id) VALUES (?, ?)",
+                ("note.created", "node_1"),
             )
+            inserted_id = cursor.lastrowid
             await db.commit()
 
         async with aiosqlite.connect(stats_store.db_path) as db:
             db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT * FROM enrich_queue WHERE id = ?", ("eq_1",))
+            cursor = await db.execute("SELECT * FROM enrich_queue WHERE id = ?", (inserted_id,))
             row = await cursor.fetchone()
         assert row is not None
         assert row["node_id"] == "node_1"
-        assert row["enrich_type"] == "entity_extract"
-        assert row["status"] == "pending"
-        assert row["created_at"] is not None
+        assert row["trigger_type"] == "note.created"
+        assert row["task_id"] is None
+        assert row["processed_at"] is None
+        assert row["triggered_at"] is not None
 
     async def test_working_memory_round_trip(self, stats_store: StatsStore) -> None:
         import aiosqlite
@@ -192,9 +252,11 @@ class TestInsertSelectRoundTrip:
         now = "2026-04-10T12:00:00Z"
         async with aiosqlite.connect(stats_store.db_path) as db:
             await db.execute(
-                "INSERT INTO working_memory (task_id, node_id, activation_count, last_seen_at, last_receipt_id) "
-                "VALUES (?, ?, ?, ?, ?)",
-                ("task_1", "node_1", 2, now, "rcpt_abc123"),
+                "INSERT INTO working_memory "
+                "(task_id, node_id, activation_count, first_seen_at, "
+                " last_seen_at, last_receipt_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("task_1", "node_1", 2, now, now, "rcpt_abc123"),
             )
             await db.commit()
 
@@ -207,6 +269,7 @@ class TestInsertSelectRoundTrip:
             row = await cursor.fetchone()
         assert row is not None
         assert row["activation_count"] == 2
+        assert row["first_seen_at"] == now
         assert row["last_seen_at"] == now
         assert row["last_receipt_id"] == "rcpt_abc123"
 
@@ -221,17 +284,21 @@ class TestInsertSelectRoundTrip:
         async with aiosqlite.connect(stats_store.db_path) as db:
             await db.execute(
                 "INSERT INTO receipts "
-                '(id, query, "limit", namespace_filter, scouts_fired, final_nodes, '
-                "conflicts_surfaced, temperature, terrace_reached, created_at, agent_id, task_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                '(id, query, "limit", namespace_filter, scouts_fired, '
+                " candidates_considered, final_nodes, conflicts_surfaced, "
+                " surface_conflicts, temperature, terrace_reached, "
+                " created_at, agent_id, task_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     "rcpt_test1",
                     "test query",
                     10,
                     None,
                     scouts,
+                    42,
                     nodes,
                     conflicts,
+                    1,
                     0.5,
                     1,
                     now,
@@ -250,8 +317,10 @@ class TestInsertSelectRoundTrip:
         assert row["limit"] == 10
         assert row["namespace_filter"] is None  # SQL NULL when None
         assert json.loads(row["scouts_fired"]) == ["scout_vector", "scout_lexical"]
+        assert row["candidates_considered"] == 42
         assert json.loads(row["final_nodes"]) == ["n1", "n2"]
         assert json.loads(row["conflicts_surfaced"]) == []
+        assert row["surface_conflicts"] == 1
         assert row["temperature"] == 0.5
         assert row["terrace_reached"] == 1
         assert row["agent_id"] == "agent_1"
@@ -335,7 +404,10 @@ class TestCorruptRecovery:
 
         await store.open()
         conn = sqlite3.connect(str(store.db_path))
-        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
         tables = {row[0] for row in cursor.fetchall()}
         conn.close()
         assert tables == {

@@ -299,6 +299,56 @@ class TestLithosWriteEnumValidation:
         assert result["code"] == "invalid_input"
         assert "status" in result["message"]
 
+    @pytest.mark.asyncio
+    async def test_invalid_summaries_unknown_key(self, server: LithosServer) -> None:
+        """summaries rejects keys other than 'short' and 'long'."""
+        result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Bad Summaries",
+                "content": "Content",
+                "agent": "test-agent",
+                "summaries": {"short": "ok", "medium": "disallowed"},
+            },
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+        assert "summaries" in result["message"]
+        assert "medium" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_summaries_non_string_value(self, server: LithosServer) -> None:
+        """summaries values must be strings."""
+        result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Bad Summaries",
+                "content": "Content",
+                "agent": "test-agent",
+                "summaries": {"short": 42},
+            },
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+        assert "summaries" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_valid_summaries_partial_accepted(self, server: LithosServer) -> None:
+        """summaries with only one of short/long is still valid."""
+        result = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Partial Summaries",
+                "content": "Content",
+                "agent": "test-agent",
+                "summaries": {"short": "Just the short one"},
+            },
+        )
+        assert result["status"] == "created"
+
 
 class TestLithosWriteTaskScopeInvariant:
     """Test task-scope access_scope enforcement."""

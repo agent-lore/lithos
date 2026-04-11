@@ -28,32 +28,39 @@ logger = logging.getLogger(__name__)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS node_stats (
     node_id TEXT PRIMARY KEY,
+    salience REAL NOT NULL DEFAULT 0.5,
     retrieval_count INTEGER NOT NULL DEFAULT 0,
     last_retrieved_at TIMESTAMP,
-    salience REAL NOT NULL DEFAULT 0.5
+    last_used_at TIMESTAMP,
+    ignored_count INTEGER NOT NULL DEFAULT 0,
+    misleading_count INTEGER NOT NULL DEFAULT 0,
+    decay_rate REAL NOT NULL DEFAULT 0.0,
+    spaced_rep_strength REAL NOT NULL DEFAULT 0.0
 );
 
 CREATE TABLE IF NOT EXISTS coactivation (
-    node_a TEXT NOT NULL,
-    node_b TEXT NOT NULL,
+    node_id_a TEXT NOT NULL,
+    node_id_b TEXT NOT NULL,
     namespace TEXT NOT NULL,
     count INTEGER NOT NULL DEFAULT 0,
     last_at TIMESTAMP,
-    PRIMARY KEY (node_a, node_b, namespace)
+    PRIMARY KEY (node_id_a, node_id_b, namespace)
 );
 
 CREATE TABLE IF NOT EXISTS enrich_queue (
-    id TEXT PRIMARY KEY,
-    node_id TEXT NOT NULL,
-    enrich_type TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    status TEXT NOT NULL DEFAULT 'pending'
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger_type TEXT NOT NULL,
+    node_id TEXT,
+    task_id TEXT,
+    triggered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS working_memory (
     task_id TEXT NOT NULL,
     node_id TEXT NOT NULL,
     activation_count INTEGER NOT NULL DEFAULT 0,
+    first_seen_at TIMESTAMP,
     last_seen_at TIMESTAMP,
     last_receipt_id TEXT,
     PRIMARY KEY (task_id, node_id)
@@ -65,8 +72,10 @@ CREATE TABLE IF NOT EXISTS receipts (
     "limit" INTEGER NOT NULL,
     namespace_filter TEXT,
     scouts_fired TEXT NOT NULL,
+    candidates_considered INTEGER NOT NULL DEFAULT 0,
     final_nodes TEXT NOT NULL,
     conflicts_surfaced TEXT NOT NULL,
+    surface_conflicts INTEGER NOT NULL DEFAULT 0,
     temperature REAL NOT NULL,
     terrace_reached INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -75,8 +84,10 @@ CREATE TABLE IF NOT EXISTS receipts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_receipts_created_at ON receipts(created_at);
+CREATE INDEX IF NOT EXISTS idx_receipts_task_id ON receipts(task_id);
+CREATE INDEX IF NOT EXISTS idx_receipts_agent_id ON receipts(agent_id);
 CREATE INDEX IF NOT EXISTS idx_working_memory_task_id ON working_memory(task_id);
-CREATE INDEX IF NOT EXISTS idx_enrich_queue_status ON enrich_queue(status);
+CREATE INDEX IF NOT EXISTS idx_enrich_queue_processed_at ON enrich_queue(processed_at);
 CREATE INDEX IF NOT EXISTS idx_coactivation_namespace ON coactivation(namespace);
 """
 
@@ -143,8 +154,10 @@ class StatsStore:
         limit: int,
         namespace_filter: list[str] | None,
         scouts_fired: list[str],
+        candidates_considered: int,
         final_nodes: list[str],
-        conflicts_surfaced: list[str],
+        conflicts_surfaced: list[dict[str, object]],
+        surface_conflicts: bool,
         temperature: float,
         terrace_reached: int,
         agent_id: str | None = None,
@@ -157,17 +170,20 @@ class StatsStore:
             await db.execute(
                 """INSERT INTO receipts
                    (id, query, "limit", namespace_filter, scouts_fired,
-                    final_nodes, conflicts_surfaced, temperature,
-                    terrace_reached, agent_id, task_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    candidates_considered, final_nodes, conflicts_surfaced,
+                    surface_conflicts, temperature, terrace_reached,
+                    agent_id, task_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     receipt_id,
                     query,
                     limit,
                     ns_json,
                     json.dumps(scouts_fired),
+                    candidates_considered,
                     json.dumps(final_nodes),
                     json.dumps(conflicts_surfaced),
+                    1 if surface_conflicts else 0,
                     temperature,
                     terrace_reached,
                     agent_id,
@@ -187,19 +203,25 @@ class StatsStore:
         node_id: str,
         receipt_id: str,
     ) -> None:
-        """Upsert a working-memory row, incrementing activation_count."""
+        """Upsert a working-memory row, incrementing activation_count.
+
+        ``first_seen_at`` is set on INSERT only — existing rows preserve
+        their original value so callers can distinguish first activation
+        from subsequent touches.
+        """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """INSERT INTO working_memory
-                   (task_id, node_id, activation_count, last_seen_at, last_receipt_id)
-                   VALUES (?, ?, 1, ?, ?)
+                   (task_id, node_id, activation_count,
+                    first_seen_at, last_seen_at, last_receipt_id)
+                   VALUES (?, ?, 1, ?, ?, ?)
                    ON CONFLICT(task_id, node_id) DO UPDATE SET
                      activation_count = activation_count + 1,
                      last_seen_at = excluded.last_seen_at,
                      last_receipt_id = excluded.last_receipt_id""",
-                (task_id, node_id, now, receipt_id),
+                (task_id, node_id, now, now, receipt_id),
             )
             await db.commit()
 
@@ -220,9 +242,10 @@ class StatsStore:
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                """INSERT INTO coactivation (node_a, node_b, namespace, count, last_at)
+                """INSERT INTO coactivation
+                   (node_id_a, node_id_b, namespace, count, last_at)
                    VALUES (?, ?, ?, 1, ?)
-                   ON CONFLICT(node_a, node_b, namespace) DO UPDATE SET
+                   ON CONFLICT(node_id_a, node_id_b, namespace) DO UPDATE SET
                      count = count + 1,
                      last_at = excluded.last_at""",
                 (a, b, namespace, now),

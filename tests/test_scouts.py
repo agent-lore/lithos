@@ -456,6 +456,12 @@ class TestScoutFreshness:
         assert len(candidates) >= 1
 
     @pytest.mark.asyncio
+    async def test_latest_keyword(self, seeded_km: KnowledgeManager) -> None:
+        """The 'latest' keyword is part of the freshness signal set (design §5.2)."""
+        candidates = await scout_freshness("what's the latest?", seeded_km)
+        assert len(candidates) >= 1
+
+    @pytest.mark.asyncio
     async def test_namespace_filter(self, seeded_km: KnowledgeManager) -> None:
         candidates = await scout_freshness(
             "update notes", seeded_km, namespace_filter=["nonexistent"]
@@ -551,48 +557,38 @@ class TestScoutTaskContext:
         assert all(c.scouts == [SCOUT_TASK_CONTEXT] for c in candidates)
 
     @pytest.mark.asyncio
-    async def test_returns_candidates_from_agent_claims(self, seeded_km: KnowledgeManager) -> None:
-        from dataclasses import dataclass as dc
+    async def test_returns_candidates_from_source_field(self, seeded_km: KnowledgeManager) -> None:
+        """Notes whose frontmatter `source` matches task_id are surfaced.
+
+        Replaces the previous broader behaviour that pulled in every note
+        authored by any agent with a non-expired claim on the task — that
+        approach flooded results with unrelated notes from long-lived agents.
+        """
         from unittest.mock import AsyncMock
-
-        @dc
-        class FakeClaim:
-            task_id: str
-            agent: str
-            aspect: str
-            claimed_at: datetime
-            expires_at: datetime
-
-        @dc
-        class FakeTaskStatus:
-            id: str
-            title: str
-            status: str
-            claims: list[FakeClaim]
 
         coordination = AsyncMock()
         coordination.list_findings.return_value = []
-        coordination.get_task_status.return_value = [
-            FakeTaskStatus(
-                id="task-42",
-                title="Test Task",
-                status="open",
-                claims=[
-                    FakeClaim(
-                        task_id="task-42",
-                        agent="agent-alpha",
-                        aspect="impl",
-                        claimed_at=datetime.now(timezone.utc),
-                        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
-                    )
-                ],
-            )
-        ]
 
+        # Note 3 in the fixture has source="task-42" with access_scope="task"
         candidates = await scout_task_context(coordination, seeded_km, task_id="task-42")
-        # agent-alpha authored note-001, note-003, note-004, note-006
-        agent_alpha_ids = {c.node_id for c in candidates}
-        assert _ID1 in agent_alpha_ids
+        found_ids = {c.node_id for c in candidates}
+        assert _ID3 in found_ids
+        # Notes without matching source must NOT be surfaced even when
+        # they share the same author (agent-alpha also authored _ID1/_ID4/_ID6).
+        assert _ID1 not in found_ids
+        assert _ID4 not in found_ids  # agent_private, different task
+        assert _ID6 not in found_ids  # no source set
+
+    @pytest.mark.asyncio
+    async def test_ignores_notes_from_other_tasks(self, seeded_km: KnowledgeManager) -> None:
+        """Task ID mismatch means no task-context hits even if source is set."""
+        from unittest.mock import AsyncMock
+
+        coordination = AsyncMock()
+        coordination.list_findings.return_value = []
+
+        candidates = await scout_task_context(coordination, seeded_km, task_id="task-99")
+        assert candidates == []
 
     @pytest.mark.asyncio
     async def test_namespace_filter(self, seeded_km: KnowledgeManager) -> None:

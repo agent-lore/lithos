@@ -747,6 +747,8 @@ Notes:
 
 Reviewer suggestion, implemented as coherence among top candidates (by edges).
 
+**MVP 1 implementation note.** `compute_temperature` in `src/lithos/lcma/retrieve.py` unconditionally returns `LcmaConfig.temperature_default` (0.5). The `edge_store` argument is preserved in the signature for forward compatibility but never read. Coherence-based computation activates in MVP 3 once `edges.db` has enough typed edges for `compute_coherence` to be meaningful.
+
 ```python
 def compute_coherence(top_node_ids: list[str], namespace: str) -> float:
     # coherence in [0,1]
@@ -956,6 +958,8 @@ def rerank_fast(q: QueryContext, pool: list[Candidate]) -> list[Candidate]:
     # Diversity: MMR-style removal of near-duplicates
     return mmr_diversify(out, lambda a,b: similarity(a.node_id, b.node_id), top_n=200)
 ```
+
+**MVP 1 implementation note.** The actual MVP 1 `_rerank_fast` in `src/lithos/lcma/retrieve.py` uses a slightly different weighted combination: scout-name-keyed weights pulled from `LcmaConfig.rerank_weights` (e.g. `vector: 0.35`, `lexical: 0.25`) rather than prior-name-keyed weights (`type_prior`, `scope`, `graph`, ...). It applies a greedy MMR pass over the top 30 candidates using title-token Jaccard as the similarity metric — no embedding lookups in the hot path. The prior-name formula above captures the MVP 2+ target; differentiated priors and graph/salience features from `stats.db` are layered in as reinforcement data becomes available.
 
 ### `note_type_prior()` definition
 

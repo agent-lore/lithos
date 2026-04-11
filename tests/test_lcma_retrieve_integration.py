@@ -60,9 +60,15 @@ async def _seed_notes(server: LithosServer) -> list[str]:
 
 class TestRetrieveCreatesStores:
     @pytest.mark.asyncio
-    async def test_first_call_creates_edges_and_stats_db(self, server: LithosServer) -> None:
-        """First call against fresh data dir creates edges.db and stats.db
-        with exactly one receipt row."""
+    async def test_first_call_creates_stats_db_with_receipt(self, server: LithosServer) -> None:
+        """First retrieve against a fresh data dir creates stats.db and
+        writes exactly one receipt row.
+
+        Note: ``edges.db`` is NOT created as a side effect of retrieval —
+        it is created lazily on the first edge mutation via
+        ``lithos_edge_upsert``. Retrieve in MVP 1 is a pure read against
+        stats.db only.
+        """
         await _seed_notes(server)
 
         result = await _call_tool(
@@ -76,11 +82,7 @@ class TestRetrieveCreatesStores:
         receipt_id = result["receipt_id"]
         assert receipt_id.startswith("rcpt_")
 
-        # Verify edges.db exists
-        edges_path = server.config.storage.edges_db_path
-        assert edges_path.exists()
-
-        # Verify stats.db has exactly one receipt
+        # stats.db gets created on the first receipt write.
         stats_path = server.config.storage.stats_db_path
         assert stats_path.exists()
 
@@ -89,6 +91,26 @@ class TestRetrieveCreatesStores:
             row = await cursor.fetchone()
             assert row is not None
             assert row[0] == 1
+
+    @pytest.mark.asyncio
+    async def test_edge_upsert_creates_edges_db(self, server: LithosServer) -> None:
+        """edges.db is created lazily on the first edge mutation."""
+        edges_path = server.config.storage.edges_db_path
+        assert not edges_path.exists()
+
+        result = await _call_tool(
+            server,
+            "lithos_edge_upsert",
+            {
+                "from_id": "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
+                "to_id": "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
+                "type": "related_to",
+                "weight": 0.5,
+                "namespace": "default",
+            },
+        )
+        assert result["status"] == "ok"
+        assert edges_path.exists()
 
 
 class TestTenReceiptsProduceTenRows:

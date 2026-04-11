@@ -776,6 +776,36 @@ class LithosServer:
                         "warnings": [],
                     }
 
+                # Validate summaries shape
+                if summaries is not None:
+                    if not isinstance(summaries, dict):
+                        return {
+                            "status": "error",
+                            "code": "invalid_input",
+                            "message": "summaries must be an object with "
+                            "'short' and/or 'long' string fields.",
+                            "warnings": [],
+                        }
+                    unknown_keys = set(summaries.keys()) - {"short", "long"}
+                    if unknown_keys:
+                        return {
+                            "status": "error",
+                            "code": "invalid_input",
+                            "message": f"summaries has unknown keys: "
+                            f"{sorted(unknown_keys)}. "
+                            f"Allowed keys: ['long', 'short'].",
+                            "warnings": [],
+                        }
+                    for k, v in summaries.items():
+                        if not isinstance(v, str):
+                            return {
+                                "status": "error",
+                                "code": "invalid_input",
+                                "message": f"summaries.{k} must be a string, "
+                                f"got {type(v).__name__}.",
+                                "warnings": [],
+                            }
+
                 # Validate task-scope invariant
                 if access_scope == "task":
                     if id is None:

@@ -19,6 +19,7 @@ import asyncio
 import collections
 import itertools
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from lithos.lcma.scouts import (
@@ -47,12 +48,81 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_MMR_LAMBDA = 0.7  # 1.0 = relevance only, 0.0 = diversity only
+_MMR_WINDOW = 30  # apply diversity over this many top candidates
+_TOKEN_PATTERN = re.compile(r"\w+")
+
+
+def _title_tokens(knowledge: KnowledgeManager, node_id: str) -> set[str]:
+    """Lowercased token set for a node's title+path — used by MMR similarity."""
+    cached = knowledge._meta_cache.get(node_id)
+    if cached is None:
+        return set()
+    title = getattr(cached, "title", "") or ""
+    path = str(getattr(cached, "path", "") or "")
+    tokens = _TOKEN_PATTERN.findall(f"{title} {path}".lower())
+    return set(tokens)
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+def _mmr_diversify(
+    ranked: list[Candidate],
+    knowledge: KnowledgeManager,
+    window: int = _MMR_WINDOW,
+    lam: float = _MMR_LAMBDA,
+) -> list[Candidate]:
+    """Greedy MMR over the top ``window`` candidates by title-token Jaccard.
+
+    Returns a reordered list: diversified top ``window`` followed by any tail
+    left untouched. Input is not mutated.
+    """
+    if len(ranked) <= 1:
+        return list(ranked)
+
+    head = list(ranked[:window])
+    tail = list(ranked[window:])
+    token_cache: dict[str, set[str]] = {
+        c.node_id: _title_tokens(knowledge, c.node_id) for c in head
+    }
+
+    selected: list[Candidate] = []
+    remaining = list(head)
+    while remaining:
+        best_idx = 0
+        best_score = -float("inf")
+        for i, c in enumerate(remaining):
+            if not selected:
+                mmr = c.score
+            else:
+                max_sim = max(
+                    _jaccard(token_cache[c.node_id], token_cache[s.node_id]) for s in selected
+                )
+                mmr = lam * c.score - (1.0 - lam) * max_sim
+            if mmr > best_score:
+                best_score = mmr
+                best_idx = i
+        selected.append(remaining.pop(best_idx))
+
+    return selected + tail
+
+
 def _rerank_fast(
     candidates: list[Candidate],
     lcma_config: LcmaConfig,
     knowledge: KnowledgeManager,
 ) -> list[Candidate]:
     """Terrace 1 reranking: weighted scout scores, note_type priors, basic salience.
+
+    After the linear combination sort, applies a greedy MMR pass over the top
+    candidates to penalise near-duplicates (see checklist MVP 1 requirement for
+    "diversity (MMR)").
 
     Returns a new sorted list (highest score first). Input is not mutated.
     """
@@ -77,15 +147,26 @@ def _rerank_fast(
             note_type_prior = note_type_priors.get(note_type, 0.5)
 
         # Salience: use normalized score as proxy (actual salience from stats
-        # will be layered in US-011)
+        # will be layered in MVP 2 reinforcement)
         salience = c.score
 
         # Final composite: weighted combination
         final = c.score * scout_weight + note_type_prior * 0.1 + salience * 0.1
-        scored.append((final, c))
+        scored.append(
+            (
+                final,
+                Candidate(
+                    node_id=c.node_id,
+                    score=final,
+                    reasons=list(c.reasons),
+                    scouts=list(c.scouts),
+                ),
+            )
+        )
 
     scored.sort(key=lambda t: t[0], reverse=True)
-    return [c for _, c in scored]
+    ranked = [c for _, c in scored]
+    return _mmr_diversify(ranked, knowledge)
 
 
 def _dominant_namespace(
@@ -115,18 +196,16 @@ async def compute_temperature(
     lcma_config: LcmaConfig,
     namespace_filter: list[str] | None,
 ) -> float:
-    """Compute temperature — cold-start returns default when edge count is low."""
-    try:
-        # Use dominant namespace if filter provided, otherwise global count
-        ns = namespace_filter[0] if namespace_filter else None
-        edge_count = await edge_store.count(namespace=ns)
-        if edge_count < lcma_config.temperature_edge_threshold:
-            return lcma_config.temperature_default
-        # When enough edges exist, temperature approaches 0 (confident retrieval)
-        return max(0.0, 1.0 - edge_count / (lcma_config.temperature_edge_threshold * 10))
-    except Exception:
-        logger.warning("compute_temperature failed, using default", exc_info=True)
-        return lcma_config.temperature_default
+    """Return the MVP 1 retrieval temperature.
+
+    MVP 1 always returns ``lcma_config.temperature_default`` — the design
+    defers coherence-based computation (``temperature = 1 - coherence``) to
+    MVP 3, when ``edges.db`` has been populated with enough typed edges to
+    make coherence meaningful. The ``edge_store`` parameter is preserved in
+    the signature so callers do not need to change when MVP 3 activates it.
+    """
+    del edge_store, namespace_filter  # unused in MVP 1
+    return lcma_config.temperature_default
 
 
 async def run_retrieve(
@@ -159,7 +238,9 @@ async def run_retrieve(
     receipt_id = _generate_receipt_id()
     scouts_fired: list[str] = []
     final_nodes: list[str] = []
+    candidates_considered = 0
     terrace_reached = 0
+    temperature: float = lcma_config.temperature_default
 
     try:
         # ── Phase A: parallel scouts ──────────────────────────────
@@ -223,6 +304,7 @@ async def run_retrieve(
 
         # ── Merge & Normalise all candidates ──────────────────────
         merged = merge_and_normalize(all_candidates)
+        candidates_considered = len(merged)
 
         # ── Terrace 1: rerank_fast ────────────────────────────────
         reranked = _rerank_fast(merged, lcma_config, knowledge)
@@ -291,9 +373,11 @@ async def run_retrieve(
                 limit=limit,
                 namespace_filter=namespace_filter,
                 scouts_fired=scouts_fired,
+                candidates_considered=candidates_considered,
                 final_nodes=final_nodes,
                 conflicts_surfaced=[],
-                temperature=0.0 if not terrace_reached else temperature,  # type: ignore[possibly-undefined]
+                surface_conflicts=surface_conflicts,
+                temperature=temperature,
                 terrace_reached=terrace_reached,
                 agent_id=agent_id,
                 task_id=task_id,

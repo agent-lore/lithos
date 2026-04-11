@@ -281,3 +281,72 @@ class TestNoOpWhenAbsent:
         result = await _project_provenance_to_edges(store, seeded_km)
         assert result == {"created": 0, "removed": 0}
         assert not store.db_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Test: reconcile wire-up invokes the real projection
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileWireUp:
+    @pytest.mark.asyncio
+    async def test_reconcile_provenance_projection_runs_real_logic(
+        self, seeded_config: LithosConfig, seeded_km: KnowledgeManager
+    ) -> None:
+        """reconcile(scope='provenance_projection') creates real edges.
+
+        Regression test — before the MVP 1 cleanup this call returned
+        supported=True/noop/reason=not_implemented without touching edges.db.
+        """
+        from lithos.reconcile import reconcile
+
+        # Ensure edges.db exists (and is empty) so the reconcile function
+        # considers provenance_projection supported.
+        store = EdgeStore(seeded_config)
+        await store.open()
+        # Reference seeded_km so the fixture runs and writes notes to disk.
+        _ = seeded_km
+
+        result = await reconcile(scope="provenance_projection", config=seeded_config)
+
+        assert result["supported"] is True
+        assert result["status"] == "ok"
+        assert result["summary"]["repaired"] >= 1
+        # Action payload carries the (created, removed) counts.
+        assert any("created" in a for a in result["actions"])
+
+        edges = await store.list_edges(edge_type="derived_from")
+        assert len(edges) >= 1
+
+    @pytest.mark.asyncio
+    async def test_reconcile_dry_run_does_not_mutate(
+        self, seeded_config: LithosConfig, seeded_km: KnowledgeManager
+    ) -> None:
+        """Dry-run must not write any edges."""
+        from lithos.reconcile import reconcile
+
+        store = EdgeStore(seeded_config)
+        await store.open()
+        _ = seeded_km
+
+        result = await reconcile(scope="provenance_projection", dry_run=True, config=seeded_config)
+        assert result["supported"] is True
+        assert result["status"] == "noop"
+
+        edges = await store.list_edges(edge_type="derived_from")
+        assert len(edges) == 0
+
+    @pytest.mark.asyncio
+    async def test_reconcile_unsupported_when_edges_db_missing(
+        self, seeded_config: LithosConfig, seeded_km: KnowledgeManager
+    ) -> None:
+        """When edges.db does not exist, supported=False and no action taken."""
+        from lithos.reconcile import reconcile
+
+        _ = seeded_km
+        edges_db = seeded_config.storage.data_dir / ".lithos" / "edges.db"
+        assert not edges_db.exists()
+
+        result = await reconcile(scope="provenance_projection", config=seeded_config)
+        assert result["supported"] is False
+        assert result["status"] == "noop"
