@@ -106,7 +106,7 @@
         "Pyright, ruff, all Done Criteria pass"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

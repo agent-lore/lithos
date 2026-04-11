@@ -4,6 +4,7 @@ import pytest
 
 from lithos.events import (
     AGENT_REGISTERED,
+    EDGE_UPSERTED,
     NOTE_CREATED,
     NOTE_DELETED,
     NOTE_UPDATED,
@@ -339,6 +340,62 @@ class TestSubscriberIdAndMetrics:
         counter.add(1, {"subscriber_id": "test-id"})
 
 
+class TestEdgeUpsertedEvent:
+    """Tests for edge.upserted event type (US-006)."""
+
+    @pytest.mark.asyncio
+    async def test_edge_upserted_publish_receive(self, bus: EventBus) -> None:
+        """edge.upserted event can be published and received."""
+        queue = bus.subscribe(event_types=[EDGE_UPSERTED])
+        event = LithosEvent(
+            type=EDGE_UPSERTED,
+            payload={"from_id": "note-a", "to_id": "note-b", "edge_type": "derived_from"},
+        )
+        await bus.emit(event)
+        assert queue.qsize() == 1
+        received = queue.get_nowait()
+        assert received.type == EDGE_UPSERTED
+        assert received.payload["from_id"] == "note-a"
+
+    @pytest.mark.asyncio
+    async def test_edge_upserted_not_delivered_to_note_subscriber(self, bus: EventBus) -> None:
+        """Subscriber filtered on NOTE_CREATED does not receive edge.upserted."""
+        queue = bus.subscribe(event_types=[NOTE_CREATED])
+        await bus.emit(LithosEvent(type=EDGE_UPSERTED))
+        assert queue.qsize() == 0
+
+    def test_edge_upserted_constant_value(self) -> None:
+        assert EDGE_UPSERTED == "edge.upserted"
+
+
+class TestSubscribeMaxsize:
+    """Tests for subscribe() maxsize parameter (US-006)."""
+
+    def test_subscribe_maxsize_large_queue(self) -> None:
+        """subscribe(maxsize=10_000) returns a queue with that capacity."""
+        bus = EventBus()
+        queue = bus.subscribe(maxsize=10_000)
+        assert queue.maxsize == 10_000
+
+    def test_subscribe_no_argument_uses_default(self) -> None:
+        """subscribe() with no maxsize uses the configured default."""
+        from lithos.config import EventsConfig
+
+        config = EventsConfig(subscriber_queue_size=100)
+        bus = EventBus(config)
+        queue = bus.subscribe()
+        assert queue.maxsize == 100
+
+    def test_subscribe_maxsize_overrides_config_default(self) -> None:
+        """subscribe(maxsize=...) overrides the config default."""
+        from lithos.config import EventsConfig
+
+        config = EventsConfig(subscriber_queue_size=50)
+        bus = EventBus(config)
+        queue = bus.subscribe(maxsize=200)
+        assert queue.maxsize == 200
+
+
 class TestEventTypeConstants:
     """Verify all event type constants are defined."""
 
@@ -354,6 +411,7 @@ class TestEventTypeConstants:
             "task.released",
             "task.completed",
             "finding.posted",
+            "edge.upserted",
             "agent.registered",
             "batch.queued",
             "batch.applying",

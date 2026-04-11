@@ -75,6 +75,7 @@ Started: Thu Apr  9 02:36:23 UTC 2026
   - coactivation PK is (node_a, node_b, namespace) — unordered pairs need consistent ordering at insert time (caller responsibility, not enforced by schema)
 - LcmaConfig uses `model_validator(mode="before")` for note_type_priors validation — fills missing keys with 0.5, rejects unknown keys
 - LithosConfig env vars for nested models use `__` delimiter: e.g. `LITHOS_LCMA__ENABLED=false`
+- EventBus.subscribe() accepts optional `maxsize` param; default from EventsConfig.subscriber_queue_size; ENRICH_SUBSCRIBER_QUEUE_SIZE = 10_000 for large queues
 ---
 
 ## 2026-04-11 - US-005
@@ -87,4 +88,16 @@ Started: Thu Apr  9 02:36:23 UTC 2026
   - LcmaConfig was already implemented and committed — only the PRD marker `passes: false` needed updating
   - `_LCMA_NOTE_TYPES` frozenset in config.py is the canonical source for valid note types (mirrors VALID_NOTE_TYPES in knowledge.py)
   - `_DEFAULT_RERANK_WEIGHTS` keys correspond to the seven scout names minus `scout_` prefix; weights sum to 1.0
+---
+
+## 2026-04-11 - US-006
+- Implemented edge.upserted event type and EventBus maxsize parameter
+- Files changed:
+  - `src/lithos/events.py`: Added EDGE_UPSERTED = "edge.upserted" constant; added `maxsize: int | None = None` parameter to `subscribe()`; added ENRICH_SUBSCRIBER_QUEUE_SIZE constant for MVP 2
+  - `tests/test_event_bus.py`: Added TestEdgeUpsertedEvent class (3 tests: publish/receive, filtering, constant value) and TestSubscribeMaxsize class (3 tests: large queue, default, override); updated TestEventTypeConstants to include edge.upserted
+- All Done Criteria pass: 636 unit tests, 280 integration tests, ruff, pyright
+- **Learnings for future iterations:**
+  - EventBus.subscribe() maxsize=None uses self._queue_size (from EventsConfig.subscriber_queue_size); explicit maxsize overrides
+  - ENRICH_SUBSCRIBER_QUEUE_SIZE = 10_000 is a convenience constant for MVP 2's lithos-enrich subscriber
+  - No existing subscribe() callers were modified — only one caller in server.py (SSE subscription) which doesn't use maxsize
 ---
