@@ -187,3 +187,19 @@ Started: Thu Apr  9 02:36:23 UTC 2026
   - `increment_node_stats()` inserts with salience=0.5 on first touch via ON CONFLICT
   - Coactivation/node_stats update is in the `finally` block alongside receipt — runs even on partial failures
 ---
+
+## 2026-04-11 - US-012
+- Implemented _project_provenance_to_edges internal function for provenance-to-edges projection
+- Files changed:
+  - `src/lithos/lcma/edges.py`: Added `_project_provenance_to_edges()` async function and `EdgeStore.delete_edges()` method; added TYPE_CHECKING import for KnowledgeManager
+  - `tests/test_provenance_projection.py`: New test file with 8 tests covering forward projection, multiple sources, namespace derivation, stale edge removal, non-derived_from edge preservation, idempotent runs, edge_id stability, no-op when edges.db absent
+- Existing `_reconcile_provenance_projection` in reconcile.py remains a noop — all 14 test_reconcile.py tests pass unchanged
+- All Done Criteria pass: 711 unit tests, 303 integration tests, ruff check, ruff format, pyright
+- **Learnings for future iterations:**
+  - `_project_provenance_to_edges` reads KnowledgeManager._doc_to_sources for the desired set of (from_id, to_id) pairs
+  - Namespace is derived from _meta_cache path using `derive_namespace()` — falls back to "default" if not in cache
+  - The function only manages `type='derived_from'` edges — other edge types are untouched
+  - EdgeStore.delete_edges() takes a list of edge_ids and returns the count of deleted rows
+  - Provenance edges use `provenance_type='frontmatter'` to indicate they came from frontmatter projection
+  - EdgeStore.upsert() composite key (from_id, to_id, type, namespace) ensures idempotent re-projection
+---
