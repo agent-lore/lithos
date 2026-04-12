@@ -134,6 +134,104 @@ class LithosServer:
         except Exception:
             logger.exception("Failed to emit %s event", event.type)
 
+    async def _process_task_feedback(
+        self,
+        *,
+        task_id: str,
+        agent: str,
+        cited_nodes: list[str] | None,
+        misleading_nodes: list[str] | None,
+        receipt_id: str | None,
+    ) -> dict[str, Any] | None:
+        """Validate receipt and apply reinforcement signals.
+
+        Returns an error envelope dict if receipt validation fails hard,
+        or ``None`` on success (including when feedback is silently dropped).
+        """
+        from lithos.lcma.reinforcement import (
+            penalize_ignored,
+            penalize_misleading,
+            reinforce_cited_nodes,
+            reinforce_edges_between,
+            weaken_edges_for_bad_context,
+        )
+
+        # -- Resolve receipt --
+        receipt: dict[str, object] | None
+        if receipt_id is not None:
+            receipt = await self.stats_store.get_receipt(receipt_id, task_id)
+            if receipt is None:
+                return {
+                    "status": "error",
+                    "code": "receipt_not_found",
+                    "message": (
+                        f"Receipt '{receipt_id}' not found or does not belong to task '{task_id}'."
+                    ),
+                }
+        else:
+            receipt = await self.stats_store.get_latest_receipt(task_id, agent)
+            if receipt is None:
+                logger.warning(
+                    "No receipt found for task=%s agent=%s — dropping all feedback",
+                    task_id,
+                    agent,
+                )
+                return None
+
+        receipt_node_ids: set[str] = set()
+        raw_ids = receipt.get("final_node_ids")
+        if isinstance(raw_ids, list):
+            receipt_node_ids = {str(nid) for nid in raw_ids}
+
+        # -- Intersect with receipt node IDs --
+        cited = list(receipt_node_ids & set(cited_nodes)) if cited_nodes is not None else None
+        misleading = (
+            list(receipt_node_ids & set(misleading_nodes)) if misleading_nodes is not None else None
+        )
+
+        # Log dropped IDs
+        if cited_nodes is not None:
+            dropped = set(cited_nodes) - receipt_node_ids
+            for nid in dropped:
+                logger.debug("Dropped cited node %s — not in receipt", nid)
+        if misleading_nodes is not None:
+            dropped = set(misleading_nodes) - receipt_node_ids
+            for nid in dropped:
+                logger.debug("Dropped misleading node %s — not in receipt", nid)
+
+        # -- Intersect with existing knowledge (prevent writes for deleted notes) --
+        existing_ids: set[str] = set()
+        for nid in receipt_node_ids:
+            if nid in self.knowledge._meta_cache:
+                existing_ids.add(nid)
+
+        if cited is not None:
+            cited = [nid for nid in cited if nid in existing_ids]
+        if misleading is not None:
+            misleading = [nid for nid in misleading if nid in existing_ids]
+
+        # -- Apply reinforcement --
+        if cited is not None and cited:
+            await reinforce_cited_nodes(cited, self.edge_store, self.stats_store, self.knowledge)
+            await reinforce_edges_between(cited, self.edge_store, self.knowledge)
+
+        if misleading is not None and misleading:
+            await penalize_misleading(misleading, self.stats_store, self.knowledge)
+            await weaken_edges_for_bad_context(misleading, self.edge_store)
+
+        # -- Penalize ignored: receipt nodes not in cited or misleading --
+        cited_set = set(cited) if cited is not None else set()
+        misleading_set = set(misleading) if misleading is not None else set()
+        ignored = [
+            nid
+            for nid in receipt_node_ids
+            if nid not in cited_set and nid not in misleading_set and nid in existing_ids
+        ]
+        if ignored:
+            await penalize_ignored(ignored, self.stats_store)
+
+        return None
+
     async def _get_health(self) -> dict[str, Any]:
         """Run health checks and return a status dict (shared by HTTP and any callers)."""
         components: dict[str, Any] = {}
@@ -2336,12 +2434,18 @@ class LithosServer:
         async def lithos_task_complete(
             task_id: str,
             agent: str,
+            cited_nodes: list[str] | None = None,
+            misleading_nodes: list[str] | None = None,
+            receipt_id: str | None = None,
         ) -> dict[str, Any]:
             """Mark a task as completed.
 
             Args:
                 task_id: Task ID
                 agent: Agent completing the task
+                cited_nodes: Node IDs the agent found useful (None = no feedback)
+                misleading_nodes: Node IDs the agent found misleading (None = no feedback)
+                receipt_id: Specific receipt to bind feedback to (optional)
 
             Returns:
                 Dict with success boolean, or error envelope if task not found or not open
@@ -2365,11 +2469,31 @@ class LithosServer:
                         "message": f"Task '{task_id}' not found or not in an open state.",
                     }
 
+                # -- Feedback / reinforcement learning step --
+                feedback_supplied = cited_nodes is not None or misleading_nodes is not None
+                if feedback_supplied:
+                    result = await self._process_task_feedback(
+                        task_id=task_id,
+                        agent=agent,
+                        cited_nodes=cited_nodes,
+                        misleading_nodes=misleading_nodes,
+                        receipt_id=receipt_id,
+                    )
+                    if result is not None:
+                        # An error was returned from receipt validation
+                        return result
+
                 await self._emit(
                     LithosEvent(
                         type=TASK_COMPLETED,
                         agent=agent,
-                        payload={"task_id": task_id, "agent": agent},
+                        payload={
+                            "task_id": task_id,
+                            "agent": agent,
+                            "cited_nodes": json.dumps(cited_nodes),
+                            "misleading_nodes": json.dumps(misleading_nodes),
+                            "receipt_id": json.dumps(receipt_id),
+                        },
                     )
                 )
 
