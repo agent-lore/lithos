@@ -870,3 +870,88 @@ class TestDrainConcurrency:
 
         assert len(all_claimed) == len(set(all_claimed)), "Some rows were double-claimed"
         assert len(all_claimed) == 10
+
+
+class TestGetReceipt:
+    """get_receipt: look up receipt by ID with task_id verification."""
+
+    async def test_returns_correct_receipt_and_final_node_ids(
+        self, stats_store: StatsStore
+    ) -> None:
+        final_nodes = [{"id": "node-a", "score": 0.9}, {"id": "node-b", "score": 0.7}]
+        await stats_store.insert_receipt(
+            receipt_id="rcpt_test1",
+            query="test query",
+            limit=10,
+            namespace_filter=None,
+            scouts_fired=["scout_vector"],
+            candidates_considered=5,
+            final_nodes=final_nodes,
+            conflicts_surfaced=[],
+            surface_conflicts=False,
+            temperature=0.5,
+            terrace_reached=1,
+            agent_id="agent-1",
+            task_id="task-1",
+        )
+
+        result = await stats_store.get_receipt("rcpt_test1", "task-1")
+        assert result is not None
+        assert result["id"] == "rcpt_test1"
+        assert result["task_id"] == "task-1"
+        assert result["final_node_ids"] == ["node-a", "node-b"]
+
+    async def test_mismatched_task_id_returns_none(self, stats_store: StatsStore) -> None:
+        await stats_store.insert_receipt(
+            receipt_id="rcpt_test2",
+            query="test query",
+            limit=10,
+            namespace_filter=None,
+            scouts_fired=["scout_vector"],
+            candidates_considered=5,
+            final_nodes=[{"id": "node-x"}],
+            conflicts_surfaced=[],
+            surface_conflicts=False,
+            temperature=0.5,
+            terrace_reached=1,
+            agent_id="agent-1",
+            task_id="task-1",
+        )
+
+        result = await stats_store.get_receipt("rcpt_test2", "wrong-task")
+        assert result is None
+
+    async def test_nonexistent_receipt_returns_none(self, stats_store: StatsStore) -> None:
+        result = await stats_store.get_receipt("rcpt_nonexistent", "task-1")
+        assert result is None
+
+
+class TestGetLatestReceipt:
+    """get_latest_receipt: return most recent receipt for (task_id, agent_id)."""
+
+    async def test_returns_most_recent_receipt(self, stats_store: StatsStore) -> None:
+        for i in range(3):
+            await stats_store.insert_receipt(
+                receipt_id=f"rcpt_latest_{i}",
+                query=f"query {i}",
+                limit=10,
+                namespace_filter=None,
+                scouts_fired=["scout_vector"],
+                candidates_considered=5,
+                final_nodes=[{"id": f"node-{i}"}],
+                conflicts_surfaced=[],
+                surface_conflicts=False,
+                temperature=0.5,
+                terrace_reached=1,
+                agent_id="agent-1",
+                task_id="task-1",
+            )
+
+        result = await stats_store.get_latest_receipt("task-1", "agent-1")
+        assert result is not None
+        assert result["id"] == "rcpt_latest_2"
+        assert result["final_node_ids"] == ["node-2"]
+
+    async def test_no_matching_receipt_returns_none(self, stats_store: StatsStore) -> None:
+        result = await stats_store.get_latest_receipt("no-task", "no-agent")
+        assert result is None

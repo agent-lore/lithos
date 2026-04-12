@@ -98,6 +98,19 @@ def _generate_receipt_id() -> str:
     return f"rcpt_{uuid.uuid4().hex[:12]}"
 
 
+def _extract_final_node_ids(final_nodes_json: object) -> list[str]:
+    """Parse the ``final_nodes`` JSON column and collect ``id`` fields."""
+    if not isinstance(final_nodes_json, str):
+        return []
+    try:
+        entries = json.loads(final_nodes_json)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    return [entry["id"] for entry in entries if isinstance(entry, dict) and "id" in entry]
+
+
 class StatsStore:
     """Lazily-created SQLite store for LCMA retrieval statistics.
 
@@ -546,6 +559,52 @@ class StatsStore:
                 (node_id, initial, delta),
             )
             await db.commit()
+
+    # ------------------------------------------------------------------
+    # Receipt lookup operations
+    # ------------------------------------------------------------------
+
+    async def get_receipt(self, receipt_id: str, task_id: str) -> dict[str, object] | None:
+        """Look up a receipt by ID and verify it belongs to *task_id*.
+
+        Returns the receipt row as a dict with an added ``final_node_ids``
+        field (``list[str]``), or ``None`` if no matching receipt exists or
+        the task_id does not match.
+        """
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM receipts WHERE id = ?", (receipt_id,))
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        if result.get("task_id") != task_id:
+            return None
+        result["final_node_ids"] = _extract_final_node_ids(result.get("final_nodes", "[]"))
+        return result
+
+    async def get_latest_receipt(self, task_id: str, agent_id: str) -> dict[str, object] | None:
+        """Return the most recent receipt for *(task_id, agent_id)*.
+
+        Uses ``ORDER BY rowid DESC LIMIT 1`` for recency. Returns the
+        receipt row as a dict with an added ``final_node_ids`` field, or
+        ``None`` if no receipt matches.
+        """
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM receipts WHERE task_id = ? AND agent_id = ? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (task_id, agent_id),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["final_node_ids"] = _extract_final_node_ids(result.get("final_nodes", "[]"))
+        return result
 
     # ------------------------------------------------------------------
     # Internal helpers
