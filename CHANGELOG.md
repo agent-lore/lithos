@@ -2,7 +2,31 @@
 
 ## Unreleased
 
+---
+
+## [0.2.0] — 2026-04-12
+
+### Added — LCMA MVP1 (Layered Cognitive Memory Architecture)
+
+- **`lithos_retrieve`** — new cognitive retrieval tool that orchestrates parallel scouts
+  (vector, lexical, provenance, task-context) with merge-and-normalize, Terrace 1
+  reranking, and audit receipt logging on every call. Returns `reasons`, `scouts`,
+  `salience`, `temperature`, `terrace_reached`, and `receipt_id` per result.
+- **`lithos_edge_upsert`** — create or update typed edges in `edges.db`.
+  Upsert key is `(from_id, to_id, type, namespace)`.
+- **`lithos_edge_list`** — query edges from `edges.db` by optional filters
+  (`from_id`, `to_id`, `type`, `namespace`).
+- **`lithos_write` LCMA fields**: `note_type`, `namespace`, `access_scope`,
+  `summaries`, `schema_version` — all optional and additive; existing documents
+  are unaffected.
+- **`edges.db`** and **`stats.db`** base tables for graph and statistics storage.
+- **Receipts logging** — every `lithos_retrieve` call writes an audit receipt
+  (`rcpt_*`) for full observability.
+- **`lithos_health` removed from MCP surface** — health checks are now HTTP-only
+  at `GET /health`.
+
 ### Added
+
 
 - **Structured JSON logging** (`logging_config.py`): all log output is now
   emitted as single-line JSON objects with fields `timestamp`, `level`,
