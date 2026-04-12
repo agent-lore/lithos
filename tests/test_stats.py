@@ -693,3 +693,134 @@ class TestEvictWorkingMemory:
         assert deleted == 0
         rows = await stats_store.get_working_memory("t1")
         assert len(rows) == 1
+
+
+class TestEnqueue:
+    """enqueue validates exactly-one-of node_id / task_id."""
+
+    async def test_enqueue_with_node_id(self, stats_store: StatsStore) -> None:
+        await stats_store.enqueue("note.created", node_id="n1")
+        result = await stats_store.drain_pending_nodes()
+        assert len(result) == 1
+        assert result[0]["node_id"] == "n1"
+
+    async def test_enqueue_with_task_id(self, stats_store: StatsStore) -> None:
+        await stats_store.enqueue("task.completed", task_id="t1")
+        result = await stats_store.drain_pending_tasks()
+        assert len(result) == 1
+        assert result[0]["task_id"] == "t1"
+
+    async def test_raises_when_both_none(self, stats_store: StatsStore) -> None:
+        with pytest.raises(ValueError, match="Exactly one"):
+            await stats_store.enqueue("note.created", node_id=None, task_id=None)
+
+    async def test_raises_when_both_provided(self, stats_store: StatsStore) -> None:
+        with pytest.raises(ValueError, match="Exactly one"):
+            await stats_store.enqueue("note.created", node_id="x", task_id="y")
+
+
+class TestDrainPendingNodes:
+    """drain_pending_nodes: atomic claim, deduplication, trigger preservation."""
+
+    async def test_returns_empty_when_no_pending(self, stats_store: StatsStore) -> None:
+        result = await stats_store.drain_pending_nodes()
+        assert result == []
+
+    async def test_deduplicates_by_node_id(self, stats_store: StatsStore) -> None:
+        await stats_store.enqueue("note.created", node_id="n1")
+        await stats_store.enqueue("note.updated", node_id="n1")
+        await stats_store.enqueue("retrieval", node_id="n1")
+
+        result = await stats_store.drain_pending_nodes()
+        assert len(result) == 1
+        assert result[0]["node_id"] == "n1"
+        assert set(result[0]["trigger_types"]) == {"note.created", "note.updated", "retrieval"}
+        assert len(result[0]["claimed_ids"]) == 3
+
+    async def test_rows_enqueued_after_drain_not_in_claimed_set(
+        self, stats_store: StatsStore
+    ) -> None:
+        await stats_store.enqueue("note.created", node_id="n1")
+        result1 = await stats_store.drain_pending_nodes()
+        assert len(result1) == 1
+
+        # Enqueue after drain
+        await stats_store.enqueue("note.updated", node_id="n1")
+        result2 = await stats_store.drain_pending_nodes()
+        assert len(result2) == 1
+        assert result2[0]["trigger_types"] == ["note.updated"]
+
+    async def test_does_not_include_task_rows(self, stats_store: StatsStore) -> None:
+        await stats_store.enqueue("task.completed", task_id="t1")
+        result = await stats_store.drain_pending_nodes()
+        assert result == []
+
+    async def test_multiple_nodes(self, stats_store: StatsStore) -> None:
+        await stats_store.enqueue("note.created", node_id="n1")
+        await stats_store.enqueue("note.updated", node_id="n2")
+
+        result = await stats_store.drain_pending_nodes()
+        assert len(result) == 2
+        node_ids = {r["node_id"] for r in result}
+        assert node_ids == {"n1", "n2"}
+
+
+class TestDrainPendingTasks:
+    """drain_pending_tasks: atomic claim for task-level rows."""
+
+    async def test_returns_empty_when_no_pending(self, stats_store: StatsStore) -> None:
+        result = await stats_store.drain_pending_tasks()
+        assert result == []
+
+    async def test_claims_task_rows(self, stats_store: StatsStore) -> None:
+        await stats_store.enqueue("task.completed", task_id="t1")
+        await stats_store.enqueue("task.completed", task_id="t2")
+
+        result = await stats_store.drain_pending_tasks()
+        assert len(result) == 2
+        task_ids = {r["task_id"] for r in result}
+        assert task_ids == {"t1", "t2"}
+
+    async def test_does_not_include_node_rows(self, stats_store: StatsStore) -> None:
+        await stats_store.enqueue("note.created", node_id="n1")
+        result = await stats_store.drain_pending_tasks()
+        assert result == []
+
+    async def test_rows_enqueued_after_drain_not_claimed(self, stats_store: StatsStore) -> None:
+        await stats_store.enqueue("task.completed", task_id="t1")
+        result1 = await stats_store.drain_pending_tasks()
+        assert len(result1) == 1
+
+        await stats_store.enqueue("task.completed", task_id="t2")
+        result2 = await stats_store.drain_pending_tasks()
+        assert len(result2) == 1
+        assert result2[0]["task_id"] == "t2"
+
+
+class TestRequeueFailed:
+    """requeue_failed resets processed_at so rows reappear in next drain."""
+
+    async def test_requeue_makes_rows_reappear(self, stats_store: StatsStore) -> None:
+        await stats_store.enqueue("note.created", node_id="n1")
+        result = await stats_store.drain_pending_nodes()
+        claimed_ids = result[0]["claimed_ids"]
+
+        # After drain, nothing pending
+        assert await stats_store.drain_pending_nodes() == []
+
+        # Requeue
+        count = await stats_store.requeue_failed(claimed_ids)
+        assert count == len(claimed_ids)
+
+        # Now they reappear
+        result2 = await stats_store.drain_pending_nodes()
+        assert len(result2) == 1
+        assert result2[0]["node_id"] == "n1"
+
+    async def test_requeue_empty_list(self, stats_store: StatsStore) -> None:
+        count = await stats_store.requeue_failed([])
+        assert count == 0
+
+    async def test_requeue_nonexistent_ids(self, stats_store: StatsStore) -> None:
+        count = await stats_store.requeue_failed([99999])
+        assert count == 0

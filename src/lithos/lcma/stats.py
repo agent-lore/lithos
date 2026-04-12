@@ -300,6 +300,140 @@ class StatsStore:
             await db.commit()
 
     # ------------------------------------------------------------------
+    # Enrich-queue operations
+    # ------------------------------------------------------------------
+
+    async def enqueue(
+        self,
+        trigger_type: str,
+        *,
+        node_id: str | None = None,
+        task_id: str | None = None,
+    ) -> None:
+        """Insert a row into enrich_queue.
+
+        Exactly one of *node_id* or *task_id* must be provided.
+        """
+        if (node_id is None) == (task_id is None):
+            raise ValueError("Exactly one of node_id or task_id must be provided")
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO enrich_queue (trigger_type, node_id, task_id) VALUES (?, ?, ?)",
+                (trigger_type, node_id, task_id),
+            )
+            await db.commit()
+
+    async def drain_pending_nodes(self) -> list[dict[str, object]]:
+        """Atomically claim unprocessed node-level enrich_queue rows.
+
+        Returns ``[{node_id, trigger_types, claimed_ids}]`` deduplicated
+        by ``node_id``, preserving all distinct trigger types per node.
+        ``note.created`` and ``note.updated`` triggers are never discarded.
+        """
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # SELECT pending node rows
+            cursor = await db.execute(
+                "SELECT id, node_id, trigger_type FROM enrich_queue "
+                "WHERE node_id IS NOT NULL AND processed_at IS NULL"
+            )
+            rows = await cursor.fetchall()
+            if not rows:
+                return []
+
+            # Mark as processed atomically
+            ids = [row["id"] for row in rows]
+            placeholders = ", ".join("?" for _ in ids)
+            await db.execute(
+                f"UPDATE enrich_queue SET processed_at = ? WHERE id IN ({placeholders})",
+                (now, *ids),
+            )
+            await db.commit()
+
+        # Deduplicate by node_id
+        by_node: dict[str, dict[str, object]] = {}
+        for row in rows:
+            nid = row["node_id"]
+            if nid not in by_node:
+                by_node[nid] = {
+                    "node_id": nid,
+                    "trigger_types": set(),
+                    "claimed_ids": [],
+                }
+            entry = by_node[nid]
+            assert isinstance(entry["trigger_types"], set)
+            assert isinstance(entry["claimed_ids"], list)
+            entry["trigger_types"].add(row["trigger_type"])
+            entry["claimed_ids"].append(row["id"])
+
+        # Convert sets to sorted lists for deterministic output
+        result: list[dict[str, object]] = []
+        for entry in by_node.values():
+            assert isinstance(entry["trigger_types"], set)
+            entry["trigger_types"] = sorted(entry["trigger_types"])
+            result.append(entry)
+        return result
+
+    async def drain_pending_tasks(self) -> list[dict[str, object]]:
+        """Atomically claim unprocessed task-level enrich_queue rows.
+
+        Returns ``[{task_id, claimed_ids}]`` using the same atomic
+        SELECT+UPDATE pattern as :meth:`drain_pending_nodes`.
+        """
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id, task_id FROM enrich_queue "
+                "WHERE node_id IS NULL AND processed_at IS NULL"
+            )
+            rows = await cursor.fetchall()
+            if not rows:
+                return []
+
+            ids = [row["id"] for row in rows]
+            placeholders = ", ".join("?" for _ in ids)
+            await db.execute(
+                f"UPDATE enrich_queue SET processed_at = ? WHERE id IN ({placeholders})",
+                (now, *ids),
+            )
+            await db.commit()
+
+        # Deduplicate by task_id
+        by_task: dict[str, dict[str, object]] = {}
+        for row in rows:
+            tid = row["task_id"]
+            if tid not in by_task:
+                by_task[tid] = {"task_id": tid, "claimed_ids": []}
+            entry = by_task[tid]
+            assert isinstance(entry["claimed_ids"], list)
+            entry["claimed_ids"].append(row["id"])
+
+        return list(by_task.values())
+
+    async def requeue_failed(self, claimed_ids: list[int]) -> int:
+        """Reset ``processed_at`` to NULL for the given row IDs.
+
+        Returns the count of rows reset.
+        """
+        if not claimed_ids:
+            return 0
+        await self._ensure_open()
+        placeholders = ", ".join("?" for _ in claimed_ids)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"UPDATE enrich_queue SET processed_at = NULL WHERE id IN ({placeholders})",
+                tuple(claimed_ids),
+            )
+            count = cursor.rowcount
+            await db.commit()
+        return count
+
+    # ------------------------------------------------------------------
     # Node stats operations
     # ------------------------------------------------------------------
 
