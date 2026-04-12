@@ -573,6 +573,7 @@ class _CachedMeta:
     access_scope: str | None = None
     source: str | None = None
     note_type: str | None = None
+    status: str | None = None
 
 
 class _UnsetType:
@@ -700,6 +701,7 @@ class KnowledgeManager:
                     raw_source: str | None = post.metadata.get("source")  # type: ignore[assignment]
                     raw_note_type: str | None = post.metadata.get("note_type")  # type: ignore[assignment]
                     raw_namespace: str | None = post.metadata.get("namespace")  # type: ignore[assignment]
+                    raw_status: str | None = post.metadata.get("status")  # type: ignore[assignment]
                     cached_namespace = (
                         raw_namespace
                         if isinstance(raw_namespace, str) and raw_namespace
@@ -718,6 +720,7 @@ class KnowledgeManager:
                         else None,
                         source=raw_source if isinstance(raw_source, str) else None,
                         note_type=raw_note_type if isinstance(raw_note_type, str) else None,
+                        status=raw_status if isinstance(raw_status, str) else None,
                     )
 
                     # Populate source_url -> id map
@@ -968,6 +971,7 @@ class KnowledgeManager:
                 access_scope=metadata.access_scope,
                 source=metadata.source,
                 note_type=metadata.note_type,
+                status=metadata.status,
             )
 
             logger.info(
@@ -1329,6 +1333,7 @@ class KnowledgeManager:
                 access_scope=doc.metadata.access_scope,
                 source=doc.metadata.source,
                 note_type=doc.metadata.note_type,
+                status=doc.metadata.status,
             )
 
             if logger.isEnabledFor(logging.INFO):
@@ -1409,16 +1414,22 @@ class KnowledgeManager:
         offset: int = 0,
         tags: list[str] | None = None,
         author: str | None = None,
+        exclude_status: list[str] | None = None,
     ) -> tuple[list[KnowledgeDocument], int]:
         """List all documents with optional filtering.
 
         Uses the in-memory metadata cache for filtering so only matching
         documents require a full disk read.
+
+        ``exclude_status`` filters out documents whose cached status is in
+        the given list (e.g. ``['quarantined']``).
         """
         matching_ids: list[str] = []
         normalized_since = _normalize_datetime(since) if since else None
 
         for doc_id, cached in self._meta_cache.items():
+            if exclude_status and cached.status in exclude_status:
+                continue
             if path_prefix and not str(cached.path).startswith(path_prefix):
                 continue
             if tags and not all(t in cached.tags for t in tags):
@@ -1625,6 +1636,7 @@ class KnowledgeManager:
             access_scope=metadata.access_scope,
             source=metadata.source,
             note_type=metadata.note_type,
+            status=metadata.status,
         )
 
         return doc

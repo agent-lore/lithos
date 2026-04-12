@@ -1,4 +1,4 @@
-"""Tests for LCMA reinforcement — positive feedback signals."""
+"""Tests for LCMA reinforcement — positive and negative feedback signals."""
 
 import pytest
 import pytest_asyncio
@@ -6,7 +6,13 @@ import pytest_asyncio
 from lithos.config import LithosConfig
 from lithos.knowledge import KnowledgeManager
 from lithos.lcma.edges import EdgeStore
-from lithos.lcma.reinforcement import reinforce_cited_nodes, reinforce_edges_between
+from lithos.lcma.reinforcement import (
+    penalize_ignored,
+    penalize_misleading,
+    reinforce_cited_nodes,
+    reinforce_edges_between,
+    weaken_edges_for_bad_context,
+)
 from lithos.lcma.stats import StatsStore
 
 
@@ -233,3 +239,180 @@ class TestReinforceEdgesBetween:
 
         all_edges = await edge_store.list_edges(edge_type="related_to")
         assert len(all_edges) == 3
+
+
+class TestPenalizeIgnored:
+    """penalize_ignored: threshold logic for salience decay."""
+
+    async def test_ignored_count_4_does_not_decay(
+        self,
+        knowledge_manager: KnowledgeManager,
+        stats_store: StatsStore,
+    ) -> None:
+        """ignored_count=4 (<=5) does NOT trigger salience decay."""
+        nid = await _create_note(knowledge_manager, "Note Ign4")
+
+        # Bring ignored_count to 4 (each call increments by 1)
+        for _ in range(4):
+            await penalize_ignored([nid], stats_store)
+
+        stats = await stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["ignored_count"] == 4
+        # Salience should remain at default 0.5 (no decay applied)
+        assert stats["salience"] == pytest.approx(0.5)
+
+    async def test_ignored_count_6_cited_3_does_decay(
+        self,
+        knowledge_manager: KnowledgeManager,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """ignored_count=6 > 5 and ignored_count=6 > cited_count=3 → decay applied."""
+        nid = await _create_note(knowledge_manager, "Note Ign6c3")
+
+        # Set cited_count to 3
+        for _ in range(3):
+            await stats_store.increment_cited(nid)
+
+        # Bring ignored_count to 6 (threshold > 5 crossed on call 6)
+        for _ in range(6):
+            await penalize_ignored([nid], stats_store)
+
+        stats = await stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["ignored_count"] == 6
+        # Decay should have been applied once (on the 6th call: ignored=6 > 5 and > 3)
+        assert stats["salience"] == pytest.approx(0.5 - 0.02)
+
+    async def test_ignored_count_6_cited_10_no_decay(
+        self,
+        knowledge_manager: KnowledgeManager,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """ignored_count=6 > 5 but cited_count=10 > ignored_count → NO decay."""
+        nid = await _create_note(knowledge_manager, "Note Ign6c10")
+
+        # Set cited_count to 10
+        for _ in range(10):
+            await stats_store.increment_cited(nid)
+
+        # Bring ignored_count to 6
+        for _ in range(6):
+            await penalize_ignored([nid], stats_store)
+
+        stats = await stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["ignored_count"] == 6
+        # No decay: ignored_count(6) is NOT > cited_count(10)
+        assert stats["salience"] == pytest.approx(0.5)
+
+
+class TestPenalizeMisleading:
+    """penalize_misleading: salience penalty and quarantine threshold."""
+
+    async def test_decrements_salience(
+        self,
+        knowledge_manager: KnowledgeManager,
+        stats_store: StatsStore,
+    ) -> None:
+        nid = await _create_note(knowledge_manager, "Note Mis1")
+
+        await penalize_misleading([nid], stats_store, knowledge_manager)
+
+        stats = await stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["misleading_count"] == 1
+        assert stats["salience"] == pytest.approx(0.5 - 0.05)
+
+    async def test_quarantine_at_misleading_count_3(
+        self,
+        knowledge_manager: KnowledgeManager,
+        stats_store: StatsStore,
+    ) -> None:
+        """misleading_count reaching 3 sets status to 'quarantined'."""
+        nid = await _create_note(knowledge_manager, "Note Mis3")
+
+        for _ in range(3):
+            await penalize_misleading([nid], stats_store, knowledge_manager)
+
+        stats = await stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["misleading_count"] == 3
+
+        # Verify status was set to quarantined in knowledge manager
+        cached = knowledge_manager._meta_cache.get(nid)
+        assert cached is not None
+        assert cached.status == "quarantined"
+
+    async def test_no_quarantine_at_misleading_count_2(
+        self,
+        knowledge_manager: KnowledgeManager,
+        stats_store: StatsStore,
+    ) -> None:
+        """misleading_count=2 does NOT quarantine."""
+        nid = await _create_note(knowledge_manager, "Note Mis2")
+
+        for _ in range(2):
+            await penalize_misleading([nid], stats_store, knowledge_manager)
+
+        cached = knowledge_manager._meta_cache.get(nid)
+        assert cached is not None
+        assert cached.status != "quarantined"
+
+
+class TestWeakenEdgesForBadContext:
+    """weaken_edges_for_bad_context: weakens all edges touching bad nodes."""
+
+    async def test_weakens_edges_pointing_to_bad_node(
+        self,
+        knowledge_manager: KnowledgeManager,
+        edge_store: EdgeStore,
+    ) -> None:
+        n1 = await _create_note(knowledge_manager, "Note W1")
+        n2 = await _create_note(knowledge_manager, "Note W2")
+
+        # Create an edge between the two nodes
+        await reinforce_edges_between([n1, n2], edge_store, knowledge_manager)
+
+        # Weaken edges for n2
+        await weaken_edges_for_bad_context([n2], edge_store)
+
+        from_id, to_id = sorted([n1, n2])
+        edges = await edge_store.list_edges(from_id=from_id, to_id=to_id, edge_type="related_to")
+        assert len(edges) == 1
+        # Initial weight 0.5, weakened by -0.05 → 0.45
+        assert edges[0]["weight"] == pytest.approx(0.45)
+
+
+class TestQuarantineFiltering:
+    """Quarantined nodes must be excluded from list_all."""
+
+    async def test_list_all_with_exclude_status(
+        self,
+        knowledge_manager: KnowledgeManager,
+        stats_store: StatsStore,
+    ) -> None:
+        """list_all with exclude_status=['quarantined'] filters correctly."""
+        n1 = await _create_note(knowledge_manager, "Note Active")
+        n2 = await _create_note(knowledge_manager, "Note Quarantined")
+
+        # Quarantine n2
+        for _ in range(3):
+            await penalize_misleading([n2], stats_store, knowledge_manager)
+
+        # list_all without filter returns both
+        docs_all, total_all = await knowledge_manager.list_all()
+        all_ids = {d.id for d in docs_all}
+        assert n1 in all_ids
+        assert n2 in all_ids
+
+        # list_all with exclude_status filters out quarantined
+        docs_filtered, total_filtered = await knowledge_manager.list_all(
+            exclude_status=["quarantined"]
+        )
+        filtered_ids = {d.id for d in docs_filtered}
+        assert n1 in filtered_ids
+        assert n2 not in filtered_ids
+        assert total_filtered == total_all - 1

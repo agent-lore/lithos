@@ -100,3 +100,80 @@ async def reinforce_edges_between(
                 provenance_type="reinforcement",
             )
             logger.debug("Created related_to edge %s between %s and %s", eid, from_id, to_id)
+
+
+# ── Negative reinforcement ─────────────────────────────────────────────
+
+
+async def penalize_ignored(
+    node_ids: list[str],
+    stats_store: StatsStore,
+) -> None:
+    """Decay salience for chronically ignored nodes.
+
+    For each *node_id*:
+    - ``ignored_count += 1``
+    - If ``ignored_count > 5`` **and** ``ignored_count > cited_count``,
+      apply ``salience -= 0.02``.
+    """
+    for node_id in node_ids:
+        await stats_store.increment_ignored(node_id)
+        stats = await stats_store.get_node_stats(node_id)
+        if stats is not None:
+            ignored = stats["ignored_count"]
+            cited = stats["cited_count"]
+            assert isinstance(ignored, int)
+            assert isinstance(cited, int)
+            if ignored > 5 and ignored > cited:
+                await stats_store.update_salience(node_id, -0.02)
+                logger.debug("Decayed salience for ignored node %s", node_id)
+        logger.debug("Penalized ignored node %s", node_id)
+
+
+async def penalize_misleading(
+    node_ids: list[str],
+    stats_store: StatsStore,
+    knowledge: KnowledgeManager,
+) -> None:
+    """Penalise misleading nodes and quarantine repeat offenders.
+
+    For each *node_id*:
+    - ``misleading_count += 1``
+    - ``salience -= 0.05``
+    - If ``misleading_count >= 3``, set ``status = 'quarantined'``
+      via :meth:`KnowledgeManager.update`.
+    """
+    for node_id in node_ids:
+        await stats_store.increment_misleading(node_id)
+        await stats_store.update_salience(node_id, -0.05)
+        stats = await stats_store.get_node_stats(node_id)
+        if stats is not None:
+            misleading = stats["misleading_count"]
+            assert isinstance(misleading, int)
+            if misleading >= 3:
+                await knowledge.update(id=node_id, lcma_status="quarantined", agent="lithos-enrich")
+                logger.info("Quarantined misleading node %s (count=%d)", node_id, misleading)
+        logger.debug("Penalized misleading node %s", node_id)
+
+
+async def weaken_edges_for_bad_context(
+    bad_node_ids: list[str],
+    edge_store: EdgeStore,
+) -> None:
+    """Weaken all edges pointing to/from bad nodes.
+
+    Finds all edges where ``from_id`` or ``to_id`` is in *bad_node_ids*
+    (any namespace) and weakens each by ``-0.05`` via
+    :meth:`EdgeStore.adjust_weight`.
+    """
+    for node_id in bad_node_ids:
+        edges_from = await edge_store.list_edges(from_id=node_id)
+        edges_to = await edge_store.list_edges(to_id=node_id)
+        seen: set[str] = set()
+        for edge in [*edges_from, *edges_to]:
+            eid = str(edge["edge_id"])
+            if eid in seen:
+                continue
+            seen.add(eid)
+            await edge_store.adjust_weight(eid, -0.05)
+            logger.debug("Weakened edge %s for bad node %s", eid, node_id)

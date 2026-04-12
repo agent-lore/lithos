@@ -146,6 +146,8 @@ async def scout_vector(
     for r in results:
         doc_id = r.id
         meta = _get_cached_meta(knowledge, doc_id)
+        if not _passes_status_filter(meta, ["quarantined"]):
+            continue
         ns = meta.namespace if meta else None
         if not _passes_namespace_filter(ns, namespace_filter):
             continue
@@ -198,6 +200,8 @@ async def scout_lexical(
     for r in results:
         doc_id = r.id
         meta = _get_cached_meta(knowledge, doc_id)
+        if not _passes_status_filter(meta, ["quarantined"]):
+            continue
         ns = meta.namespace if meta else None
         if not _passes_namespace_filter(ns, namespace_filter):
             continue
@@ -261,6 +265,8 @@ async def scout_exact_alias(
     candidates: list[Candidate] = []
     for doc_id in found_ids:
         meta = _get_cached_meta(knowledge, doc_id)
+        if not _passes_status_filter(meta, ["quarantined"]):
+            continue
         ns = meta.namespace if meta else None
         if not _passes_namespace_filter(ns, namespace_filter):
             continue
@@ -308,6 +314,7 @@ async def scout_tags_recency(
         tags=tags,
         path_prefix=path_prefix,
         limit=limit * 3,
+        exclude_status=["quarantined"],
     )
     # Sort by updated_at descending (most recent first)
     docs.sort(key=lambda d: d.metadata.updated_at, reverse=True)
@@ -355,6 +362,7 @@ async def scout_freshness(
         tags=tags,
         path_prefix=path_prefix,
         limit=limit * 5,
+        exclude_status=["quarantined"],
     )
     candidates: list[Candidate] = []
     for doc in docs:
@@ -416,6 +424,8 @@ async def scout_provenance(
         if not knowledge.has_document(doc_id):
             continue
         meta = _get_cached_meta(knowledge, doc_id)
+        if not _passes_status_filter(meta, ["quarantined"]):
+            continue
         ns = meta.namespace if meta else None
         if not _passes_namespace_filter(ns, namespace_filter):
             continue
@@ -488,6 +498,8 @@ async def scout_task_context(
         if not knowledge.has_document(doc_id):
             continue
         meta = _get_cached_meta(knowledge, doc_id)
+        if not _passes_status_filter(meta, ["quarantined"]):
+            continue
         ns = meta.namespace if meta else None
         if not _passes_namespace_filter(ns, namespace_filter):
             continue
@@ -536,6 +548,17 @@ class _CachedMetaView:
     source: str | None
     tags: list[str]
     path: object  # Path, but kept loose to avoid an import cycle
+    status: str | None = None
+
+
+def _passes_status_filter(
+    view: _CachedMetaView | None,
+    exclude_status: list[str] | None = None,
+) -> bool:
+    """Return False when the view's status is in the exclusion list."""
+    if exclude_status is None or view is None:
+        return True
+    return view.status not in exclude_status
 
 
 def _get_cached_meta(knowledge: KnowledgeManager, doc_id: str) -> _CachedMetaView | None:
@@ -554,4 +577,5 @@ def _get_cached_meta(knowledge: KnowledgeManager, doc_id: str) -> _CachedMetaVie
         source=cached.source,
         tags=list(cached.tags),
         path=cached.path,
+        status=cached.status,
     )
