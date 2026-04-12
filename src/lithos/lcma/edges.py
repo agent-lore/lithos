@@ -281,17 +281,19 @@ class EdgeStore:
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
+            # Single atomic UPDATE with clamping in SQL — no read-modify-write race.
+            cursor = await db.execute(
+                "UPDATE edges SET weight = MAX(0.0, MIN(1.0, weight + ?)), updated_at = ? "
+                "WHERE edge_id = ?",
+                (delta, now, edge_id),
+            )
+            if cursor.rowcount == 0:
+                return None
             cursor = await db.execute("SELECT weight FROM edges WHERE edge_id = ?", (edge_id,))
             row = await cursor.fetchone()
-            if row is None:
-                return None
-            new_weight = max(0.0, min(1.0, row[0] + delta))
-            await db.execute(
-                "UPDATE edges SET weight = ?, updated_at = ? WHERE edge_id = ?",
-                (new_weight, now, edge_id),
-            )
             await db.commit()
-        return new_weight
+        assert row is not None
+        return row[0]
 
     async def list_edges_between(
         self,

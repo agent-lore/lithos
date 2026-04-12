@@ -1,5 +1,6 @@
 """Tests for LCMA edge store (edges.db)."""
 
+import asyncio
 import sqlite3
 
 import pytest
@@ -312,3 +313,19 @@ class TestListEdgesBetween:
         await edge_store.upsert(from_id="a", to_id="b", edge_type="rel", weight=1.0, namespace="ns")
         result = await edge_store.list_edges_between(["c", "d"])
         assert result == []
+
+
+class TestAdjustWeightConcurrency:
+    """Concurrent adjust_weight calls must not lose updates."""
+
+    async def test_concurrent_adjustments_sum_correctly(self, edge_store: EdgeStore) -> None:
+        eid = await edge_store.upsert(
+            from_id="a", to_id="b", edge_type="rel", weight=0.5, namespace="ns"
+        )
+        # 10 concurrent +0.01 adjustments → expect 0.5 + 0.1 = 0.6
+        results = await asyncio.gather(*[edge_store.adjust_weight(eid, 0.01) for _ in range(10)])
+        # All should succeed (not None)
+        assert all(r is not None for r in results)
+        # Final weight should reflect all 10 deltas
+        edges = await edge_store.list_edges(from_id="a")
+        assert edges[0]["weight"] == pytest.approx(0.6, abs=1e-9)

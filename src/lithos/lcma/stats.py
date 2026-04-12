@@ -335,16 +335,19 @@ class StatsStore:
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            # SELECT pending node rows
+            # BEGIN IMMEDIATE acquires a write lock before the SELECT,
+            # preventing concurrent callers from reading the same rows.
+            await db.execute("BEGIN IMMEDIATE")
             cursor = await db.execute(
                 "SELECT id, node_id, trigger_type FROM enrich_queue "
                 "WHERE node_id IS NOT NULL AND processed_at IS NULL"
             )
             rows = await cursor.fetchall()
             if not rows:
+                await db.execute("COMMIT")
                 return []
 
-            # Mark as processed atomically
+            # Mark as processed within the same transaction
             ids = [row["id"] for row in rows]
             placeholders = ", ".join("?" for _ in ids)
             await db.execute(
@@ -387,12 +390,16 @@ class StatsStore:
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
+            # BEGIN IMMEDIATE acquires a write lock before the SELECT,
+            # preventing concurrent callers from reading the same rows.
+            await db.execute("BEGIN IMMEDIATE")
             cursor = await db.execute(
                 "SELECT id, task_id FROM enrich_queue "
                 "WHERE node_id IS NULL AND processed_at IS NULL"
             )
             rows = await cursor.fetchall()
             if not rows:
+                await db.execute("COMMIT")
                 return []
 
             ids = [row["id"] for row in rows]

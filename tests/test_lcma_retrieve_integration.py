@@ -58,6 +58,19 @@ async def _seed_notes(server: LithosServer) -> list[str]:
     return ids
 
 
+class TestMigrationRegistryOnStartup:
+    @pytest.mark.asyncio
+    async def test_startup_creates_migration_registry(self, server: LithosServer) -> None:
+        """Server.initialize() creates the migration registry file."""
+        registry_path = server.config.storage.lithos_store_path / "migrations" / "registry.json"
+        assert registry_path.exists(), "Migration registry was not created on startup"
+
+        data = json.loads(registry_path.read_text())
+        assert "current_version" in data
+        assert "applied" in data
+        assert isinstance(data["applied"], list)
+
+
 class TestRetrieveCreatesStores:
     @pytest.mark.asyncio
     async def test_first_call_creates_stats_db_with_receipt(self, server: LithosServer) -> None:
@@ -290,3 +303,60 @@ class TestLcmaDisabled:
                     assert row[0] == 0
         finally:
             server.config.lcma.enabled = original
+
+
+class TestNoteTypePriorsIntegration:
+    @pytest.mark.asyncio
+    async def test_different_note_types_produce_different_scores(
+        self, server: LithosServer
+    ) -> None:
+        """End-to-end: notes with different note_type values receive different
+        retrieval scores because of differentiated note_type_priors."""
+        # Seed two notes with very similar content but different note_types.
+        # agent_finding has prior 0.6 vs task_record 0.35 in defaults.
+        for title, content, note_type in [
+            (
+                "Algorithm performance finding",
+                "Detailed analysis of algorithm performance benchmarks and results",
+                "agent_finding",
+            ),
+            (
+                "Algorithm performance record",
+                "Detailed analysis of algorithm performance benchmarks and outcomes",
+                "task_record",
+            ),
+        ]:
+            result = await _call_tool(
+                server,
+                "lithos_write",
+                {
+                    "title": title,
+                    "content": content,
+                    "agent": "test-agent",
+                    "tags": ["perf"],
+                    "note_type": note_type,
+                },
+            )
+            assert result["status"] == "created"
+
+        result = await _call_tool(
+            server,
+            "lithos_retrieve",
+            {"query": "algorithm performance analysis"},
+        )
+
+        assert len(result["results"]) >= 2
+        scores_by_type: dict[str, float] = {}
+        for r in result["results"]:
+            # Read the note to get its note_type
+            doc_result = await _call_tool(server, "lithos_read", {"id": r["id"]})
+            nt = doc_result.get("note_type", "observation")
+            if nt in ("agent_finding", "task_record"):
+                scores_by_type[nt] = r["score"]
+
+        assert "agent_finding" in scores_by_type, "agent_finding note not in results"
+        assert "task_record" in scores_by_type, "task_record note not in results"
+        assert scores_by_type["agent_finding"] > scores_by_type["task_record"], (
+            f"agent_finding score ({scores_by_type['agent_finding']}) should be > "
+            f"task_record score ({scores_by_type['task_record']}) due to higher prior"
+        )

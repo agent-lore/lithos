@@ -1,5 +1,6 @@
 """Tests for LCMA stats store (stats.db)."""
 
+import asyncio
 import json
 import sqlite3
 
@@ -824,3 +825,48 @@ class TestRequeueFailed:
     async def test_requeue_nonexistent_ids(self, stats_store: StatsStore) -> None:
         count = await stats_store.requeue_failed([99999])
         assert count == 0
+
+
+class TestDrainConcurrency:
+    """Concurrent drains must not claim the same row twice."""
+
+    async def test_concurrent_drain_nodes_no_double_claim(self, stats_store: StatsStore) -> None:
+        # Enqueue several rows
+        for i in range(10):
+            await stats_store.enqueue("note.created", node_id=f"n{i}")
+
+        # Run two drains concurrently
+        results = await asyncio.gather(
+            stats_store.drain_pending_nodes(),
+            stats_store.drain_pending_nodes(),
+        )
+
+        # Collect all claimed IDs across both results
+        all_claimed: list[int] = []
+        for result in results:
+            for entry in result:
+                assert isinstance(entry["claimed_ids"], list)
+                all_claimed.extend(entry["claimed_ids"])
+
+        # Each row must be claimed at most once
+        assert len(all_claimed) == len(set(all_claimed)), "Some rows were double-claimed"
+        # Together they should claim all 10 rows
+        assert len(all_claimed) == 10
+
+    async def test_concurrent_drain_tasks_no_double_claim(self, stats_store: StatsStore) -> None:
+        for i in range(10):
+            await stats_store.enqueue("task.completed", task_id=f"t{i}")
+
+        results = await asyncio.gather(
+            stats_store.drain_pending_tasks(),
+            stats_store.drain_pending_tasks(),
+        )
+
+        all_claimed: list[int] = []
+        for result in results:
+            for entry in result:
+                assert isinstance(entry["claimed_ids"], list)
+                all_claimed.extend(entry["claimed_ids"])
+
+        assert len(all_claimed) == len(set(all_claimed)), "Some rows were double-claimed"
+        assert len(all_claimed) == 10
