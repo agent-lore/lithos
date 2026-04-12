@@ -112,3 +112,17 @@ Started: Sun Apr 12 18:39:40 UTC 2026
   - `spaced_rep_strength` defaults to 0.0 (not 0.5), only `salience` defaults to 0.5
   - `knowledge._meta_cache` is the fastest way to check if a node exists (no I/O)
 ---
+
+## 2026-04-12 - US-008
+- What was implemented
+  - New `lithos_node_stats(node_id)` MCP tool registered in server.py
+  - Returns salience, retrieval_count, cited_count, ignored_count, misleading_count, decay_rate, spaced_rep_strength, timestamps
+  - If node has no stats row, returns defaults (salience=0.5, all counts 0, timestamps null)
+  - Returns error envelope if node_id not found in knowledge manager
+- Files changed
+  - `src/lithos/server.py` (added lithos_node_stats tool)
+  - `tests/test_node_stats_tool.py` (new, 3 tests)
+- **Learnings for future iterations:**
+  - `last_decay_applied_at` is not in the DB schema — always returns None for now
+  - `knowledge._meta_cache` check is sufficient for node existence validation (avoids I/O)
+---
