@@ -35,6 +35,15 @@ class TestLcmaConfigDefaults:
         assert cfg.note_type_priors == _DEFAULT_NOTE_TYPE_PRIORS
         assert set(cfg.note_type_priors.keys()) == _LCMA_NOTE_TYPES
 
+    def test_differentiated_note_type_prior_values(self) -> None:
+        cfg = LcmaConfig()
+        assert cfg.note_type_priors["observation"] == 0.5
+        assert cfg.note_type_priors["agent_finding"] == 0.6
+        assert cfg.note_type_priors["summary"] == 0.55
+        assert cfg.note_type_priors["concept"] == 0.45
+        assert cfg.note_type_priors["task_record"] == 0.35
+        assert cfg.note_type_priors["hypothesis"] == 0.5
+
     def test_default_temperature(self) -> None:
         cfg = LcmaConfig()
         assert cfg.temperature_default == 0.5
@@ -58,9 +67,9 @@ class TestLcmaConfigNoteTypePriors:
     def test_missing_keys_filled_with_default(self) -> None:
         cfg = LcmaConfig(note_type_priors={"observation": 0.9})
         assert cfg.note_type_priors["observation"] == 0.9
-        # All other keys filled with 0.5
+        # All other keys filled with their differentiated defaults
         for nt in _LCMA_NOTE_TYPES - {"observation"}:
-            assert cfg.note_type_priors[nt] == 0.5
+            assert cfg.note_type_priors[nt] == _DEFAULT_NOTE_TYPE_PRIORS[nt]
         assert len(cfg.note_type_priors) == 6
 
     def test_unknown_keys_rejected(self) -> None:

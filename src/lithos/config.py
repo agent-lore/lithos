@@ -24,7 +24,14 @@ _DEFAULT_RERANK_WEIGHTS: dict[str, float] = {
     "task_context": 0.05,
 }
 
-_DEFAULT_NOTE_TYPE_PRIORS: dict[str, float] = {nt: 0.5 for nt in sorted(_LCMA_NOTE_TYPES)}
+_DEFAULT_NOTE_TYPE_PRIORS: dict[str, float] = {
+    "agent_finding": 0.6,
+    "concept": 0.45,
+    "hypothesis": 0.5,
+    "observation": 0.5,
+    "summary": 0.55,
+    "task_record": 0.35,
+}
 
 
 class ServerConfig(BaseModel):
@@ -161,10 +168,10 @@ class LcmaConfig(BaseModel):
                 f"Unknown note_type_priors keys: {sorted(unknown)}. "
                 f"Allowed keys: {sorted(_LCMA_NOTE_TYPES)}"
             )
-        # Fill missing keys with default 0.5
+        # Fill missing keys with differentiated defaults
         for nt in _LCMA_NOTE_TYPES:
             if nt not in priors:
-                priors[nt] = 0.5
+                priors[nt] = _DEFAULT_NOTE_TYPE_PRIORS[nt]
         data["note_type_priors"] = priors
         return data
 
