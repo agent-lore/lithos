@@ -604,3 +604,92 @@ class TestCitedCountMigration:
         row = await store.get_node_stats("old_node")
         assert row is not None
         assert row["cited_count"] == 0
+
+
+class TestGetWorkingMemory:
+    """get_working_memory returns rows ordered by activation_count descending."""
+
+    async def test_returns_empty_list_for_unknown_task(self, stats_store: StatsStore) -> None:
+        result = await stats_store.get_working_memory("no_such_task")
+        assert result == []
+
+    async def test_returns_rows_ordered_by_activation(self, stats_store: StatsStore) -> None:
+        # Insert nodes with different activation counts
+        await stats_store.upsert_working_memory(task_id="t1", node_id="n1", receipt_id="r1")
+        await stats_store.upsert_working_memory(task_id="t1", node_id="n2", receipt_id="r2")
+        await stats_store.upsert_working_memory(task_id="t1", node_id="n2", receipt_id="r3")
+        await stats_store.upsert_working_memory(task_id="t1", node_id="n3", receipt_id="r4")
+        await stats_store.upsert_working_memory(task_id="t1", node_id="n3", receipt_id="r5")
+        await stats_store.upsert_working_memory(task_id="t1", node_id="n3", receipt_id="r6")
+
+        rows = await stats_store.get_working_memory("t1")
+        assert len(rows) == 3
+        assert rows[0]["node_id"] == "n3"
+        assert rows[0]["activation_count"] == 3
+        assert rows[1]["node_id"] == "n2"
+        assert rows[1]["activation_count"] == 2
+        assert rows[2]["node_id"] == "n1"
+        assert rows[2]["activation_count"] == 1
+
+    async def test_only_returns_rows_for_given_task(self, stats_store: StatsStore) -> None:
+        await stats_store.upsert_working_memory(task_id="t1", node_id="n1", receipt_id="r1")
+        await stats_store.upsert_working_memory(task_id="t2", node_id="n2", receipt_id="r2")
+
+        rows = await stats_store.get_working_memory("t1")
+        assert len(rows) == 1
+        assert rows[0]["node_id"] == "n1"
+
+
+class TestEvictWorkingMemory:
+    """evict_working_memory deletes by completed task IDs or TTL expiry."""
+
+    async def test_evicts_by_completed_task_ids(self, stats_store: StatsStore) -> None:
+        await stats_store.upsert_working_memory(task_id="t1", node_id="n1", receipt_id="r1")
+        await stats_store.upsert_working_memory(task_id="t2", node_id="n2", receipt_id="r2")
+        await stats_store.upsert_working_memory(task_id="t3", node_id="n3", receipt_id="r3")
+
+        deleted = await stats_store.evict_working_memory(
+            completed_task_ids=["t1", "t2"], ttl_days=365
+        )
+        assert deleted == 2
+
+        # t3 should remain
+        rows = await stats_store.get_working_memory("t3")
+        assert len(rows) == 1
+        assert await stats_store.get_working_memory("t1") == []
+        assert await stats_store.get_working_memory("t2") == []
+
+    async def test_evicts_by_ttl(self, stats_store: StatsStore) -> None:
+        import aiosqlite
+
+        # Insert a row with an old last_seen_at
+        old_ts = "2020-01-01T00:00:00+00:00"
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "INSERT INTO working_memory "
+                "(task_id, node_id, activation_count, first_seen_at, last_seen_at, last_receipt_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("old_task", "n1", 1, old_ts, old_ts, "r1"),
+            )
+            await db.commit()
+
+        # Insert a fresh row
+        await stats_store.upsert_working_memory(task_id="fresh_task", node_id="n2", receipt_id="r2")
+
+        deleted = await stats_store.evict_working_memory(completed_task_ids=[], ttl_days=30)
+        assert deleted == 1  # only old row
+
+        assert await stats_store.get_working_memory("old_task") == []
+        rows = await stats_store.get_working_memory("fresh_task")
+        assert len(rows) == 1
+
+    async def test_no_rows_to_evict(self, stats_store: StatsStore) -> None:
+        deleted = await stats_store.evict_working_memory(completed_task_ids=[], ttl_days=30)
+        assert deleted == 0
+
+    async def test_empty_task_ids_with_no_expired(self, stats_store: StatsStore) -> None:
+        await stats_store.upsert_working_memory(task_id="t1", node_id="n1", receipt_id="r1")
+        deleted = await stats_store.evict_working_memory(completed_task_ids=[], ttl_days=365)
+        assert deleted == 0
+        rows = await stats_store.get_working_memory("t1")
+        assert len(rows) == 1

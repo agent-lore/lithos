@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiosqlite
@@ -233,6 +233,44 @@ class StatsStore:
                 (task_id, node_id, now, now, receipt_id),
             )
             await db.commit()
+
+    async def get_working_memory(self, task_id: str) -> list[dict[str, object]]:
+        """Return all working_memory rows for *task_id*, ordered by activation_count descending."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM working_memory WHERE task_id = ? ORDER BY activation_count DESC",
+                (task_id,),
+            )
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def evict_working_memory(self, *, completed_task_ids: list[str], ttl_days: int) -> int:
+        """Delete working_memory rows for completed tasks or stale entries.
+
+        Removes rows where ``task_id`` is in *completed_task_ids* **OR**
+        ``last_seen_at`` is older than *ttl_days* ago.  Returns the count
+        of rows deleted.
+        """
+        await self._ensure_open()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            if completed_task_ids:
+                placeholders = ", ".join("?" for _ in completed_task_ids)
+                cursor = await db.execute(
+                    f"DELETE FROM working_memory "
+                    f"WHERE task_id IN ({placeholders}) OR last_seen_at < ?",
+                    (*completed_task_ids, cutoff),
+                )
+            else:
+                cursor = await db.execute(
+                    "DELETE FROM working_memory WHERE last_seen_at < ?",
+                    (cutoff,),
+                )
+            deleted = cursor.rowcount
+            await db.commit()
+        return deleted
 
     # ------------------------------------------------------------------
     # Coactivation operations
