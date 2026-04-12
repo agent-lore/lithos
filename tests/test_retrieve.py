@@ -241,6 +241,32 @@ class TestRerankFast:
         _rerank_fast(candidates, LcmaConfig(), seeded_km)
         assert candidates[0].score == original_score
 
+    def test_stored_salience_affects_ranking(self, seeded_km: KnowledgeManager) -> None:
+        """When salience_map is provided, higher salience boosts ranking."""
+        # Both candidates have same raw score and same note_type
+        candidates = [
+            Candidate(node_id=_ID1, score=1.0, reasons=["r1"], scouts=["scout_vector"]),
+            Candidate(node_id=_ID2, score=1.0, reasons=["r2"], scouts=["scout_vector"]),
+        ]
+        # Give ID2 much higher salience
+        salience_map = {_ID1: 0.1, _ID2: 0.9}
+        result = _rerank_fast(candidates, LcmaConfig(), seeded_km, salience_map=salience_map)
+        # ID2 should rank first due to higher salience
+        assert result[0].node_id == _ID2
+        assert result[0].score > result[1].score
+
+    def test_salience_map_none_uses_score_as_proxy(self, seeded_km: KnowledgeManager) -> None:
+        """Without salience_map, _rerank_fast falls back to c.score as proxy."""
+        candidates = [
+            Candidate(node_id=_ID1, score=0.3, reasons=["r1"], scouts=["scout_vector"]),
+            Candidate(node_id=_ID2, score=0.9, reasons=["r2"], scouts=["scout_vector"]),
+        ]
+        result_without = _rerank_fast(candidates, LcmaConfig(), seeded_km, salience_map=None)
+        result_default = _rerank_fast(candidates, LcmaConfig(), seeded_km)
+        # Both should produce the same ranking
+        assert result_without[0].node_id == result_default[0].node_id
+        assert result_without[1].node_id == result_default[1].node_id
+
 
 # ---------------------------------------------------------------------------
 # compute_temperature

@@ -117,8 +117,14 @@ def _rerank_fast(
     candidates: list[Candidate],
     lcma_config: LcmaConfig,
     knowledge: KnowledgeManager,
+    salience_map: dict[str, float] | None = None,
 ) -> list[Candidate]:
-    """Terrace 1 reranking: weighted scout scores, note_type priors, basic salience.
+    """Terrace 1 reranking: weighted scout scores, note_type priors, salience.
+
+    When *salience_map* is provided, actual salience values from StatsStore are
+    used instead of the normalised scout score.  ``salience_map`` maps
+    ``node_id → salience``; nodes absent from the map fall back to 0.5
+    (the StatsStore default).
 
     After the linear combination sort, applies a greedy MMR pass over the top
     candidates to penalise near-duplicates (see checklist MVP 1 requirement for
@@ -146,9 +152,9 @@ def _rerank_fast(
             note_type = getattr(cached, "note_type", None) or "observation"
             note_type_prior = note_type_priors.get(note_type, 0.5)
 
-        # Salience: use normalized score as proxy (actual salience from stats
-        # will be layered in MVP 2 reinforcement)
-        salience = c.score
+        # Salience: read from StatsStore via pre-fetched map when available,
+        # otherwise fall back to normalised score (pre-reinforcement path).
+        salience = salience_map.get(c.node_id, 0.5) if salience_map is not None else c.score
 
         # Final composite: weighted combination
         final = c.score * scout_weight + note_type_prior * 0.1 + salience * 0.1
@@ -325,7 +331,14 @@ async def run_retrieve(
         candidates_considered = len(merged)
 
         # ── Terrace 1: rerank_fast ────────────────────────────────
-        reranked = _rerank_fast(merged, lcma_config, knowledge)
+        # ── Pre-fetch salience map for reranking ─────��────────────
+        salience_map: dict[str, float] = {}
+        for c in merged:
+            stats = await stats_store.get_node_stats(c.node_id)
+            raw = stats["salience"] if stats else 0.5
+            salience_map[c.node_id] = raw if isinstance(raw, float) else 0.5
+
+        reranked = _rerank_fast(merged, lcma_config, knowledge, salience_map=salience_map)
         terrace_reached = 1
 
         # Apply limit
