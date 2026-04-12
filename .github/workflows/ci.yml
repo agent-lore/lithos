@@ -13,27 +13,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
 
-      - name: Run Ruff linter
-        run: uv run ruff check src/ tests/
-
-      - name: Run Ruff formatter check
-        run: uv run ruff format --check src/ tests/
-
-      - name: Run Pyright type check
-        run: uv run pyright src/
+      - name: Lint and typecheck
+        run: make lint typecheck
 
   test:
     name: Test
@@ -41,18 +30,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync
 
       - name: Run tests with coverage
         run: uv run pytest tests/ -m "not integration" --cov=lithos --cov-report=xml -v --tb=short
@@ -121,11 +105,6 @@ jobs:
       - name: Show server logs
         run: docker compose -f docker/docker-compose.yml logs
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Install uv and test client
         uses: astral-sh/setup-uv@v4
         with:
@@ -133,7 +112,7 @@ jobs:
 
       - name: Install integration test dependencies
         run: |
-          uv sync --extra dev
+          uv sync
           uv pip install mcp
 
       - name: Run integration pytest suite

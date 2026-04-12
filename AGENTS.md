@@ -18,11 +18,11 @@ Lithos is a local, privacy-first MCP server that provides a shared knowledge bas
 
 A change is **not done** unless all five are green:
 
-1. Unit tests: `uv run --extra dev pytest -m "not integration" tests/ -q`
-2. Integration tests: `uv run --extra dev pytest -m integration tests/ -q`
-3. Lint: `uv run --extra dev ruff check .`
-4. Format check: `uv run --extra dev ruff format --check src/ tests/`
-5. Type check: `uv run --extra dev pyright src/`
+1. Unit tests: `make test`
+2. Integration tests: `make test-integration`
+3. Lint + format: `make lint`
+4. Type check: `make typecheck`
+5. All checks (1, 3, 4): `make check`
 
 ## Code Conventions
 

@@ -37,14 +37,6 @@ jobs:
 
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.12"
-
-      - name: Install Hatch
-        run: pip install hatch
-
       - name: Extract version
         id: version
         run: |
@@ -55,7 +47,7 @@ jobs:
           elif [ -n "${{ inputs.tag }}" ]; then
             VERSION="${{ inputs.tag }}"
           else
-            VERSION=$(hatch version)
+            VERSION=$(grep '^version = ' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           fi
           MAJOR_MINOR=$(echo "$VERSION" | sed 's/\.[^.]*$//')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
