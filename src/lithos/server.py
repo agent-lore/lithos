@@ -44,6 +44,7 @@ from lithos.knowledge import (
     KnowledgeManager,
     _UnsetType,
 )
+from lithos.lcma.migrations import MigrationRegistry, run_migrations
 from lithos.search import SearchEngine
 from lithos.telemetry import (
     StatusCode,
@@ -388,6 +389,14 @@ class LithosServer:
             try:
                 # Ensure directories exist
                 self.config.ensure_directories()
+
+                # Initialize and run schema migrations
+                registry_path = (
+                    self.config.storage.lithos_store_path / "migrations" / "registry.json"
+                )
+                migration_registry = MigrationRegistry(registry_path)
+                migration_registry.initialize()
+                run_migrations(self.knowledge, migration_registry)
 
                 # Initialize coordination database
                 await self.coordination.initialize()

@@ -273,6 +273,58 @@ class EdgeStore:
             await db.commit()
             return cursor.rowcount
 
+    async def adjust_weight(self, edge_id: str, delta: float) -> float | None:
+        """Atomically adjust weight by *delta*, clamping to [0.0, 1.0].
+
+        Returns the new weight, or ``None`` if the edge is not found.
+        """
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            # Single atomic UPDATE with clamping in SQL — no read-modify-write race.
+            cursor = await db.execute(
+                "UPDATE edges SET weight = MAX(0.0, MIN(1.0, weight + ?)), updated_at = ? "
+                "WHERE edge_id = ?",
+                (delta, now, edge_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            cursor = await db.execute("SELECT weight FROM edges WHERE edge_id = ?", (edge_id,))
+            row = await cursor.fetchone()
+            await db.commit()
+        assert row is not None
+        return row[0]
+
+    async def list_edges_between(
+        self,
+        node_ids: list[str],
+        *,
+        edge_type: str | None = None,
+        namespace: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Return all edges where both from_id and to_id are in *node_ids*."""
+        await self._ensure_open()
+        if not node_ids:
+            return []
+        placeholders = ", ".join("?" for _ in node_ids)
+        clauses = [
+            f"from_id IN ({placeholders})",
+            f"to_id IN ({placeholders})",
+        ]
+        params: list[object] = [*node_ids, *node_ids]
+        if edge_type is not None:
+            clauses.append("type = ?")
+            params.append(edge_type)
+        if namespace is not None:
+            clauses.append("namespace = ?")
+            params.append(namespace)
+        where = " AND ".join(clauses)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(f"SELECT * FROM edges WHERE {where}", params)
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
 
 async def _project_provenance_to_edges(
     edge_store: EdgeStore,

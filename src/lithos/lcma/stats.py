@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiosqlite
@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS node_stats (
     ignored_count INTEGER NOT NULL DEFAULT 0,
     misleading_count INTEGER NOT NULL DEFAULT 0,
     decay_rate REAL NOT NULL DEFAULT 0.0,
-    spaced_rep_strength REAL NOT NULL DEFAULT 0.0
+    spaced_rep_strength REAL NOT NULL DEFAULT 0.0,
+    cited_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS coactivation (
@@ -134,6 +135,7 @@ class StatsStore:
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            await self._migrate_add_cited_count(db)
             await db.commit()
         self._opened = True
 
@@ -232,6 +234,44 @@ class StatsStore:
             )
             await db.commit()
 
+    async def get_working_memory(self, task_id: str) -> list[dict[str, object]]:
+        """Return all working_memory rows for *task_id*, ordered by activation_count descending."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM working_memory WHERE task_id = ? ORDER BY activation_count DESC",
+                (task_id,),
+            )
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def evict_working_memory(self, *, completed_task_ids: list[str], ttl_days: int) -> int:
+        """Delete working_memory rows for completed tasks or stale entries.
+
+        Removes rows where ``task_id`` is in *completed_task_ids* **OR**
+        ``last_seen_at`` is older than *ttl_days* ago.  Returns the count
+        of rows deleted.
+        """
+        await self._ensure_open()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            if completed_task_ids:
+                placeholders = ", ".join("?" for _ in completed_task_ids)
+                cursor = await db.execute(
+                    f"DELETE FROM working_memory "
+                    f"WHERE task_id IN ({placeholders}) OR last_seen_at < ?",
+                    (*completed_task_ids, cutoff),
+                )
+            else:
+                cursor = await db.execute(
+                    "DELETE FROM working_memory WHERE last_seen_at < ?",
+                    (cutoff,),
+                )
+            deleted = cursor.rowcount
+            await db.commit()
+        return deleted
+
     # ------------------------------------------------------------------
     # Coactivation operations
     # ------------------------------------------------------------------
@@ -260,6 +300,147 @@ class StatsStore:
             await db.commit()
 
     # ------------------------------------------------------------------
+    # Enrich-queue operations
+    # ------------------------------------------------------------------
+
+    async def enqueue(
+        self,
+        trigger_type: str,
+        *,
+        node_id: str | None = None,
+        task_id: str | None = None,
+    ) -> None:
+        """Insert a row into enrich_queue.
+
+        Exactly one of *node_id* or *task_id* must be provided.
+        """
+        if (node_id is None) == (task_id is None):
+            raise ValueError("Exactly one of node_id or task_id must be provided")
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO enrich_queue (trigger_type, node_id, task_id) VALUES (?, ?, ?)",
+                (trigger_type, node_id, task_id),
+            )
+            await db.commit()
+
+    async def drain_pending_nodes(self) -> list[dict[str, object]]:
+        """Atomically claim unprocessed node-level enrich_queue rows.
+
+        Returns ``[{node_id, trigger_types, claimed_ids}]`` deduplicated
+        by ``node_id``, preserving all distinct trigger types per node.
+        ``note.created`` and ``note.updated`` triggers are never discarded.
+        """
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # BEGIN IMMEDIATE acquires a write lock before the SELECT,
+            # preventing concurrent callers from reading the same rows.
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT id, node_id, trigger_type FROM enrich_queue "
+                "WHERE node_id IS NOT NULL AND processed_at IS NULL"
+            )
+            rows = await cursor.fetchall()
+            if not rows:
+                await db.execute("COMMIT")
+                return []
+
+            # Mark as processed within the same transaction
+            ids = [row["id"] for row in rows]
+            placeholders = ", ".join("?" for _ in ids)
+            await db.execute(
+                f"UPDATE enrich_queue SET processed_at = ? WHERE id IN ({placeholders})",
+                (now, *ids),
+            )
+            await db.commit()
+
+        # Deduplicate by node_id
+        by_node: dict[str, dict[str, object]] = {}
+        for row in rows:
+            nid = row["node_id"]
+            if nid not in by_node:
+                by_node[nid] = {
+                    "node_id": nid,
+                    "trigger_types": set(),
+                    "claimed_ids": [],
+                }
+            entry = by_node[nid]
+            assert isinstance(entry["trigger_types"], set)
+            assert isinstance(entry["claimed_ids"], list)
+            entry["trigger_types"].add(row["trigger_type"])
+            entry["claimed_ids"].append(row["id"])
+
+        # Convert sets to sorted lists for deterministic output
+        result: list[dict[str, object]] = []
+        for entry in by_node.values():
+            assert isinstance(entry["trigger_types"], set)
+            entry["trigger_types"] = sorted(entry["trigger_types"])
+            result.append(entry)
+        return result
+
+    async def drain_pending_tasks(self) -> list[dict[str, object]]:
+        """Atomically claim unprocessed task-level enrich_queue rows.
+
+        Returns ``[{task_id, claimed_ids}]`` using the same atomic
+        SELECT+UPDATE pattern as :meth:`drain_pending_nodes`.
+        """
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # BEGIN IMMEDIATE acquires a write lock before the SELECT,
+            # preventing concurrent callers from reading the same rows.
+            await db.execute("BEGIN IMMEDIATE")
+            cursor = await db.execute(
+                "SELECT id, task_id FROM enrich_queue "
+                "WHERE node_id IS NULL AND processed_at IS NULL"
+            )
+            rows = await cursor.fetchall()
+            if not rows:
+                await db.execute("COMMIT")
+                return []
+
+            ids = [row["id"] for row in rows]
+            placeholders = ", ".join("?" for _ in ids)
+            await db.execute(
+                f"UPDATE enrich_queue SET processed_at = ? WHERE id IN ({placeholders})",
+                (now, *ids),
+            )
+            await db.commit()
+
+        # Deduplicate by task_id
+        by_task: dict[str, dict[str, object]] = {}
+        for row in rows:
+            tid = row["task_id"]
+            if tid not in by_task:
+                by_task[tid] = {"task_id": tid, "claimed_ids": []}
+            entry = by_task[tid]
+            assert isinstance(entry["claimed_ids"], list)
+            entry["claimed_ids"].append(row["id"])
+
+        return list(by_task.values())
+
+    async def requeue_failed(self, claimed_ids: list[int]) -> int:
+        """Reset ``processed_at`` to NULL for the given row IDs.
+
+        Returns the count of rows reset.
+        """
+        if not claimed_ids:
+            return 0
+        await self._ensure_open()
+        placeholders = ", ".join("?" for _ in claimed_ids)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"UPDATE enrich_queue SET processed_at = NULL WHERE id IN ({placeholders})",
+                tuple(claimed_ids),
+            )
+            count = cursor.rowcount
+            await db.commit()
+        return count
+
+    # ------------------------------------------------------------------
     # Node stats operations
     # ------------------------------------------------------------------
 
@@ -281,9 +462,104 @@ class StatsStore:
             )
             await db.commit()
 
+    async def get_node_stats(self, node_id: str) -> dict[str, object] | None:
+        """Return all node_stats columns for *node_id*, or ``None`` if absent."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM node_stats WHERE node_id = ?", (node_id,))
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    async def update_salience(self, node_id: str, delta: float) -> None:
+        """Atomically adjust salience by *delta*, clamping to [0.0, 1.0].
+
+        Creates the row with ``salience = 0.5 + delta`` (clamped) if absent.
+        """
+        await self._ensure_open()
+        initial = max(0.0, min(1.0, 0.5 + delta))
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, salience)
+                   VALUES (?, ?)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     salience = MAX(0.0, MIN(1.0, salience + ?))""",
+                (node_id, initial, delta),
+            )
+            await db.commit()
+
+    async def increment_ignored(self, node_id: str) -> None:
+        """Atomically increment ignored_count; creates row if absent."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, ignored_count)
+                   VALUES (?, 1)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     ignored_count = ignored_count + 1""",
+                (node_id,),
+            )
+            await db.commit()
+
+    async def increment_cited(self, node_id: str) -> None:
+        """Atomically increment cited_count; creates row if absent."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, cited_count)
+                   VALUES (?, 1)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     cited_count = cited_count + 1""",
+                (node_id,),
+            )
+            await db.commit()
+
+    async def increment_misleading(self, node_id: str) -> None:
+        """Atomically increment misleading_count; creates row if absent."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, misleading_count)
+                   VALUES (?, 1)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     misleading_count = misleading_count + 1""",
+                (node_id,),
+            )
+            await db.commit()
+
+    async def update_spaced_rep_strength(self, node_id: str, delta: float) -> None:
+        """Atomically adjust spaced_rep_strength by *delta*, clamping to [0.0, 1.0].
+
+        Creates the row with ``spaced_rep_strength = max(0, min(1, 0 + delta))``
+        if absent (default is 0.0).
+        """
+        await self._ensure_open()
+        initial = max(0.0, min(1.0, delta))
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, spaced_rep_strength)
+                   VALUES (?, ?)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     spaced_rep_strength = MAX(0.0, MIN(1.0, spaced_rep_strength + ?))""",
+                (node_id, initial, delta),
+            )
+            await db.commit()
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _migrate_add_cited_count(db: aiosqlite.Connection) -> None:
+        """Add cited_count column to existing node_stats tables."""
+        cursor = await db.execute("PRAGMA table_info(node_stats)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "cited_count" not in columns:
+            await db.execute(
+                "ALTER TABLE node_stats ADD COLUMN cited_count INTEGER NOT NULL DEFAULT 0"
+            )
 
     @staticmethod
     async def _probe(path: Path) -> bool:

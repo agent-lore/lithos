@@ -213,6 +213,26 @@ class TestRerankFast:
         # agent_finding (ID2) should rank first due to higher prior
         assert result[0].node_id == _ID2
 
+    def test_default_priors_differentiate_note_types(self, seeded_km: KnowledgeManager) -> None:
+        """With default priors, agent_finding (0.6) ranks above task_record (0.35)
+        when raw scores are identical."""
+        from dataclasses import replace
+
+        # Override ID1's note_type to task_record in the cache
+        seeded_km._meta_cache[_ID1] = replace(seeded_km._meta_cache[_ID1], note_type="task_record")
+
+        candidates = [
+            Candidate(node_id=_ID1, score=1.0, reasons=["r1"], scouts=["scout_vector"]),
+            Candidate(node_id=_ID2, score=1.0, reasons=["r2"], scouts=["scout_vector"]),
+        ]
+        # Use default LcmaConfig (differentiated priors)
+        result = _rerank_fast(candidates, LcmaConfig(), seeded_km)
+        # agent_finding (0.6) should outrank task_record (0.35)
+        assert result[0].node_id == _ID2
+        assert result[1].node_id == _ID1
+        # Scores must differ
+        assert result[0].score > result[1].score
+
     def test_does_not_mutate_input(self, seeded_km: KnowledgeManager) -> None:
         candidates = [
             Candidate(node_id=_ID1, score=0.5, reasons=["r1"], scouts=["scout_vector"]),
