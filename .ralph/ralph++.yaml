@@ -9,7 +9,7 @@ orchestrated:
   run_tests_between_steps: true
   max_iteration_retries: 1
   test_commands:
-    - uv run --extra dev pytest tests/
+    - make check
 
 prd_review:
   max_cycles: 10
@@ -22,4 +22,4 @@ post_review:
 
 hooks:
   post_worktree_create:
-    - "uv sync --extra dev --extra otel"
+    - "uv sync --extra otel"
