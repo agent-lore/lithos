@@ -2547,6 +2547,66 @@ class LithosServer:
 
         @self.mcp.tool()
         @tool_metrics()
+        async def lithos_node_stats(
+            node_id: str,
+        ) -> dict[str, Any]:
+            """View a note's salience score, retrieval stats, and penalty counts.
+
+            Args:
+                node_id: The document ID to look up stats for
+
+            Returns:
+                Dict with salience, retrieval_count, cited_count, ignored_count,
+                misleading_count, and other stats fields.
+                Returns error envelope if node_id does not match any known document.
+            """
+            logger.info("lithos_node_stats node_id=%s", node_id)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.node_stats") as span:
+                span.set_attribute("lithos.tool", "lithos_node_stats")
+                span.set_attribute("lithos.node_id", node_id)
+
+                # Verify node exists in knowledge manager
+                if node_id not in self.knowledge._meta_cache:
+                    return {
+                        "status": "error",
+                        "code": "doc_not_found",
+                        "message": f"Node '{node_id}' not found in knowledge base.",
+                    }
+
+                stats = await self.stats_store.get_node_stats(node_id)
+                if stats is None:
+                    # Node exists but has no stats row — return defaults
+                    return {
+                        "node_id": node_id,
+                        "salience": 0.5,
+                        "retrieval_count": 0,
+                        "cited_count": 0,
+                        "last_retrieved_at": None,
+                        "last_used_at": None,
+                        "ignored_count": 0,
+                        "misleading_count": 0,
+                        "decay_rate": 0.0,
+                        "spaced_rep_strength": 0.0,
+                        "last_decay_applied_at": None,
+                    }
+
+                return {
+                    "node_id": node_id,
+                    "salience": stats.get("salience", 0.5),
+                    "retrieval_count": stats.get("retrieval_count", 0),
+                    "cited_count": stats.get("cited_count", 0),
+                    "last_retrieved_at": stats.get("last_retrieved_at"),
+                    "last_used_at": stats.get("last_used_at"),
+                    "ignored_count": stats.get("ignored_count", 0),
+                    "misleading_count": stats.get("misleading_count", 0),
+                    "decay_rate": stats.get("decay_rate", 0.0),
+                    "spaced_rep_strength": stats.get("spaced_rep_strength", 0.0),
+                    "last_decay_applied_at": stats.get("last_decay_applied_at"),
+                }
+
+        @self.mcp.tool()
+        @tool_metrics()
         async def lithos_task_list(
             agent: str | None = None,
             status: str | None = None,
