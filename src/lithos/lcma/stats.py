@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS node_stats (
     ignored_count INTEGER NOT NULL DEFAULT 0,
     misleading_count INTEGER NOT NULL DEFAULT 0,
     decay_rate REAL NOT NULL DEFAULT 0.0,
-    spaced_rep_strength REAL NOT NULL DEFAULT 0.0
+    spaced_rep_strength REAL NOT NULL DEFAULT 0.0,
+    cited_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS coactivation (
@@ -134,6 +135,7 @@ class StatsStore:
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            await self._migrate_add_cited_count(db)
             await db.commit()
         self._opened = True
 
@@ -281,9 +283,104 @@ class StatsStore:
             )
             await db.commit()
 
+    async def get_node_stats(self, node_id: str) -> dict[str, object] | None:
+        """Return all node_stats columns for *node_id*, or ``None`` if absent."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM node_stats WHERE node_id = ?", (node_id,))
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    async def update_salience(self, node_id: str, delta: float) -> None:
+        """Atomically adjust salience by *delta*, clamping to [0.0, 1.0].
+
+        Creates the row with ``salience = 0.5 + delta`` (clamped) if absent.
+        """
+        await self._ensure_open()
+        initial = max(0.0, min(1.0, 0.5 + delta))
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, salience)
+                   VALUES (?, ?)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     salience = MAX(0.0, MIN(1.0, salience + ?))""",
+                (node_id, initial, delta),
+            )
+            await db.commit()
+
+    async def increment_ignored(self, node_id: str) -> None:
+        """Atomically increment ignored_count; creates row if absent."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, ignored_count)
+                   VALUES (?, 1)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     ignored_count = ignored_count + 1""",
+                (node_id,),
+            )
+            await db.commit()
+
+    async def increment_cited(self, node_id: str) -> None:
+        """Atomically increment cited_count; creates row if absent."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, cited_count)
+                   VALUES (?, 1)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     cited_count = cited_count + 1""",
+                (node_id,),
+            )
+            await db.commit()
+
+    async def increment_misleading(self, node_id: str) -> None:
+        """Atomically increment misleading_count; creates row if absent."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, misleading_count)
+                   VALUES (?, 1)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     misleading_count = misleading_count + 1""",
+                (node_id,),
+            )
+            await db.commit()
+
+    async def update_spaced_rep_strength(self, node_id: str, delta: float) -> None:
+        """Atomically adjust spaced_rep_strength by *delta*, clamping to [0.0, 1.0].
+
+        Creates the row with ``spaced_rep_strength = max(0, min(1, 0 + delta))``
+        if absent (default is 0.0).
+        """
+        await self._ensure_open()
+        initial = max(0.0, min(1.0, delta))
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, spaced_rep_strength)
+                   VALUES (?, ?)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     spaced_rep_strength = MAX(0.0, MIN(1.0, spaced_rep_strength + ?))""",
+                (node_id, initial, delta),
+            )
+            await db.commit()
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    async def _migrate_add_cited_count(db: aiosqlite.Connection) -> None:
+        """Add cited_count column to existing node_stats tables."""
+        cursor = await db.execute("PRAGMA table_info(node_stats)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "cited_count" not in columns:
+            await db.execute(
+                "ALTER TABLE node_stats ADD COLUMN cited_count INTEGER NOT NULL DEFAULT 0"
+            )
 
     @staticmethod
     async def _probe(path: Path) -> bool:

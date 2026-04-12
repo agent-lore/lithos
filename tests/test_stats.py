@@ -3,6 +3,7 @@
 import json
 import sqlite3
 
+import pytest
 import pytest_asyncio
 
 from lithos.config import LithosConfig
@@ -52,6 +53,7 @@ class TestStatsStoreCreation:
             "misleading_count",
             "decay_rate",
             "spaced_rep_strength",
+            "cited_count",
         }
 
     async def test_coactivation_columns(self, stats_store: StatsStore) -> None:
@@ -426,3 +428,179 @@ class TestStoreLocation:
         store = StatsStore(test_config)
         expected = test_config.storage.data_dir / ".lithos" / "stats.db"
         assert store.db_path == expected
+
+
+class TestGetNodeStats:
+    """get_node_stats returns dict or None."""
+
+    async def test_returns_none_for_absent_node(self, stats_store: StatsStore) -> None:
+        result = await stats_store.get_node_stats("nonexistent")
+        assert result is None
+
+    async def test_returns_dict_for_existing_node(self, stats_store: StatsStore) -> None:
+        await stats_store.increment_node_stats(node_id="n1")
+        result = await stats_store.get_node_stats("n1")
+        assert result is not None
+        assert result["node_id"] == "n1"
+        assert result["retrieval_count"] == 1
+        assert result["salience"] == 0.5
+        assert result["ignored_count"] == 0
+        assert result["cited_count"] == 0
+        assert result["misleading_count"] == 0
+
+
+class TestUpdateSalience:
+    """update_salience: insert-on-absent, update-on-existing, clamping."""
+
+    async def test_creates_row_if_absent(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("n1", 0.1)
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["salience"] == pytest.approx(0.6)
+
+    async def test_updates_existing_row(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("n1", 0.0)  # creates at 0.5
+        await stats_store.update_salience("n1", 0.2)
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["salience"] == pytest.approx(0.7)
+
+    async def test_clamps_to_upper_bound(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("n1", 0.0)  # 0.5
+        await stats_store.update_salience("n1", 10.0)
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["salience"] == pytest.approx(1.0)
+
+    async def test_clamps_to_lower_bound(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("n1", 0.0)  # 0.5
+        await stats_store.update_salience("n1", -10.0)
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["salience"] == pytest.approx(0.0)
+
+    async def test_insert_clamps_initial_value(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("n1", 2.0)  # 0.5 + 2.0 = 2.5 → clamped to 1.0
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["salience"] == pytest.approx(1.0)
+
+
+class TestIncrementIgnored:
+    """increment_ignored: insert-on-absent, update-on-existing."""
+
+    async def test_creates_row_if_absent(self, stats_store: StatsStore) -> None:
+        await stats_store.increment_ignored("n1")
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["ignored_count"] == 1
+
+    async def test_increments_existing(self, stats_store: StatsStore) -> None:
+        await stats_store.increment_ignored("n1")
+        await stats_store.increment_ignored("n1")
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["ignored_count"] == 2
+
+
+class TestIncrementCited:
+    """increment_cited: insert-on-absent, update-on-existing."""
+
+    async def test_creates_row_if_absent(self, stats_store: StatsStore) -> None:
+        await stats_store.increment_cited("n1")
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["cited_count"] == 1
+
+    async def test_increments_existing(self, stats_store: StatsStore) -> None:
+        await stats_store.increment_cited("n1")
+        await stats_store.increment_cited("n1")
+        await stats_store.increment_cited("n1")
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["cited_count"] == 3
+
+
+class TestIncrementMisleading:
+    """increment_misleading: insert-on-absent, update-on-existing."""
+
+    async def test_creates_row_if_absent(self, stats_store: StatsStore) -> None:
+        await stats_store.increment_misleading("n1")
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["misleading_count"] == 1
+
+    async def test_increments_existing(self, stats_store: StatsStore) -> None:
+        await stats_store.increment_misleading("n1")
+        await stats_store.increment_misleading("n1")
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["misleading_count"] == 2
+
+
+class TestUpdateSpacedRepStrength:
+    """update_spaced_rep_strength: insert-on-absent, clamping."""
+
+    async def test_creates_row_if_absent(self, stats_store: StatsStore) -> None:
+        await stats_store.update_spaced_rep_strength("n1", 0.3)
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["spaced_rep_strength"] == pytest.approx(0.3)
+
+    async def test_updates_existing_row(self, stats_store: StatsStore) -> None:
+        await stats_store.update_spaced_rep_strength("n1", 0.3)
+        await stats_store.update_spaced_rep_strength("n1", 0.2)
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["spaced_rep_strength"] == pytest.approx(0.5)
+
+    async def test_clamps_to_upper_bound(self, stats_store: StatsStore) -> None:
+        await stats_store.update_spaced_rep_strength("n1", 0.5)
+        await stats_store.update_spaced_rep_strength("n1", 10.0)
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["spaced_rep_strength"] == pytest.approx(1.0)
+
+    async def test_clamps_to_lower_bound(self, stats_store: StatsStore) -> None:
+        await stats_store.update_spaced_rep_strength("n1", 0.5)
+        await stats_store.update_spaced_rep_strength("n1", -10.0)
+        row = await stats_store.get_node_stats("n1")
+        assert row is not None
+        assert row["spaced_rep_strength"] == pytest.approx(0.0)
+
+
+class TestCitedCountMigration:
+    """ALTER TABLE migration adds cited_count to existing databases."""
+
+    async def test_migration_adds_cited_count_to_old_db(self, test_config: LithosConfig) -> None:
+        """Simulate an old database without cited_count and verify migration."""
+        import aiosqlite
+
+        path = test_config.storage.stats_db_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create old schema without cited_count
+        async with aiosqlite.connect(path) as db:
+            await db.execute(
+                """CREATE TABLE IF NOT EXISTS node_stats (
+                    node_id TEXT PRIMARY KEY,
+                    salience REAL NOT NULL DEFAULT 0.5,
+                    retrieval_count INTEGER NOT NULL DEFAULT 0,
+                    last_retrieved_at TIMESTAMP,
+                    last_used_at TIMESTAMP,
+                    ignored_count INTEGER NOT NULL DEFAULT 0,
+                    misleading_count INTEGER NOT NULL DEFAULT 0,
+                    decay_rate REAL NOT NULL DEFAULT 0.0,
+                    spaced_rep_strength REAL NOT NULL DEFAULT 0.0
+                )"""
+            )
+            await db.execute("INSERT INTO node_stats (node_id) VALUES (?)", ("old_node",))
+            await db.commit()
+
+        # Open via StatsStore — should run migration
+        store = StatsStore(test_config)
+        await store.open()
+
+        row = await store.get_node_stats("old_node")
+        assert row is not None
+        assert row["cited_count"] == 0
