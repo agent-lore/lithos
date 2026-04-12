@@ -1,205 +1,82 @@
 # Ralph Progress Log
-Started: Thu Apr  9 02:36:23 UTC 2026
+Started: Sun Apr 12 12:55:00 UTC 2026
 
 ## Codebase Patterns
-- KnowledgeMetadata uses `_KNOWN_METADATA_KEYS` frozenset to separate known vs unknown (extra) fields — new metadata fields must be added there
-- `from_dict` only unpacks what it receives; read-time defaults are applied by callers with path context (not in from_dict)
-- `_resolve_safe_path` returns (relative_path, full_path) — relative_path is relative to knowledge_path
-- `to_dict` conditionally includes optional fields (only when not None) to keep frontmatter clean
-- Tests use `test_config` fixture (conftest.py) which creates isolated temp dirs; `knowledge_manager` fixture wraps it
-- Use `fm.Post(content, **kwargs)` + `fm.dumps(post)` to write test notes manually to disk
-- MCP boundary uses _UNSET sentinel: None from caller → _UNSET (preserve existing), value → pass through — used for all optional update fields
-- Integration tests use `server` fixture and `_call_tool(server, name, args)` helper to invoke MCP tools via `server.mcp._call_tool_mcp()`
-- LCMA enum constants: VALID_ACCESS_SCOPES, VALID_NOTE_TYPES, VALID_STATUSES exported from knowledge.py
-- EdgeStore follows coordination.db pattern: `async def open()` creates schema, `aiosqlite.connect(db_path)` per operation, no persistent connection
-- Corrupt DB detection uses `PRAGMA integrity_check` — `SELECT 1` doesn't read the file so can't detect corruption
-- `StorageConfig.edges_db_path` property gives the canonical path: `data_dir / ".lithos" / "edges.db"`
-- Quarantine naming: `edges.db.corrupt-{YYYYMMDDTHHMMSSZ}` with suffix disambiguation
-- `StorageConfig.stats_db_path` property gives `data_dir / ".lithos" / "stats.db"`
-- StatsStore follows the same pattern as EdgeStore: open(), _probe(), _quarantine(), aiosqlite per-op
-- receipts table: `"limit"` column name is a SQL keyword — must be quoted in INSERT/SELECT statements
-- receipts.namespace_filter is TEXT NULL (SQL NULL when None, JSON array string when provided)
+- StatsStore uses `INSERT ... ON CONFLICT(node_id) DO UPDATE SET` for all upsert operations
+- StatsStore methods follow pattern: `await self._ensure_open()`, then `async with aiosqlite.connect(self.db_path) as db`
+- Schema migrations for adding columns use `PRAGMA table_info` check + `ALTER TABLE ADD COLUMN` in a static method called from `open()`
+- Tests use `stats_store` fixture from `test_config`, assertions use `get_node_stats()` to verify state
+- `uv run` replaces `make` when make is unavailable (e.g., `uv run ruff check`, `uv run pyright`, `uv run pytest`)
+
 ---
 
-## 2026-04-09 - US-001
-- Implemented LCMA frontmatter fields with lazy read-time defaults
-- Files changed:
-  - `src/lithos/knowledge.py`: Added 6 LCMA fields to KnowledgeMetadata, updated _KNOWN_METADATA_KEYS, from_dict, to_dict; added derive_namespace() and apply_lcma_defaults() helpers; applied defaults in read() and _sync_from_disk_unlocked()
-  - `tests/test_lcma_frontmatter.py`: New test file with 25 tests covering defaults, namespace derivation, from_dict, to_dict round-trip, read-time defaults via KnowledgeManager
+## 2026-04-12 - US-001
+- **What was implemented:** Added 6 new methods to StatsStore: `get_node_stats`, `update_salience`, `increment_ignored`, `increment_cited`, `increment_misleading`, `update_spaced_rep_strength`. Added `cited_count` column to `node_stats` schema with ALTER TABLE migration for existing databases.
+- **Files changed:**
+  - `src/lithos/lcma/stats.py` — new methods + schema change + migration helper
+  - `tests/test_stats.py` — updated column test, added 7 new test classes with 20 test methods
 - **Learnings for future iterations:**
-  - LCMA defaults are NOT applied in from_dict — they're applied by callers (read/sync_from_disk) that have access to the note's relative path for namespace derivation
-  - Namespace derivation uses `Path.parent.parts` on the relative path; empty/root = "default", otherwise join with "/"
-  - All 210 existing test_knowledge.py tests pass unchanged — the LCMA fields default to None so pre-existing code is fully backward-compatible
-  - summaries has no default — left as None when not provided
+  - All StatsStore upsert methods follow the same INSERT ON CONFLICT pattern — consistent and safe to replicate
+  - Clamping in SQL uses `MAX(0.0, MIN(1.0, expr))` pattern
+  - For initial insert with clamping, compute the clamped initial value in Python before passing to SQL
+  - The `_migrate_add_cited_count` static method pattern can be reused for future column additions
+  - `make` command is not available in the worktree container — use `uv run` directly
 ---
 
-## 2026-04-10 - US-002
-- Implemented lithos_write with optional LCMA field parameters
-- Files changed:
-  - `src/lithos/server.py`: Added schema_version, namespace, access_scope, note_type, status, summaries params to lithos_write; enum validation; task-scope invariant enforcement; LCMA field forwarding to create/update
-  - `src/lithos/knowledge.py`: Added LCMA params to create() and update() signatures; preserve/set semantics on update with _UNSET pattern; defaults for pre-LCMA notes on update
-  - `tests/test_lcma_write.py`: 17 integration tests covering create with LCMA fields, update preserving values, pre-LCMA note defaults, enum validation, task-scope invariant, envelope shape, source_task forwarding
+## 2026-04-12 - US-002
+- **What was implemented:** Added `get_working_memory(task_id)` and `evict_working_memory(completed_task_ids, ttl_days)` methods to StatsStore.
+- **Files changed:**
+  - `src/lithos/lcma/stats.py` — two new methods in Working-memory operations section
+  - `tests/test_stats.py` — added TestGetWorkingMemory (3 tests) and TestEvictWorkingMemory (4 tests)
 - **Learnings for future iterations:**
-  - lithos_write uses the _UNSET sentinel pattern: MCP boundary maps None → _UNSET (preserve), value → pass through for LCMA fields on update
-  - Tests use `_call_tool(server, "lithos_write", {...})` helper to invoke MCP tools — calls `server.mcp._call_tool_mcp()` internally
-  - The `server` fixture is an integration fixture that boots a full LithosServer with temp dirs
-  - On update, LCMA fields that were None in pre-LCMA notes get defaults written (schema_version=1, access_scope=shared, note_type=observation, status=active) — but NOT namespace (derived at read time)
-  - task-scope validation on update does an extra read to check existing metadata.source — be aware of the performance cost
+  - For dynamic IN clauses in SQLite, use f-string for placeholders only (not values) with tuple unpacking for params
+  - `evict_working_memory` uses OR logic: completed task IDs OR TTL expiry — both conditions in one DELETE
+  - Working memory rows are keyed by (task_id, node_id) composite PK
 ---
 
-## 2026-04-10 - US-003
-- Implemented edges.db with edges table, lazily created on first use
-- Files changed:
-  - `src/lithos/config.py`: Added `edges_db_path` property to `StorageConfig`
-  - `src/lithos/lcma/edges.py`: New EdgeStore class with open(), upsert(), list_edges(), count() methods; corrupt DB quarantine and recovery
-  - `tests/test_edges.py`: 15 unit tests covering schema creation, idempotent re-open, no-op when exists, corrupt recovery, store location, basic upsert/list
+## 2026-04-12 - US-003
+- **What was implemented:** Added `enqueue`, `drain_pending_nodes`, `drain_pending_tasks`, and `requeue_failed` methods to StatsStore.
+- **Files changed:**
+  - `src/lithos/lcma/stats.py` — four new methods in new Enrich-queue operations section
+  - `tests/test_stats.py` — added TestEnqueue (4 tests), TestDrainPendingNodes (5 tests), TestDrainPendingTasks (4 tests), TestRequeueFailed (3 tests)
 - **Learnings for future iterations:**
-  - EdgeStore.open() is idempotent — call it before any operation or once at startup
-  - Corrupt DB detection requires `PRAGMA integrity_check`, not `SELECT 1` (SQLite connects to any file without error; `SELECT 1` is a pure expression that doesn't read the file)
-  - The upsert/list_edges/count methods are provided for US-010's lithos_edge_upsert and lithos_edge_list MCP tools to use directly
-  - edge_id format: `edge_{12-char-hex}` via uuid4().hex[:12]
+  - drain methods use SELECT+UPDATE within one connection for atomicity — no UPDATE RETURNING in SQLite
+  - `enqueue` validates exactly-one-of with `(node_id is None) == (task_id is None)` — elegant XOR check
+  - drain_pending_nodes deduplicates by node_id in Python after claiming, collecting trigger_types as a set then sorting
+  - requeue_failed short-circuits on empty list to avoid malformed SQL
 ---
 
-## 2026-04-10 - US-004
-- Implemented stats.db with five MVP 1 tables lazily created on first use
-- Files changed:
-  - `src/lithos/config.py`: Added `stats_db_path` property to `StorageConfig`
-  - `src/lithos/lcma/stats.py`: New StatsStore class following EdgeStore pattern; open(), _probe(), _quarantine(); schema for node_stats, coactivation, enrich_queue, working_memory, receipts tables with indexes
-  - `tests/test_stats.py`: 19 unit tests covering schema creation (all 5 tables + columns), idempotent re-open, insert/select round-trip for each table, receipts.namespace_filter for both None and list, corrupt-file recovery, store location
+## 2026-04-12 - US-004
+- **What was implemented:** Added `adjust_weight(edge_id, delta)` and `list_edges_between(node_ids)` methods to EdgeStore.
+- **Files changed:**
+  - `src/lithos/lcma/edges.py` — two new methods after `delete_edges`
+  - `tests/test_edges.py` — added TestAdjustWeight (5 tests) and TestListEdgesBetween (6 tests)
 - **Learnings for future iterations:**
-  - StatsStore is a direct copy of EdgeStore's pattern — open/probe/quarantine are identical; future refactoring could extract a base class
-  - The `limit` column in receipts is a SQL reserved word — must quote as `"limit"` in SQL statements
-  - receipts.namespace_filter uses SQL NULL for None and JSON array string for list values — tests verify both paths
-  - receipt_id format: `rcpt_{12-char-hex}` via uuid4().hex[:12] (parallel to edge_id)
-  - JSON array columns (scouts_fired, final_nodes, conflicts_surfaced) are TEXT NOT NULL — always store json.dumps([]) even when empty
-  - coactivation PK is (node_a, node_b, namespace) — unordered pairs need consistent ordering at insert time (caller responsibility, not enforced by schema)
-- LcmaConfig uses `model_validator(mode="before")` for note_type_priors validation — fills missing keys with 0.5, rejects unknown keys
-- LithosConfig env vars for nested models use `__` delimiter: e.g. `LITHOS_LCMA__ENABLED=false`
-- EventBus.subscribe() accepts optional `maxsize` param; default from EventsConfig.subscriber_queue_size; ENRICH_SUBSCRIBER_QUEUE_SIZE = 10_000 for large queues
-- All sync SearchEngine methods (full_text_search, semantic_search, hybrid_search) are called via `asyncio.to_thread()` from async server code; sync CLI/internal calls don't need wrapping
-- Scout canonical names: `scout_vector`, `scout_lexical`, `scout_exact_alias`, `scout_tags_recency`, `scout_freshness`, `scout_provenance`, `scout_task_context` — these are values in receipts.scouts_fired
-- `_CachedMeta` in knowledge.py now includes `access_scope` and `source` fields for access_scope gating
-- `_resolve_link` returns node_id which IS doc_id (graph uses `node_id = doc.id`); use `knowledge.has_document(resolved)` to verify
+  - EdgeStore uses SELECT+UPDATE pattern for adjust_weight (not INSERT ON CONFLICT since edges must already exist)
+  - list_edges_between uses two IN clauses (from_id IN (...) AND to_id IN (...)) — node_ids param list duplicated
+  - EdgeStore.list_edges returns explicit dict construction; list_edges_between uses `dict(r)` from Row factory — both patterns valid
 ---
 
-## 2026-04-11 - US-005
-- Verified LcmaConfig configuration subtree (already implemented in prior iteration)
-- Files verified:
-  - `src/lithos/config.py`: LcmaConfig class with all MVP 1 fields, model_validator for note_type_priors, integrated into LithosConfig as `lcma` subtree
-  - `tests/test_lcma_config.py`: 19 tests covering defaults, note_type_priors filling/rejection, LithosConfig subtree integration, env var overrides, no side effects
-- All Done Criteria pass: 636 unit tests, 280 integration tests, ruff check, ruff format, pyright
+## 2026-04-12 - US-005
+- **What was implemented:** Created `src/lithos/lcma/migrations.py` with `MigrationRegistry` class (JSON persistence) and `run_migrations()` function. First migration `v1_to_v2` is a no-op placeholder.
+- **Files changed:**
+  - `src/lithos/lcma/migrations.py` — new module (MigrationRegistry, run_migrations, MIGRATIONS list)
+  - `tests/test_migrations.py` — 14 tests across 4 test classes
 - **Learnings for future iterations:**
-  - LcmaConfig was already implemented and committed — only the PRD marker `passes: false` needed updating
-  - `_LCMA_NOTE_TYPES` frozenset in config.py is the canonical source for valid note types (mirrors VALID_NOTE_TYPES in knowledge.py)
-  - `_DEFAULT_RERANK_WEIGHTS` keys correspond to the seven scout names minus `scout_` prefix; weights sum to 1.0
+  - Registry uses `lithos_store_path / 'migrations' / 'registry.json'` — not hardcoded `data/` path
+  - Ruff requires `collections.abc.Callable` not `typing.Callable` (UP035 rule)
+  - For unused params in no-op functions, use `_` prefix (e.g., `_knowledge`) not `# noqa: ARG001`
+  - `json.loads` returns `Any` — pyright needs `assert isinstance(raw, dict)` for narrowing
 ---
 
-## 2026-04-11 - US-006
-- Implemented edge.upserted event type and EventBus maxsize parameter
-- Files changed:
-  - `src/lithos/events.py`: Added EDGE_UPSERTED = "edge.upserted" constant; added `maxsize: int | None = None` parameter to `subscribe()`; added ENRICH_SUBSCRIBER_QUEUE_SIZE constant for MVP 2
-  - `tests/test_event_bus.py`: Added TestEdgeUpsertedEvent class (3 tests: publish/receive, filtering, constant value) and TestSubscribeMaxsize class (3 tests: large queue, default, override); updated TestEventTypeConstants to include edge.upserted
-- All Done Criteria pass: 636 unit tests, 280 integration tests, ruff, pyright
+## 2026-04-12 - US-006
+- **What was implemented:** Updated `_DEFAULT_NOTE_TYPE_PRIORS` from uniform 0.5 to differentiated values: agent_finding=0.6, summary=0.55, observation=0.5, hypothesis=0.5, concept=0.45, task_record=0.35. Updated validator to fill missing keys with the new defaults instead of hardcoded 0.5.
+- **Files changed:**
+  - `src/lithos/config.py` — new differentiated `_DEFAULT_NOTE_TYPE_PRIORS` dict + updated validator fill logic
+  - `tests/test_lcma_config.py` — added `test_differentiated_note_type_prior_values`, updated `test_missing_keys_filled_with_default` assertions
+  - `tests/test_retrieve.py` — added `test_default_priors_differentiate_note_types` integration test
 - **Learnings for future iterations:**
-  - EventBus.subscribe() maxsize=None uses self._queue_size (from EventsConfig.subscriber_queue_size); explicit maxsize overrides
-  - ENRICH_SUBSCRIBER_QUEUE_SIZE = 10_000 is a convenience constant for MVP 2's lithos-enrich subscriber
-  - No existing subscribe() callers were modified — only one caller in server.py (SSE subscription) which doesn't use maxsize
----
-
-## 2026-04-11 - US-007
-- Verified async wrapping of sync search calls — all async call sites in server.py already use asyncio.to_thread()
-- Files changed:
-  - `tests/test_async_search.py`: New test file with 3 tests: slow search non-blocking verification, parallel search execution timing, and static source-code verification that server.py uses asyncio.to_thread for all three search methods
-- Call sites verified:
-  - `server.py:1213` — full_text_search via asyncio.to_thread (lithos_search)
-  - `server.py:1223` — semantic_search via asyncio.to_thread (lithos_search)
-  - `server.py:1251` — hybrid_search via asyncio.to_thread (lithos_search)
-  - `server.py:1355` — semantic_search via asyncio.to_thread (lithos_cache_lookup)
-  - `server.py:1539` — full_text_search via asyncio.to_thread (lithos_list)
-- Sync call sites (cli.py:384/391, search.py:1314) are in sync functions — no wrapping needed
-- All Done Criteria pass: 645 unit tests, ruff, pyright
-- **Learnings for future iterations:**
-  - All server.py search call sites were already wrapped in asyncio.to_thread() — the wrapping was done in a prior iteration
-  - graph_search in search.py internally calls hybrid_search synchronously; this is fine since graph_search itself is called via asyncio.to_thread from server.py
-  - CLI search calls are synchronous (Click commands) — no wrapping needed
----
-
-## 2026-04-11 - US-008
-- Implemented seven MVP 1 scouts in src/lithos/lcma/scouts.py
-- Files changed:
-  - `src/lithos/lcma/scouts.py`: New file with 7 async scout functions (scout_vector, scout_lexical, scout_exact_alias, scout_tags_recency, scout_freshness, scout_provenance, scout_task_context) + scout_contradictions stub + gating helpers
-  - `src/lithos/lcma/__init__.py`: Updated to export scout constants (SCOUT_VECTOR, etc., ALL_SCOUT_NAMES)
-  - `src/lithos/knowledge.py`: Extended _CachedMeta with access_scope and source fields for proper access_scope gating in scouts
-  - `tests/test_scouts.py`: 30 tests covering each scout individually with seeded data — raw scores, namespace filter, access_scope gating, edge cases
-- **Learnings for future iterations:**
-  - Scout canonical names include `scout_` prefix: `scout_vector`, `scout_lexical`, etc. — these appear in receipts.scouts_fired
-  - _CachedMeta now includes access_scope and source fields; all 4 construction sites updated
-  - Scouts use _get_cached_meta() which returns _CachedMetaView typed dataclass (avoids pyright dict[str, object] issues)
-  - _resolve_link returns node_id which IS doc_id (node_id = doc.id in graph.py:147)
-  - derived_from_ids must be valid UUIDs — non-UUID IDs like "note-001" are silently skipped during scan
-  - scout_freshness is keyword-triggered: only fires on queries containing update/refresh/recheck/verify
-  - scout_tags_recency returns [] when both tags and path_prefix are absent (explicit no-op)
----
-
-## 2026-04-11 - US-009
-- Implemented lithos_retrieve MCP tool with full retrieval pipeline
-- Files changed:
-  - `src/lithos/lcma/retrieve.py`: New module with `run_retrieve()` pipeline, `_rerank_fast()` Terrace 1 reranker, `compute_temperature()`, `_generate_snippet()` (mirrors SearchEngine._generate_snippet)
-  - `src/lithos/lcma/stats.py`: Added `insert_receipt()` and `upsert_working_memory()` methods to StatsStore
-  - `src/lithos/server.py`: Registered `lithos_retrieve` MCP tool; added EdgeStore and StatsStore initialization in `__init__` and `initialize()`
-  - `src/lithos/knowledge.py`: Added `note_type` field to `_CachedMeta` for reranker note_type prior lookup; updated all 4 construction sites
-  - `tests/test_retrieve.py`: 19 unit tests covering snippet generation, reranking, temperature, Phase A/B, receipts, working memory, max_context_nodes
-  - `tests/test_lcma_retrieve_integration.py`: 7 integration tests covering store creation, 10 receipts, schema compatibility, semantic parity, working memory, scouts_fired, lcma_disabled
-- **Learnings for future iterations:**
-  - `run_retrieve()` in retrieve.py is the core pipeline — it takes all service dependencies as params, not self
-  - `common_kw` dict contains namespace_filter, agent_id, task_id — used with **common_kw for scouts. Don't pass task_id separately (duplicate keyword error)
-  - lithos_search uses SearchResult.updated_at (str), but KnowledgeMetadata.updated_at is datetime — must call `.isoformat()` in retrieve.py
-  - StatsStore.insert_receipt uses quoted `"limit"` for the SQL reserved word
-  - Temperature: cold-start returns lcma_config.temperature_default when edge_count < temperature_edge_threshold
-  - EdgeStore and StatsStore are initialized in LithosServer.__init__ and opened in initialize()
-  - `_CachedMeta` now has `note_type` field — used by `_rerank_fast()` for note_type prior scoring
-  - Receipt is always written in `finally` block even on exceptions (terrace_reached=0 on error)
-  - When LcmaConfig.enabled=False, error envelope returned immediately, no receipt written
-  - Phase A scouts use asyncio.gather with return_exceptions=True to handle individual scout failures gracefully
----
-
-## 2026-04-11 - US-010
-- Implemented lithos_edge_upsert and lithos_edge_list MCP tools
-- Files changed:
-  - `src/lithos/server.py`: Added lithos_edge_upsert and lithos_edge_list tool registrations; edge_upsert publishes edge.upserted event, validates evidence type and namespace
-  - `tests/test_edge_tools.py`: 14 integration tests covering create, update-by-composite-key, dict/list evidence, idempotent upsert, missing namespace error, scalar evidence error, query by each dimension, empty results, all keys present, event emission
-- **Learnings for future iterations:**
-  - evidence parameter uses `Any` type (not `dict | list | None`) to allow our handler to return error envelope for scalars instead of Pydantic raising ValidationError
-  - Evidence is stored as JSON string in edges.db via json.dumps()
-  - lithos_edge_upsert publishes EDGE_UPSERTED event after successful upsert with edge_id, from_id, to_id, type, namespace in payload
-  - EdgeStore.upsert() returns the same edge_id on update, new edge_id on create
----
-
-## 2026-04-11 - US-011
-- Implemented coactivation and node_stats updates on retrieval
-- Files changed:
-  - `src/lithos/lcma/retrieve.py`: Added `_dominant_namespace()` helper; added coactivation + node_stats logic in finally block after receipt
-  - `src/lithos/lcma/stats.py`: Added `increment_coactivation()` and `increment_node_stats()` methods
-  - `tests/test_coactivation.py`: 9 unit tests + 2 integration tests covering dominant namespace, single-call node_stats, coactivation pairs, salience default, multi-call increments
-- **Learnings for future iterations:**
-  - `_dominant_namespace()` uses collections.Counter on cached metadata paths; ties broken alphabetically with `min()`
-  - Coactivation uses consistent pair ordering (node_a <= node_b) via sort in `increment_coactivation()`
-  - `increment_node_stats()` inserts with salience=0.5 on first touch via ON CONFLICT
-  - Coactivation/node_stats update is in the `finally` block alongside receipt — runs even on partial failures
----
-
-## 2026-04-11 - US-012
-- Implemented _project_provenance_to_edges internal function for provenance-to-edges projection
-- Files changed:
-  - `src/lithos/lcma/edges.py`: Added `_project_provenance_to_edges()` async function and `EdgeStore.delete_edges()` method; added TYPE_CHECKING import for KnowledgeManager
-  - `tests/test_provenance_projection.py`: New test file with 8 tests covering forward projection, multiple sources, namespace derivation, stale edge removal, non-derived_from edge preservation, idempotent runs, edge_id stability, no-op when edges.db absent
-- Existing `_reconcile_provenance_projection` in reconcile.py remains a noop — all 14 test_reconcile.py tests pass unchanged
-- All Done Criteria pass: 711 unit tests, 303 integration tests, ruff check, ruff format, pyright
-- **Learnings for future iterations:**
-  - `_project_provenance_to_edges` reads KnowledgeManager._doc_to_sources for the desired set of (from_id, to_id) pairs
-  - Namespace is derived from _meta_cache path using `derive_namespace()` — falls back to "default" if not in cache
-  - The function only manages `type='derived_from'` edges — other edge types are untouched
-  - EdgeStore.delete_edges() takes a list of edge_ids and returns the count of deleted rows
-  - Provenance edges use `provenance_type='frontmatter'` to indicate they came from frontmatter projection
-  - EdgeStore.upsert() composite key (from_id, to_id, type, namespace) ensures idempotent re-projection
+  - `dataclasses.replace()` is the clean way to override a single field on a cached KnowledgeMetadata for testing
+  - Validator fill logic should reference `_DEFAULT_NOTE_TYPE_PRIORS[nt]` not a hardcoded value to stay DRY
+  - Ruff format may reformat long function call args onto a single line — let it
 ---
