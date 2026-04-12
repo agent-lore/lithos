@@ -1,0 +1,139 @@
+{
+  "project": "Lithos MVP2 Part 2 — Reinforcement Loop, Feedback & Node Stats",
+  "branchName": "ralph/mvp2-02-reinforcement",
+  "description": "Implements bidirectional reinforcement loop (positive and negative), extends lithos_task_complete with feedback parameters, and adds lithos_node_stats observability tool so retrieval quality improves over time.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "sourceStoryId": "US-005",
+      "title": "Positive reinforcement — reinforce_cited_nodes and reinforce_edges_between",
+      "description": "As the system, I want a new reinforcement.py module with reinforce_cited_nodes and reinforce_edges_between functions so that cited nodes gain salience and edges between cited pairs are strengthened.",
+      "acceptanceCriteria": [
+        "Create src/lithos/lcma/reinforcement.py with reinforce_cited_nodes(cited_ids, edge_store, stats_store, knowledge) that increments cited_count += 1, salience += 0.02, spaced_rep_strength += 0.05 for each cited node",
+        "Create reinforce_edges_between(cited_ids, edge_store, knowledge) that strengthens edges between cited node pairs by +0.03 weight via EdgeStore.adjust_weight, creating type='related_to' edges if they don't exist",
+        "All related_to edge operations canonicalize pairs by sorting doc IDs lexicographically so from_id <= to_id",
+        "Unit test: assert that related_to edges are stored in canonical from_id <= to_id order",
+        "Reinforcement edge operations only operate on same-namespace pairs — resolve namespace per node from KnowledgeManager._meta_cache, skip cross-namespace pairs",
+        "Unit test: reinforce_edges_between skips cross-namespace pairs and creates edges for same-namespace pairs with correct namespace",
+        "Unit tests verify salience changes from reinforce_cited_nodes and edge-weight changes from reinforce_edges_between",
+        "make check passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "This story only records reinforcement signals (stats and edge writes). Retrieval-time salience read is handled by US-002."
+    },
+    {
+      "id": "US-002",
+      "sourceStoryId": "US-005",
+      "title": "Update _rerank_fast to read actual salience from StatsStore",
+      "description": "As the system, I want _rerank_fast in retrieve.py to read actual salience from StatsStore.get_node_stats() instead of using c.score as a proxy, so that reinforcement signals affect retrieval ranking.",
+      "acceptanceCriteria": [
+        "_rerank_fast in retrieve.py reads actual salience from StatsStore.get_node_stats() instead of using c.score as a proxy",
+        "stats_store parameter added to _rerank_fast as optional (default None), or caller in run_retrieve pre-fetches a salience map before calling _rerank_fast — either approach is acceptable",
+        "Signature change does not break any existing test",
+        "Unit test verifies that stored salience values affect retrieval ranking",
+        "make check passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "sourceStoryId": "US-006",
+      "title": "Negative reinforcement — penalize_ignored and penalize_misleading with status gating",
+      "description": "As the system, I want to decay salience for chronically ignored nodes and aggressively penalize misleading nodes so that low-quality notes stop dominating retrieval. Quarantined notes must be excluded from all retrieval paths.",
+      "acceptanceCriteria": [
+        "penalize_ignored(node_ids, stats_store) in reinforcement.py increments ignored_count for each node; if ignored_count > 5 and ignored_count > cited_count, applies salience -= 0.02",
+        "penalize_misleading(node_ids, stats_store, knowledge) in reinforcement.py increments misleading_count; applies salience -= 0.05; if misleading_count >= 3, sets note status to 'quarantined' via KnowledgeManager.update(id=node_id, lcma_status='quarantined', agent='lithos-enrich')",
+        "weaken_edges_for_bad_context(bad_node_ids, edge_store) in reinforcement.py finds all edges pointing to bad nodes (any namespace) and weakens by -0.05 via adjust_weight",
+        "Add status: str | None field to _CachedMeta in knowledge.py; populate it in all four inline _meta_cache assignments (around lines 708, 960, 1321, 1617)",
+        "Add status: str | None field to _CachedMetaView in scouts.py; populate from cached.status in _get_cached_meta()",
+        "Add shared helper _passes_status_filter(view, exclude_status) in scouts.py that returns False when view.status is in the exclusion list",
+        "All scouts that call _get_cached_meta() or iterate _meta_cache call _passes_status_filter with exclude_status=['quarantined'] and skip non-passing nodes — includes vector, lexical, exact-alias, provenance, task-context, and all Phase B scouts",
+        "list_all() gains optional exclude_status: list[str] | None = None parameter and filters against cached.status",
+        "All callers of knowledge.list_all() inside scouts pass exclude_status=['quarantined'] — scout_tags_recency and scout_freshness",
+        "Unit tests cover threshold logic: ignored_count=4 does NOT decay; ignored_count=6 with cited_count=3 DOES decay; ignored_count=6 with cited_count=10 does NOT decay",
+        "Unit test: quarantine threshold — misleading_count reaching 3 sets status",
+        "Unit test: quarantined node is excluded from retrieval results",
+        "Unit test: list_all with exclude_status filters correctly",
+        "make check passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "sourceStoryId": "US-010",
+      "title": "Add get_receipt and get_latest_receipt to StatsStore",
+      "description": "As the system, I want StatsStore methods to look up receipts so that lithos_task_complete can validate feedback against prior retrievals.",
+      "acceptanceCriteria": [
+        "StatsStore gains get_receipt(receipt_id: str, task_id: str) -> dict | None that queries by receipts.id text primary key and verifies task_id matches",
+        "StatsStore gains get_latest_receipt(task_id: str, agent_id: str) -> dict | None that queries with ORDER BY rowid DESC LIMIT 1 scoped to (task_id, agent_id)",
+        "Both methods return a dict including final_node_ids: list[str] field extracted by JSON-parsing the final_nodes column and collecting the id field from each entry",
+        "Unit test: get_receipt returns correct receipt and final_node_ids",
+        "Unit test: get_receipt with mismatched task_id returns None",
+        "Unit test: get_latest_receipt returns most recent receipt for (task_id, agent_id)",
+        "make check passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "sourceStoryId": "US-010",
+      "title": "Extend lithos_task_complete with feedback parameters",
+      "description": "As an agent completing a task, I want to report cited_nodes, misleading_nodes, and receipt_id via lithos_task_complete so the system learns from my feedback.",
+      "acceptanceCriteria": [
+        "lithos_task_complete gains three optional parameters: cited_nodes: list[str] | None = None, misleading_nodes: list[str] | None = None, receipt_id: str | None = None",
+        "Existing callers passing only (task_id, agent) continue to work unchanged",
+        "Unit test: call with no feedback params — existing behavior unchanged",
+        "None means 'no feedback supplied' — learning step skipped entirely; [] means 'explicit feedback with zero nodes' — valid signal",
+        "When cited_nodes is provided, calls reinforce_cited_nodes and reinforce_edges_between from reinforcement.py",
+        "When misleading_nodes is provided, calls penalize_misleading and weaken_edges_for_bad_context",
+        "Receipt validation: if receipt_id provided, look up exact receipt and verify it belongs to task_id — return an error if that receipt does not exist or does not belong to the given task_id; if receipt_id omitted, look up most recent receipt for (task_id, agent) — if no receipt found, drop all feedback with a WARNING (no error)",
+        "Both cited_nodes and misleading_nodes are intersected with receipt_node_ids — IDs not in receipt are silently dropped and logged at DEBUG",
+        "After receipt intersection, intersect again with IDs that exist in KnowledgeManager — prevents writes for deleted notes",
+        "Nodes in receipt not in cited_nodes and not in misleading_nodes are passed to penalize_ignored (only when feedback was supplied)",
+        "TASK_COMPLETED event payload includes cited_nodes, misleading_nodes, receipt_id as JSON-encoded strings via json.dumps (not comma-separated)",
+        "Unit test: cited_nodes containing ID not in receipt is silently dropped",
+        "Unit test: misleading_nodes containing ID not in receipt is silently dropped",
+        "Unit test: feedback with no prior receipt — all feedback dropped, WARNING logged",
+        "Unit test: receipt_id provided — feedback binds to that exact receipt",
+        "Unit test: receipt_id for different task_id — rejected with error",
+        "Unit test: cited_nodes=None, misleading_nodes=None — no learning step, no penalize_ignored call",
+        "Unit test: cited_nodes=[], misleading_nodes=[] — learning step runs, all receipt nodes passed to penalize_ignored",
+        "Unit test: feedback referencing deleted note — ID dropped before reinforcement",
+        "Unit test: call with cited_nodes — verify salience increments",
+        "Unit test: call with misleading_nodes — verify penalties applied",
+        "Integration test: full cycle — retrieve, complete with cited_nodes and misleading_nodes feedback, verify node-stats changes in stats.db (cited_count, ignored_count, misleading_count, salience, spaced_rep_strength)",
+        "make check passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "sourceStoryId": "US-030",
+      "title": "lithos_node_stats MCP tool",
+      "description": "As an agent or operator, I want to view a note's salience score, retrieval stats, and penalty counts via lithos_node_stats so I can understand why certain notes rank the way they do.",
+      "acceptanceCriteria": [
+        "New MCP tool lithos_node_stats(node_id: str) -> dict registered in server.py",
+        "Tool name follows lithos_ prefix convention",
+        "Returns dict with fields: node_id, salience, retrieval_count, cited_count, last_retrieved_at, last_used_at, ignored_count, misleading_count, decay_rate, spaced_rep_strength, last_decay_applied_at",
+        "If node has no stats row, returns defaults: salience=0.5, all counts 0, all timestamps null",
+        "Returns error envelope if node_id does not match any known document in knowledge manager",
+        "Unit test: query stats for node with retrieval history",
+        "Unit test: query stats for node with no stats row — verify defaults",
+        "Unit test: query with invalid node_id — verify error",
+        "make check passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
