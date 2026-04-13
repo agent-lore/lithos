@@ -179,7 +179,7 @@
         "make check passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "Depends on US-003 (decay logic), US-005 (consolidation), US-007 (entity extraction)"
     }
   ]

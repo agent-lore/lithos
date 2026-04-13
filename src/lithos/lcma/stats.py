@@ -601,6 +601,14 @@ class StatsStore:
             return None
         return dict(row)
 
+    async def list_all_node_ids(self) -> list[str]:
+        """Return all node_id values from node_stats."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT node_id FROM node_stats")
+            rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+
     async def update_salience(self, node_id: str, delta: float) -> None:
         """Atomically adjust salience by *delta*, clamping to [0.0, 1.0].
 

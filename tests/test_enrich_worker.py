@@ -1027,3 +1027,143 @@ class TestExtractEntities:
         # Read back — entities should still be the agent-written ones
         doc, _ = await km.read(id=doc_id)
         assert doc.metadata.entities == agent_entities
+
+
+# ---------------------------------------------------------------------------
+# Full sweep tests
+# ---------------------------------------------------------------------------
+
+
+class TestFullSweep:
+    """Verify full sweep: decay, WM eviction, provenance reconciliation."""
+
+    async def test_full_sweep_decays_nodes_and_evicts_wm(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+    ) -> None:
+        """Full sweep applies decay to inactive nodes and evicts stale WM."""
+        from lithos.coordination import CoordinationService
+
+        coord = CoordinationService(test_config)
+        await coord.initialize()
+        km = KnowledgeManager(test_config)
+
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=coord,
+        )
+
+        # Create node_stats with last_used_at 14 days ago (will decay)
+        node_id = "sweep-decay-1"
+        await stats_store.increment_node_stats(node_id=node_id)
+        fourteen_days_ago = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "UPDATE node_stats SET last_used_at = ? WHERE node_id = ?",
+                (fourteen_days_ago, node_id),
+            )
+            await db.commit()
+
+        salience_before = (await stats_store.get_node_stats(node_id))["salience"]
+
+        # Create a completed task with WM entries
+        await coord.create_task(title="test-task", agent="test-agent")
+        tasks = await coord.list_tasks(status="open")
+        task_id = tasks[0]["id"]
+        await coord.complete_task(task_id=task_id, agent="test-agent")
+
+        # Add WM entries for the completed task
+        await stats_store.upsert_working_memory(
+            task_id=task_id, node_id=node_id, receipt_id="rcpt_test"
+        )
+
+        await worker.full_sweep()
+
+        # Verify decay was applied
+        salience_after = (await stats_store.get_node_stats(node_id))["salience"]
+        assert salience_after < salience_before
+
+        # Verify WM was evicted (completed task entries should be gone)
+        wm = await stats_store.get_working_memory(task_id)
+        assert len(wm) == 0
+
+    async def test_full_sweep_repairs_stale_derived_from_edge(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+    ) -> None:
+        """Full sweep reconciles provenance edges, removing stale ones."""
+        from lithos.coordination import CoordinationService
+
+        coord = CoordinationService(test_config)
+        await coord.initialize()
+        km = KnowledgeManager(test_config)
+
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=coord,
+        )
+
+        # Create two notes: source-note and derived-note
+        source_result = await km.create(
+            title="Source Note",
+            content="This is a source.",
+            agent="test-agent",
+        )
+        assert source_result.document is not None
+        source_id = source_result.document.id
+
+        derived_result = await km.create(
+            title="Derived Note",
+            content="This is derived.",
+            agent="test-agent",
+            derived_from_ids=[source_id],
+        )
+        assert derived_result.document is not None
+        derived_id = derived_result.document.id
+
+        # Add a stale derived_from edge that doesn't match frontmatter
+        await edge_store.upsert(
+            from_id=derived_id,
+            to_id="nonexistent-source",
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+        )
+
+        # Verify the stale edge exists
+        stale_edges = await edge_store.list_edges(
+            from_id=derived_id, to_id="nonexistent-source", edge_type="derived_from"
+        )
+        assert len(stale_edges) == 1
+
+        await worker.full_sweep()
+
+        # Stale edge should be removed
+        stale_edges_after = await edge_store.list_edges(
+            from_id=derived_id, to_id="nonexistent-source", edge_type="derived_from"
+        )
+        assert len(stale_edges_after) == 0
+
+        # Valid derived_from edge should still exist (or be created)
+        valid_edges = await edge_store.list_edges(
+            from_id=derived_id, to_id=source_id, edge_type="derived_from"
+        )
+        assert len(valid_edges) == 1

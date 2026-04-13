@@ -26,6 +26,9 @@ Started: Mon Apr 13 18:18:43 UTC 2026
 - Entity extraction: _extract_entities_from_text is a pure function; _extract_entities on EnrichWorker reads/updates via KnowledgeManager
 - mock_knowledge fixture needs `km.read = AsyncMock(...)` for tests where _enrich_node triggers entity extraction
 - KnowledgeManager.create() returns WriteResult with .document.id (not .id directly)
+- full_sweep() uses CoordinationService.list_tasks(status="completed"|"cancelled") for WM eviction IDs
+- _project_provenance_to_edges from edges.py handles whole-store reconciliation (no need to iterate nodes)
+- StatsStore.list_all_node_ids() is a simple SELECT node_id FROM node_stats
 
 ---
 
@@ -178,4 +181,24 @@ Started: Mon Apr 13 18:18:43 UTC 2026
   - Ruff SIM102: combine nested `if` into single `if ... and (...)` statement
   - mock_knowledge fixture must set `km.read = AsyncMock(...)` since _enrich_node now calls _extract_entities which awaits km.read()
   - 961 unit tests pass; all checks green (2 pre-existing pyright errors in server.py unchanged)
+---
+
+## 2026-04-13 - US-008
+- What was implemented:
+  - `StatsStore.list_all_node_ids()` — simple SELECT node_id FROM node_stats
+  - `_sweep_loop()` on EnrichWorker: waits `sweep_startup_delay_minutes` then runs `full_sweep()` every `sweep_interval_hours`
+  - `full_sweep()` method: (1) loads all node IDs and applies decay, (2) evicts WM for completed/cancelled tasks via CoordinationService.list_tasks(), (3) reconciles provenance edges via `_project_provenance_to_edges()`
+  - Sweep task started in `start()` and cancelled in `stop()` alongside consumer and drain tasks
+  - Full sweep logs summary with decayed count, evicted WM count, and provenance edge created/removed counts
+  - 2 new tests: decay+WM eviction test, stale derived_from edge repair test
+- Files changed:
+  - src/lithos/lcma/stats.py (list_all_node_ids method)
+  - src/lithos/lcma/enrich.py (sweep loop + full_sweep + start/stop updates)
+  - tests/test_enrich_worker.py (2 new tests in TestFullSweep)
+- **Learnings for future iterations:**
+  - CoordinationService.list_tasks(status="completed") returns list of dicts with "id" key
+  - _project_provenance_to_edges is a whole-store function — no need to iterate nodes manually for provenance
+  - Sweep startup delay prevents CPU spike at server boot
+  - 963 unit tests pass; all checks green (2 pre-existing pyright errors in server.py unchanged)
+  - ALL 8 USER STORIES COMPLETE
 ---

@@ -320,6 +320,7 @@ class EnrichWorker:
         self._queue: asyncio.Queue[LithosEvent] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
         self._drain_task: asyncio.Task[None] | None = None
+        self._sweep_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Subscribe to events and start consumer + drain tasks."""
@@ -329,15 +330,17 @@ class EnrichWorker:
         )
         self._consumer_task = asyncio.create_task(self._consume_events(), name="enrich-consumer")
         self._drain_task = asyncio.create_task(self._drain_loop(), name="enrich-drain")
+        self._sweep_task = asyncio.create_task(self._sweep_loop(), name="enrich-sweep")
         logger.info(
-            "EnrichWorker started (drain_interval=%dm, max_attempts=%d)",
+            "EnrichWorker started (drain_interval=%dm, max_attempts=%d, sweep_interval=%dh)",
             self._config.enrich_drain_interval_minutes,
             self._config.max_enrich_attempts,
+            self._config.sweep_interval_hours,
         )
 
     async def stop(self) -> None:
         """Cancel tasks and unsubscribe from event bus."""
-        for task in (self._consumer_task, self._drain_task):
+        for task in (self._consumer_task, self._drain_task, self._sweep_task):
             if task is not None and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -349,6 +352,7 @@ class EnrichWorker:
 
         self._consumer_task = None
         self._drain_task = None
+        self._sweep_task = None
         logger.info("EnrichWorker stopped")
 
     # ------------------------------------------------------------------
@@ -541,6 +545,64 @@ class EnrichWorker:
 
         await self._knowledge.update(id=node_id, agent="lithos-enrich", entities=extracted)
         logger.debug("Extracted %d entities for node %s", len(extracted), node_id)
+
+    # ------------------------------------------------------------------
+    # Sweep loop
+    # ------------------------------------------------------------------
+
+    async def _sweep_loop(self) -> None:
+        """Periodically run a full sweep over all nodes."""
+        startup_delay = self._config.sweep_startup_delay_minutes * 60
+        interval = self._config.sweep_interval_hours * 3600
+        try:
+            await asyncio.sleep(startup_delay)
+            while True:
+                try:
+                    await self.full_sweep()
+                except Exception:
+                    logger.exception("EnrichWorker: full sweep failed")
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            return
+
+    async def full_sweep(self) -> None:
+        """Run a full sweep: decay all nodes, evict stale WM, reconcile provenance."""
+        from lithos.lcma.edges import _project_provenance_to_edges
+
+        # --- Decay all nodes ---
+        node_ids = await self._stats_store.list_all_node_ids()
+        decayed = 0
+        for node_id in node_ids:
+            stats = await self._stats_store.get_node_stats(node_id)
+            if stats is not None:
+                salience_before = stats.get("salience")
+                await self._apply_decay(node_id, stats)
+                stats_after = await self._stats_store.get_node_stats(node_id)
+                if stats_after is not None and stats_after.get("salience") != salience_before:
+                    decayed += 1
+
+        # --- Evict stale working memory ---
+        completed_tasks = await self._coordination.list_tasks(status="completed")
+        cancelled_tasks = await self._coordination.list_tasks(status="cancelled")
+        completed_ids = [str(t["id"]) for t in completed_tasks]
+        cancelled_ids = [str(t["id"]) for t in cancelled_tasks]
+        all_done_ids = completed_ids + cancelled_ids
+        evicted = await self._stats_store.evict_working_memory(
+            completed_task_ids=all_done_ids,
+            ttl_days=self._config.wm_eviction_days,
+        )
+
+        # --- Reconcile provenance edges ---
+        prov_counts = await _project_provenance_to_edges(self._edge_store, self._knowledge)
+
+        logger.info(
+            "Full sweep: decayed %d nodes, evicted %d WM entries, "
+            "provenance edges created=%d removed=%d",
+            decayed,
+            evicted,
+            prov_counts.get("created", 0),
+            prov_counts.get("removed", 0),
+        )
 
     async def _consolidate_task(self, task_id: str) -> None:
         """Consolidate working memory into long-term signals.
