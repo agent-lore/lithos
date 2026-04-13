@@ -955,3 +955,72 @@ class TestGetLatestReceipt:
     async def test_no_matching_receipt_returns_none(self, stats_store: StatsStore) -> None:
         result = await stats_store.get_latest_receipt("no-task", "no-agent")
         assert result is None
+
+
+class TestGetCoactivated:
+    """get_coactivated: return co-occurring nodes ranked by count."""
+
+    async def test_returns_correct_pairs_descending(self, stats_store: StatsStore) -> None:
+        # Seed coactivation data: "a" co-occurs with "b" (3x) and "c" (1x)
+        for _ in range(3):
+            await stats_store.increment_coactivation(node_a="a", node_b="b", namespace="ns1")
+        await stats_store.increment_coactivation(node_a="a", node_b="c", namespace="ns1")
+
+        result = await stats_store.get_coactivated(["a"])
+        assert len(result) == 2
+        assert result[0] == ("b", 3)
+        assert result[1] == ("c", 1)
+
+    async def test_namespace_filter(self, stats_store: StatsStore) -> None:
+        await stats_store.increment_coactivation(node_a="a", node_b="b", namespace="ns1")
+        await stats_store.increment_coactivation(node_a="a", node_b="c", namespace="ns2")
+
+        result = await stats_store.get_coactivated(["a"], namespace="ns1")
+        assert len(result) == 1
+        assert result[0] == ("b", 1)
+
+    async def test_deduplicates_across_seeds(self, stats_store: StatsStore) -> None:
+        # Both seeds co-occur with "x"
+        await stats_store.increment_coactivation(node_a="a", node_b="x", namespace="ns1")
+        await stats_store.increment_coactivation(node_a="b", node_b="x", namespace="ns1")
+
+        result = await stats_store.get_coactivated(["a", "b"])
+        # "x" appears via both seeds, counts should be summed
+        assert len(result) == 1
+        assert result[0] == ("x", 2)
+
+    async def test_excludes_seed_nodes(self, stats_store: StatsStore) -> None:
+        # "a" and "b" co-occur; when both are seeds, neither should appear in results
+        await stats_store.increment_coactivation(node_a="a", node_b="b", namespace="ns1")
+        await stats_store.increment_coactivation(node_a="a", node_b="c", namespace="ns1")
+
+        result = await stats_store.get_coactivated(["a", "b"])
+        assert len(result) == 1
+        assert result[0] == ("c", 1)
+
+    async def test_respects_limit(self, stats_store: StatsStore) -> None:
+        for i in range(5):
+            for _ in range(5 - i):
+                await stats_store.increment_coactivation(
+                    node_a="seed", node_b=f"n{i}", namespace="ns1"
+                )
+
+        result = await stats_store.get_coactivated(["seed"], limit=2)
+        assert len(result) == 2
+        assert result[0] == ("n0", 5)
+        assert result[1] == ("n1", 4)
+
+    async def test_empty_node_ids(self, stats_store: StatsStore) -> None:
+        result = await stats_store.get_coactivated([])
+        assert result == []
+
+    async def test_finds_via_both_columns(self, stats_store: StatsStore) -> None:
+        """Seed may appear as node_id_a or node_id_b depending on lex order."""
+        # "z" > "a", so stored as (a, z) — seed "z" is in node_id_b column
+        await stats_store.increment_coactivation(node_a="z", node_b="a", namespace="ns1")
+        # "z" < "zz", so stored as (z, zz) — seed "z" is in node_id_a column
+        await stats_store.increment_coactivation(node_a="z", node_b="zz", namespace="ns1")
+
+        result = await stats_store.get_coactivated(["z"])
+        ids = {r[0] for r in result}
+        assert ids == {"a", "zz"}

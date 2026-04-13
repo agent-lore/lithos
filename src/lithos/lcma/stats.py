@@ -312,6 +312,70 @@ class StatsStore:
             )
             await db.commit()
 
+    async def get_coactivated(
+        self,
+        node_ids: list[str],
+        *,
+        namespace: str | None = None,
+        limit: int = 20,
+    ) -> list[tuple[str, int]]:
+        """Return nodes frequently co-occurring with *node_ids* in past retrievals.
+
+        Queries the coactivation table for rows where any of *node_ids*
+        appears as either ``node_id_a`` or ``node_id_b``.  For each match
+        the *other* node in the pair is collected with its ``count``.
+
+        When the same other-node appears across multiple seeds, counts are
+        summed.  Seed nodes themselves are excluded from results.
+
+        Returns ``(other_node_id, total_count)`` pairs sorted by count
+        descending, capped at *limit*.
+        """
+        if not node_ids:
+            return []
+        await self._ensure_open()
+        seed_set = set(node_ids)
+        totals: dict[str, int] = {}
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            placeholders = ", ".join("?" for _ in node_ids)
+
+            # Rows where a seed appears as node_id_a → other is node_id_b
+            if namespace is not None:
+                query_a = (
+                    f"SELECT node_id_b AS other, count FROM coactivation "
+                    f"WHERE node_id_a IN ({placeholders}) AND namespace = ?"
+                )
+                params_a: tuple[str, ...] = (*node_ids, namespace)
+                query_b = (
+                    f"SELECT node_id_a AS other, count FROM coactivation "
+                    f"WHERE node_id_b IN ({placeholders}) AND namespace = ?"
+                )
+                params_b: tuple[str, ...] = (*node_ids, namespace)
+            else:
+                query_a = (
+                    f"SELECT node_id_b AS other, count FROM coactivation "
+                    f"WHERE node_id_a IN ({placeholders})"
+                )
+                params_a = tuple(node_ids)
+                query_b = (
+                    f"SELECT node_id_a AS other, count FROM coactivation "
+                    f"WHERE node_id_b IN ({placeholders})"
+                )
+                params_b = tuple(node_ids)
+
+            for query, params in [(query_a, params_a), (query_b, params_b)]:
+                cursor = await db.execute(query, params)
+                for row in await cursor.fetchall():
+                    other = row["other"]
+                    if other in seed_set:
+                        continue
+                    totals[other] = totals.get(other, 0) + row["count"]
+
+        ranked = sorted(totals.items(), key=lambda t: t[1], reverse=True)
+        return ranked[:limit]
+
     # ------------------------------------------------------------------
     # Enrich-queue operations
     # ------------------------------------------------------------------
