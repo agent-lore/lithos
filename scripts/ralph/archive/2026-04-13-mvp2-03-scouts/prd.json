@@ -1,0 +1,88 @@
+{
+  "project": "Lithos MVP2 Part 4 — Contradiction Workflow",
+  "branchName": "ralph/mvp2-04-contradictions",
+  "description": "Activates the contradiction workflow by replacing the stub scout_contradictions with a real implementation that queries edges.db for contradicts edges, and adds the lithos_conflict_resolve MCP tool for resolving contradictions with tracked states.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "sourceStoryId": "US-012",
+      "title": "Add get_edge method to EdgeStore",
+      "description": "As the conflict resolution tool, I want an EdgeStore.get_edge(edge_id) method so I can look up a specific edge by its ID.",
+      "acceptanceCriteria": [
+        "EdgeStore gains get_edge(edge_id: str) -> dict | None that returns the edge row as a dict or None if not found",
+        "Unit test: insert an edge, verify get_edge returns the correct dict with all fields",
+        "Unit test: get_edge for a non-existent edge_id returns None",
+        "make check passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "sourceStoryId": "US-012",
+      "title": "Add supersedes parameter to KnowledgeManager.update()",
+      "description": "As the conflict resolution tool, I want KnowledgeManager.update() to accept a supersedes parameter so I can record which note supersedes another.",
+      "acceptanceCriteria": [
+        "KnowledgeManager.update() gains supersedes: str | None | _UnsetType = _UNSET parameter, following the same pattern as source_url and other optional string fields",
+        "When supersedes is set, it is threaded through to metadata.supersedes and written to frontmatter",
+        "When supersedes is _UNSET, the existing value is preserved (not overwritten)",
+        "Unit test: update a note with supersedes set, verify frontmatter contains supersedes field",
+        "Unit test: update a note without passing supersedes, verify existing supersedes value is preserved",
+        "make check passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "sourceStoryId": "US-011",
+      "title": "Activate scout_contradictions",
+      "description": "As the retrieval pipeline, I want to query edges.db for type=contradicts edges connected to top results, so that surface_conflicts=True actually surfaces contradictions.",
+      "acceptanceCriteria": [
+        "scout_contradictions in scouts.py is replaced with a real implementation with signature: scout_contradictions(seed_ids, edge_store, knowledge, *, namespace_filter, agent_id, task_id) -> list[dict]",
+        "Queries EdgeStore.list_edges(from_id=node_id, edge_type='contradicts') and EdgeStore.list_edges(to_id=node_id, edge_type='contradicts') for each seed node",
+        "Returns list of dicts: {'edge_id': str, 'from_id': str, 'to_id': str, 'conflict_state': str | None} for edges where conflict_state is NULL or not in ('superseded', 'refuted', 'merged')",
+        "Before including a conflict, verifies the counterpart note passes: _passes_namespace_filter(), _passes_access_scope(), _passes_status_filter(exclude_status=['quarantined']), and exists in KnowledgeManager",
+        "run_retrieve passes seed nodes, edge_store, knowledge, and gating parameters to the activated scout; populates conflicts_surfaced in the receipt",
+        "When surface_conflicts=False (default), the scout is still a no-op",
+        "When surface_conflicts=True, conflicts appear in the response envelope under a conflicts key",
+        "Update existing test_returns_empty_list (tests/test_scouts.py) to match new scout_contradictions signature",
+        "Unit test: seeded contradiction edge verifies surfacing",
+        "Unit test: surface_conflicts=False verifies no-op",
+        "Unit test: contradiction edge pointing to a note in a different namespace is excluded when namespace_filter is set",
+        "Unit test: contradiction edge pointing to a quarantined note is excluded",
+        "make check passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "sourceStoryId": "US-012",
+      "title": "lithos_conflict_resolve MCP tool",
+      "description": "As an agent or user, I want to resolve a contradiction between two notes by setting a resolution state, so that the conflict is tracked and future retrieval reflects the resolution.",
+      "acceptanceCriteria": [
+        "New MCP tool lithos_conflict_resolve(edge_id: str, resolution: str, resolver: str, winner_id: str | None = None) -> dict registered in server.py",
+        "resolution must be one of: 'accepted_dual', 'superseded', 'refuted', 'merged' — rejects others with error envelope",
+        "resolution with invalid value raises error with descriptive message",
+        "Tool updates the edge's conflict_state to the resolution value, provenance_actor to resolver, and updated_at to now",
+        "When resolution is 'superseded', winner_id is required and must equal either from_id or to_id of the edge; rejects with error otherwise",
+        "When resolution is 'superseded', sets supersedes on the winning note to point to the losing note via KnowledgeManager.update()",
+        "Tool returns {'status': 'ok', 'edge_id': ..., 'conflict_state': ...} on success",
+        "Returns error envelope when edge not found or edge type is not 'contradicts'",
+        "Emits EDGE_UPSERTED event after resolution",
+        "Unit test: resolve with each valid resolution state",
+        "Unit test: reject invalid resolution string",
+        "Unit test: reject non-contradiction edge",
+        "Unit test: reject superseded resolution without valid winner_id",
+        "make check passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "Depends on US-001 (get_edge method) and US-002 (supersedes parameter)"
+    }
+  ]
+}
