@@ -23,6 +23,7 @@ from lithos.lcma.scouts import (
     SCOUT_GRAPH,
     SCOUT_LEXICAL,
     SCOUT_PROVENANCE,
+    SCOUT_SOURCE_URL,
     SCOUT_TAGS_RECENCY,
     SCOUT_TASK_CONTEXT,
     SCOUT_VECTOR,
@@ -33,6 +34,7 @@ from lithos.lcma.scouts import (
     scout_graph,
     scout_lexical,
     scout_provenance,
+    scout_source_url,
     scout_tags_recency,
     scout_task_context,
     scout_vector,
@@ -858,6 +860,90 @@ class TestScoutCoactivation:
 
 
 # ---------------------------------------------------------------------------
+# scout_source_url
+# ---------------------------------------------------------------------------
+
+_URL_ID_A = "11111111-1111-4111-1111-111111111111"
+_URL_ID_B = "22222222-2222-4222-2222-222222222222"
+_URL_ID_C = "33333333-3333-4333-3333-333333333333"
+
+
+@pytest.fixture
+def source_url_km(seeded_config: LithosConfig) -> KnowledgeManager:
+    """KnowledgeManager with notes that have source_url fields."""
+    km = KnowledgeManager(seeded_config)
+    kp = seeded_config.storage.knowledge_path
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    note_a = fm.Post(
+        "# Research A\n\nFrom example.com",
+        id=_URL_ID_A,
+        title="Research A",
+        author="agent-alpha",
+        created_at=now,
+        updated_at=now,
+        access_scope="shared",
+        source_url="https://example.com/page1",
+    )
+    (kp / "research-a.md").write_text(fm.dumps(note_a))
+
+    note_b = fm.Post(
+        "# Research B\n\nAlso from example.com",
+        id=_URL_ID_B,
+        title="Research B",
+        author="agent-alpha",
+        created_at=now,
+        updated_at=now,
+        access_scope="shared",
+        source_url="https://example.com/page2",
+    )
+    (kp / "research-b.md").write_text(fm.dumps(note_b))
+
+    note_c = fm.Post(
+        "# Research C\n\nFrom different.org",
+        id=_URL_ID_C,
+        title="Research C",
+        author="agent-alpha",
+        created_at=now,
+        updated_at=now,
+        access_scope="shared",
+        source_url="https://different.org/article",
+    )
+    (kp / "research-c.md").write_text(fm.dumps(note_c))
+
+    km._scan_existing()
+    return km
+
+
+class TestScoutSourceUrl:
+    async def test_finds_same_domain_notes(self, source_url_km: KnowledgeManager) -> None:
+        """Seed A (example.com) should find B (also example.com) but not C (different.org)."""
+        candidates = await scout_source_url([_URL_ID_A], source_url_km)
+        node_ids = {c.node_id for c in candidates}
+        assert _URL_ID_B in node_ids
+        assert _URL_ID_C not in node_ids
+        assert all(c.scouts == [SCOUT_SOURCE_URL] for c in candidates)
+
+    async def test_no_source_url_returns_empty(self, seeded_km: KnowledgeManager) -> None:
+        """Seeds without source_url should return []."""
+        candidates = await scout_source_url([_ID1], seeded_km)
+        assert candidates == []
+
+    async def test_excludes_seeds(self, source_url_km: KnowledgeManager) -> None:
+        candidates = await scout_source_url([_URL_ID_A, _URL_ID_B], source_url_km)
+        node_ids = {c.node_id for c in candidates}
+        assert _URL_ID_A not in node_ids
+        assert _URL_ID_B not in node_ids
+
+    async def test_namespace_filter(self, source_url_km: KnowledgeManager) -> None:
+        candidates = await scout_source_url(
+            [_URL_ID_A], source_url_km, namespace_filter=["nonexistent"]
+        )
+        assert len(candidates) == 0
+
+
+# ---------------------------------------------------------------------------
 # scout_contradictions (stub)
 # ---------------------------------------------------------------------------
 
@@ -875,8 +961,8 @@ class TestScoutContradictions:
 
 
 class TestScoutConstants:
-    def test_all_scout_names_has_nine_entries(self) -> None:
-        assert len(ALL_SCOUT_NAMES) == 9
+    def test_all_scout_names_has_ten_entries(self) -> None:
+        assert len(ALL_SCOUT_NAMES) == 10
 
     def test_canonical_names(self) -> None:
         assert SCOUT_VECTOR == "scout_vector"
@@ -888,6 +974,7 @@ class TestScoutConstants:
         assert SCOUT_TASK_CONTEXT == "scout_task_context"
         assert SCOUT_GRAPH == "scout_graph"
         assert SCOUT_COACTIVATION == "scout_coactivation"
+        assert SCOUT_SOURCE_URL == "scout_source_url"
 
 
 # ---------------------------------------------------------------------------

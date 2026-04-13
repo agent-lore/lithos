@@ -18,6 +18,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from lithos.lcma.utils import Candidate
 
@@ -41,6 +42,7 @@ SCOUT_PROVENANCE = "scout_provenance"
 SCOUT_TASK_CONTEXT = "scout_task_context"
 SCOUT_GRAPH = "scout_graph"
 SCOUT_COACTIVATION = "scout_coactivation"
+SCOUT_SOURCE_URL = "scout_source_url"
 
 ALL_SCOUT_NAMES = [
     SCOUT_VECTOR,
@@ -52,6 +54,7 @@ ALL_SCOUT_NAMES = [
     SCOUT_TASK_CONTEXT,
     SCOUT_GRAPH,
     SCOUT_COACTIVATION,
+    SCOUT_SOURCE_URL,
 ]
 
 # Keywords that trigger freshness boost
@@ -667,6 +670,86 @@ async def scout_coactivation(
                 score=float(count),
                 reasons=[f"coactivated {count} times with seeds"],
                 scouts=[SCOUT_COACTIVATION],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _extract_domain(normalized_url: str) -> str | None:
+    """Extract the hostname from a normalized URL."""
+    try:
+        parsed = urlparse(normalized_url)
+        return parsed.hostname or None
+    except Exception:
+        return None
+
+
+async def scout_source_url(
+    seed_ids: list[str],
+    knowledge: KnowledgeManager,
+    *,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
+) -> list[Candidate]:
+    """Find notes from the same URL domain as seed notes."""
+    seed_set = set(seed_ids)
+    url_map = knowledge._source_url_to_id
+
+    # 1. Collect domains from seed notes' source URLs
+    seed_domains: set[str] = set()
+    for norm_url, doc_id in url_map.items():
+        if doc_id in seed_set:
+            domain = _extract_domain(norm_url)
+            if domain:
+                seed_domains.add(domain)
+
+    if not seed_domains:
+        return []
+
+    # 2. Find all notes with matching domains (excluding seeds)
+    matches: list[str] = []
+    for norm_url, doc_id in url_map.items():
+        if doc_id in seed_set:
+            continue
+        domain = _extract_domain(norm_url)
+        if domain and domain in seed_domains:
+            matches.append(doc_id)
+
+    # 3. Apply gating and build candidates
+    candidates: list[Candidate] = []
+    for doc_id in matches:
+        if not knowledge.has_document(doc_id):
+            continue
+        meta = _get_cached_meta(knowledge, doc_id)
+        if not _passes_status_filter(meta, ["quarantined"]):
+            continue
+        ns = meta.namespace if meta else None
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(
+            meta.access_scope if meta else None,
+            meta.author if meta else None,
+            meta.source if meta else None,
+            agent_id,
+            task_id,
+        ):
+            continue
+        if not _passes_tags_filter(meta.tags if meta else None, tags):
+            continue
+        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
+            continue
+        candidates.append(
+            Candidate(
+                node_id=doc_id,
+                score=1.0,
+                reasons=["same source URL domain"],
+                scouts=[SCOUT_SOURCE_URL],
             )
         )
         if len(candidates) >= limit:
