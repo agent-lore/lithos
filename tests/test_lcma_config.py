@@ -120,6 +120,20 @@ class TestLcmaConfigRerankWeights:
         assert len(cfg.rerank_weights) == 10
         assert abs(sum(cfg.rerank_weights.values()) - 1.0) < 1e-9
 
+    def test_missing_keys_non_positive_total_rejected(self) -> None:
+        """Partial map whose filled total is non-positive must be rejected."""
+        negative_legacy = {
+            "vector": -0.25,
+            "lexical": -0.18,
+            "exact_alias": -0.10,
+            "tags_recency": -0.07,
+            "freshness": -0.04,
+            "provenance": -0.04,
+            "task_context": -0.04,
+        }
+        with pytest.raises(Exception, match="rerank_weights sum must be positive"):
+            LcmaConfig(rerank_weights=negative_legacy)
+
 
 class TestLcmaConfigNoteTypePriors:
     """note_type_priors key filling and rejection."""

@@ -1151,6 +1151,10 @@ class TestNewScoutsWiredInPhaseB:
         fired = json.loads(row["scouts_fired"])
         assert "scout_coactivation" in fired
 
+        # Verify the coactivated candidate was merged into final results
+        result_ids = [r["id"] for r in result["results"]]
+        assert _ID2 in result_ids
+
     @pytest.mark.asyncio
     async def test_source_url_scout_fires(
         self,
@@ -1229,6 +1233,10 @@ class TestNewScoutsWiredInPhaseB:
         assert row is not None
         fired = json.loads(row["scouts_fired"])
         assert "scout_source_url" in fired
+
+        # Verify the same-domain candidate was merged into final results
+        result_ids = [r["id"] for r in result["results"]]
+        assert _ID2 in result_ids
 
     @pytest.mark.asyncio
     async def test_failing_phase_b_scout_does_not_abort(

@@ -178,8 +178,11 @@ class LcmaConfig(BaseModel):
             for key in missing:
                 weights[key] = _DEFAULT_RERANK_WEIGHTS[key]
             total = sum(weights.values())
-            if total > 0:
-                weights = {k: v / total for k, v in weights.items()}
+            if total <= 0:
+                raise ValueError(
+                    f"rerank_weights sum must be positive after filling missing keys, got {total:.4f}"
+                )
+            weights = {k: v / total for k, v in weights.items()}
         else:
             # All keys present — assert sum ≈ 1.0
             total = sum(weights.values())

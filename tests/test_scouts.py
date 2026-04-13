@@ -852,6 +852,24 @@ class TestScoutCoactivation:
         )
         assert len(candidates) == 0
 
+    async def test_namespace_filter_scopes_coactivation_rows(
+        self, seeded_config: LithosConfig, seeded_km: KnowledgeManager
+    ) -> None:
+        """Coactivation rows stored under a different namespace must be excluded
+        even when the candidate note itself lives in the allowed namespace."""
+        store = StatsStore(seeded_config)
+        await store.open()
+        # Record coactivation under namespace "other" — the candidate note (_ID2)
+        # lives in the "default" namespace, but the evidence is from "other".
+        for _ in range(5):
+            await store.increment_coactivation(node_a=_ID1, node_b=_ID2, namespace="other")
+        candidates = await scout_coactivation(
+            [_ID1], store, seeded_km, namespace_filter=["default"]
+        )
+        # _ID2 coactivation data is under "other", so it should NOT surface
+        node_ids = {c.node_id for c in candidates}
+        assert _ID2 not in node_ids
+
     async def test_empty_seeds(
         self, coactivation_stats_store: StatsStore, seeded_km: KnowledgeManager
     ) -> None:
@@ -941,6 +959,70 @@ class TestScoutSourceUrl:
             [_URL_ID_A], source_url_km, namespace_filter=["nonexistent"]
         )
         assert len(candidates) == 0
+
+    async def test_seed_not_owner_in_source_url_index(self, seeded_config: LithosConfig) -> None:
+        """A seed note with source_url that lost the _source_url_to_id slot
+        (due to a collision) must still activate the scout."""
+        _COLLISION_A = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+        _COLLISION_B = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+        _COLLISION_C = "cccccccc-cccc-4ccc-cccc-cccccccccccc"
+
+        km = KnowledgeManager(seeded_config)
+        kp = seeded_config.storage.knowledge_path
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Note A owns the source_url slot for example.com/same
+        note_a = fm.Post(
+            "# A\n\nContent A",
+            id=_COLLISION_A,
+            title="A",
+            author="agent",
+            created_at=now,
+            updated_at=now,
+            access_scope="shared",
+            source_url="https://example.com/same",
+        )
+        (kp / "coll-a.md").write_text(fm.dumps(note_a))
+
+        # Note B has the same normalized source_url → collision, NOT in index
+        note_b = fm.Post(
+            "# B\n\nContent B",
+            id=_COLLISION_B,
+            title="B",
+            author="agent",
+            created_at=now,
+            updated_at=now,
+            access_scope="shared",
+            source_url="https://example.com/same",
+        )
+        (kp / "coll-b.md").write_text(fm.dumps(note_b))
+
+        # Note C has a different page on the same domain
+        note_c = fm.Post(
+            "# C\n\nContent C",
+            id=_COLLISION_C,
+            title="C",
+            author="agent",
+            created_at=now,
+            updated_at=now,
+            access_scope="shared",
+            source_url="https://example.com/other-page",
+        )
+        (kp / "coll-c.md").write_text(fm.dumps(note_c))
+
+        km._scan_existing()
+
+        # Confirm B is NOT the owner in _source_url_to_id (A is)
+        from lithos.knowledge import normalize_url
+
+        norm = normalize_url("https://example.com/same")
+        assert km._source_url_to_id.get(norm) == _COLLISION_A
+
+        # Use B as seed — it has source_url but is NOT in _source_url_to_id
+        candidates = await scout_source_url([_COLLISION_B], km)
+        node_ids = {c.node_id for c in candidates}
+        # Should still find C (same domain) via B's on-disk source_url
+        assert _COLLISION_C in node_ids
 
 
 # ---------------------------------------------------------------------------

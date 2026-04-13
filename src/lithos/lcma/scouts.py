@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+import frontmatter as fm
+
 from lithos.lcma.utils import Candidate
 
 if TYPE_CHECKING:
@@ -640,7 +642,18 @@ async def scout_coactivation(
     if not seed_ids:
         return []
 
-    coactivated = await stats_store.get_coactivated(seed_ids, limit=limit * 3)
+    # When namespace_filter is set, scope coactivation queries per-namespace
+    # to avoid leaking cross-namespace coactivation evidence.
+    if namespace_filter:
+        merged: dict[str, int] = {}
+        for ns in namespace_filter:
+            for node_id, count in await stats_store.get_coactivated(
+                seed_ids, namespace=ns, limit=limit * 3
+            ):
+                merged[node_id] = merged.get(node_id, 0) + count
+        coactivated = sorted(merged.items(), key=lambda t: t[1], reverse=True)[: limit * 3]
+    else:
+        coactivated = await stats_store.get_coactivated(seed_ids, limit=limit * 3)
 
     candidates: list[Candidate] = []
     for node_id, count in coactivated:
@@ -698,16 +711,31 @@ async def scout_source_url(
     path_prefix: str | None = None,
 ) -> list[Candidate]:
     """Find notes from the same URL domain as seed notes."""
+    from lithos.knowledge import normalize_url
+
     seed_set = set(seed_ids)
     url_map = knowledge._source_url_to_id
 
-    # 1. Collect domains from seed notes' source URLs
+    # 1. Collect domains from seed notes themselves (not from _source_url_to_id
+    #    ownership, which may miss notes involved in URL collisions).
     seed_domains: set[str] = set()
-    for norm_url, doc_id in url_map.items():
-        if doc_id in seed_set:
-            domain = _extract_domain(norm_url)
-            if domain:
-                seed_domains.add(domain)
+    for seed_id in seed_ids:
+        file_rel = knowledge._id_to_path.get(seed_id)
+        if file_rel is None:
+            continue
+        full_path = knowledge.knowledge_path / file_rel
+        if not full_path.exists():
+            continue
+        try:
+            post = fm.load(str(full_path))
+            raw_url: str | None = post.metadata.get("source_url")  # type: ignore[assignment]
+            if raw_url:
+                norm = normalize_url(raw_url)
+                domain = _extract_domain(norm)
+                if domain:
+                    seed_domains.add(domain)
+        except Exception:
+            continue
 
     if not seed_domains:
         return []
