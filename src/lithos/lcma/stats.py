@@ -85,6 +85,26 @@ CREATE TABLE IF NOT EXISTS receipts (
     task_id TEXT
 );
 
+CREATE TABLE IF NOT EXISTS task_consolidation_log (
+    task_id TEXT PRIMARY KEY,
+    consolidated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS consolidation_edge_ops (
+    task_id TEXT NOT NULL,
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (task_id, from_id, to_id)
+);
+
+CREATE TABLE IF NOT EXISTS consolidation_salience_ops (
+    task_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (task_id, node_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_receipts_ts ON receipts(ts);
 CREATE INDEX IF NOT EXISTS idx_receipts_task_id ON receipts(task_id);
 CREATE INDEX IF NOT EXISTS idx_receipts_agent_id ON receipts(agent_id);
@@ -680,6 +700,72 @@ class StatsStore:
                    ON CONFLICT(node_id) DO UPDATE SET
                      last_used_at = excluded.last_used_at""",
                 (node_id, now),
+            )
+            await db.commit()
+
+    # ------------------------------------------------------------------
+    # Consolidation tracking operations
+    # ------------------------------------------------------------------
+
+    async def is_task_consolidated(self, task_id: str) -> bool:
+        """Return ``True`` if *task_id* exists in ``task_consolidation_log``."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM task_consolidation_log WHERE task_id = ?",
+                (task_id,),
+            )
+            return await cursor.fetchone() is not None
+
+    async def mark_task_consolidated(self, task_id: str) -> None:
+        """Insert *task_id* into ``task_consolidation_log`` (INSERT OR IGNORE)."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO task_consolidation_log (task_id) VALUES (?)",
+                (task_id,),
+            )
+            await db.commit()
+
+    async def has_consolidation_edge_op(self, task_id: str, from_id: str, to_id: str) -> bool:
+        """Return ``True`` if the edge op has already been recorded."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM consolidation_edge_ops "
+                "WHERE task_id = ? AND from_id = ? AND to_id = ?",
+                (task_id, from_id, to_id),
+            )
+            return await cursor.fetchone() is not None
+
+    async def record_consolidation_edge_op(self, task_id: str, from_id: str, to_id: str) -> None:
+        """Record an edge consolidation op (INSERT OR IGNORE)."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO consolidation_edge_ops (task_id, from_id, to_id) "
+                "VALUES (?, ?, ?)",
+                (task_id, from_id, to_id),
+            )
+            await db.commit()
+
+    async def has_consolidation_salience_op(self, task_id: str, node_id: str) -> bool:
+        """Return ``True`` if the salience op has already been recorded."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM consolidation_salience_ops WHERE task_id = ? AND node_id = ?",
+                (task_id, node_id),
+            )
+            return await cursor.fetchone() is not None
+
+    async def record_consolidation_salience_op(self, task_id: str, node_id: str) -> None:
+        """Record a salience consolidation op (INSERT OR IGNORE)."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO consolidation_salience_ops (task_id, node_id) VALUES (?, ?)",
+                (task_id, node_id),
             )
             await db.commit()
 

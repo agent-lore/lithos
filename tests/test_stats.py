@@ -36,7 +36,16 @@ class TestStatsStoreCreation:
         )
         tables = {row[0] for row in cursor.fetchall()}
         conn.close()
-        expected = {"node_stats", "coactivation", "enrich_queue", "working_memory", "receipts"}
+        expected = {
+            "node_stats",
+            "coactivation",
+            "enrich_queue",
+            "working_memory",
+            "receipts",
+            "task_consolidation_log",
+            "consolidation_edge_ops",
+            "consolidation_salience_ops",
+        }
         assert tables == expected
 
     async def test_node_stats_columns(self, stats_store: StatsStore) -> None:
@@ -421,6 +430,9 @@ class TestCorruptRecovery:
             "enrich_queue",
             "working_memory",
             "receipts",
+            "task_consolidation_log",
+            "consolidation_edge_ops",
+            "consolidation_salience_ops",
         }
 
 
@@ -1026,3 +1038,39 @@ class TestGetCoactivated:
         result = await stats_store.get_coactivated(["z"])
         ids = {r[0] for r in result}
         assert ids == {"a", "zz"}
+
+
+class TestConsolidationTracking:
+    """Per-target op tables correctly track individual edge and salience operations."""
+
+    async def test_task_consolidation_log(self, stats_store: StatsStore) -> None:
+        assert not await stats_store.is_task_consolidated("task-1")
+        await stats_store.mark_task_consolidated("task-1")
+        assert await stats_store.is_task_consolidated("task-1")
+        # Idempotent — second call is INSERT OR IGNORE
+        await stats_store.mark_task_consolidated("task-1")
+        assert await stats_store.is_task_consolidated("task-1")
+
+    async def test_consolidation_edge_ops(self, stats_store: StatsStore) -> None:
+        assert not await stats_store.has_consolidation_edge_op("t1", "a", "b")
+        await stats_store.record_consolidation_edge_op("t1", "a", "b")
+        assert await stats_store.has_consolidation_edge_op("t1", "a", "b")
+        # Different task — not recorded
+        assert not await stats_store.has_consolidation_edge_op("t2", "a", "b")
+        # Different pair — not recorded
+        assert not await stats_store.has_consolidation_edge_op("t1", "a", "c")
+        # Idempotent
+        await stats_store.record_consolidation_edge_op("t1", "a", "b")
+        assert await stats_store.has_consolidation_edge_op("t1", "a", "b")
+
+    async def test_consolidation_salience_ops(self, stats_store: StatsStore) -> None:
+        assert not await stats_store.has_consolidation_salience_op("t1", "node-1")
+        await stats_store.record_consolidation_salience_op("t1", "node-1")
+        assert await stats_store.has_consolidation_salience_op("t1", "node-1")
+        # Different task — not recorded
+        assert not await stats_store.has_consolidation_salience_op("t2", "node-1")
+        # Different node — not recorded
+        assert not await stats_store.has_consolidation_salience_op("t1", "node-2")
+        # Idempotent
+        await stats_store.record_consolidation_salience_op("t1", "node-1")
+        assert await stats_store.has_consolidation_salience_op("t1", "node-1")

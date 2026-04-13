@@ -95,3 +95,19 @@ Started: Mon Apr 13 18:18:43 UTC 2026
   - _project_node_provenance uses (to_id, namespace) as key since from_id is always the node_id
   - 944 unit tests pass; all checks green
 ---
+
+## 2026-04-13 - US-004
+- What was implemented:
+  - Added 3 new tables to stats.db SCHEMA: `task_consolidation_log`, `consolidation_edge_ops`, `consolidation_salience_ops`
+  - Added 6 StatsStore methods: `is_task_consolidated`, `mark_task_consolidated`, `has_consolidation_edge_op`, `record_consolidation_edge_op`, `has_consolidation_salience_op`, `record_consolidation_salience_op`
+  - All methods use INSERT OR IGNORE for idempotency
+  - Updated `test_schema_has_all_tables` and `test_recreated_db_has_all_tables` to include the 3 new tables
+  - Added `TestConsolidationTracking` class with 3 tests covering all 6 methods
+- Files changed:
+  - src/lithos/lcma/stats.py (3 tables + 6 methods)
+  - tests/test_stats.py (updated table sets + 3 new tests)
+- **Learnings for future iterations:**
+  - Consolidation ops use composite PKs: (task_id, from_id, to_id) for edge ops, (task_id, node_id) for salience ops
+  - INSERT OR IGNORE is the idempotency pattern — safe to call multiple times
+  - 947 unit tests pass; all checks green
+---
