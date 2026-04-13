@@ -195,6 +195,35 @@ class EdgeStore:
             await db.commit()
         return edge_id
 
+    async def get_edge(self, edge_id: str) -> dict[str, object] | None:
+        """Return a single edge by its ID, or ``None`` if not found."""
+        await self._ensure_open()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT edge_id, from_id, to_id, type, weight, namespace, "
+                "created_at, updated_at, provenance_actor, provenance_type, "
+                "evidence, conflict_state FROM edges WHERE edge_id = ?",
+                (edge_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "edge_id": row["edge_id"],
+            "from_id": row["from_id"],
+            "to_id": row["to_id"],
+            "type": row["type"],
+            "weight": row["weight"],
+            "namespace": row["namespace"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "provenance_actor": row["provenance_actor"],
+            "provenance_type": row["provenance_type"],
+            "evidence": row["evidence"],
+            "conflict_state": row["conflict_state"],
+        }
+
     async def list_edges(
         self,
         *,

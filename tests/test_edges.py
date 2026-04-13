@@ -225,6 +225,41 @@ class TestUpsertAndList:
         assert await edge_store.count(namespace="other") == 0
 
 
+class TestGetEdge:
+    """get_edge: look up a single edge by ID."""
+
+    async def test_returns_edge_dict(self, edge_store: EdgeStore) -> None:
+        eid = await edge_store.upsert(
+            from_id="a",
+            to_id="b",
+            edge_type="rel",
+            weight=0.7,
+            namespace="ns",
+            provenance_actor="agent-1",
+            provenance_type="manual",
+            evidence="some evidence",
+            conflict_state="open",
+        )
+        result = await edge_store.get_edge(eid)
+        assert result is not None
+        assert result["edge_id"] == eid
+        assert result["from_id"] == "a"
+        assert result["to_id"] == "b"
+        assert result["type"] == "rel"
+        assert result["weight"] == pytest.approx(0.7)
+        assert result["namespace"] == "ns"
+        assert result["provenance_actor"] == "agent-1"
+        assert result["provenance_type"] == "manual"
+        assert result["evidence"] == "some evidence"
+        assert result["conflict_state"] == "open"
+        assert result["created_at"] is not None
+        assert result["updated_at"] is not None
+
+    async def test_returns_none_for_nonexistent(self, edge_store: EdgeStore) -> None:
+        result = await edge_store.get_edge("edge_nonexistent")
+        assert result is None
+
+
 class TestAdjustWeight:
     """adjust_weight: atomic delta, clamping, absent edge."""
 
