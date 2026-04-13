@@ -17,6 +17,7 @@ from lithos.knowledge import KnowledgeManager
 from lithos.lcma.edges import EdgeStore
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
+    SCOUT_COACTIVATION,
     SCOUT_EXACT_ALIAS,
     SCOUT_FRESHNESS,
     SCOUT_GRAPH,
@@ -25,6 +26,7 @@ from lithos.lcma.scouts import (
     SCOUT_TAGS_RECENCY,
     SCOUT_TASK_CONTEXT,
     SCOUT_VECTOR,
+    scout_coactivation,
     scout_contradictions,
     scout_exact_alias,
     scout_freshness,
@@ -35,6 +37,7 @@ from lithos.lcma.scouts import (
     scout_task_context,
     scout_vector,
 )
+from lithos.lcma.stats import StatsStore
 from lithos.search import SearchEngine
 
 
@@ -803,6 +806,58 @@ class TestScoutGraph:
 
 
 # ---------------------------------------------------------------------------
+# scout_coactivation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def coactivation_stats_store(
+    seeded_config: LithosConfig, seeded_km: KnowledgeManager
+) -> StatsStore:
+    """StatsStore with seeded coactivation data."""
+    store = StatsStore(seeded_config)
+    await store.open()
+    # _ID1 co-occurs with _ID2 (3x) and _ID5 (1x)
+    for _ in range(3):
+        await store.increment_coactivation(node_a=_ID1, node_b=_ID2, namespace="default")
+    await store.increment_coactivation(node_a=_ID1, node_b=_ID5, namespace="default")
+    return store
+
+
+class TestScoutCoactivation:
+    async def test_returns_coactivated_neighbors(
+        self, coactivation_stats_store: StatsStore, seeded_km: KnowledgeManager
+    ) -> None:
+        candidates = await scout_coactivation([_ID1], coactivation_stats_store, seeded_km)
+        node_ids = {c.node_id for c in candidates}
+        assert _ID2 in node_ids
+        assert _ID5 in node_ids
+        assert all(c.scouts == [SCOUT_COACTIVATION] for c in candidates)
+
+    async def test_scores_by_count(
+        self, coactivation_stats_store: StatsStore, seeded_km: KnowledgeManager
+    ) -> None:
+        candidates = await scout_coactivation([_ID1], coactivation_stats_store, seeded_km)
+        c2 = next(c for c in candidates if c.node_id == _ID2)
+        c5 = next(c for c in candidates if c.node_id == _ID5)
+        assert c2.score > c5.score  # 3 > 1
+
+    async def test_namespace_filter(
+        self, coactivation_stats_store: StatsStore, seeded_km: KnowledgeManager
+    ) -> None:
+        candidates = await scout_coactivation(
+            [_ID1], coactivation_stats_store, seeded_km, namespace_filter=["nonexistent"]
+        )
+        assert len(candidates) == 0
+
+    async def test_empty_seeds(
+        self, coactivation_stats_store: StatsStore, seeded_km: KnowledgeManager
+    ) -> None:
+        candidates = await scout_coactivation([], coactivation_stats_store, seeded_km)
+        assert candidates == []
+
+
+# ---------------------------------------------------------------------------
 # scout_contradictions (stub)
 # ---------------------------------------------------------------------------
 
@@ -820,8 +875,8 @@ class TestScoutContradictions:
 
 
 class TestScoutConstants:
-    def test_all_scout_names_has_eight_entries(self) -> None:
-        assert len(ALL_SCOUT_NAMES) == 8
+    def test_all_scout_names_has_nine_entries(self) -> None:
+        assert len(ALL_SCOUT_NAMES) == 9
 
     def test_canonical_names(self) -> None:
         assert SCOUT_VECTOR == "scout_vector"
@@ -832,6 +887,7 @@ class TestScoutConstants:
         assert SCOUT_PROVENANCE == "scout_provenance"
         assert SCOUT_TASK_CONTEXT == "scout_task_context"
         assert SCOUT_GRAPH == "scout_graph"
+        assert SCOUT_COACTIVATION == "scout_coactivation"
 
 
 # ---------------------------------------------------------------------------

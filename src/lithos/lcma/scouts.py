@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from lithos.graph import KnowledgeGraph
     from lithos.knowledge import KnowledgeManager
     from lithos.lcma.edges import EdgeStore
+    from lithos.lcma.stats import StatsStore
     from lithos.search import SearchEngine
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ SCOUT_FRESHNESS = "scout_freshness"
 SCOUT_PROVENANCE = "scout_provenance"
 SCOUT_TASK_CONTEXT = "scout_task_context"
 SCOUT_GRAPH = "scout_graph"
+SCOUT_COACTIVATION = "scout_coactivation"
 
 ALL_SCOUT_NAMES = [
     SCOUT_VECTOR,
@@ -49,6 +51,7 @@ ALL_SCOUT_NAMES = [
     SCOUT_PROVENANCE,
     SCOUT_TASK_CONTEXT,
     SCOUT_GRAPH,
+    SCOUT_COACTIVATION,
 ]
 
 # Keywords that trigger freshness boost
@@ -611,6 +614,59 @@ async def scout_graph(
                 score=score,
                 reasons=[reason],
                 scouts=[SCOUT_GRAPH],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+async def scout_coactivation(
+    seed_ids: list[str],
+    stats_store: StatsStore,
+    knowledge: KnowledgeManager,
+    *,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
+) -> list[Candidate]:
+    """Find nodes frequently co-occurring with seed nodes in past retrievals."""
+    if not seed_ids:
+        return []
+
+    coactivated = await stats_store.get_coactivated(seed_ids, limit=limit * 3)
+
+    candidates: list[Candidate] = []
+    for node_id, count in coactivated:
+        if not knowledge.has_document(node_id):
+            continue
+        meta = _get_cached_meta(knowledge, node_id)
+        if not _passes_status_filter(meta, ["quarantined"]):
+            continue
+        ns = meta.namespace if meta else None
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(
+            meta.access_scope if meta else None,
+            meta.author if meta else None,
+            meta.source if meta else None,
+            agent_id,
+            task_id,
+        ):
+            continue
+        if not _passes_tags_filter(meta.tags if meta else None, tags):
+            continue
+        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
+            continue
+        candidates.append(
+            Candidate(
+                node_id=node_id,
+                score=float(count),
+                reasons=[f"coactivated {count} times with seeds"],
+                scouts=[SCOUT_COACTIVATION],
             )
         )
         if len(candidates) >= limit:
