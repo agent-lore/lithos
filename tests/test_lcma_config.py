@@ -61,6 +61,66 @@ class TestLcmaConfigDefaults:
         assert cfg.llm_provider is None
 
 
+class TestLcmaConfigRerankWeights:
+    """rerank_weights 10-scout defaults and backward-compatible fill/renormalize."""
+
+    def test_default_has_10_keys(self) -> None:
+        cfg = LcmaConfig()
+        assert len(cfg.rerank_weights) == 10
+
+    def test_default_sum_to_one(self) -> None:
+        cfg = LcmaConfig()
+        assert abs(sum(cfg.rerank_weights.values()) - 1.0) < 1e-9
+
+    def test_default_key_values(self) -> None:
+        cfg = LcmaConfig()
+        assert cfg.rerank_weights["vector"] == 0.25
+        assert cfg.rerank_weights["graph"] == 0.13
+        assert cfg.rerank_weights["coactivation"] == 0.10
+        assert cfg.rerank_weights["source_url"] == 0.05
+
+    def test_legacy_7_key_config_fills_and_renormalizes(self) -> None:
+        """Old 7-key config gets missing keys filled and renormalized to sum=1.0."""
+        legacy = {
+            "vector": 0.35,
+            "lexical": 0.25,
+            "exact_alias": 0.15,
+            "tags_recency": 0.10,
+            "freshness": 0.05,
+            "provenance": 0.05,
+            "task_context": 0.05,
+        }
+        cfg = LcmaConfig(rerank_weights=legacy)
+        assert len(cfg.rerank_weights) == 10
+        assert "graph" in cfg.rerank_weights
+        assert "coactivation" in cfg.rerank_weights
+        assert "source_url" in cfg.rerank_weights
+        # Sum should be ~1.0 after renormalization
+        assert abs(sum(cfg.rerank_weights.values()) - 1.0) < 1e-9
+        # Relative ordering of original keys preserved
+        assert cfg.rerank_weights["vector"] > cfg.rerank_weights["lexical"]
+
+    def test_unknown_keys_rejected(self) -> None:
+        with pytest.raises(Exception, match="Unknown rerank_weights keys"):
+            LcmaConfig(rerank_weights={"vector": 0.5, "bogus_scout": 0.5})
+
+    def test_all_10_keys_provided_valid(self) -> None:
+        custom = {k: 0.1 for k in _DEFAULT_RERANK_WEIGHTS}
+        cfg = LcmaConfig(rerank_weights=custom)
+        assert len(cfg.rerank_weights) == 10
+        assert all(v == 0.1 for v in cfg.rerank_weights.values())
+
+    def test_all_10_keys_bad_sum_rejected(self) -> None:
+        bad = {k: 0.5 for k in _DEFAULT_RERANK_WEIGHTS}
+        with pytest.raises(Exception, match="rerank_weights must sum"):
+            LcmaConfig(rerank_weights=bad)
+
+    def test_empty_dict_fills_all_defaults(self) -> None:
+        cfg = LcmaConfig(rerank_weights={})
+        assert len(cfg.rerank_weights) == 10
+        assert abs(sum(cfg.rerank_weights.values()) - 1.0) < 1e-9
+
+
 class TestLcmaConfigNoteTypePriors:
     """note_type_priors key filling and rejection."""
 
@@ -133,5 +193,5 @@ class TestLithosConfigLcmaSubtree:
         """MVP 1 functions without any user configuration."""
         cfg = LithosConfig()
         assert cfg.lcma.enabled is True
-        assert len(cfg.lcma.rerank_weights) == 7
+        assert len(cfg.lcma.rerank_weights) == 10
         assert len(cfg.lcma.note_type_priors) == 6
