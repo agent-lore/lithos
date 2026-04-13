@@ -19,6 +19,13 @@ Started: Mon Apr 13 18:18:43 UTC 2026
 - Decay is convergent via last_decay_applied_at date check — safe to run multiple times per day
 - knowledge.get_doc_sources(doc_id) returns list[str] of source IDs (public API for _doc_to_sources)
 - knowledge._meta_cache[doc_id].namespace gives resolved namespace for edge operations
+- Cross-DB atomicity (stats.db → edges.db): use record-before-write pattern for at-most-once semantics
+- Same-DB atomicity (multiple stats.db writes): combine in single aiosqlite transaction
+- Pyright walrus operator trick: `isinstance((v := d.get("k")), int) and v >= 2` narrows correctly
+- Adding a metadata field: _KNOWN_METADATA_KEYS, KnowledgeMetadata dataclass, to_dict, from_dict, update() param
+- Entity extraction: _extract_entities_from_text is a pure function; _extract_entities on EnrichWorker reads/updates via KnowledgeManager
+- mock_knowledge fixture needs `km.read = AsyncMock(...)` for tests where _enrich_node triggers entity extraction
+- KnowledgeManager.create() returns WriteResult with .document.id (not .id directly)
 
 ---
 
@@ -110,4 +117,65 @@ Started: Mon Apr 13 18:18:43 UTC 2026
   - Consolidation ops use composite PKs: (task_id, from_id, to_id) for edge ops, (task_id, node_id) for salience ops
   - INSERT OR IGNORE is the idempotency pattern — safe to call multiple times
   - 947 unit tests pass; all checks green
+---
+
+## 2026-04-13 - US-005
+- What was implemented:
+  - `_consolidate_task(task_id)` in enrich.py: full consolidation logic
+  - Task-level idempotency via `is_task_consolidated` check at entry
+  - Reads working memory, filters to frequent nodes (activation_count >= 2)
+  - Edge reinforcement between frequent node pairs: canonical ordering (from_id <= to_id), same-namespace-only, weight += 0.03 or creates new `related_to` edge
+  - Per-target edge idempotency: record-before-write via `consolidation_edge_ops` (at-most-once across stats.db/edges.db)
+  - Salience boost (+0.01) for each frequent node with per-target idempotency via `consolidation_salience_ops`
+  - Added `update_salience_and_record_consolidation()` to StatsStore — atomically updates salience and records the consolidation op in a single stats.db transaction
+  - 4 new tests: consolidation with WM entries, no WM entries (no-op), already-consolidated (idempotent), partial consolidation replay
+- Files changed:
+  - src/lithos/lcma/enrich.py (_consolidate_task implementation)
+  - src/lithos/lcma/stats.py (update_salience_and_record_consolidation method)
+  - tests/test_enrich_worker.py (4 new tests in TestConsolidateTask)
+- **Learnings for future iterations:**
+  - Pyright does not narrow `e["key"]` after `isinstance(e.get("key"), int)` — use walrus operator `(ac := e.get("key"))` instead
+  - Edge reinforcement uses `adjust_weight(edge_id, +0.03)` for existing edges, `upsert(weight=0.03)` for new ones
+  - For cross-DB atomicity (stats.db to edges.db): record-before-write gives at-most-once semantics
+  - For same-DB atomicity (salience + record in stats.db): combine in single aiosqlite transaction
+  - Namespace for consolidation edges comes from `knowledge._meta_cache[node_id].namespace`
+  - Pyright does not narrow dict value access across get/index calls — use walrus operator for isinstance checks
+  - 951 unit tests pass; all checks green
+---
+
+## 2026-04-13 - US-006
+- What was implemented:
+  - Added `entities` to `_KNOWN_METADATA_KEYS` so it's not captured in `extra`
+  - Added `entities: list[str] = field(default_factory=list)` to KnowledgeMetadata
+  - Added entities to `to_dict()`: included in output when non-empty
+  - Added entities parsing to `from_dict()`: `entities=data.get('entities', [])`
+  - Added `entities: list[str] | None | _UnsetType = _UNSET` parameter to `KnowledgeManager.update()`
+  - When not _UNSET, replaces `metadata.entities`; None clears to empty list
+- Files changed:
+  - src/lithos/knowledge.py (all changes in one file)
+- **Learnings for future iterations:**
+  - New metadata fields: add to _KNOWN_METADATA_KEYS, dataclass, to_dict, from_dict, and update() signature
+  - Entities uses same pattern as derived_from_ids: list field, include in to_dict when non-empty
+  - update() parameter uses _UnsetType sentinel for preserve/clear/set semantics
+  - 951 unit tests pass; all checks green
+---
+
+## 2026-04-13 - US-007
+- What was implemented:
+  - `_extract_entities_from_text(text)` pure function with 4 rule-based heuristics: wiki-links, backtick terms, capitalized multi-word phrases, proper nouns/PascalCase identifiers
+  - `_extract_entities(node_id)` method on EnrichWorker: reads note via KnowledgeManager, checks if entities already present (skips if non-empty), writes extracted entities via `km.update(..., entities=extracted)`
+  - Integrated into `_enrich_node()`: entity extraction runs only when `trigger_types` contains `note.created` or `note.updated`
+  - Common English words filter (`_COMMON_WORDS` frozenset) prevents false positives from sentence starters
+  - Leading common words stripped from capitalized phrases ("The Knowledge Manager" → "Knowledge Manager")
+  - 10 new tests: 8 unit tests for text extraction, 2 integration tests (frontmatter update + agent-written preservation)
+  - Updated `mock_knowledge` fixture to include `read` as `AsyncMock` to support entity extraction path in existing tests
+- Files changed:
+  - src/lithos/lcma/enrich.py (entity extraction logic + _enrich_node integration)
+  - tests/test_enrich_worker.py (10 new tests + mock fixture update)
+- **Learnings for future iterations:**
+  - KnowledgeManager.create() returns WriteResult — access doc ID via `result.document.id`, not `result.id`
+  - PascalCase identifiers (ChromaDB, NetworkX) need `[A-Z][a-zA-Z]{2,}` regex, not just `[A-Z][a-z]{2,}`
+  - Ruff SIM102: combine nested `if` into single `if ... and (...)` statement
+  - mock_knowledge fixture must set `km.read = AsyncMock(...)` since _enrich_node now calls _extract_entities which awaits km.read()
+  - 961 unit tests pass; all checks green (2 pre-existing pyright errors in server.py unchanged)
 ---

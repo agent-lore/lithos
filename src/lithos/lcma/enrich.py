@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,163 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# --- Entity extraction patterns ---
+# [[wiki-link]] or [[wiki-link|display]]
+_WIKI_LINK_RE = re.compile(r"\[\[([^\]\[|]+?)(?:\|[^\]]+)?\]\]")
+# `backtick-enclosed terms` (single backtick, not code fences)
+_BACKTICK_RE = re.compile(r"(?<!`)``?([^`\n]+?)``?(?!`)")
+# Capitalized multi-word phrases (2+ words starting with uppercase)
+_CAP_PHRASE_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
+# Single capitalized words: proper nouns and PascalCase identifiers (3+ chars)
+_PROPER_NOUN_RE = re.compile(r"(?<!\w)([A-Z][a-zA-Z]{2,})(?!\w)")
+# Common English words to exclude from proper noun extraction
+_COMMON_WORDS = frozenset(
+    {
+        "The",
+        "This",
+        "That",
+        "These",
+        "Those",
+        "There",
+        "Their",
+        "They",
+        "What",
+        "When",
+        "Where",
+        "Which",
+        "While",
+        "With",
+        "Without",
+        "About",
+        "Above",
+        "After",
+        "Again",
+        "Against",
+        "Also",
+        "Always",
+        "Among",
+        "Any",
+        "Are",
+        "Because",
+        "Been",
+        "Before",
+        "Being",
+        "Between",
+        "Both",
+        "But",
+        "Can",
+        "Could",
+        "Did",
+        "Does",
+        "Each",
+        "Even",
+        "Every",
+        "For",
+        "From",
+        "Get",
+        "Got",
+        "Had",
+        "Has",
+        "Have",
+        "Her",
+        "Here",
+        "Him",
+        "His",
+        "How",
+        "However",
+        "Into",
+        "Its",
+        "Just",
+        "Let",
+        "Like",
+        "May",
+        "More",
+        "Most",
+        "Much",
+        "Must",
+        "New",
+        "Not",
+        "Now",
+        "Off",
+        "Old",
+        "One",
+        "Only",
+        "Other",
+        "Our",
+        "Out",
+        "Over",
+        "Own",
+        "Per",
+        "Same",
+        "She",
+        "Should",
+        "Some",
+        "Such",
+        "Than",
+        "Then",
+        "Too",
+        "Two",
+        "Under",
+        "Until",
+        "Use",
+        "Very",
+        "Was",
+        "Way",
+        "Were",
+        "Will",
+        "Would",
+        "Yet",
+        "You",
+        "Your",
+        "All",
+        "And",
+        "Few",
+        "Nor",
+        "See",
+        "Set",
+        "Try",
+        "Who",
+        "Why",
+        "Yes",
+        # Common sentence starters
+        "Note",
+        "Example",
+        "Given",
+        "Since",
+        "Although",
+        "Despite",
+        "Furthermore",
+        "Moreover",
+        "Therefore",
+        "Thus",
+        "Hence",
+        "Still",
+        "Already",
+        "Instead",
+        "Perhaps",
+        "Sometimes",
+        "Often",
+        "Usually",
+        "Typically",
+        "Generally",
+        "Basically",
+        "Finally",
+        "First",
+        "Second",
+        "Third",
+        "Next",
+        "Last",
+        "Several",
+        "Many",
+        "Another",
+        "Either",
+        "Neither",
+        "Rather",
+        "Whether",
+        "During",
+    }
+)
+
 _SUBSCRIBED_EVENT_TYPES = [
     NOTE_CREATED,
     NOTE_UPDATED,
@@ -42,6 +200,49 @@ _SUBSCRIBED_EVENT_TYPES = [
     FINDING_POSTED,
     EDGE_UPSERTED,
 ]
+
+
+def _extract_entities_from_text(text: str) -> list[str]:
+    """Extract entity names from text using rule-based heuristics.
+
+    Extracts:
+    - ``[[wiki-link]]`` targets
+    - `` `backtick-enclosed` `` terms
+    - Capitalized multi-word phrases (e.g. "Knowledge Manager")
+    - Single proper nouns (filtered against common English words)
+
+    Returns a deduplicated, sorted list of entity names.
+    """
+    entities: set[str] = set()
+
+    # 1. Wiki-links
+    for match in _WIKI_LINK_RE.finditer(text):
+        target = match.group(1).strip()
+        if target:
+            entities.add(target)
+
+    # 2. Backtick-enclosed terms
+    for match in _BACKTICK_RE.finditer(text):
+        term = match.group(1).strip()
+        if term and len(term) <= 60:
+            entities.add(term)
+
+    # 3. Capitalized multi-word phrases (strip leading common words)
+    for match in _CAP_PHRASE_RE.finditer(text):
+        words = match.group(1).strip().split()
+        # Strip leading common words (e.g. "The Knowledge Manager" -> "Knowledge Manager")
+        while words and words[0] in _COMMON_WORDS:
+            words = words[1:]
+        if len(words) >= 2:
+            entities.add(" ".join(words))
+
+    # 4. Single proper nouns and PascalCase identifiers (filtered)
+    for match in _PROPER_NOUN_RE.finditer(text):
+        word = match.group(1)
+        if word not in _COMMON_WORDS and not word.isupper():
+            entities.add(word)
+
+    return sorted(entities)
 
 
 def _resolve_node_id(
@@ -245,13 +446,16 @@ class EnrichWorker:
                 await self._stats_store.requeue_failed(claimed_ids)
 
     async def _enrich_node(self, node_id: str, trigger_types: object) -> None:
-        """Apply node-level enrichment: salience decay and edge projection.
+        """Apply node-level enrichment: salience decay, edge projection, entity extraction.
 
         Salience decay is applied when the node has been inactive longer than
         ``config.decay_inactive_days``.  Decay is convergent — running twice
         in the same day is safe because ``last_decay_applied_at`` is checked.
 
         Edge projection re-syncs ``derived_from`` edges for the node.
+
+        Entity extraction runs only when trigger_types contains ``note.created``
+        or ``note.updated``.
         """
         from lithos.lcma.edges import _project_node_provenance
 
@@ -262,6 +466,12 @@ class EnrichWorker:
 
         # --- Edge projection ---
         await _project_node_provenance(self._edge_store, self._knowledge, node_id)
+
+        # --- Entity extraction (only on create/update triggers) ---
+        if isinstance(trigger_types, (list, set, tuple)) and (
+            NOTE_CREATED in trigger_types or NOTE_UPDATED in trigger_types
+        ):
+            await self._extract_entities(node_id)
 
     async def _apply_decay(self, node_id: str, stats: dict[str, object]) -> None:
         """Apply salience decay to a single node.
@@ -305,6 +515,33 @@ class EnrichWorker:
             decay_amount,
         )
 
+    async def _extract_entities(self, node_id: str) -> None:
+        """Extract entities from note content and write to frontmatter.
+
+        Uses rule-based heuristics (wiki-links, backtick terms, capitalized
+        phrases).  Skips if the note already has a non-empty entities list
+        (agent-written entities are never overwritten).
+        """
+        if not self._knowledge.has_document(node_id):
+            return
+
+        try:
+            doc, _ = await self._knowledge.read(id=node_id)
+        except FileNotFoundError:
+            return
+
+        # Do not overwrite agent-written entities
+        if doc.metadata.entities:
+            logger.debug("Node %s already has entities, skipping extraction", node_id)
+            return
+
+        extracted = _extract_entities_from_text(doc.content)
+        if not extracted:
+            return
+
+        await self._knowledge.update(id=node_id, agent="lithos-enrich", entities=extracted)
+        logger.debug("Extracted %d entities for node %s", len(extracted), node_id)
+
     async def _consolidate_task(self, task_id: str) -> None:
         """Consolidate working memory into long-term signals.
 
@@ -322,9 +559,7 @@ class EnrichWorker:
         # Read working memory and filter to frequent nodes
         wm_entries = await self._stats_store.get_working_memory(task_id)
         frequent = [
-            e
-            for e in wm_entries
-            if isinstance((ac := e.get("activation_count")), int) and ac >= 2
+            e for e in wm_entries if isinstance((ac := e.get("activation_count")), int) and ac >= 2
         ]
 
         if not frequent:

@@ -20,8 +20,9 @@ from lithos.events import (
     EventBus,
     LithosEvent,
 )
+from lithos.knowledge import KnowledgeManager
 from lithos.lcma.edges import EdgeStore, _project_node_provenance
-from lithos.lcma.enrich import EnrichWorker, _resolve_node_id
+from lithos.lcma.enrich import EnrichWorker, _extract_entities_from_text, _resolve_node_id
 from lithos.lcma.stats import StatsStore
 
 
@@ -49,6 +50,7 @@ def mock_knowledge() -> MagicMock:
     km = MagicMock()
     km.has_document = MagicMock(return_value=True)
     km.get_id_by_path = MagicMock(return_value=None)
+    km.read = AsyncMock(side_effect=FileNotFoundError("mock doc not on disk"))
     return km
 
 
@@ -891,3 +893,137 @@ class TestConsolidateTask:
         assert abs(salience_q_after - (salience_q_before + 0.01)) < 0.001
 
         assert await stats_store.is_task_consolidated(task_id)
+
+
+# ---------------------------------------------------------------------------
+# Entity extraction tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractEntitiesFromText:
+    """Verify rule-based entity extraction from text."""
+
+    def test_wiki_links_extracted(self) -> None:
+        text = "This references [[Knowledge Graph]] and [[NetworkX]]."
+        entities = _extract_entities_from_text(text)
+        assert "Knowledge Graph" in entities
+        assert "NetworkX" in entities
+
+    def test_backtick_terms_extracted(self) -> None:
+        text = "The `EnrichWorker` processes events from the `EventBus`."
+        entities = _extract_entities_from_text(text)
+        assert "EnrichWorker" in entities
+        assert "EventBus" in entities
+
+    def test_capitalized_phrases_extracted(self) -> None:
+        text = "The Knowledge Manager handles all document operations."
+        entities = _extract_entities_from_text(text)
+        assert "Knowledge Manager" in entities
+
+    def test_proper_nouns_extracted(self) -> None:
+        text = "Lithos uses Tantivy for full-text search and ChromaDB for semantic."
+        entities = _extract_entities_from_text(text)
+        assert "Lithos" in entities
+        assert "Tantivy" in entities
+        assert "ChromaDB" in entities
+
+    def test_common_words_excluded(self) -> None:
+        text = "The system should handle these cases. However this is fine."
+        entities = _extract_entities_from_text(text)
+        assert "The" not in entities
+        assert "However" not in entities
+
+    def test_wiki_link_with_display_text(self) -> None:
+        text = "See [[target-doc|display name]] for details."
+        entities = _extract_entities_from_text(text)
+        assert "target-doc" in entities
+
+    def test_deduplicated_and_sorted(self) -> None:
+        text = "[[Alpha]] appears twice: [[Alpha]] and `Beta`."
+        entities = _extract_entities_from_text(text)
+        assert entities == sorted(set(entities))
+
+    def test_empty_text(self) -> None:
+        assert _extract_entities_from_text("") == []
+
+
+class TestExtractEntities:
+    """Verify _extract_entities integration with KnowledgeManager."""
+
+    async def test_extract_entities_updates_frontmatter(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """Entity extraction writes entities to frontmatter when absent."""
+        km = KnowledgeManager(test_config)
+
+        # Create a note with known entities in the content
+        result = await km.create(
+            title="Test Entity Note",
+            content="Lithos uses [[NetworkX]] and `ChromaDB` for Knowledge Graph operations.",
+            agent="test-agent",
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=mock_coordination,
+        )
+
+        await worker._extract_entities(doc_id)
+
+        # Read back and verify entities were written
+        doc, _ = await km.read(id=doc_id)
+        assert len(doc.metadata.entities) > 0
+        assert "NetworkX" in doc.metadata.entities
+        assert "ChromaDB" in doc.metadata.entities
+
+    async def test_agent_written_entities_not_overwritten(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """Agent-written entities are preserved and not overwritten."""
+        km = KnowledgeManager(test_config)
+
+        # Create a note
+        result = await km.create(
+            title="Agent Entity Note",
+            content="Lithos uses [[NetworkX]] for graph operations.",
+            agent="test-agent",
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+
+        # Agent writes custom entities
+        agent_entities = ["CustomEntity", "AgentDefined"]
+        await km.update(id=doc_id, agent="test-agent", entities=agent_entities)
+
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=mock_coordination,
+        )
+
+        await worker._extract_entities(doc_id)
+
+        # Read back — entities should still be the agent-written ones
+        doc, _ = await km.read(id=doc_id)
+        assert doc.metadata.entities == agent_entities
