@@ -785,9 +785,73 @@ async def scout_source_url(
     return candidates
 
 
-async def scout_contradictions() -> list[Candidate]:
-    """Non-counted stub — always returns []. Not included in receipts.scouts_fired."""
-    return []
+async def scout_contradictions(
+    seed_ids: list[str],
+    edge_store: EdgeStore,
+    knowledge: KnowledgeManager,
+    *,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+) -> list[dict[str, object]]:
+    """Query contradiction edges connected to seed nodes.
+
+    Returns a list of dicts with edge_id, from_id, to_id, and conflict_state
+    for edges where conflict_state is NULL or not in a resolved terminal state.
+    """
+    _RESOLVED_STATES = {"superseded", "refuted", "merged"}
+    seen_edge_ids: set[str] = set()
+    results: list[dict[str, object]] = []
+
+    for node_id in seed_ids:
+        outgoing = await edge_store.list_edges(from_id=node_id, edge_type="contradicts")
+        incoming = await edge_store.list_edges(to_id=node_id, edge_type="contradicts")
+
+        for edge in [*outgoing, *incoming]:
+            eid = str(edge["edge_id"])
+            if eid in seen_edge_ids:
+                continue
+            seen_edge_ids.add(eid)
+
+            conflict_state = edge["conflict_state"]
+            if isinstance(conflict_state, str) and conflict_state in _RESOLVED_STATES:
+                continue
+
+            # Determine the counterpart note (the one that isn't the current seed)
+            from_id = str(edge["from_id"])
+            to_id = str(edge["to_id"])
+            counterpart_id = to_id if from_id == node_id else from_id
+
+            # Verify counterpart exists
+            if not knowledge.has_document(counterpart_id):
+                continue
+
+            # Apply gating filters on the counterpart
+            meta = _get_cached_meta(knowledge, counterpart_id)
+            if not _passes_status_filter(meta, ["quarantined"]):
+                continue
+            ns = meta.namespace if meta else None
+            if not _passes_namespace_filter(ns, namespace_filter):
+                continue
+            if not _passes_access_scope(
+                meta.access_scope if meta else None,
+                meta.author if meta else None,
+                meta.source if meta else None,
+                agent_id,
+                task_id,
+            ):
+                continue
+
+            results.append(
+                {
+                    "edge_id": eid,
+                    "from_id": from_id,
+                    "to_id": to_id,
+                    "conflict_state": conflict_state,
+                }
+            )
+
+    return results
 
 
 # ---------------------------------------------------------------------------

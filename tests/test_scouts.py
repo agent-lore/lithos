@@ -1026,15 +1026,116 @@ class TestScoutSourceUrl:
 
 
 # ---------------------------------------------------------------------------
-# scout_contradictions (stub)
+# scout_contradictions
 # ---------------------------------------------------------------------------
 
 
 class TestScoutContradictions:
     @pytest.mark.asyncio
-    async def test_returns_empty_list(self) -> None:
-        candidates = await scout_contradictions()
-        assert candidates == []
+    async def test_returns_empty_when_no_edges(
+        self, seeded_km: KnowledgeManager, seeded_config: LithosConfig
+    ) -> None:
+        """No contradiction edges → empty list."""
+        edge_store = EdgeStore(seeded_config)
+        await edge_store.open()
+        result = await scout_contradictions([_ID1], edge_store, seeded_km)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_surfaces_contradiction_edge(
+        self, seeded_km: KnowledgeManager, seeded_config: LithosConfig
+    ) -> None:
+        """Seeded contradiction edge is surfaced."""
+        edge_store = EdgeStore(seeded_config)
+        await edge_store.open()
+        eid = await edge_store.upsert(
+            from_id=_ID1,
+            to_id=_ID2,
+            edge_type="contradicts",
+            weight=1.0,
+            namespace="default",
+        )
+        result = await scout_contradictions([_ID1], edge_store, seeded_km)
+        assert len(result) == 1
+        assert result[0]["edge_id"] == eid
+        assert result[0]["from_id"] == _ID1
+        assert result[0]["to_id"] == _ID2
+        assert result[0]["conflict_state"] is None
+
+    @pytest.mark.asyncio
+    async def test_excludes_resolved_edges(
+        self, seeded_km: KnowledgeManager, seeded_config: LithosConfig
+    ) -> None:
+        """Edges with resolved conflict_state are excluded."""
+        edge_store = EdgeStore(seeded_config)
+        await edge_store.open()
+        for state in ("superseded", "refuted", "merged"):
+            await edge_store.upsert(
+                from_id=_ID1,
+                to_id=_ID2,
+                edge_type="contradicts",
+                weight=1.0,
+                namespace=f"ns-{state}",
+                conflict_state=state,
+            )
+        result = await scout_contradictions([_ID1], edge_store, seeded_km)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_excludes_different_namespace(
+        self, seeded_km: KnowledgeManager, seeded_config: LithosConfig
+    ) -> None:
+        """Contradiction edge to a note in a different namespace is excluded when filter is set."""
+        edge_store = EdgeStore(seeded_config)
+        await edge_store.open()
+        # _ID1 is in "default" namespace, _ID2 is in "projects" namespace
+        await edge_store.upsert(
+            from_id=_ID1,
+            to_id=_ID2,
+            edge_type="contradicts",
+            weight=1.0,
+            namespace="default",
+        )
+        # Filter to only "default" — _ID2 is in "projects" so should be excluded
+        result = await scout_contradictions(
+            [_ID1], edge_store, seeded_km, namespace_filter=["default"]
+        )
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_excludes_quarantined_note(
+        self, seeded_km: KnowledgeManager, seeded_config: LithosConfig
+    ) -> None:
+        """Contradiction edge pointing to a quarantined note is excluded."""
+        edge_store = EdgeStore(seeded_config)
+        await edge_store.open()
+
+        # Create a quarantined note
+        quarantined_id = "qqqqqqqq-qqqq-4qqq-qqqq-qqqqqqqqqqqq"
+        note = fm.Post(
+            "# Quarantined\n\nBad content",
+            id=quarantined_id,
+            title="Quarantined Note",
+            author="agent-alpha",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            access_scope="shared",
+            namespace="default",
+            status="quarantined",
+        )
+        kp = seeded_config.storage.knowledge_path
+        (kp / "quarantined-note.md").write_text(fm.dumps(note))
+        seeded_km._scan_existing()
+
+        await edge_store.upsert(
+            from_id=_ID1,
+            to_id=quarantined_id,
+            edge_type="contradicts",
+            weight=1.0,
+            namespace="default",
+        )
+        result = await scout_contradictions([_ID1], edge_store, seeded_km)
+        assert result == []
 
 
 # ---------------------------------------------------------------------------

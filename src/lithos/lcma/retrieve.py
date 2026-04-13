@@ -253,6 +253,7 @@ async def run_retrieve(
     candidates_considered = 0
     terrace_reached = 0
     temperature: float = lcma_config.temperature_default
+    conflicts_found: list[dict[str, object]] = []
 
     try:
         # ── Phase A: parallel scouts ──────────────────────────────
@@ -348,8 +349,15 @@ async def run_retrieve(
             except Exception:
                 logger.warning("Phase B (source_url) failed", exc_info=True)
 
-        # Contradictions stub (not counted)
-        await scout_contradictions()
+        # Contradictions — only fire when surface_conflicts is True
+        conflicts_found: list[dict[str, object]] = []
+        if surface_conflicts:
+            try:
+                conflicts_found = await scout_contradictions(
+                    seed_ids, edge_store, knowledge, **scout_kw
+                )
+            except Exception:
+                logger.warning("Phase B (contradictions) failed", exc_info=True)
 
         # Record scouts_fired using canonical names in order. A scout
         # appears here iff it executed without raising — empty result
@@ -429,12 +437,15 @@ async def run_retrieve(
                 except Exception:
                     logger.warning("Working memory upsert failed for %s", r["id"], exc_info=True)
 
-        return {
+        envelope: dict[str, object] = {
             "results": results,
             "temperature": temperature,
             "terrace_reached": terrace_reached,
             "receipt_id": receipt_id,
         }
+        if surface_conflicts:
+            envelope["conflicts"] = conflicts_found
+        return envelope
 
     finally:
         # ── Receipt — always written (even on error) ──────────────
@@ -447,7 +458,7 @@ async def run_retrieve(
                 scouts_fired=scouts_fired,
                 candidates_considered=candidates_considered,
                 final_nodes=final_nodes,
-                conflicts_surfaced=[],
+                conflicts_surfaced=conflicts_found,
                 surface_conflicts=surface_conflicts,
                 temperature=temperature,
                 terrace_reached=terrace_reached,
