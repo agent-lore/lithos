@@ -95,6 +95,7 @@ _KNOWN_METADATA_KEYS = frozenset(
         "note_type",
         "status",
         "summaries",
+        "entities",
     }
 )
 
@@ -257,6 +258,7 @@ class KnowledgeMetadata:
     )
     status: str | None = None  # active | archived | quarantined
     summaries: dict | None = None  # {short: str, long: str}
+    entities: list[str] = field(default_factory=list)
 
     @property
     def is_stale(self) -> bool:
@@ -305,6 +307,8 @@ class KnowledgeMetadata:
             result["status"] = self.status
         if self.summaries is not None:
             result["summaries"] = self.summaries
+        if self.entities:
+            result["entities"] = self.entities
         # Merge unknown fields — known keys always take precedence.
         for key, value in self.extra.items():
             if key not in result:
@@ -379,6 +383,7 @@ class KnowledgeMetadata:
             note_type=data.get("note_type"),
             status=data.get("status"),
             summaries=summaries,
+            entities=data.get("entities", []),
         )
 
 
@@ -1091,6 +1096,7 @@ class KnowledgeManager:
         lcma_status: str | None | _UnsetType = _UNSET,
         summaries: dict | None | _UnsetType = _UNSET,
         supersedes: str | None | _UnsetType = _UNSET,
+        entities: list[str] | None | _UnsetType = _UNSET,
     ) -> WriteResult:
         """Update an existing document.
 
@@ -1287,6 +1293,8 @@ class KnowledgeManager:
                 doc.metadata.status = "active"
             if not isinstance(summaries, _UnsetType):
                 doc.metadata.summaries = summaries
+            if not isinstance(entities, _UnsetType):
+                doc.metadata.entities = entities if entities is not None else []
 
             # Update fields
             if content is not None:
