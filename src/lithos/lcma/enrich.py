@@ -306,5 +306,84 @@ class EnrichWorker:
         )
 
     async def _consolidate_task(self, task_id: str) -> None:
-        """Placeholder for task-level consolidation (US-005)."""
-        logger.debug("EnrichWorker: _consolidate_task(%s) — stub", task_id)
+        """Consolidate working memory into long-term signals.
+
+        Reads WM for the task, identifies frequently co-activated nodes
+        (``activation_count >= 2``), reinforces ``related_to`` edges between
+        pairs in the same namespace, and boosts salience for each frequent
+        node.  Fully idempotent via per-target op tables plus the
+        ``task_consolidation_log`` envelope.
+        """
+        # Task-level idempotency check
+        if await self._stats_store.is_task_consolidated(task_id):
+            logger.debug("Task %s already consolidated, skipping", task_id)
+            return
+
+        # Read working memory and filter to frequent nodes
+        wm_entries = await self._stats_store.get_working_memory(task_id)
+        frequent = [
+            e
+            for e in wm_entries
+            if isinstance((ac := e.get("activation_count")), int) and ac >= 2
+        ]
+
+        if not frequent:
+            await self._stats_store.mark_task_consolidated(task_id)
+            return
+
+        # Build node_id → namespace map (only nodes still in knowledge)
+        node_ns: dict[str, str] = {}
+        for entry in frequent:
+            nid = str(entry["node_id"])
+            cached = self._knowledge._meta_cache.get(nid)
+            if cached is not None:
+                node_ns[nid] = cached.namespace
+
+        # --- Edge reinforcement between frequent node pairs ---
+        node_ids = [str(e["node_id"]) for e in frequent if str(e["node_id"]) in node_ns]
+        for i, a in enumerate(node_ids):
+            for b in node_ids[i + 1 :]:
+                ns_a = node_ns.get(a)
+                ns_b = node_ns.get(b)
+                if ns_a is None or ns_b is None or ns_a != ns_b:
+                    continue
+
+                # Canonical ordering
+                from_id, to_id = (a, b) if a <= b else (b, a)
+                ns = ns_a
+
+                # Per-target idempotency: record-before-write (at-most-once
+                # across stats.db ↔ edges.db boundary)
+                if await self._stats_store.has_consolidation_edge_op(task_id, from_id, to_id):
+                    continue
+                await self._stats_store.record_consolidation_edge_op(task_id, from_id, to_id)
+
+                # Upsert or adjust edge
+                existing = await self._edge_store.list_edges(
+                    from_id=from_id, to_id=to_id, edge_type="related_to", namespace=ns
+                )
+                if existing:
+                    edge_id = str(existing[0]["edge_id"])
+                    await self._edge_store.adjust_weight(edge_id, 0.03)
+                else:
+                    await self._edge_store.upsert(
+                        from_id=from_id,
+                        to_id=to_id,
+                        edge_type="related_to",
+                        weight=0.03,
+                        namespace=ns,
+                        provenance_type="consolidation",
+                    )
+
+        # --- Salience boost for each frequent node ---
+        for entry in frequent:
+            nid = str(entry["node_id"])
+            if await self._stats_store.has_consolidation_salience_op(task_id, nid):
+                continue
+            # Atomic: salience update + op record in one stats.db transaction
+            await self._stats_store.update_salience_and_record_consolidation(
+                node_id=nid, delta=0.01, task_id=task_id
+            )
+
+        await self._stats_store.mark_task_consolidated(task_id)
+        logger.debug("Consolidated task %s: %d frequent nodes", task_id, len(frequent))

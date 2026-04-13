@@ -769,6 +769,30 @@ class StatsStore:
             )
             await db.commit()
 
+    async def update_salience_and_record_consolidation(
+        self, *, node_id: str, delta: float, task_id: str
+    ) -> None:
+        """Atomically update salience and record the consolidation salience op.
+
+        Both writes happen in a single stats.db transaction so that a crash
+        between them cannot cause double-boosting on retry.
+        """
+        await self._ensure_open()
+        initial = max(0.0, min(1.0, 0.5 + delta))
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, salience)
+                   VALUES (?, ?)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     salience = MAX(0.0, MIN(1.0, salience + ?))""",
+                (node_id, initial, delta),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO consolidation_salience_ops (task_id, node_id) VALUES (?, ?)",
+                (task_id, node_id),
+            )
+            await db.commit()
+
     # ------------------------------------------------------------------
     # Receipt lookup operations
     # ------------------------------------------------------------------

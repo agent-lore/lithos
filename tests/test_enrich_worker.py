@@ -700,3 +700,194 @@ class TestProjectNodeProvenance:
 
         result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
         assert result == {"created": 0, "removed": 0}
+
+
+# ---------------------------------------------------------------------------
+# Task consolidation tests
+# ---------------------------------------------------------------------------
+
+
+def _setup_meta_cache(
+    mock_knowledge: MagicMock, node_ids: list[str], namespace: str = "default"
+) -> None:
+    """Helper: populate mock _meta_cache with namespace for given node_ids."""
+    cache: dict[str, MagicMock] = {}
+    for nid in node_ids:
+        meta = MagicMock()
+        meta.namespace = namespace
+        cache[nid] = meta
+    mock_knowledge._meta_cache = cache
+
+
+class TestConsolidateTask:
+    """Verify task-level consolidation logic."""
+
+    async def test_consolidate_with_wm_entries(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_knowledge: MagicMock,
+    ) -> None:
+        """Consolidation creates edges and boosts salience for frequent nodes."""
+        task_id = "task-consolidate-1"
+        nodes = ["node-a", "node-b", "node-c"]
+        _setup_meta_cache(mock_knowledge, nodes)
+
+        # Seed node_stats so salience reads work
+        for nid in nodes:
+            await stats_store.increment_node_stats(node_id=nid)
+
+        # Insert WM entries: node-a x3, node-b x2, node-c x1 (not frequent)
+        for nid, count in [("node-a", 3), ("node-b", 2), ("node-c", 1)]:
+            for _ in range(count):
+                await stats_store.upsert_working_memory(
+                    task_id=task_id, node_id=nid, receipt_id="rcpt_test"
+                )
+
+        salience_before_a = (await stats_store.get_node_stats("node-a"))["salience"]
+        salience_before_b = (await stats_store.get_node_stats("node-b"))["salience"]
+        salience_before_c = (await stats_store.get_node_stats("node-c"))["salience"]
+
+        await worker._consolidate_task(task_id)
+
+        # Edge between node-a and node-b should exist (both frequent, same ns)
+        edges = await edge_store.list_edges(
+            from_id="node-a", to_id="node-b", edge_type="related_to", namespace="default"
+        )
+        assert len(edges) == 1
+        assert abs(edges[0]["weight"] - 0.03) < 0.001
+
+        # Salience boosted for frequent nodes only
+        salience_after_a = (await stats_store.get_node_stats("node-a"))["salience"]
+        salience_after_b = (await stats_store.get_node_stats("node-b"))["salience"]
+        salience_after_c = (await stats_store.get_node_stats("node-c"))["salience"]
+
+        assert abs(salience_after_a - (salience_before_a + 0.01)) < 0.001
+        assert abs(salience_after_b - (salience_before_b + 0.01)) < 0.001
+        assert salience_after_c == salience_before_c  # not frequent
+
+        # Task marked as consolidated
+        assert await stats_store.is_task_consolidated(task_id)
+
+    async def test_consolidate_no_wm_entries(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+        mock_knowledge: MagicMock,
+    ) -> None:
+        """Consolidation with no WM entries is a no-op but marks task done."""
+        task_id = "task-empty"
+        mock_knowledge._meta_cache = {}
+
+        await worker._consolidate_task(task_id)
+
+        assert await stats_store.is_task_consolidated(task_id)
+
+    async def test_consolidate_already_consolidated(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_knowledge: MagicMock,
+    ) -> None:
+        """Re-consolidating an already-consolidated task is a no-op."""
+        task_id = "task-idempotent"
+        nodes = ["node-x", "node-y"]
+        _setup_meta_cache(mock_knowledge, nodes)
+
+        for nid in nodes:
+            await stats_store.increment_node_stats(node_id=nid)
+        for nid in nodes:
+            for _ in range(2):
+                await stats_store.upsert_working_memory(
+                    task_id=task_id, node_id=nid, receipt_id="rcpt_test"
+                )
+
+        # First consolidation
+        await worker._consolidate_task(task_id)
+        salience_after_first = (await stats_store.get_node_stats("node-x"))["salience"]
+        edges_after_first = await edge_store.list_edges(
+            from_id="node-x", to_id="node-y", edge_type="related_to"
+        )
+
+        # Second consolidation — should be a no-op
+        await worker._consolidate_task(task_id)
+        salience_after_second = (await stats_store.get_node_stats("node-x"))["salience"]
+        edges_after_second = await edge_store.list_edges(
+            from_id="node-x", to_id="node-y", edge_type="related_to"
+        )
+
+        assert salience_after_second == salience_after_first
+        assert edges_after_second[0]["weight"] == edges_after_first[0]["weight"]
+
+    async def test_partial_consolidation_replay(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_knowledge: MagicMock,
+    ) -> None:
+        """After partial consolidation, replay skips applied ops and applies remaining."""
+        task_id = "task-partial"
+        nodes = ["node-p", "node-q", "node-r"]
+        _setup_meta_cache(mock_knowledge, nodes)
+
+        for nid in nodes:
+            await stats_store.increment_node_stats(node_id=nid)
+        for nid in nodes:
+            for _ in range(2):
+                await stats_store.upsert_working_memory(
+                    task_id=task_id, node_id=nid, receipt_id="rcpt_test"
+                )
+
+        # Simulate partial consolidation: edge (node-p, node-q) already applied
+        await stats_store.record_consolidation_edge_op(task_id, "node-p", "node-q")
+        await edge_store.upsert(
+            from_id="node-p",
+            to_id="node-q",
+            edge_type="related_to",
+            weight=0.03,
+            namespace="default",
+            provenance_type="consolidation",
+        )
+        # Simulate partial consolidation: salience for node-p already applied
+        await stats_store.update_salience_and_record_consolidation(
+            node_id="node-p", delta=0.01, task_id=task_id
+        )
+
+        salience_p_before = (await stats_store.get_node_stats("node-p"))["salience"]
+        salience_q_before = (await stats_store.get_node_stats("node-q"))["salience"]
+
+        # Run consolidation — should skip already-applied ops
+        await worker._consolidate_task(task_id)
+
+        # node-p ↔ node-q edge should NOT be double-adjusted
+        pq_edges = await edge_store.list_edges(
+            from_id="node-p", to_id="node-q", edge_type="related_to"
+        )
+        assert len(pq_edges) == 1
+        assert abs(pq_edges[0]["weight"] - 0.03) < 0.001  # unchanged
+
+        # node-p ↔ node-r edge should be created (not yet applied)
+        pr_edges = await edge_store.list_edges(
+            from_id="node-p", to_id="node-r", edge_type="related_to"
+        )
+        assert len(pr_edges) == 1
+        assert abs(pr_edges[0]["weight"] - 0.03) < 0.001
+
+        # node-q ↔ node-r edge should be created
+        qr_edges = await edge_store.list_edges(
+            from_id="node-q", to_id="node-r", edge_type="related_to"
+        )
+        assert len(qr_edges) == 1
+
+        # node-p salience should NOT be double-boosted
+        salience_p_after = (await stats_store.get_node_stats("node-p"))["salience"]
+        assert abs(salience_p_after - salience_p_before) < 0.001
+
+        # node-q salience SHOULD be boosted (not previously applied)
+        salience_q_after = (await stats_store.get_node_stats("node-q"))["salience"]
+        assert abs(salience_q_after - (salience_q_before + 0.01)) < 0.001
+
+        assert await stats_store.is_task_consolidated(task_id)
