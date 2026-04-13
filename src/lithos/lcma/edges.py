@@ -377,6 +377,70 @@ class EdgeStore:
         return [dict(r) for r in rows]
 
 
+async def _project_node_provenance(
+    edge_store: EdgeStore,
+    knowledge: KnowledgeManager,
+    node_id: str,
+) -> dict[str, int]:
+    """Project provenance for a single node into edges.db.
+
+    When the node exists in ``knowledge``:
+      - Reads ``derived_from_ids`` via ``get_doc_sources(node_id)``
+      - Upserts ``type='derived_from'`` edges for each source
+      - Removes orphan ``derived_from`` edges that no longer match frontmatter
+
+    When the node is absent (deleted):
+      - Deletes all ``derived_from`` edges where ``from_id == node_id``
+
+    Returns ``{"created": N, "removed": M}`` summarising the delta.
+    """
+    if not edge_store.db_path.exists():
+        return {"created": 0, "removed": 0}
+
+    # Read existing derived_from edges where from_id == node_id
+    existing_edges = await edge_store.list_edges(from_id=node_id, edge_type="derived_from")
+    existing_map: dict[tuple[str, str], str] = {}
+    for e in existing_edges:
+        key = (str(e["to_id"]), str(e["namespace"]))
+        existing_map[key] = str(e["edge_id"])
+
+    # Node absent — remove all derived_from edges
+    if not knowledge.has_document(node_id):
+        if existing_edges:
+            edge_ids = [str(e["edge_id"]) for e in existing_edges]
+            await edge_store.delete_edges(edge_ids=edge_ids)
+        return {"created": 0, "removed": len(existing_edges)}
+
+    # Node exists — build desired set
+    sources = knowledge.get_doc_sources(node_id)
+    cached = knowledge._meta_cache.get(node_id)
+    ns = cached.namespace if cached else "default"
+
+    desired: set[tuple[str, str]] = set()
+    for source_id in sources:
+        desired.add((source_id, ns))
+
+    existing_keys = set(existing_map.keys())
+    to_create = desired - existing_keys
+    to_remove = existing_keys - desired
+
+    for to_id, namespace in to_create:
+        await edge_store.upsert(
+            from_id=node_id,
+            to_id=to_id,
+            edge_type="derived_from",
+            weight=1.0,
+            namespace=namespace,
+            provenance_type="frontmatter",
+        )
+
+    orphan_ids = [existing_map[k] for k in to_remove]
+    if orphan_ids:
+        await edge_store.delete_edges(edge_ids=orphan_ids)
+
+    return {"created": len(to_create), "removed": len(to_remove)}
+
+
 async def _project_provenance_to_edges(
     edge_store: EdgeStore,
     knowledge: KnowledgeManager,

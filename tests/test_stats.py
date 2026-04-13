@@ -55,6 +55,7 @@ class TestStatsStoreCreation:
             "decay_rate",
             "spaced_rep_strength",
             "cited_count",
+            "last_decay_applied_at",
         }
 
     async def test_coactivation_columns(self, stats_store: StatsStore) -> None:

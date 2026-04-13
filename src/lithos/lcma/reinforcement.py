@@ -39,6 +39,7 @@ async def reinforce_cited_nodes(
         await stats_store.increment_cited(node_id)
         await stats_store.update_salience(node_id, 0.02)
         await stats_store.update_spaced_rep_strength(node_id, 0.05)
+        await stats_store.update_last_used_at(node_id)
         logger.debug("Reinforced cited node %s", node_id)
 
 

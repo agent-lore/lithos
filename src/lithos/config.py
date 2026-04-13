@@ -153,6 +153,9 @@ class LcmaConfig(BaseModel):
     temperature_edge_threshold: int = 50
     wm_eviction_days: int = 7
     max_enrich_attempts: int = 3
+    decay_inactive_days: int = 7
+    sweep_interval_hours: int = 24
+    sweep_startup_delay_minutes: int = 10
     llm_provider: str | None = None
 
     @model_validator(mode="before")

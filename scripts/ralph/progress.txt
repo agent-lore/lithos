@@ -14,6 +14,11 @@ Started: Mon Apr 13 18:18:43 UTC 2026
 - StatsStore.drain_pending_nodes/tasks accept max_attempts kwarg; requeue_failed increments attempts
 - Server fixture in conftest.py must call `await srv.stop_enrich_worker()` before `stop_file_watcher()`
 - EnrichWorker tests use `asyncio.sleep(0.1)` to let consumer process events from the queue
+- StatsStore migrations follow pattern: static method checks PRAGMA table_info, ALTER TABLE if column missing
+- _project_node_provenance handles both existing (sync edges) and deleted (remove all) nodes
+- Decay is convergent via last_decay_applied_at date check — safe to run multiple times per day
+- knowledge.get_doc_sources(doc_id) returns list[str] of source IDs (public API for _doc_to_sources)
+- knowledge._meta_cache[doc_id].namespace gives resolved namespace for edge operations
 
 ---
 
@@ -62,4 +67,31 @@ Started: Mon Apr 13 18:18:43 UTC 2026
   - EventBus.subscribe() returns a Queue; must call unsubscribe() on stop to prevent memory leaks
   - EnrichWorker._enrich_node and _consolidate_task are stubs for US-003/US-005
   - CLI shutdown uses asyncio.run() since the event loop is not running at KeyboardInterrupt time
+---
+
+## 2026-04-13 - US-003
+- What was implemented:
+  - Added `decay_inactive_days: int = 7`, `sweep_interval_hours: int = 24`, `sweep_startup_delay_minutes: int = 10` to LcmaConfig
+  - Added `last_decay_applied_at TIMESTAMP` column to node_stats via ALTER TABLE migration
+  - Added `update_last_decay_applied_at()` and `update_last_used_at()` methods to StatsStore
+  - Updated `reinforce_cited_nodes()` to set `last_used_at = now` when incrementing cited_count
+  - Implemented `_enrich_node()` with salience decay: reads node_stats, computes days since last use, applies decay formula with convergence check
+  - Implemented `_apply_decay()` helper with convergence (skips if already applied today)
+  - Implemented `_project_node_provenance()` in edges.py — syncs derived_from edges for a single node (handles both existing and deleted nodes)
+  - Updated `test_node_stats_columns` to include `last_decay_applied_at`
+  - Added 8 new tests: 5 decay tests + 3 edge projection tests
+- Files changed:
+  - src/lithos/config.py (3 new LcmaConfig fields)
+  - src/lithos/lcma/stats.py (migration, update_last_decay_applied_at, update_last_used_at)
+  - src/lithos/lcma/reinforcement.py (last_used_at in reinforce_cited_nodes)
+  - src/lithos/lcma/enrich.py (_enrich_node, _apply_decay)
+  - src/lithos/lcma/edges.py (_project_node_provenance)
+  - tests/test_enrich_worker.py (8 new tests)
+  - tests/test_stats.py (updated column set)
+- **Learnings for future iterations:**
+  - Decay formula: `min(0.1, days * 0.005)` — caps at 0.1 max decay per cycle
+  - Convergence uses date comparison (last_decay_applied_at.date() == today) not timestamp
+  - `datetime.fromisoformat()` on SQLite TIMESTAMP strings may lack tzinfo — always normalize with `replace(tzinfo=timezone.utc)`
+  - _project_node_provenance uses (to_id, namespace) as key since from_id is always the node_id
+  - 944 unit tests pass; all checks green
 ---

@@ -150,6 +150,7 @@ class StatsStore:
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
             await self._migrate_add_cited_count(db)
+            await self._migrate_add_last_decay_applied_at(db)
             await db.commit()
         self._opened = True
 
@@ -654,6 +655,34 @@ class StatsStore:
             )
             await db.commit()
 
+    async def update_last_decay_applied_at(self, node_id: str) -> None:
+        """Set ``last_decay_applied_at`` to now for *node_id*."""
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE node_stats SET last_decay_applied_at = ? WHERE node_id = ?",
+                (now, node_id),
+            )
+            await db.commit()
+
+    async def update_last_used_at(self, node_id: str) -> None:
+        """Set ``last_used_at`` to now for *node_id*.
+
+        Creates the row with default salience if absent.
+        """
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO node_stats (node_id, last_used_at)
+                   VALUES (?, ?)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     last_used_at = excluded.last_used_at""",
+                (node_id, now),
+            )
+            await db.commit()
+
     # ------------------------------------------------------------------
     # Receipt lookup operations
     # ------------------------------------------------------------------
@@ -713,6 +742,14 @@ class StatsStore:
             await db.execute(
                 "ALTER TABLE node_stats ADD COLUMN cited_count INTEGER NOT NULL DEFAULT 0"
             )
+
+    @staticmethod
+    async def _migrate_add_last_decay_applied_at(db: aiosqlite.Connection) -> None:
+        """Add last_decay_applied_at column to existing node_stats tables."""
+        cursor = await db.execute("PRAGMA table_info(node_stats)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "last_decay_applied_at" not in columns:
+            await db.execute("ALTER TABLE node_stats ADD COLUMN last_decay_applied_at TIMESTAMP")
 
     @staticmethod
     async def _probe(path: Path) -> bool:

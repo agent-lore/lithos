@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,7 +20,7 @@ from lithos.events import (
     EventBus,
     LithosEvent,
 )
-from lithos.lcma.edges import EdgeStore
+from lithos.lcma.edges import EdgeStore, _project_node_provenance
 from lithos.lcma.enrich import EnrichWorker, _resolve_node_id
 from lithos.lcma.stats import StatsStore
 
@@ -436,3 +437,266 @@ class TestResolveNodeId:
     def test_task_completed_returns_none(self, mock_knowledge: MagicMock) -> None:
         result = _resolve_node_id({"task_id": "task-1"}, mock_knowledge, TASK_COMPLETED)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Salience decay tests
+# ---------------------------------------------------------------------------
+
+
+class TestSalienceDecay:
+    """Verify salience decay application over time."""
+
+    async def test_decay_applied_after_inactive_days(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+    ) -> None:
+        """Salience decays after more than decay_inactive_days of inactivity."""
+        node_id = "decay-test-1"
+        # Create node_stats with last_used_at 14 days ago
+        await stats_store.increment_node_stats(node_id=node_id)
+        fourteen_days_ago = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "UPDATE node_stats SET last_used_at = ? WHERE node_id = ?",
+                (fourteen_days_ago, node_id),
+            )
+            await db.commit()
+
+        stats_before = await stats_store.get_node_stats(node_id)
+        assert stats_before is not None
+        salience_before = stats_before["salience"]
+
+        await worker._enrich_node(node_id, [NOTE_UPDATED])
+
+        stats_after = await stats_store.get_node_stats(node_id)
+        assert stats_after is not None
+        assert stats_after["salience"] < salience_before
+        # decay_amount = min(0.1, 14 * 0.005) = 0.07
+        expected_salience = max(0.0, salience_before - 0.07)
+        assert abs(stats_after["salience"] - expected_salience) < 0.001
+        # last_decay_applied_at should be set
+        assert stats_after["last_decay_applied_at"] is not None
+
+    async def test_no_decay_within_inactive_days(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+    ) -> None:
+        """No decay when within decay_inactive_days threshold."""
+        node_id = "decay-test-2"
+        await stats_store.increment_node_stats(node_id=node_id)
+        # Set last_used_at to 3 days ago (within default 7 day threshold)
+        three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "UPDATE node_stats SET last_used_at = ? WHERE node_id = ?",
+                (three_days_ago, node_id),
+            )
+            await db.commit()
+
+        stats_before = await stats_store.get_node_stats(node_id)
+        assert stats_before is not None
+        salience_before = stats_before["salience"]
+
+        await worker._enrich_node(node_id, [NOTE_UPDATED])
+
+        stats_after = await stats_store.get_node_stats(node_id)
+        assert stats_after is not None
+        assert stats_after["salience"] == salience_before
+
+    async def test_decay_convergent_same_day(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+    ) -> None:
+        """Running decay twice on the same day is idempotent."""
+        node_id = "decay-test-3"
+        await stats_store.increment_node_stats(node_id=node_id)
+        twenty_days_ago = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "UPDATE node_stats SET last_used_at = ? WHERE node_id = ?",
+                (twenty_days_ago, node_id),
+            )
+            await db.commit()
+
+        # First decay
+        await worker._enrich_node(node_id, [NOTE_UPDATED])
+        stats_after_first = await stats_store.get_node_stats(node_id)
+        assert stats_after_first is not None
+
+        # Second decay — should be a no-op
+        await worker._enrich_node(node_id, [NOTE_UPDATED])
+        stats_after_second = await stats_store.get_node_stats(node_id)
+        assert stats_after_second is not None
+        assert stats_after_second["salience"] == stats_after_first["salience"]
+
+    async def test_decay_uses_last_retrieved_at_fallback(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+    ) -> None:
+        """Falls back to last_retrieved_at when last_used_at is NULL."""
+        node_id = "decay-test-4"
+        await stats_store.increment_node_stats(node_id=node_id)
+        # last_retrieved_at was set by increment_node_stats, set it to 10 days ago
+        ten_days_ago = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "UPDATE node_stats SET last_retrieved_at = ?, last_used_at = NULL "
+                "WHERE node_id = ?",
+                (ten_days_ago, node_id),
+            )
+            await db.commit()
+
+        stats_before = await stats_store.get_node_stats(node_id)
+        assert stats_before is not None
+
+        await worker._enrich_node(node_id, [NOTE_UPDATED])
+
+        stats_after = await stats_store.get_node_stats(node_id)
+        assert stats_after is not None
+        # decay_amount = min(0.1, 10 * 0.005) = 0.05
+        assert stats_after["salience"] < stats_before["salience"]
+
+    async def test_decay_capped_at_max(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+    ) -> None:
+        """Decay amount is capped at 0.1 regardless of days inactive."""
+        node_id = "decay-test-5"
+        await stats_store.increment_node_stats(node_id=node_id)
+        long_ago = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "UPDATE node_stats SET last_used_at = ? WHERE node_id = ?",
+                (long_ago, node_id),
+            )
+            await db.commit()
+
+        stats_before = await stats_store.get_node_stats(node_id)
+        assert stats_before is not None
+        salience_before = stats_before["salience"]
+
+        await worker._enrich_node(node_id, [NOTE_UPDATED])
+
+        stats_after = await stats_store.get_node_stats(node_id)
+        assert stats_after is not None
+        # decay_amount = min(0.1, 100 * 0.005) = min(0.1, 0.5) = 0.1
+        expected = max(0.0, salience_before - 0.1)
+        assert abs(stats_after["salience"] - expected) < 0.001
+
+
+# ---------------------------------------------------------------------------
+# Edge projection tests
+# ---------------------------------------------------------------------------
+
+
+class TestProjectNodeProvenance:
+    """Verify _project_node_provenance for single-node edge sync."""
+
+    async def test_deleted_node_removes_all_derived_from_edges(
+        self,
+        edge_store: EdgeStore,
+        mock_knowledge: MagicMock,
+    ) -> None:
+        """Deleted node has all its derived_from edges removed."""
+        # Create some derived_from edges where from_id is the deleted node
+        await edge_store.upsert(
+            from_id="deleted-node",
+            to_id="source-1",
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+        )
+        await edge_store.upsert(
+            from_id="deleted-node",
+            to_id="source-2",
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+        )
+
+        # Node no longer exists
+        mock_knowledge.has_document = MagicMock(return_value=False)
+
+        result = await _project_node_provenance(edge_store, mock_knowledge, "deleted-node")
+        assert result == {"created": 0, "removed": 2}
+
+        # Verify edges are gone
+        remaining = await edge_store.list_edges(from_id="deleted-node", edge_type="derived_from")
+        assert len(remaining) == 0
+
+    async def test_edge_projection_sync_for_existing_node(
+        self,
+        edge_store: EdgeStore,
+        mock_knowledge: MagicMock,
+    ) -> None:
+        """Existing node gets derived_from edges synced from frontmatter."""
+        node_id = "sync-node"
+
+        # Pre-existing edge that should be removed (source-old is no longer in frontmatter)
+        await edge_store.upsert(
+            from_id=node_id,
+            to_id="source-old",
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+        )
+
+        # Set up knowledge mock
+        mock_knowledge.has_document = MagicMock(return_value=True)
+        mock_knowledge.get_doc_sources = MagicMock(return_value=["source-new"])
+
+        # Set up _meta_cache with a mock that has .namespace
+        cached_meta = MagicMock()
+        cached_meta.namespace = "default"
+        mock_knowledge._meta_cache = {node_id: cached_meta}
+
+        result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
+        assert result["created"] == 1
+        assert result["removed"] == 1
+
+        # Verify: source-old edge gone, source-new edge exists
+        edges = await edge_store.list_edges(from_id=node_id, edge_type="derived_from")
+        assert len(edges) == 1
+        assert edges[0]["to_id"] == "source-new"
+
+    async def test_edge_projection_no_op_when_in_sync(
+        self,
+        edge_store: EdgeStore,
+        mock_knowledge: MagicMock,
+    ) -> None:
+        """No changes when edges already match frontmatter."""
+        node_id = "synced-node"
+
+        await edge_store.upsert(
+            from_id=node_id,
+            to_id="source-1",
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+        )
+
+        mock_knowledge.has_document = MagicMock(return_value=True)
+        mock_knowledge.get_doc_sources = MagicMock(return_value=["source-1"])
+
+        cached_meta = MagicMock()
+        cached_meta.namespace = "default"
+        mock_knowledge._meta_cache = {node_id: cached_meta}
+
+        result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
+        assert result == {"created": 0, "removed": 0}

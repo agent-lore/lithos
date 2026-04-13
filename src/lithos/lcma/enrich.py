@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from lithos.events import (
@@ -244,8 +245,65 @@ class EnrichWorker:
                 await self._stats_store.requeue_failed(claimed_ids)
 
     async def _enrich_node(self, node_id: str, trigger_types: object) -> None:
-        """Placeholder for node-level enrichment (US-003, US-007)."""
-        logger.debug("EnrichWorker: _enrich_node(%s, %s) — stub", node_id, trigger_types)
+        """Apply node-level enrichment: salience decay and edge projection.
+
+        Salience decay is applied when the node has been inactive longer than
+        ``config.decay_inactive_days``.  Decay is convergent — running twice
+        in the same day is safe because ``last_decay_applied_at`` is checked.
+
+        Edge projection re-syncs ``derived_from`` edges for the node.
+        """
+        from lithos.lcma.edges import _project_node_provenance
+
+        # --- Salience decay ---
+        stats = await self._stats_store.get_node_stats(node_id)
+        if stats is not None:
+            await self._apply_decay(node_id, stats)
+
+        # --- Edge projection ---
+        await _project_node_provenance(self._edge_store, self._knowledge, node_id)
+
+    async def _apply_decay(self, node_id: str, stats: dict[str, object]) -> None:
+        """Apply salience decay to a single node.
+
+        Convergent: skips if ``last_decay_applied_at`` is already today (UTC).
+        """
+        now = datetime.now(timezone.utc)
+
+        # Check convergence — skip if already decayed today
+        last_decay_raw = stats.get("last_decay_applied_at")
+        if isinstance(last_decay_raw, str) and last_decay_raw:
+            last_decay_dt = datetime.fromisoformat(last_decay_raw)
+            if last_decay_dt.tzinfo is None:
+                last_decay_dt = last_decay_dt.replace(tzinfo=timezone.utc)
+            if last_decay_dt.date() == now.date():
+                return
+
+        # Determine days since last use
+        last_used_raw = stats.get("last_used_at")
+        if not isinstance(last_used_raw, str) or not last_used_raw:
+            # Fallback to last_retrieved_at
+            last_used_raw = stats.get("last_retrieved_at")
+        if not isinstance(last_used_raw, str) or not last_used_raw:
+            return  # No usage data — skip decay
+
+        last_used_dt = datetime.fromisoformat(last_used_raw)
+        if last_used_dt.tzinfo is None:
+            last_used_dt = last_used_dt.replace(tzinfo=timezone.utc)
+
+        days_since_last_use = (now - last_used_dt).days
+        if days_since_last_use <= self._config.decay_inactive_days:
+            return
+
+        decay_amount = min(0.1, days_since_last_use * 0.005)
+        await self._stats_store.update_salience(node_id, -decay_amount)
+        await self._stats_store.update_last_decay_applied_at(node_id)
+        logger.debug(
+            "Applied decay to %s: days_inactive=%d, decay=%.3f",
+            node_id,
+            days_since_last_use,
+            decay_amount,
+        )
 
     async def _consolidate_task(self, task_id: str) -> None:
         """Placeholder for task-level consolidation (US-005)."""
