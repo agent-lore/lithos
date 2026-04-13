@@ -225,6 +225,29 @@ class TestUpsertAndList:
         assert await edge_store.count(namespace="other") == 0
 
 
+class TestUpdateConflictResolution:
+    """update_conflict_resolution: targeted update for conflict state."""
+
+    async def test_updates_fields(self, edge_store: EdgeStore) -> None:
+        eid = await edge_store.upsert(
+            from_id="a", to_id="b", edge_type="contradicts", weight=1.0, namespace="ns"
+        )
+        updated = await edge_store.update_conflict_resolution(
+            eid, conflict_state="superseded", provenance_actor="resolver-1"
+        )
+        assert updated is True
+        edge = await edge_store.get_edge(eid)
+        assert edge is not None
+        assert edge["conflict_state"] == "superseded"
+        assert edge["provenance_actor"] == "resolver-1"
+
+    async def test_returns_false_for_nonexistent(self, edge_store: EdgeStore) -> None:
+        updated = await edge_store.update_conflict_resolution(
+            "edge_nonexistent", conflict_state="refuted", provenance_actor="x"
+        )
+        assert updated is False
+
+
 class TestGetEdge:
     """get_edge: look up a single edge by ID."""
 

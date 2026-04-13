@@ -224,6 +224,28 @@ class EdgeStore:
             "conflict_state": row["conflict_state"],
         }
 
+    async def update_conflict_resolution(
+        self,
+        edge_id: str,
+        *,
+        conflict_state: str,
+        provenance_actor: str,
+    ) -> bool:
+        """Update conflict_state and provenance_actor on an existing edge.
+
+        Returns ``True`` if the edge was found and updated, ``False`` otherwise.
+        """
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE edges SET conflict_state = ?, provenance_actor = ?, updated_at = ? "
+                "WHERE edge_id = ?",
+                (conflict_state, provenance_actor, now, edge_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def list_edges(
         self,
         *,

@@ -1641,6 +1641,117 @@ class LithosServer:
 
         @self.mcp.tool()
         @tool_metrics()
+        async def lithos_conflict_resolve(
+            edge_id: str,
+            resolution: str,
+            resolver: str,
+            winner_id: str | None = None,
+        ) -> dict[str, Any]:
+            """Resolve a contradiction between two notes.
+
+            Sets the resolution state on a contradicts edge so future retrieval
+            reflects the resolution.
+
+            Args:
+                edge_id: The edge ID of the contradiction to resolve
+                resolution: One of: accepted_dual, superseded, refuted, merged
+                resolver: Agent or user identifier performing the resolution
+                winner_id: Required when resolution is 'superseded'; must be
+                    either from_id or to_id of the edge
+            """
+            logger.info(
+                "lithos_conflict_resolve edge_id=%s resolution=%s resolver=%s",
+                edge_id,
+                resolution,
+                resolver,
+            )
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.conflict_resolve") as span:
+                span.set_attribute("lithos.tool", "lithos_conflict_resolve")
+
+                valid_resolutions = {"accepted_dual", "superseded", "refuted", "merged"}
+                if resolution not in valid_resolutions:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": (
+                            f"Invalid resolution '{resolution}'. "
+                            f"Must be one of: {', '.join(sorted(valid_resolutions))}"
+                        ),
+                    }
+
+                edge = await self.edge_store.get_edge(edge_id)
+                if edge is None:
+                    return {
+                        "status": "error",
+                        "code": "not_found",
+                        "message": f"Edge '{edge_id}' not found",
+                    }
+
+                if edge["type"] != "contradicts":
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": (
+                            f"Edge '{edge_id}' is type '{edge['type']}', not 'contradicts'"
+                        ),
+                    }
+
+                from_id = str(edge["from_id"])
+                to_id = str(edge["to_id"])
+
+                if resolution == "superseded":
+                    if winner_id is None:
+                        return {
+                            "status": "error",
+                            "code": "invalid_input",
+                            "message": "winner_id is required when resolution is 'superseded'",
+                        }
+                    if winner_id not in (from_id, to_id):
+                        return {
+                            "status": "error",
+                            "code": "invalid_input",
+                            "message": (
+                                f"winner_id '{winner_id}' must be either "
+                                f"from_id '{from_id}' or to_id '{to_id}'"
+                            ),
+                        }
+                    loser_id = to_id if winner_id == from_id else from_id
+                    await self.knowledge.update(
+                        id=winner_id,
+                        agent=resolver,
+                        supersedes=loser_id,
+                    )
+
+                await self.edge_store.update_conflict_resolution(
+                    edge_id,
+                    conflict_state=resolution,
+                    provenance_actor=resolver,
+                )
+
+                from lithos.events import EDGE_UPSERTED
+
+                await self._emit(
+                    LithosEvent(
+                        type=EDGE_UPSERTED,
+                        payload={
+                            "edge_id": edge_id,
+                            "from_id": from_id,
+                            "to_id": to_id,
+                            "type": "contradicts",
+                            "conflict_state": resolution,
+                        },
+                    )
+                )
+
+                return {
+                    "status": "ok",
+                    "edge_id": edge_id,
+                    "conflict_state": resolution,
+                }
+
+        @self.mcp.tool()
+        @tool_metrics()
         async def lithos_cache_lookup(
             query: str,
             source_url: str | None = None,
