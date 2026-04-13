@@ -1,39 +1,34 @@
 {
-  "project": "Lithos MVP2 Part 3 — New Scouts & Retrieval Integration",
-  "branchName": "ralph/mvp2-03-scouts",
-  "description": "Adds three new scouts (graph, coactivation/bridge, source-URL) that exploit MVP1's accumulated edge and coactivation data to broaden retrieval reach, wires them into Phase B of run_retrieve, and updates rerank weights to a 10-scout configuration.",
+  "project": "Lithos MVP2 Part 4 — Contradiction Workflow",
+  "branchName": "ralph/mvp2-04-contradictions",
+  "description": "Activates the contradiction workflow by replacing the stub scout_contradictions with a real implementation that queries edges.db for contradicts edges, and adds the lithos_conflict_resolve MCP tool for resolving contradictions with tracked states.",
   "userStories": [
     {
       "id": "US-001",
-      "sourceStoryId": "US-021",
-      "title": "StatsStore.get_coactivated method",
-      "description": "As the coactivation scout, I want a StatsStore.get_coactivated method so I can look up nodes frequently co-occurring with seed nodes in past retrievals.",
+      "sourceStoryId": "US-012",
+      "title": "Add get_edge method to EdgeStore",
+      "description": "As the conflict resolution tool, I want an EdgeStore.get_edge(edge_id) method so I can look up a specific edge by its ID.",
       "acceptanceCriteria": [
-        "StatsStore gains get_coactivated(node_ids: list[str], *, namespace: str | None = None, limit: int = 20) -> list[tuple[str, int]] that returns (other_node_id, total_count) pairs ranked by count descending",
-        "Returns ranked (other_node_id, total_count) pairs; when namespace is provided, filters to coactivation rows matching that namespace",
-        "Deduplicates results across seeds",
-        "Unit test: seed coactivation data, verify get_coactivated returns correct (node_id, count) pairs in descending order",
-        "Unit test: get_coactivated with namespace filter returns only matching rows",
+        "EdgeStore gains get_edge(edge_id: str) -> dict | None that returns the edge row as a dict or None if not found",
+        "Unit test: insert an edge, verify get_edge returns the correct dict with all fields",
+        "Unit test: get_edge for a non-existent edge_id returns None",
         "make check passes"
       ],
       "priority": 1,
       "passes": true,
-      "notes": "Consider testing edge cases like empty node_ids"
+      "notes": ""
     },
     {
       "id": "US-002",
-      "sourceStoryId": "US-020",
-      "title": "Graph scout implementation",
-      "description": "As the retrieval pipeline, I want a graph scout that finds neighbors of seed nodes in both the wiki-link graph (NetworkX) and the typed edge graph (edges.db), so that retrieval can follow structural relationships.",
+      "sourceStoryId": "US-012",
+      "title": "Add supersedes parameter to KnowledgeManager.update()",
+      "description": "As the conflict resolution tool, I want KnowledgeManager.update() to accept a supersedes parameter so I can record which note supersedes another.",
       "acceptanceCriteria": [
-        "New scout_graph(seed_ids, graph, edge_store, knowledge, *, limit, namespace_filter, agent_id, task_id, tags, path_prefix) -> list[Candidate] in scouts.py",
-        "Queries NetworkX via graph.get_links(node_id, direction='both') for each seed",
-        "Queries edge_store.list_edges(from_id=seed) and edge_store.list_edges(to_id=seed) for each seed",
-        "Deduplicates neighbor IDs; scores by edge weight (edges.db) or 0.5 (wiki-links)",
-        "Applies namespace_filter and access_scope gating (reuses _passes_namespace_filter, _passes_access_scope)",
-        "Applies tags and path_prefix filtering",
-        "Returns candidates with scouts=['scout_graph'] and reasons describing the relationship type",
-        "Unit test with wiki-link neighbors + typed edges, verifying dedup and filtering",
+        "KnowledgeManager.update() gains supersedes: str | None | _UnsetType = _UNSET parameter, following the same pattern as source_url and other optional string fields",
+        "When supersedes is set, it is threaded through to metadata.supersedes and written to frontmatter",
+        "When supersedes is _UNSET, the existing value is preserved (not overwritten)",
+        "Unit test: update a note with supersedes set, verify frontmatter contains supersedes field",
+        "Unit test: update a note without passing supersedes, verify existing supersedes value is preserved",
         "make check passes"
       ],
       "priority": 2,
@@ -42,75 +37,52 @@
     },
     {
       "id": "US-003",
-      "sourceStoryId": "US-021",
-      "title": "Coactivation/bridge scout implementation",
-      "description": "As the retrieval pipeline, I want a scout that finds nodes frequently co-occurring with seed nodes in past retrievals, so that empirically useful associations inform current retrieval.",
+      "sourceStoryId": "US-011",
+      "title": "Activate scout_contradictions",
+      "description": "As the retrieval pipeline, I want to query edges.db for type=contradicts edges connected to top results, so that surface_conflicts=True actually surfaces contradictions.",
       "acceptanceCriteria": [
-        "New scout_coactivation(seed_ids, stats_store, knowledge, *, limit, namespace_filter, agent_id, task_id, tags, path_prefix) -> list[Candidate] in scouts.py",
-        "Queries coactivation data for each seed via stats_store.get_coactivated and scores by count (normalized later by merge_and_normalize)",
-        "Applies namespace_filter, access_scope, tags, path_prefix gating",
-        "Unit test seeding coactivation data and verifying scout returns correct neighbors",
+        "scout_contradictions in scouts.py is replaced with a real implementation with signature: scout_contradictions(seed_ids, edge_store, knowledge, *, namespace_filter, agent_id, task_id) -> list[dict]",
+        "Queries EdgeStore.list_edges(from_id=node_id, edge_type='contradicts') and EdgeStore.list_edges(to_id=node_id, edge_type='contradicts') for each seed node",
+        "Returns list of dicts: {'edge_id': str, 'from_id': str, 'to_id': str, 'conflict_state': str | None} for edges where conflict_state is NULL or not in ('superseded', 'refuted', 'merged')",
+        "Before including a conflict, verifies the counterpart note passes: _passes_namespace_filter(), _passes_access_scope(), _passes_status_filter(exclude_status=['quarantined']), and exists in KnowledgeManager",
+        "run_retrieve passes seed nodes, edge_store, knowledge, and gating parameters to the activated scout; populates conflicts_surfaced in the receipt",
+        "When surface_conflicts=False (default), the scout is still a no-op",
+        "When surface_conflicts=True, conflicts appear in the response envelope under a conflicts key",
+        "Update existing test_returns_empty_list (tests/test_scouts.py) to match new scout_contradictions signature",
+        "Unit test: seeded contradiction edge verifies surfacing",
+        "Unit test: surface_conflicts=False verifies no-op",
+        "Unit test: contradiction edge pointing to a note in a different namespace is excluded when namespace_filter is set",
+        "Unit test: contradiction edge pointing to a quarantined note is excluded",
         "make check passes"
       ],
       "priority": 3,
       "passes": true,
-      "notes": "Depends on US-001 (get_coactivated method)"
+      "notes": ""
     },
     {
       "id": "US-004",
-      "sourceStoryId": "US-022",
-      "title": "Source-URL/domain scout implementation",
-      "description": "As the retrieval pipeline, I want a scout that finds notes from the same URL family as seed notes, so that research from the same source is connected.",
+      "sourceStoryId": "US-012",
+      "title": "lithos_conflict_resolve MCP tool",
+      "description": "As an agent or user, I want to resolve a contradiction between two notes by setting a resolution state, so that the conflict is tracked and future retrieval reflects the resolution.",
       "acceptanceCriteria": [
-        "New scout_source_url(seed_ids, knowledge, *, limit, namespace_filter, agent_id, task_id, tags, path_prefix) -> list[Candidate] in scouts.py",
-        "For each seed node with a source_url, normalizes it with normalize_url() from src/lithos/knowledge.py and then extracts the host/domain from the normalized URL",
-        "Scans the normalized source URLs held by KnowledgeManager (e.g. iterating _source_url_to_id entries) to find other notes whose host/domain matches the seed notes' domains",
-        "Only activated when at least one seed node has source_url set; returns [] otherwise",
-        "Applies namespace_filter, access_scope, tags, path_prefix gating",
-        "Unit test with seeded source_url notes verifying domain grouping",
+        "New MCP tool lithos_conflict_resolve(edge_id: str, resolution: str, resolver: str, winner_id: str | None = None) -> dict registered in server.py",
+        "resolution must be one of: 'accepted_dual', 'superseded', 'refuted', 'merged' — rejects others with error envelope",
+        "resolution with invalid value raises error with descriptive message",
+        "Tool updates the edge's conflict_state to the resolution value, provenance_actor to resolver, and updated_at to now",
+        "When resolution is 'superseded', winner_id is required and must equal either from_id or to_id of the edge; rejects with error otherwise",
+        "When resolution is 'superseded', sets supersedes on the winning note to point to the losing note via KnowledgeManager.update()",
+        "Tool returns {'status': 'ok', 'edge_id': ..., 'conflict_state': ...} on success",
+        "Returns error envelope when edge not found or edge type is not 'contradicts'",
+        "Emits EDGE_UPSERTED event after resolution",
+        "Unit test: resolve with each valid resolution state",
+        "Unit test: reject invalid resolution string",
+        "Unit test: reject non-contradiction edge",
+        "Unit test: reject superseded resolution without valid winner_id",
         "make check passes"
       ],
       "priority": 4,
       "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-005",
-      "sourceStoryId": "US-023",
-      "title": "LcmaConfig 10-scout rerank_weights defaults and validator",
-      "description": "As the system, I want the rerank_weights config updated to a 10-scout default map with a backwards-compatible validator so that adding new scout keys does not break existing configurations.",
-      "acceptanceCriteria": [
-        "rerank_weights in LcmaConfig is updated with the 10-scout default map: vector: 0.25, lexical: 0.18, exact_alias: 0.10, tags_recency: 0.07, freshness: 0.04, provenance: 0.04, task_context: 0.04, graph: 0.13, coactivation: 0.10, source_url: 0.05 (weights sum to 1.0)",
-        "New _fill_and_renormalize_rerank_weights model validator detects missing keys by comparing user-supplied map against _DEFAULT_RERANK_WEIGHTS",
-        "If any keys are missing, inserts them with their default values and renormalizes the full map so all values sum to 1.0 (divides each value by current sum)",
-        "If all 10 keys are present, skips renormalization but asserts sum ≈ 1.0 within tolerance",
-        "Rejects unknown keys with an error, consistent with note_type_priors validation",
-        "rerank_weights tests cover the new 10-scout defaults and backward-compatible fill/renormalize behavior",
-        "Update test_defaults_allow_mvp1_no_user_config (tests/test_lcma_config.py:123) to assert len(cfg.lcma.rerank_weights) == 10",
-        "make check passes"
-      ],
-      "priority": 5,
-      "passes": true,
-      "notes": "Implementation should verify legacy 7-key configs are filled and renormalized correctly (sum = 1.0, relative ordering preserved)"
-    },
-    {
-      "id": "US-006",
-      "sourceStoryId": "US-023",
-      "title": "Wire new scouts into run_retrieve Phase B",
-      "description": "As the retrieval pipeline, I want the three new scouts wired into Phase B of run_retrieve so that their candidates are merged, normalized, and reranked alongside existing scouts.",
-      "acceptanceCriteria": [
-        "run_retrieve imports and calls scout_graph, scout_coactivation, scout_source_url in Phase B (after provenance scout, before Terrace 1 rerank) — consistent with design doc §5.4",
-        "Each new scout is called with return_exceptions=True in a gather or try/except — a failing scout does not abort retrieval",
-        "scout_graph is seeded from Phase A top results (sequential, seeded from Phase A); all three new scouts run in Phase B",
-        "Add scout_graph, scout_coactivation, scout_source_url to ALL_SCOUT_NAMES list",
-        "Receipt scouts_fired includes new scout names when they execute",
-        "Update test_all_scout_names_has_seven_entries (tests/test_scouts.py:647) to expect count of 10 (adds scout_graph, scout_coactivation, scout_source_url)",
-        "Integration test: retrieve with edges.db edges verifies graph scout fires",
-        "make check passes"
-      ],
-      "priority": 6,
-      "passes": true,
-      "notes": "Depends on US-002, US-003, US-004 (scout implementations) and US-005 (config)"
+      "notes": "Depends on US-001 (get_edge method) and US-002 (supersedes parameter)"
     }
   ]
 }

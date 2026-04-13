@@ -1,83 +1,62 @@
 # Ralph Progress Log
-Started: Mon Apr 13 04:05:27 UTC 2026
----
+Started: Mon Apr 13 06:41:33 UTC 2026
 
 ## Codebase Patterns
-- StatsStore methods: always call `await self._ensure_open()` first, use `aiosqlite.connect(self.db_path)`, set `db.row_factory = aiosqlite.Row` for dict-like access
-- Coactivation pairs stored in lexicographic order: `(min(a,b), max(a,b))` — queries must check both `node_id_a` and `node_id_b` columns
-- Tests use `stats_store` fixture from conftest that creates an opened StatsStore with `test_config`
-- All quality checks: `uv run ruff check`, `uv run ruff format --check`, `uv run pyright src/`, `uv run pytest -m "not integration" tests/ -q`
-- Scout tests: `seeded_km` and `seeded_graph` fixtures in test_scouts.py; graph fixture doesn't parse wiki-links by default — must call `parse_wiki_links(post.content)` when building KnowledgeDocument
-- EdgeStore `list_edges` returns `list[dict[str, object]]` — use `isinstance` checks for type narrowing with pyright
-- Scout functions follow the pattern: seed_ids → collect neighbors → apply gating → return Candidate list
+- EdgeStore methods follow pattern: `await self._ensure_open()`, then `async with aiosqlite.connect(self.db_path) as db:` with `db.row_factory = aiosqlite.Row` for named access
+- EdgeStore returns dicts with explicit key mapping from Row objects (not `dict(r)` for type safety)
+- Tests use `edge_store` fixture from `test_config: LithosConfig` — no manual setup needed
+- `make` not available in container; use `uv run ruff check/format`, `uv run pyright`, `uv run pytest` directly
+- Git identity needs to be set in container: `git config user.email/name`
+- MCP tools registered via `@self.mcp.tool()` inside `_register_tools()` with access to `self.edge_store`, `self.knowledge`, etc.
+- Tool error envelope: `{"status": "error", "code": "...", "message": "..."}`
+- Tool event emission: `await self._emit(LithosEvent(type=EDGE_UPSERTED, payload={...}))`
 
----
-
-## 2026-04-13 - US-001
-- Implemented `StatsStore.get_coactivated(node_ids, *, namespace, limit)` method
-- Queries coactivation table for nodes co-occurring with seeds, deduplicates across seeds, excludes seeds from results
-- Returns `list[tuple[str, int]]` ranked by count descending
-- Files changed: `src/lithos/lcma/stats.py`, `tests/test_stats.py`
-- **Learnings for future iterations:**
-  - Coactivation pairs are stored with lexicographic ordering (node_a <= node_b), so lookups must query both columns
-  - The `increment_coactivation` method handles the ordering internally
-  - Test suite has 862 passing unit tests; integration tests excluded via `-m "not integration"`
----
-
-## 2026-04-13 - US-002
-- Implemented `scout_graph` in `src/lithos/lcma/scouts.py`
-- Queries wiki-link graph (NetworkX via `graph.get_links`) and typed edge graph (edges.db via `edge_store.list_edges`) for neighbors of seed nodes
-- Deduplicates, scores by edge weight (typed edges) or 0.5 (wiki-links), applies standard gating
-- Added `SCOUT_GRAPH` constant and updated `ALL_SCOUT_NAMES` to 8 entries
-- Files changed: `src/lithos/lcma/scouts.py`, `tests/test_scouts.py`
-- **Learnings for future iterations:**
-  - `seeded_graph` fixture in test_scouts.py does NOT parse wiki-links — must pass `links=parse_wiki_links(post.content)` to KnowledgeDocument
-  - EdgeStore returns `dict[str, object]` — pyright requires `isinstance` type guards for `float()` calls
-  - Wiki-link resolution in KnowledgeGraph works by UUID match (step 3 of `_resolve_link`) and handles unresolved links via `_resolve_pending_links`
----
-
-## 2026-04-13 - US-003
-- Implemented `scout_coactivation` in `src/lithos/lcma/scouts.py`
-- Queries `stats_store.get_coactivated(seed_ids)` and scores by raw count
-- Added `SCOUT_COACTIVATION` constant, `ALL_SCOUT_NAMES` now has 9 entries
-- Files changed: `src/lithos/lcma/scouts.py`, `tests/test_scouts.py`
-- **Learnings for future iterations:**
-  - Coactivation scout is straightforward — delegates dedup/ordering to `get_coactivated`, then applies standard gating
-  - Test fixture `coactivation_stats_store` uses `increment_coactivation` to seed data
 ---
 
 ## 2026-04-13 - US-004
-- Implemented `scout_source_url` in `src/lithos/lcma/scouts.py`
-- Scans `knowledge._source_url_to_id` to find seed domains, then finds other notes with matching domains
-- Added `SCOUT_SOURCE_URL` constant, `ALL_SCOUT_NAMES` now has 10 entries
-- Files changed: `src/lithos/lcma/scouts.py`, `tests/test_scouts.py`
+- Implemented `lithos_conflict_resolve` MCP tool in server.py
+- Validates resolution in {accepted_dual, superseded, refuted, merged}; rejects others
+- Validates edge exists and is type 'contradicts'
+- For 'superseded': requires winner_id matching from_id or to_id; sets supersedes on winner note
+- Added `EdgeStore.update_conflict_resolution()` for targeted field updates
+- Emits EDGE_UPSERTED event after resolution
+- 9 tests in `tests/test_conflict_resolve.py` + 2 in `tests/test_edges.py`
+- Files changed: `src/lithos/server.py`, `src/lithos/lcma/edges.py`, `tests/test_conflict_resolve.py`, `tests/test_edges.py`
 - **Learnings for future iterations:**
-  - `_CachedMeta` doesn't store `source_url` — use `_source_url_to_id` map for reverse lookup
-  - `_source_url_to_id` maps normalized URLs to doc IDs; domain extraction uses `urlparse().hostname`
-  - Notes must have `source_url` in frontmatter for `_scan_existing` to populate the map
+  - MCP tool tests use `_call_tool(server, name, args)` helper to call through FastMCP
+  - `server` fixture from conftest initializes full LithosServer with all deps
+  - For targeted edge field updates, prefer a focused method over full upsert (avoids needing all composite key fields)
 ---
 
-## 2026-04-13 - US-005
-- Updated `_DEFAULT_RERANK_WEIGHTS` to 10-scout map (vector:0.25, lexical:0.18, exact_alias:0.10, tags_recency:0.07, freshness:0.04, provenance:0.04, task_context:0.04, graph:0.13, coactivation:0.10, source_url:0.05)
-- Added `_fill_and_renormalize_rerank_weights` model validator
-- Files changed: `src/lithos/config.py`, `tests/test_lcma_config.py`
+## 2026-04-13 - US-003
+- Replaced `scout_contradictions` stub with real implementation querying EdgeStore for `contradicts` edges
+- Scout signature: `(seed_ids, edge_store, knowledge, *, namespace_filter, agent_id, task_id) -> list[dict]`
+- Returns dicts with edge_id, from_id, to_id, conflict_state; filters out resolved states (superseded, refuted, merged)
+- Applies gating: `_passes_status_filter` (quarantined), `_passes_namespace_filter`, `_passes_access_scope`, `has_document`
+- Updated `run_retrieve` to call scout when `surface_conflicts=True`, populate `conflicts_surfaced` in receipt, add `conflicts` to envelope
+- 5 tests: empty (no edges), surfaces edge, excludes resolved, excludes different namespace, excludes quarantined
+- Files changed: `src/lithos/lcma/scouts.py`, `src/lithos/lcma/retrieve.py`, `tests/test_scouts.py`
 - **Learnings for future iterations:**
-  - Pydantic `model_validator(mode="before")` runs before field assignment — good for filling/renormalizing dicts
-  - Config validators in LcmaConfig use `@classmethod` pattern consistent with note_type_priors
-  - Updated test_defaults_allow_mvp1_no_user_config to assert 10 keys
+  - `scout_contradictions` returns dicts (not Candidate objects) since conflicts aren't retrieval candidates
+  - `run_retrieve` initializes `conflicts_found` at outer scope for `finally` block access
+  - When `surface_conflicts=False`, the scout isn't called at all (not just results discarded)
 ---
 
-## 2026-04-13 - US-006
-- Wired `scout_graph`, `scout_coactivation`, `scout_source_url` into Phase B of `run_retrieve`
-- Each new scout called in try/except — a failing scout logs a warning but does not abort retrieval
-- All three scouts seeded from Phase A top results (same seed_ids as provenance)
-- New scouts added to import list and fire after provenance, before merge & rerank
-- Added 4 integration tests in `TestNewScoutsWiredInPhaseB`:
-  - `test_graph_scout_fires_with_edges` — verifies edge traversal and scouts_fired
-  - `test_coactivation_scout_fires` — verifies coactivation data flows through
-  - `test_source_url_scout_fires` — verifies domain grouping fires the scout
-  - `test_failing_phase_b_scout_does_not_abort` — verifies fault isolation
-- Files changed: `src/lithos/lcma/retrieve.py`, `tests/test_retrieve.py`
-- Test suite: 889 passing unit tests
-- **All 6 user stories complete. PRD fully implemented.**
+## 2026-04-13 - US-002
+- Added `supersedes: str | None | _UnsetType = _UNSET` parameter to `KnowledgeManager.update()`
+- Threads through to `doc.metadata.supersedes` following existing `source` field pattern
+- Added `TestUpdateSupersedes` class with 2 tests: set value persists to disk, _UNSET preserves existing
+- Files changed: `src/lithos/knowledge.py`, `tests/test_knowledge.py`
+- **Learnings for future iterations:**
+  - Simple optional string fields follow pattern: check `not isinstance(x, _UnsetType)`, then assign to `doc.metadata.field`
+  - `supersedes` was already in `KnowledgeMetadata` dataclass and `to_dict()` — only needed update() param
+---
+
+## 2026-04-13 - US-001
+- Implemented `EdgeStore.get_edge(edge_id: str) -> dict[str, object] | None`
+- Added `TestGetEdge` class with 2 tests: returns full dict with all fields, returns None for nonexistent
+- Files changed: `src/lithos/lcma/edges.py`, `tests/test_edges.py`
+- **Learnings for future iterations:**
+  - EdgeStore dict returns use explicit key mapping from Row objects for type consistency
+  - All 894 unit tests pass; no regressions
 ---
