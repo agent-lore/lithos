@@ -268,6 +268,62 @@ class TestRerankFast:
         assert result_without[1].node_id == result_default[1].node_id
 
 
+class TestStoredSalienceAffectsRetrieval:
+    """Verify that salience stored in StatsStore flows through run_retrieve."""
+
+    @pytest.mark.asyncio
+    async def test_persisted_salience_affects_run_retrieve_ranking(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """Persist different salience values in StatsStore and verify they
+        influence the ranking produced by run_retrieve."""
+        # Give _ID1 a low salience and _ID2 a high salience in StatsStore.
+        # Default salience is 0.5; adjust so _ID1 -> 0.1, _ID2 -> 0.9.
+        await stats_store.update_salience(_ID1, -0.4)  # 0.5 - 0.4 = 0.1
+        await stats_store.update_salience(_ID2, 0.4)  # 0.5 + 0.4 = 0.9
+
+        # Mock search so both IDs come back with equal raw scores, forcing
+        # the salience component to be the differentiator.
+        from lithos.search import SearchResult
+
+        equal_results = [
+            SearchResult(
+                id=_ID1, score=0.5, title="Alpha Note", snippet="alpha", path="alpha-note.md"
+            ),
+            SearchResult(
+                id=_ID2, score=0.5, title="Beta Note", snippet="beta", path="beta-note.md"
+            ),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=equal_results),
+            patch.object(seeded_search, "full_text_search", return_value=equal_results),
+        ):
+            result = await run_retrieve(
+                query="testing",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        result_ids = [r["id"] for r in result["results"]]
+        # Both IDs should appear in results
+        assert _ID1 in result_ids
+        assert _ID2 in result_ids
+        # _ID2 (salience=0.9) should rank above _ID1 (salience=0.1)
+        assert result_ids.index(_ID2) < result_ids.index(_ID1)
+
+
 # ---------------------------------------------------------------------------
 # compute_temperature
 # ---------------------------------------------------------------------------

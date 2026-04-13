@@ -1,7 +1,7 @@
 """Tests for lithos_task_complete feedback parameters (US-006).
 
 Covers receipt validation, reinforcement/penalty application, and the
-full retrieve → complete-with-feedback cycle.
+full retrieve -> complete-with-feedback cycle.
 """
 
 import json
@@ -14,7 +14,7 @@ import pytest_asyncio
 from lithos.config import LithosConfig
 from lithos.server import LithosServer
 
-pytestmark = pytest.mark.integration
+pytestmark = pytest.mark.asyncio
 
 
 @pytest_asyncio.fixture
@@ -75,7 +75,7 @@ async def _insert_receipt(
     )
 
 
-# ── Existing behaviour unchanged ──────────────────────────────────────
+# -- Existing behaviour unchanged -----------------------------------------
 
 
 class TestTaskCompleteNoFeedback:
@@ -89,7 +89,7 @@ class TestTaskCompleteNoFeedback:
 
     @pytest.mark.asyncio
     async def test_cited_none_misleading_none_no_learning(self, srv: LithosServer) -> None:
-        """cited_nodes=None, misleading_nodes=None — no learning step, no penalize_ignored."""
+        """cited_nodes=None, misleading_nodes=None -- no learning step, no penalize_ignored."""
         task_id = await _create_task(srv)
         node_ids = await _create_notes(srv, 2)
         await _insert_receipt(srv, "rcpt-1", task_id, "test-agent", node_ids)
@@ -104,7 +104,7 @@ class TestTaskCompleteNoFeedback:
         )
         assert result == {"success": True}
 
-        # Verify no stats changes — ignored_count should be 0
+        # Verify no stats changes -- ignored_count should be 0
         for nid in node_ids:
             stats = await srv.stats_store.get_node_stats(nid)
             if stats is not None:
@@ -112,7 +112,7 @@ class TestTaskCompleteNoFeedback:
                 assert stats["cited_count"] == 0
 
 
-# ── Receipt validation ────────────────────────────────────────────────
+# -- Receipt validation ---------------------------------------------------
 
 
 class TestReceiptValidation:
@@ -122,7 +122,7 @@ class TestReceiptValidation:
     async def test_feedback_no_prior_receipt_dropped_with_warning(
         self, srv: LithosServer, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """No receipt found → all feedback dropped, WARNING logged."""
+        """No receipt found -> all feedback dropped, WARNING logged."""
         task_id = await _create_task(srv)
         node_ids = await _create_notes(srv, 2)
 
@@ -147,7 +147,7 @@ class TestReceiptValidation:
 
     @pytest.mark.asyncio
     async def test_receipt_id_provided_binds_to_exact_receipt(self, srv: LithosServer) -> None:
-        """receipt_id provided — feedback binds to that exact receipt."""
+        """receipt_id provided -- feedback binds to that exact receipt."""
         task_id = await _create_task(srv)
         node_ids = await _create_notes(srv, 2)
         await _insert_receipt(srv, "rcpt-exact", task_id, "test-agent", node_ids)
@@ -168,7 +168,7 @@ class TestReceiptValidation:
 
     @pytest.mark.asyncio
     async def test_receipt_id_for_different_task_rejected(self, srv: LithosServer) -> None:
-        """receipt_id for different task_id — rejected with error."""
+        """receipt_id for different task_id -- rejected with error."""
         task_id = await _create_task(srv)
         other_task_id = await _create_task(srv, agent="other-agent")
         node_ids = await _create_notes(srv, 1)
@@ -186,8 +186,32 @@ class TestReceiptValidation:
         assert result["status"] == "error"
         assert result["code"] == "receipt_not_found"
 
+    @pytest.mark.asyncio
+    async def test_receipt_id_for_different_task_does_not_close_task(
+        self, srv: LithosServer
+    ) -> None:
+        """receipt_id for wrong task_id -- task must remain open (not completed)."""
+        task_id = await _create_task(srv)
+        other_task_id = await _create_task(srv, agent="other-agent")
+        node_ids = await _create_notes(srv, 1)
+        await _insert_receipt(srv, "rcpt-other2", other_task_id, "test-agent", node_ids)
 
-# ── Feedback intersection ─────────────────────────────────────────────
+        result = await _call(
+            srv,
+            "lithos_task_complete",
+            task_id=task_id,
+            agent="test-agent",
+            cited_nodes=node_ids,
+            receipt_id="rcpt-other2",
+        )
+        assert result["status"] == "error"
+
+        # The task should still be open -- a second complete call should succeed
+        result2 = await _call(srv, "lithos_task_complete", task_id=task_id, agent="test-agent")
+        assert result2 == {"success": True}
+
+
+# -- Feedback intersection ------------------------------------------------
 
 
 class TestFeedbackIntersection:
@@ -215,7 +239,7 @@ class TestFeedbackIntersection:
         assert stats0 is not None
         assert stats0["cited_count"] == 1
 
-        # node_ids[2] was NOT in receipt — should not be reinforced
+        # node_ids[2] was NOT in receipt -- should not be reinforced
         stats2 = await srv.stats_store.get_node_stats(node_ids[2])
         if stats2 is not None:
             assert stats2["cited_count"] == 0
@@ -241,14 +265,14 @@ class TestFeedbackIntersection:
         assert stats1 is not None
         assert stats1["misleading_count"] == 1
 
-        # node_ids[2] was NOT in receipt — should not be penalized
+        # node_ids[2] was NOT in receipt -- should not be penalized
         stats2 = await srv.stats_store.get_node_stats(node_ids[2])
         if stats2 is not None:
             assert stats2["misleading_count"] == 0
 
     @pytest.mark.asyncio
     async def test_feedback_referencing_deleted_note_dropped(self, srv: LithosServer) -> None:
-        """Feedback referencing deleted note — ID dropped before reinforcement."""
+        """Feedback referencing deleted note -- ID dropped before reinforcement."""
         task_id = await _create_task(srv)
         node_ids = await _create_notes(srv, 2)
         await _insert_receipt(srv, "rcpt-del", task_id, "test-agent", node_ids)
@@ -265,18 +289,18 @@ class TestFeedbackIntersection:
         )
         assert result == {"success": True}
 
-        # node_ids[0] still exists — should be cited
+        # node_ids[0] still exists -- should be cited
         stats0 = await srv.stats_store.get_node_stats(node_ids[0])
         assert stats0 is not None
         assert stats0["cited_count"] == 1
 
-        # node_ids[1] was deleted — no stats change expected
+        # node_ids[1] was deleted -- no stats change expected
         stats1 = await srv.stats_store.get_node_stats(node_ids[1])
         if stats1 is not None:
             assert stats1["cited_count"] == 0
 
 
-# ── Ignored / empty-list semantics ────────────────────────────────────
+# -- Ignored / empty-list semantics ---------------------------------------
 
 
 class TestIgnoredPenalization:
@@ -284,7 +308,7 @@ class TestIgnoredPenalization:
 
     @pytest.mark.asyncio
     async def test_empty_lists_all_receipt_nodes_penalized_ignored(self, srv: LithosServer) -> None:
-        """cited_nodes=[], misleading_nodes=[] — learning step runs, all receipt nodes
+        """cited_nodes=[], misleading_nodes=[] -- learning step runs, all receipt nodes
         passed to penalize_ignored."""
         task_id = await _create_task(srv)
         node_ids = await _create_notes(srv, 2)
@@ -307,7 +331,7 @@ class TestIgnoredPenalization:
             assert stats["ignored_count"] == 1
 
 
-# ── Reinforcement / penalty verification ──────────────────────────────
+# -- Reinforcement / penalty verification ---------------------------------
 
 
 class TestReinforcementApplication:
@@ -315,7 +339,7 @@ class TestReinforcementApplication:
 
     @pytest.mark.asyncio
     async def test_cited_nodes_salience_increments(self, srv: LithosServer) -> None:
-        """call with cited_nodes — verify salience increments."""
+        """call with cited_nodes -- verify salience increments."""
         task_id = await _create_task(srv)
         node_ids = await _create_notes(srv, 2)
         await _insert_receipt(srv, "rcpt-cite", task_id, "test-agent", node_ids)
@@ -340,7 +364,7 @@ class TestReinforcementApplication:
 
     @pytest.mark.asyncio
     async def test_misleading_nodes_penalties_applied(self, srv: LithosServer) -> None:
-        """call with misleading_nodes — verify penalties applied."""
+        """call with misleading_nodes -- verify penalties applied."""
         task_id = await _create_task(srv)
         node_ids = await _create_notes(srv, 2)
         await _insert_receipt(srv, "rcpt-mislead", task_id, "test-agent", node_ids)
@@ -364,7 +388,7 @@ class TestReinforcementApplication:
             assert abs(salience - 0.45) < 0.001
 
 
-# ── Event payload ─────────────────────────────────────────────────────
+# -- Event payload --------------------------------------------------------
 
 
 class TestEventPayload:
@@ -404,56 +428,84 @@ class TestEventPayload:
         assert json.loads(payload["receipt_id"]) == "rcpt-evt"
 
 
-# ── Integration test: full cycle ──────────────────────────────────────
+# -- Integration test: full cycle -----------------------------------------
 
 
 class TestFullReinforcementCycle:
-    """Full cycle: create notes + receipt, complete with feedback, verify stats."""
+    """Full cycle: retrieve -> complete with feedback -> verify stats."""
 
     @pytest.mark.asyncio
     async def test_full_cycle_reinforcement(self, srv: LithosServer) -> None:
-        """Retrieve → complete with cited+misleading → verify node-stats changes."""
-        # Setup: 3 notes
-        node_ids = await _create_notes(srv, 3)
+        """Retrieve, complete with cited+misleading, verify node-stats changes."""
+        # Setup: 3 notes created via lithos_write so they get indexed
+        for i in range(3):
+            write_result = await _call(
+                srv,
+                "lithos_write",
+                title=f"Note {i}",
+                content=f"Content for note {i}.",
+                agent="test-agent",
+            )
+            assert write_result.get("status") != "error", f"lithos_write failed: {write_result}"
         task_id = await _create_task(srv)
 
-        # Simulate a retrieval receipt containing all 3 nodes
-        await _insert_receipt(srv, "rcpt-cycle", task_id, "test-agent", node_ids)
+        # Perform an actual retrieval to generate a receipt
+        retrieve_result = await _call(
+            srv,
+            "lithos_retrieve",
+            query="Content for note",
+            limit=10,
+            agent_id="test-agent",
+            task_id=task_id,
+        )
+        receipt_id = retrieve_result.get("receipt_id")
+        assert receipt_id is not None, "lithos_retrieve must return a receipt_id"
 
-        # Agent completes: node 0 was useful, node 2 was misleading
+        # Collect the node IDs that were actually returned in the retrieval
+        retrieved_ids = [r["id"] for r in retrieve_result.get("results", [])]
+        # We need at least 2 nodes to test cited vs misleading vs ignored
+        assert len(retrieved_ids) >= 2, f"Expected >=2 retrieved nodes, got {len(retrieved_ids)}"
+
+        # Pick nodes from those actually in the receipt
+        cited_id = retrieved_ids[0]
+        misleading_id = retrieved_ids[-1] if retrieved_ids[-1] != cited_id else retrieved_ids[1]
+        ignored_ids = [nid for nid in retrieved_ids if nid != cited_id and nid != misleading_id]
+
+        # Agent completes: first node was useful, last node was misleading
         result = await _call(
             srv,
             "lithos_task_complete",
             task_id=task_id,
             agent="test-agent",
-            cited_nodes=[node_ids[0]],
-            misleading_nodes=[node_ids[2]],
-            receipt_id="rcpt-cycle",
+            cited_nodes=[cited_id],
+            misleading_nodes=[misleading_id],
+            receipt_id=receipt_id,
         )
         assert result == {"success": True}
 
-        # node 0: cited_count=1, salience ~0.52, spaced_rep_strength ~0.05
-        stats0 = await srv.stats_store.get_node_stats(node_ids[0])
-        assert stats0 is not None
-        assert stats0["cited_count"] == 1
-        sal0 = stats0["salience"]
+        # cited node: cited_count=1, salience ~0.52, spaced_rep_strength ~0.05
+        stats_cited = await srv.stats_store.get_node_stats(cited_id)
+        assert stats_cited is not None
+        assert stats_cited["cited_count"] == 1
+        sal0 = stats_cited["salience"]
         assert isinstance(sal0, float)
         assert abs(sal0 - 0.52) < 0.001
-        srs0 = stats0["spaced_rep_strength"]
+        srs0 = stats_cited["spaced_rep_strength"]
         assert isinstance(srs0, float)
         assert abs(srs0 - 0.05) < 0.001
 
-        # node 1: ignored (not cited, not misleading) — ignored_count=1
-        stats1 = await srv.stats_store.get_node_stats(node_ids[1])
-        assert stats1 is not None
-        assert stats1["ignored_count"] == 1
-        assert stats1["cited_count"] == 0
-        assert stats1["misleading_count"] == 0
+        # ignored nodes: ignored_count=1
+        for nid in ignored_ids:
+            stats_ign = await srv.stats_store.get_node_stats(nid)
+            assert stats_ign is not None
+            assert stats_ign["ignored_count"] == 1
+            assert stats_ign["cited_count"] == 0
+            assert stats_ign["misleading_count"] == 0
 
-        # node 2: misleading_count=1, salience ~0.45
-        stats2 = await srv.stats_store.get_node_stats(node_ids[2])
-        assert stats2 is not None
-        assert stats2["misleading_count"] == 1
-        sal2 = stats2["salience"]
+        # misleading node: misleading_count=1, salience ~0.45
+        stats_mis = await srv.stats_store.get_node_stats(misleading_id)
+        assert stats_mis is not None
+        assert stats_mis["misleading_count"] == 1
+        sal2 = stats_mis["salience"]
         assert isinstance(sal2, float)
         assert abs(sal2 - 0.45) < 0.001

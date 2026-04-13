@@ -8,7 +8,7 @@ import pytest_asyncio
 from lithos.config import LithosConfig
 from lithos.server import LithosServer
 
-pytestmark = pytest.mark.integration
+pytestmark = pytest.mark.asyncio
 
 
 @pytest_asyncio.fixture

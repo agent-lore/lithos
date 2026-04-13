@@ -385,9 +385,30 @@ class TestWeakenEdgesForBadContext:
         # Initial weight 0.5, weakened by -0.05 → 0.45
         assert edges[0]["weight"] == pytest.approx(0.45)
 
+    async def test_shared_edge_weakened_only_once(
+        self,
+        knowledge_manager: KnowledgeManager,
+        edge_store: EdgeStore,
+    ) -> None:
+        """An edge shared by two bad nodes is weakened exactly once (-0.05)."""
+        n1 = await _create_note(knowledge_manager, "Note Bad1")
+        n2 = await _create_note(knowledge_manager, "Note Bad2")
+
+        # Create an edge between the two nodes (initial weight 0.5)
+        await reinforce_edges_between([n1, n2], edge_store, knowledge_manager)
+
+        # Both endpoints are bad — edge should still only be weakened once
+        await weaken_edges_for_bad_context([n1, n2], edge_store)
+
+        from_id, to_id = sorted([n1, n2])
+        edges = await edge_store.list_edges(from_id=from_id, to_id=to_id, edge_type="related_to")
+        assert len(edges) == 1
+        # Initial weight 0.5, weakened by -0.05 exactly once → 0.45
+        assert edges[0]["weight"] == pytest.approx(0.45)
+
 
 class TestQuarantineFiltering:
-    """Quarantined nodes must be excluded from list_all."""
+    """Quarantined nodes must be excluded from list_all and retrieval."""
 
     async def test_list_all_with_exclude_status(
         self,
@@ -416,3 +437,51 @@ class TestQuarantineFiltering:
         assert n1 in filtered_ids
         assert n2 not in filtered_ids
         assert total_filtered == total_all - 1
+
+    async def test_quarantined_node_excluded_from_retrieval(
+        self,
+        test_config: LithosConfig,
+    ) -> None:
+        """Quarantined node is excluded from retrieval results."""
+        from typing import Any
+
+        from lithos.server import LithosServer
+
+        server = LithosServer(test_config)
+        await server.initialize()
+        try:
+            ss = server.stats_store
+            km = server.knowledge
+
+            async def _call(tool_name: str, **kwargs: Any) -> dict[str, Any]:
+                tool = await server.mcp.get_tool(tool_name)
+                return await tool.fn(**kwargs)
+
+            # Create two notes via lithos_write so they get indexed
+            r1 = await _call(
+                "lithos_write",
+                title="Good Note",
+                content="Unique quarantine test content alpha.",
+                agent="agent",
+            )
+            r2 = await _call(
+                "lithos_write",
+                title="Bad Note",
+                content="Unique quarantine test content alpha.",
+                agent="agent",
+            )
+            good_id = r1["id"]
+            bad_id = r2["id"]
+
+            # Quarantine the bad note via 3x penalize_misleading
+            for _ in range(3):
+                await penalize_misleading([bad_id], ss, km)
+
+            # Retrieve -- the quarantined note should be excluded
+            result = await _call("lithos_retrieve", query="quarantine test content alpha", limit=10)
+            retrieved_ids = [r["id"] for r in result.get("results", [])]
+
+            assert good_id in retrieved_ids, "Active note should appear in retrieval"
+            assert bad_id not in retrieved_ids, "Quarantined note must be excluded from retrieval"
+        finally:
+            server.stop_file_watcher()

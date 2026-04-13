@@ -134,7 +134,7 @@ class LithosServer:
         except Exception:
             logger.exception("Failed to emit %s event", event.type)
 
-    async def _process_task_feedback(
+    async def _validate_task_feedback(
         self,
         *,
         task_id: str,
@@ -142,32 +142,30 @@ class LithosServer:
         cited_nodes: list[str] | None,
         misleading_nodes: list[str] | None,
         receipt_id: str | None,
-    ) -> dict[str, Any] | None:
-        """Validate receipt and apply reinforcement signals.
+    ) -> tuple[dict[str, Any], None] | tuple[None, dict[str, Any]]:
+        """Validate receipt and compute filtered node sets without side effects.
 
-        Returns an error envelope dict if receipt validation fails hard,
-        or ``None`` on success (including when feedback is silently dropped).
+        Returns ``(error_envelope, None)`` on hard failure, or
+        ``(None, validated_data)`` on success.  ``validated_data`` contains the
+        keys ``cited``, ``misleading``, ``ignored`` (each a list[str] or None)
+        and ``skip`` (bool — True when feedback should be silently dropped).
         """
-        from lithos.lcma.reinforcement import (
-            penalize_ignored,
-            penalize_misleading,
-            reinforce_cited_nodes,
-            reinforce_edges_between,
-            weaken_edges_for_bad_context,
-        )
-
         # -- Resolve receipt --
         receipt: dict[str, object] | None
         if receipt_id is not None:
             receipt = await self.stats_store.get_receipt(receipt_id, task_id)
             if receipt is None:
-                return {
-                    "status": "error",
-                    "code": "receipt_not_found",
-                    "message": (
-                        f"Receipt '{receipt_id}' not found or does not belong to task '{task_id}'."
-                    ),
-                }
+                return (
+                    {
+                        "status": "error",
+                        "code": "receipt_not_found",
+                        "message": (
+                            f"Receipt '{receipt_id}' not found or does not "
+                            f"belong to task '{task_id}'."
+                        ),
+                    },
+                    None,
+                )
         else:
             receipt = await self.stats_store.get_latest_receipt(task_id, agent)
             if receipt is None:
@@ -176,7 +174,7 @@ class LithosServer:
                     task_id,
                     agent,
                 )
-                return None
+                return (None, {"skip": True, "cited": None, "misleading": None, "ignored": []})
 
         receipt_node_ids: set[str] = set()
         raw_ids = receipt.get("final_node_ids")
@@ -210,7 +208,37 @@ class LithosServer:
         if misleading is not None:
             misleading = [nid for nid in misleading if nid in existing_ids]
 
-        # -- Apply reinforcement --
+        # -- Compute ignored: receipt nodes not in cited or misleading --
+        cited_set = set(cited) if cited is not None else set()
+        misleading_set = set(misleading) if misleading is not None else set()
+        ignored = [
+            nid
+            for nid in receipt_node_ids
+            if nid not in cited_set and nid not in misleading_set and nid in existing_ids
+        ]
+
+        return (
+            None,
+            {"skip": False, "cited": cited, "misleading": misleading, "ignored": ignored},
+        )
+
+    async def _apply_task_feedback(self, validated: dict[str, Any]) -> None:
+        """Apply reinforcement side-effects using pre-validated data."""
+        from lithos.lcma.reinforcement import (
+            penalize_ignored,
+            penalize_misleading,
+            reinforce_cited_nodes,
+            reinforce_edges_between,
+            weaken_edges_for_bad_context,
+        )
+
+        if validated.get("skip"):
+            return
+
+        cited = validated["cited"]
+        misleading = validated["misleading"]
+        ignored = validated["ignored"]
+
         if cited is not None and cited:
             await reinforce_cited_nodes(cited, self.edge_store, self.stats_store, self.knowledge)
             await reinforce_edges_between(cited, self.edge_store, self.knowledge)
@@ -219,18 +247,8 @@ class LithosServer:
             await penalize_misleading(misleading, self.stats_store, self.knowledge)
             await weaken_edges_for_bad_context(misleading, self.edge_store)
 
-        # -- Penalize ignored: receipt nodes not in cited or misleading --
-        cited_set = set(cited) if cited is not None else set()
-        misleading_set = set(misleading) if misleading is not None else set()
-        ignored = [
-            nid
-            for nid in receipt_node_ids
-            if nid not in cited_set and nid not in misleading_set and nid in existing_ids
-        ]
         if ignored:
             await penalize_ignored(ignored, self.stats_store)
-
-        return None
 
     async def _get_health(self) -> dict[str, Any]:
         """Run health checks and return a status dict (shared by HTTP and any callers)."""
@@ -2456,6 +2474,20 @@ class LithosServer:
                 span.set_attribute("lithos.tool", "lithos_task_complete")
                 span.set_attribute("lithos.agent", agent)
                 span.set_attribute("lithos.task_id", task_id)
+                # -- Validate feedback BEFORE completing the task --
+                feedback_supplied = cited_nodes is not None or misleading_nodes is not None
+                validated: dict[str, Any] | None = None
+                if feedback_supplied:
+                    error, validated = await self._validate_task_feedback(
+                        task_id=task_id,
+                        agent=agent,
+                        cited_nodes=cited_nodes,
+                        misleading_nodes=misleading_nodes,
+                        receipt_id=receipt_id,
+                    )
+                    if error is not None:
+                        return error
+
                 success = await self.coordination.complete_task(
                     task_id=task_id,
                     agent=agent,
@@ -2469,19 +2501,9 @@ class LithosServer:
                         "message": f"Task '{task_id}' not found or not in an open state.",
                     }
 
-                # -- Feedback / reinforcement learning step --
-                feedback_supplied = cited_nodes is not None or misleading_nodes is not None
-                if feedback_supplied:
-                    result = await self._process_task_feedback(
-                        task_id=task_id,
-                        agent=agent,
-                        cited_nodes=cited_nodes,
-                        misleading_nodes=misleading_nodes,
-                        receipt_id=receipt_id,
-                    )
-                    if result is not None:
-                        # An error was returned from receipt validation
-                        return result
+                # -- Apply reinforcement side-effects after task is completed --
+                if validated is not None:
+                    await self._apply_task_feedback(validated)
 
                 await self._emit(
                     LithosEvent(

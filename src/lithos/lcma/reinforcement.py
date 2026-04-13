@@ -166,10 +166,10 @@ async def weaken_edges_for_bad_context(
     (any namespace) and weakens each by ``-0.05`` via
     :meth:`EdgeStore.adjust_weight`.
     """
+    seen: set[str] = set()
     for node_id in bad_node_ids:
         edges_from = await edge_store.list_edges(from_id=node_id)
         edges_to = await edge_store.list_edges(to_id=node_id)
-        seen: set[str] = set()
         for edge in [*edges_from, *edges_to]:
             eid = str(edge["edge_id"])
             if eid in seen:
