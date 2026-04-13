@@ -14,10 +14,12 @@ import pytest
 from lithos.config import LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
+from lithos.lcma.edges import EdgeStore
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
     SCOUT_EXACT_ALIAS,
     SCOUT_FRESHNESS,
+    SCOUT_GRAPH,
     SCOUT_LEXICAL,
     SCOUT_PROVENANCE,
     SCOUT_TAGS_RECENCY,
@@ -26,6 +28,7 @@ from lithos.lcma.scouts import (
     scout_contradictions,
     scout_exact_alias,
     scout_freshness,
+    scout_graph,
     scout_lexical,
     scout_provenance,
     scout_tags_recency,
@@ -627,6 +630,179 @@ class TestScoutTaskContext:
 
 
 # ---------------------------------------------------------------------------
+# scout_graph
+# ---------------------------------------------------------------------------
+
+_ID7 = "77777777-7777-4777-7777-777777777777"
+
+
+@pytest.fixture
+def graph_with_links(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -> KnowledgeGraph:
+    """KnowledgeGraph where note-1 wiki-links to note-2."""
+    from lithos.knowledge import KnowledgeDocument, KnowledgeMetadata, parse_wiki_links
+
+    graph = KnowledgeGraph(seeded_config)
+    kp = seeded_config.storage.knowledge_path
+
+    # Rewrite note-1 to include a wiki-link to note-2
+    note1 = fm.Post(
+        f"# Note One\n\nSome content linking to [[{_ID2}]]",
+        id=_ID1,
+        title="Note One",
+        author="agent-alpha",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        tags=["testing", "alpha"],
+        aliases=["note-one-alias"],
+        access_scope="shared",
+        namespace="default",
+    )
+    (kp / "note-one.md").write_text(fm.dumps(note1))
+    seeded_km._scan_existing()
+
+    for doc_id, rel_path in seeded_km._id_to_path.items():
+        full_path = kp / rel_path
+        if full_path.exists():
+            post = fm.load(str(full_path))
+            metadata = KnowledgeMetadata.from_dict(dict(post.metadata))
+            doc = KnowledgeDocument(
+                id=doc_id,
+                title=metadata.title,
+                content=post.content,
+                metadata=metadata,
+                path=rel_path,
+                links=parse_wiki_links(post.content),
+            )
+            graph.add_document(doc)
+    return graph
+
+
+@pytest.fixture
+async def seeded_edge_store(seeded_config: LithosConfig) -> EdgeStore:
+    """EdgeStore with some typed edges seeded."""
+    store = EdgeStore(seeded_config)
+    await store.open()
+    # _ID1 -> _ID5 via "related_to" edge with weight 0.8
+    await store.upsert(
+        from_id=_ID1,
+        to_id=_ID5,
+        edge_type="related_to",
+        weight=0.8,
+        namespace="default",
+    )
+    # _ID2 -> _ID6 via "supports" edge with weight 0.6
+    await store.upsert(
+        from_id=_ID2,
+        to_id=_ID6,
+        edge_type="supports",
+        weight=0.6,
+        namespace="default",
+    )
+    return store
+
+
+class TestScoutGraph:
+    async def test_wiki_link_neighbors(
+        self,
+        graph_with_links: KnowledgeGraph,
+        seeded_edge_store: EdgeStore,
+        seeded_km: KnowledgeManager,
+    ) -> None:
+        """Wiki-link from note-1 to note-2 should surface note-2."""
+        candidates = await scout_graph([_ID1], graph_with_links, seeded_edge_store, seeded_km)
+        node_ids = {c.node_id for c in candidates}
+        assert _ID2 in node_ids
+        assert all(c.scouts == [SCOUT_GRAPH] for c in candidates)
+
+    async def test_typed_edge_neighbors(
+        self,
+        seeded_graph: KnowledgeGraph,
+        seeded_edge_store: EdgeStore,
+        seeded_km: KnowledgeManager,
+    ) -> None:
+        """Typed edge from note-1 to note-5 should surface note-5."""
+        candidates = await scout_graph([_ID1], seeded_graph, seeded_edge_store, seeded_km)
+        node_ids = {c.node_id for c in candidates}
+        assert _ID5 in node_ids
+
+    async def test_dedup_wiki_and_edge(
+        self,
+        graph_with_links: KnowledgeGraph,
+        seeded_edge_store: EdgeStore,
+        seeded_km: KnowledgeManager,
+    ) -> None:
+        """Same neighbor via wiki-link and typed edge should appear once."""
+        # Add edge _ID1 -> _ID2 (already wiki-linked)
+        await seeded_edge_store.upsert(
+            from_id=_ID1,
+            to_id=_ID2,
+            edge_type="related_to",
+            weight=0.9,
+            namespace="default",
+        )
+        candidates = await scout_graph([_ID1], graph_with_links, seeded_edge_store, seeded_km)
+        id_counts = [c.node_id for c in candidates].count(_ID2)
+        assert id_counts == 1
+        # Edge weight (0.9) should win over wiki-link (0.5)
+        c2 = next(c for c in candidates if c.node_id == _ID2)
+        assert c2.score == 0.9
+
+    async def test_namespace_filter(
+        self,
+        seeded_graph: KnowledgeGraph,
+        seeded_edge_store: EdgeStore,
+        seeded_km: KnowledgeManager,
+    ) -> None:
+        candidates = await scout_graph(
+            [_ID1],
+            seeded_graph,
+            seeded_edge_store,
+            seeded_km,
+            namespace_filter=["nonexistent"],
+        )
+        assert len(candidates) == 0
+
+    async def test_edge_score_uses_weight(
+        self,
+        seeded_graph: KnowledgeGraph,
+        seeded_edge_store: EdgeStore,
+        seeded_km: KnowledgeManager,
+    ) -> None:
+        """Typed edge neighbor should use the edge weight as score."""
+        candidates = await scout_graph([_ID1], seeded_graph, seeded_edge_store, seeded_km)
+        c5 = next((c for c in candidates if c.node_id == _ID5), None)
+        assert c5 is not None
+        assert c5.score == 0.8
+
+    async def test_excludes_seeds(
+        self,
+        graph_with_links: KnowledgeGraph,
+        seeded_edge_store: EdgeStore,
+        seeded_km: KnowledgeManager,
+    ) -> None:
+        """Seed nodes should not appear in results."""
+        candidates = await scout_graph([_ID1, _ID2], graph_with_links, seeded_edge_store, seeded_km)
+        node_ids = {c.node_id for c in candidates}
+        assert _ID1 not in node_ids
+        assert _ID2 not in node_ids
+
+    async def test_tags_filter(
+        self,
+        seeded_graph: KnowledgeGraph,
+        seeded_edge_store: EdgeStore,
+        seeded_km: KnowledgeManager,
+    ) -> None:
+        candidates = await scout_graph(
+            [_ID1],
+            seeded_graph,
+            seeded_edge_store,
+            seeded_km,
+            tags=["nonexistent-tag"],
+        )
+        assert len(candidates) == 0
+
+
+# ---------------------------------------------------------------------------
 # scout_contradictions (stub)
 # ---------------------------------------------------------------------------
 
@@ -644,8 +820,8 @@ class TestScoutContradictions:
 
 
 class TestScoutConstants:
-    def test_all_scout_names_has_seven_entries(self) -> None:
-        assert len(ALL_SCOUT_NAMES) == 7
+    def test_all_scout_names_has_eight_entries(self) -> None:
+        assert len(ALL_SCOUT_NAMES) == 8
 
     def test_canonical_names(self) -> None:
         assert SCOUT_VECTOR == "scout_vector"
@@ -655,6 +831,7 @@ class TestScoutConstants:
         assert SCOUT_FRESHNESS == "scout_freshness"
         assert SCOUT_PROVENANCE == "scout_provenance"
         assert SCOUT_TASK_CONTEXT == "scout_task_context"
+        assert SCOUT_GRAPH == "scout_graph"
 
 
 # ---------------------------------------------------------------------------

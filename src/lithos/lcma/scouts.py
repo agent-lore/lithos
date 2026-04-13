@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from lithos.coordination import CoordinationService
     from lithos.graph import KnowledgeGraph
     from lithos.knowledge import KnowledgeManager
+    from lithos.lcma.edges import EdgeStore
     from lithos.search import SearchEngine
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ SCOUT_TAGS_RECENCY = "scout_tags_recency"
 SCOUT_FRESHNESS = "scout_freshness"
 SCOUT_PROVENANCE = "scout_provenance"
 SCOUT_TASK_CONTEXT = "scout_task_context"
+SCOUT_GRAPH = "scout_graph"
 
 ALL_SCOUT_NAMES = [
     SCOUT_VECTOR,
@@ -46,6 +48,7 @@ ALL_SCOUT_NAMES = [
     SCOUT_FRESHNESS,
     SCOUT_PROVENANCE,
     SCOUT_TASK_CONTEXT,
+    SCOUT_GRAPH,
 ]
 
 # Keywords that trigger freshness boost
@@ -521,6 +524,93 @@ async def scout_task_context(
                 score=1.0,
                 reasons=["task context match"],
                 scouts=[SCOUT_TASK_CONTEXT],
+            )
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+async def scout_graph(
+    seed_ids: list[str],
+    graph: KnowledgeGraph,
+    edge_store: EdgeStore,
+    knowledge: KnowledgeManager,
+    *,
+    limit: int = 10,
+    namespace_filter: list[str] | None = None,
+    agent_id: str | None = None,
+    task_id: str | None = None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
+) -> list[Candidate]:
+    """Find neighbors of seed nodes in the wiki-link graph and typed edge graph."""
+    seed_set = set(seed_ids)
+    # Collect (neighbor_id, score, reason) — higher score wins on dedup
+    neighbor_best: dict[str, tuple[float, str]] = {}
+
+    def _track(nid: str, score: float, reason: str) -> None:
+        prev = neighbor_best.get(nid)
+        if prev is None or score > prev[0]:
+            neighbor_best[nid] = (score, reason)
+
+    # 1. Wiki-link graph (NetworkX)
+    for seed_id in seed_ids:
+        link_info = graph.get_links(seed_id, direction="both")
+        for linked in link_info.outgoing:
+            if linked.id not in seed_set:
+                _track(linked.id, 0.5, f"wiki-link from {seed_id[:8]}")
+        for linked in link_info.incoming:
+            if linked.id not in seed_set:
+                _track(linked.id, 0.5, f"wiki-link to {seed_id[:8]}")
+
+    # 2. Typed edge graph (edges.db)
+    for seed_id in seed_ids:
+        outgoing = await edge_store.list_edges(from_id=seed_id)
+        for edge in outgoing:
+            nid = str(edge["to_id"])
+            if nid not in seed_set:
+                raw_w = edge["weight"]
+                w = float(raw_w) if isinstance(raw_w, (int, float)) else 1.0
+                _track(nid, w, f"{edge['type']} edge from {seed_id[:8]}")
+        incoming = await edge_store.list_edges(to_id=seed_id)
+        for edge in incoming:
+            nid = str(edge["from_id"])
+            if nid not in seed_set:
+                raw_w = edge["weight"]
+                w = float(raw_w) if isinstance(raw_w, (int, float)) else 1.0
+                _track(nid, w, f"{edge['type']} edge to {seed_id[:8]}")
+
+    # Sort by score descending, then apply gating
+    ranked = sorted(neighbor_best.items(), key=lambda t: t[1][0], reverse=True)
+    candidates: list[Candidate] = []
+    for nid, (score, reason) in ranked:
+        if not knowledge.has_document(nid):
+            continue
+        meta = _get_cached_meta(knowledge, nid)
+        if not _passes_status_filter(meta, ["quarantined"]):
+            continue
+        ns = meta.namespace if meta else None
+        if not _passes_namespace_filter(ns, namespace_filter):
+            continue
+        if not _passes_access_scope(
+            meta.access_scope if meta else None,
+            meta.author if meta else None,
+            meta.source if meta else None,
+            agent_id,
+            task_id,
+        ):
+            continue
+        if not _passes_tags_filter(meta.tags if meta else None, tags):
+            continue
+        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
+            continue
+        candidates.append(
+            Candidate(
+                node_id=nid,
+                score=score,
+                reasons=[reason],
+                scouts=[SCOUT_GRAPH],
             )
         )
         if len(candidates) >= limit:
