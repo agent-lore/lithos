@@ -1,62 +1,31 @@
 # Ralph Progress Log
-Started: Mon Apr 13 06:41:33 UTC 2026
+Started: Mon Apr 13 18:18:43 UTC 2026
 
 ## Codebase Patterns
-- EdgeStore methods follow pattern: `await self._ensure_open()`, then `async with aiosqlite.connect(self.db_path) as db:` with `db.row_factory = aiosqlite.Row` for named access
-- EdgeStore returns dicts with explicit key mapping from Row objects (not `dict(r)` for type safety)
-- Tests use `edge_store` fixture from `test_config: LithosConfig` — no manual setup needed
-- `make` not available in container; use `uv run ruff check/format`, `uv run pyright`, `uv run pytest` directly
-- Git identity needs to be set in container: `git config user.email/name`
-- MCP tools registered via `@self.mcp.tool()` inside `_register_tools()` with access to `self.edge_store`, `self.knowledge`, etc.
-- Tool error envelope: `{"status": "error", "code": "...", "message": "..."}`
-- Tool event emission: `await self._emit(LithosEvent(type=EDGE_UPSERTED, payload={...}))`
+- Event payloads use `dict[str, str | int | float | bool | None]` type — see `LithosEvent.payload`
+- File-watcher delete handler emits NOTE_DELETED before calling knowledge.delete() to preserve doc_id access
+- enrich_queue schema uses `attempts` column for retry tracking; drain methods filter by `attempts < max_enrich_attempts`
+- Pre-existing typecheck errors in server.py conflict_resolve (lines ~1737-1739) — not introduced by this work
+- Pre-existing format issue in tests/test_conflict_resolve.py — not introduced by this work
+- StatsStore schema tests use `PRAGMA table_info(<table>)` to check columns as a set
 
----
-
-## 2026-04-13 - US-004
-- Implemented `lithos_conflict_resolve` MCP tool in server.py
-- Validates resolution in {accepted_dual, superseded, refuted, merged}; rejects others
-- Validates edge exists and is type 'contradicts'
-- For 'superseded': requires winner_id matching from_id or to_id; sets supersedes on winner note
-- Added `EdgeStore.update_conflict_resolution()` for targeted field updates
-- Emits EDGE_UPSERTED event after resolution
-- 9 tests in `tests/test_conflict_resolve.py` + 2 in `tests/test_edges.py`
-- Files changed: `src/lithos/server.py`, `src/lithos/lcma/edges.py`, `tests/test_conflict_resolve.py`, `tests/test_edges.py`
-- **Learnings for future iterations:**
-  - MCP tool tests use `_call_tool(server, name, args)` helper to call through FastMCP
-  - `server` fixture from conftest initializes full LithosServer with all deps
-  - For targeted edge field updates, prefer a focused method over full upsert (avoids needing all composite key fields)
----
-
-## 2026-04-13 - US-003
-- Replaced `scout_contradictions` stub with real implementation querying EdgeStore for `contradicts` edges
-- Scout signature: `(seed_ids, edge_store, knowledge, *, namespace_filter, agent_id, task_id) -> list[dict]`
-- Returns dicts with edge_id, from_id, to_id, conflict_state; filters out resolved states (superseded, refuted, merged)
-- Applies gating: `_passes_status_filter` (quarantined), `_passes_namespace_filter`, `_passes_access_scope`, `has_document`
-- Updated `run_retrieve` to call scout when `surface_conflicts=True`, populate `conflicts_surfaced` in receipt, add `conflicts` to envelope
-- 5 tests: empty (no edges), surfaces edge, excludes resolved, excludes different namespace, excludes quarantined
-- Files changed: `src/lithos/lcma/scouts.py`, `src/lithos/lcma/retrieve.py`, `tests/test_scouts.py`
-- **Learnings for future iterations:**
-  - `scout_contradictions` returns dicts (not Candidate objects) since conflicts aren't retrieval candidates
-  - `run_retrieve` initializes `conflicts_found` at outer scope for `finally` block access
-  - When `surface_conflicts=False`, the scout isn't called at all (not just results discarded)
----
-
-## 2026-04-13 - US-002
-- Added `supersedes: str | None | _UnsetType = _UNSET` parameter to `KnowledgeManager.update()`
-- Threads through to `doc.metadata.supersedes` following existing `source` field pattern
-- Added `TestUpdateSupersedes` class with 2 tests: set value persists to disk, _UNSET preserves existing
-- Files changed: `src/lithos/knowledge.py`, `tests/test_knowledge.py`
-- **Learnings for future iterations:**
-  - Simple optional string fields follow pattern: check `not isinstance(x, _UnsetType)`, then assign to `doc.metadata.field`
-  - `supersedes` was already in `KnowledgeMetadata` dataclass and `to_dict()` — only needed update() param
 ---
 
 ## 2026-04-13 - US-001
-- Implemented `EdgeStore.get_edge(edge_id: str) -> dict[str, object] | None`
-- Added `TestGetEdge` class with 2 tests: returns full dict with all fields, returns None for nonexistent
-- Files changed: `src/lithos/lcma/edges.py`, `tests/test_edges.py`
+- What was implemented:
+  - Added knowledge_id to FINDING_POSTED event payload in lithos_finding_post (when present)
+  - Moved NOTE_DELETED emission before knowledge.delete() in file-watcher and added doc id to payload
+  - Added `attempts INTEGER NOT NULL DEFAULT 0` column to enrich_queue schema
+  - Added `max_enrich_attempts: int = 3` to LcmaConfig
+  - Updated test_enrich_queue_columns to expect "attempts" in column set
+- Files changed:
+  - src/lithos/server.py (FINDING_POSTED payload, NOTE_DELETED payload + ordering)
+  - src/lithos/lcma/stats.py (enrich_queue schema)
+  - src/lithos/config.py (LcmaConfig.max_enrich_attempts)
+  - tests/test_stats.py (test_enrich_queue_columns)
 - **Learnings for future iterations:**
-  - EdgeStore dict returns use explicit key mapping from Row objects for type consistency
-  - All 894 unit tests pass; no regressions
+  - File-watcher delete handler must emit event BEFORE knowledge.delete() because delete evicts _meta_cache
+  - The lithos_note_delete MCP tool already included "id" in NOTE_DELETED payload, only file-watcher was missing it
+  - LcmaConfig has model validators for rerank_weights and note_type_priors — add new simple fields before them
+  - 915 unit tests pass; 309 integration tests deselected with `-m "not integration"`
 ---

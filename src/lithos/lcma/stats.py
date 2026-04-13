@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS enrich_queue (
     node_id TEXT,
     task_id TEXT,
     triggered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    processed_at TIMESTAMP
+    processed_at TIMESTAMP,
+    attempts INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS working_memory (

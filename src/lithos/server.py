@@ -736,18 +736,19 @@ class LithosServer:
                     if deleted:
                         doc_id = self.knowledge.get_id_by_path(relative_path)
                         if doc_id:
-                            await self.knowledge.delete(doc_id)
-                            self.search.remove_document(doc_id)
-                            self.graph.remove_document(doc_id)
-                            self.graph.save_cache()
-
+                            # Emit event with doc id before delete evicts _meta_cache
                             lithos_metrics.file_watcher_events.add(1, {"event_type": "deleted"})
                             await self._emit(
                                 LithosEvent(
                                     type=NOTE_DELETED,
-                                    payload={"path": str(relative_path)},
+                                    payload={"id": doc_id, "path": str(relative_path)},
                                 )
                             )
+
+                            await self.knowledge.delete(doc_id)
+                            self.search.remove_document(doc_id)
+                            self.graph.remove_document(doc_id)
+                            self.graph.save_cache()
                     else:
                         is_new = not self.knowledge.get_id_by_path(relative_path)
                         doc = await self.knowledge.sync_from_disk(relative_path)
@@ -2858,15 +2859,19 @@ class LithosServer:
                 )
                 span.set_attribute("lithos.finding_id", finding_id)
 
+                payload: dict[str, str | int | float | bool | None] = {
+                    "finding_id": finding_id,
+                    "task_id": task_id,
+                    "agent": agent,
+                }
+                if knowledge_id is not None:
+                    payload["knowledge_id"] = knowledge_id
+
                 await self._emit(
                     LithosEvent(
                         type=FINDING_POSTED,
                         agent=agent,
-                        payload={
-                            "finding_id": finding_id,
-                            "task_id": task_id,
-                            "agent": agent,
-                        },
+                        payload=payload,
                     )
                 )
 

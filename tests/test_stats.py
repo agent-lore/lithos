@@ -76,6 +76,7 @@ class TestStatsStoreCreation:
             "task_id",
             "triggered_at",
             "processed_at",
+            "attempts",
         }
 
     async def test_enrich_queue_allows_null_node_id(self, stats_store: StatsStore) -> None:
