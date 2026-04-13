@@ -4,8 +4,9 @@ This module implements the ``lithos_retrieve`` pipeline:
 
 1. **Phase A** — Fire scouts in parallel (vector, lexical, exact_alias,
    tags_recency, freshness, task_context) via ``asyncio.gather``.
-2. **Phase B** — Fire provenance scout sequentially, seeded from top
-   ``max_context_nodes`` of the Phase A normalised pool.
+2. **Phase B** — Fire provenance, graph, coactivation, and source_url scouts
+   sequentially, seeded from top ``max_context_nodes`` of the Phase A
+   normalised pool.
 3. **Merge & Normalise** — ``merge_and_normalize`` produces a unified pool.
 4. **Terrace 1 Rerank** — Diversity (MMR), note-type priors, basic salience.
 5. **Temperature** — Cold-start detection based on edge count.
@@ -24,11 +25,14 @@ from typing import TYPE_CHECKING
 
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
+    scout_coactivation,
     scout_contradictions,
     scout_exact_alias,
     scout_freshness,
+    scout_graph,
     scout_lexical,
     scout_provenance,
+    scout_source_url,
     scout_tags_recency,
     scout_task_context,
     scout_vector,
@@ -305,7 +309,7 @@ async def run_retrieve(
         phase_a_normalised = merge_and_normalize(all_candidates)
         phase_a_normalised.sort(key=lambda c: c.score, reverse=True)
 
-        # ── Phase B: provenance (sequential, seeded from Phase A) ─
+        # ── Phase B: sequential scouts seeded from Phase A ─────────
         seed_ids = [c.node_id for c in phase_a_normalised[:max_context_nodes]]
         if seed_ids:
             try:
@@ -316,6 +320,33 @@ async def run_retrieve(
                 all_candidates.extend(prov_candidates)
             except Exception:
                 logger.warning("Phase B (provenance) failed", exc_info=True)
+
+            try:
+                graph_candidates = await scout_graph(
+                    seed_ids, graph, edge_store, knowledge, limit=limit, **scout_kw
+                )
+                executed_scouts.add("scout_graph")
+                all_candidates.extend(graph_candidates)
+            except Exception:
+                logger.warning("Phase B (graph) failed", exc_info=True)
+
+            try:
+                coact_candidates = await scout_coactivation(
+                    seed_ids, stats_store, knowledge, limit=limit, **scout_kw
+                )
+                executed_scouts.add("scout_coactivation")
+                all_candidates.extend(coact_candidates)
+            except Exception:
+                logger.warning("Phase B (coactivation) failed", exc_info=True)
+
+            try:
+                src_url_candidates = await scout_source_url(
+                    seed_ids, knowledge, limit=limit, **scout_kw
+                )
+                executed_scouts.add("scout_source_url")
+                all_candidates.extend(src_url_candidates)
+            except Exception:
+                logger.warning("Phase B (source_url) failed", exc_info=True)
 
         # Contradictions stub (not counted)
         await scout_contradictions()
