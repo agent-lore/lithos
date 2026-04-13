@@ -234,6 +234,75 @@ class TestConflictResolveSupersededValidation:
         assert "winner_id" in result["message"]
 
 
+class TestConflictResolveUpdateFailure:
+    """Error when edge update fails (e.g. edge deleted between get and update)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_error_when_update_fails(
+        self, server_with_notes: LithosServer
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        srv = server_with_notes
+        edge_id = srv._contradiction_edge_id  # type: ignore[attr-defined]
+
+        # Simulate the edge disappearing between get_edge and update
+        with patch.object(
+            srv.edge_store,
+            "update_conflict_resolution",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            result = await _call_tool(
+                srv,
+                "lithos_conflict_resolve",
+                {
+                    "edge_id": edge_id,
+                    "resolution": "accepted_dual",
+                    "resolver": "agent-c",
+                },
+            )
+        assert result["status"] == "error"
+        assert result["code"] == "update_failed"
+
+    @pytest.mark.asyncio
+    async def test_superseded_does_not_mutate_note_when_update_fails(
+        self, server_with_notes: LithosServer
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        srv = server_with_notes
+        edge_id = srv._contradiction_edge_id  # type: ignore[attr-defined]
+        alpha_id = srv._note_alpha_id  # type: ignore[attr-defined]
+
+        # Read the note before to confirm no supersedes
+        doc_before, _ = await srv.knowledge.read(id=alpha_id)
+        assert doc_before.metadata.supersedes is None
+
+        with patch.object(
+            srv.edge_store,
+            "update_conflict_resolution",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            result = await _call_tool(
+                srv,
+                "lithos_conflict_resolve",
+                {
+                    "edge_id": edge_id,
+                    "resolution": "superseded",
+                    "resolver": "agent-c",
+                    "winner_id": alpha_id,
+                },
+            )
+        assert result["status"] == "error"
+        assert result["code"] == "update_failed"
+
+        # Verify the note was NOT mutated
+        doc_after, _ = await srv.knowledge.read(id=alpha_id)
+        assert doc_after.metadata.supersedes is None
+
+
 class TestConflictResolveEdgeNotFound:
     """Error when edge not found."""
 

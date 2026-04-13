@@ -354,7 +354,12 @@ async def run_retrieve(
         if surface_conflicts:
             try:
                 conflicts_found = await scout_contradictions(
-                    seed_ids, edge_store, knowledge, **scout_kw
+                    seed_ids,
+                    edge_store,
+                    knowledge,
+                    namespace_filter=namespace_filter,
+                    agent_id=agent_id,
+                    task_id=task_id,
                 )
             except Exception:
                 logger.warning("Phase B (contradictions) failed", exc_info=True)

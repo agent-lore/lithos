@@ -1035,6 +1035,120 @@ class TestReceiptFields:
 
 
 # ---------------------------------------------------------------------------
+# Contradiction surfacing through retrieve
+# ---------------------------------------------------------------------------
+
+
+class TestContradictionSurfacing:
+    """US-003: surface_conflicts=True actually surfaces contradictions."""
+
+    @pytest.mark.asyncio
+    async def test_seeded_contradiction_appears_in_result(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """A contradiction edge between two notes surfaces in result['conflicts']."""
+        edge_id = await edge_store.upsert(
+            from_id=_ID1,
+            to_id=_ID2,
+            edge_type="contradicts",
+            weight=1.0,
+            namespace="default",
+        )
+
+        from lithos.search import SearchResult
+
+        tantivy_hits = [
+            SearchResult(id=_ID1, title="Alpha Note", snippet="", score=0.9, path="alpha-note.md"),
+            SearchResult(id=_ID2, title="Beta Note", snippet="", score=0.8, path="beta-note.md"),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
+        ):
+            result = await run_retrieve(
+                query="alpha",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+                surface_conflicts=True,
+            )
+
+        assert "conflicts" in result
+        conflicts = result["conflicts"]
+        assert len(conflicts) >= 1  # type: ignore[arg-type]
+        eids = [c["edge_id"] for c in conflicts]  # type: ignore[union-attr]
+        assert edge_id in eids
+
+        # Receipt should also record conflicts_surfaced
+        import aiosqlite
+
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT conflicts_surfaced FROM receipts WHERE id = ?",
+                (result["receipt_id"],),
+            )
+            row = await cursor.fetchone()
+        assert row is not None
+        surfaced = json.loads(row["conflicts_surfaced"])
+        assert len(surfaced) >= 1
+
+    @pytest.mark.asyncio
+    async def test_surface_conflicts_false_is_noop(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """When surface_conflicts=False (default), no conflicts key in result."""
+        await edge_store.upsert(
+            from_id=_ID1,
+            to_id=_ID2,
+            edge_type="contradicts",
+            weight=1.0,
+            namespace="default",
+        )
+
+        from lithos.search import SearchResult
+
+        tantivy_hits = [
+            SearchResult(id=_ID1, title="Alpha Note", snippet="", score=0.9, path="alpha-note.md"),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
+        ):
+            result = await run_retrieve(
+                query="alpha",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+                surface_conflicts=False,
+            )
+
+        assert "conflicts" not in result
+
+
+# ---------------------------------------------------------------------------
 # Finally-block robustness
 # ---------------------------------------------------------------------------
 

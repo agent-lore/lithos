@@ -1717,17 +1717,26 @@ class LithosServer:
                             ),
                         }
                     loser_id = to_id if winner_id == from_id else from_id
+
+                updated = await self.edge_store.update_conflict_resolution(
+                    edge_id,
+                    conflict_state=resolution,
+                    provenance_actor=resolver,
+                )
+
+                if not updated:
+                    return {
+                        "status": "error",
+                        "code": "update_failed",
+                        "message": f"Edge '{edge_id}' could not be updated",
+                    }
+
+                if resolution == "superseded":
                     await self.knowledge.update(
                         id=winner_id,
                         agent=resolver,
                         supersedes=loser_id,
                     )
-
-                await self.edge_store.update_conflict_resolution(
-                    edge_id,
-                    conflict_state=resolution,
-                    provenance_actor=resolver,
-                )
 
                 from lithos.events import EDGE_UPSERTED
 
