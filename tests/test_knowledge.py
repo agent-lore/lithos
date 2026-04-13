@@ -3504,3 +3504,61 @@ class TestSlugCollision:
         assert knowledge_manager._source_url_to_id.get(new_norm) is None, (
             "_source_url_to_id was polluted with new URL after failed update"
         )
+
+
+class TestUpdateSupersedes:
+    """supersedes parameter on update(): set, preserve, and clear."""
+
+    async def test_update_with_supersedes_set(self, knowledge_manager: KnowledgeManager):
+        """update() with supersedes set writes it to frontmatter."""
+        doc = (
+            await knowledge_manager.create(
+                title="Winner Note",
+                content="I win.",
+                agent="agent",
+            )
+        ).document
+        assert doc is not None
+
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="resolver",
+            supersedes="loser-note-id",
+        )
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.supersedes == "loser-note-id"
+
+        # Verify round-trip through disk
+        read_doc, _ = await knowledge_manager.read(id=doc.id)
+        assert read_doc.metadata.supersedes == "loser-note-id"
+
+    async def test_update_without_supersedes_preserves_existing(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """update() without passing supersedes preserves existing value."""
+        doc = (
+            await knowledge_manager.create(
+                title="Already Supersedes",
+                content="Content.",
+                agent="agent",
+            )
+        ).document
+        assert doc is not None
+
+        # Set supersedes first
+        await knowledge_manager.update(
+            id=doc.id,
+            agent="resolver",
+            supersedes="old-note-id",
+        )
+
+        # Update without touching supersedes (default is _UNSET)
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="editor",
+            content="New content.",
+        )
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.supersedes == "old-note-id"

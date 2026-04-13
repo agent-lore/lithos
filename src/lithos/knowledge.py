@@ -1090,6 +1090,7 @@ class KnowledgeManager:
         note_type: str | None | _UnsetType = _UNSET,
         lcma_status: str | None | _UnsetType = _UNSET,
         summaries: dict | None | _UnsetType = _UNSET,
+        supersedes: str | None | _UnsetType = _UNSET,
     ) -> WriteResult:
         """Update an existing document.
 
@@ -1259,6 +1260,10 @@ class KnowledgeManager:
             # Handle source (task) update
             if not isinstance(source, _UnsetType):
                 doc.metadata.source = source
+
+            # Handle supersedes update
+            if not isinstance(supersedes, _UnsetType):
+                doc.metadata.supersedes = supersedes
 
             # Handle LCMA field updates — preserve existing when _UNSET
             if not isinstance(schema_version, _UnsetType):
