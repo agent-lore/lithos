@@ -83,10 +83,22 @@ class LithosServer:
         self.event_bus = EventBus(self._config.events)
 
         from lithos.lcma.edges import EdgeStore
+        from lithos.lcma.enrich import EnrichWorker
         from lithos.lcma.stats import StatsStore
 
         self.edge_store = EdgeStore(self._config)
         self.stats_store = StatsStore(self._config)
+
+        self._enrich_worker: EnrichWorker | None = None
+        if self._config.lcma.enabled:
+            self._enrich_worker = EnrichWorker(
+                config=self._config.lcma,
+                event_bus=self.event_bus,
+                stats_store=self.stats_store,
+                edge_store=self.edge_store,
+                knowledge=self.knowledge,
+                coordination=self.coordination,
+            )
 
         # Cached count fields for synchronous OTEL observable gauge callbacks
         self._cached_active_claims: int = 0
@@ -566,6 +578,10 @@ class LithosServer:
                     self._background_tasks.add(task)
                     task.add_done_callback(self._background_tasks.discard)
 
+                # Start enrichment worker when LCMA is enabled
+                if self._enrich_worker is not None:
+                    await self._enrich_worker.start()
+
             except Exception as exc:
                 span.record_exception(exc)
                 span.set_status(StatusCode.ERROR, str(exc))
@@ -716,6 +732,11 @@ class LithosServer:
             self._observer.stop()
             self._observer.join()
             self._observer = None
+
+    async def stop_enrich_worker(self) -> None:
+        """Stop the enrichment background worker."""
+        if self._enrich_worker is not None:
+            await self._enrich_worker.stop()
 
     async def handle_file_change(self, path: Path, deleted: bool = False) -> None:
         """Handle a file change event."""

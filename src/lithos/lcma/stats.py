@@ -402,12 +402,18 @@ class StatsStore:
             )
             await db.commit()
 
-    async def drain_pending_nodes(self) -> list[dict[str, object]]:
+    async def drain_pending_nodes(
+        self, *, max_attempts: int | None = None
+    ) -> list[dict[str, object]]:
         """Atomically claim unprocessed node-level enrich_queue rows.
 
         Returns ``[{node_id, trigger_types, claimed_ids}]`` deduplicated
         by ``node_id``, preserving all distinct trigger types per node.
         ``note.created`` and ``note.updated`` triggers are never discarded.
+
+        Args:
+            max_attempts: When provided, only claim rows whose ``attempts``
+                column is strictly less than this value.
         """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
@@ -416,10 +422,18 @@ class StatsStore:
             # BEGIN IMMEDIATE acquires a write lock before the SELECT,
             # preventing concurrent callers from reading the same rows.
             await db.execute("BEGIN IMMEDIATE")
-            cursor = await db.execute(
-                "SELECT id, node_id, trigger_type FROM enrich_queue "
-                "WHERE node_id IS NOT NULL AND processed_at IS NULL"
-            )
+            if max_attempts is not None:
+                cursor = await db.execute(
+                    "SELECT id, node_id, trigger_type FROM enrich_queue "
+                    "WHERE node_id IS NOT NULL AND processed_at IS NULL "
+                    "AND attempts < ?",
+                    (max_attempts,),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT id, node_id, trigger_type FROM enrich_queue "
+                    "WHERE node_id IS NOT NULL AND processed_at IS NULL"
+                )
             rows = await cursor.fetchall()
             if not rows:
                 await db.execute("COMMIT")
@@ -458,11 +472,17 @@ class StatsStore:
             result.append(entry)
         return result
 
-    async def drain_pending_tasks(self) -> list[dict[str, object]]:
+    async def drain_pending_tasks(
+        self, *, max_attempts: int | None = None
+    ) -> list[dict[str, object]]:
         """Atomically claim unprocessed task-level enrich_queue rows.
 
         Returns ``[{task_id, claimed_ids}]`` using the same atomic
         SELECT+UPDATE pattern as :meth:`drain_pending_nodes`.
+
+        Args:
+            max_attempts: When provided, only claim rows whose ``attempts``
+                column is strictly less than this value.
         """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
@@ -471,10 +491,18 @@ class StatsStore:
             # BEGIN IMMEDIATE acquires a write lock before the SELECT,
             # preventing concurrent callers from reading the same rows.
             await db.execute("BEGIN IMMEDIATE")
-            cursor = await db.execute(
-                "SELECT id, task_id FROM enrich_queue "
-                "WHERE node_id IS NULL AND processed_at IS NULL"
-            )
+            if max_attempts is not None:
+                cursor = await db.execute(
+                    "SELECT id, task_id FROM enrich_queue "
+                    "WHERE node_id IS NULL AND processed_at IS NULL "
+                    "AND attempts < ?",
+                    (max_attempts,),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT id, task_id FROM enrich_queue "
+                    "WHERE node_id IS NULL AND processed_at IS NULL"
+                )
             rows = await cursor.fetchall()
             if not rows:
                 await db.execute("COMMIT")
@@ -501,7 +529,7 @@ class StatsStore:
         return list(by_task.values())
 
     async def requeue_failed(self, claimed_ids: list[int]) -> int:
-        """Reset ``processed_at`` to NULL for the given row IDs.
+        """Reset ``processed_at`` to NULL and increment ``attempts`` for the given row IDs.
 
         Returns the count of rows reset.
         """
@@ -511,7 +539,8 @@ class StatsStore:
         placeholders = ", ".join("?" for _ in claimed_ids)
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                f"UPDATE enrich_queue SET processed_at = NULL WHERE id IN ({placeholders})",
+                "UPDATE enrich_queue SET processed_at = NULL, attempts = attempts + 1 "
+                f"WHERE id IN ({placeholders})",
                 tuple(claimed_ids),
             )
             count = cursor.rowcount

@@ -50,7 +50,7 @@
         "make check passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Depends on US-001 (prerequisites and config)"
     },
     {

@@ -87,6 +87,7 @@ async def server(test_config: LithosConfig) -> AsyncGenerator[LithosServer, None
     srv = LithosServer(test_config)
     await srv.initialize()
     yield srv
+    await srv.stop_enrich_worker()
     srv.stop_file_watcher()
 
 

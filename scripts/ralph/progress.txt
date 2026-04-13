@@ -8,6 +8,12 @@ Started: Mon Apr 13 18:18:43 UTC 2026
 - Pre-existing typecheck errors in server.py conflict_resolve (lines ~1737-1739) — not introduced by this work
 - Pre-existing format issue in tests/test_conflict_resolve.py — not introduced by this work
 - StatsStore schema tests use `PRAGMA table_info(<table>)` to check columns as a set
+- EnrichWorker subscribes with ENRICH_SUBSCRIBER_QUEUE_SIZE (10,000) to absorb burst events
+- _resolve_node_id() is the central normalization contract for mapping event payloads to node IDs
+- note.deleted events do NOT check KnowledgeManager existence (node already deleted)
+- StatsStore.drain_pending_nodes/tasks accept max_attempts kwarg; requeue_failed increments attempts
+- Server fixture in conftest.py must call `await srv.stop_enrich_worker()` before `stop_file_watcher()`
+- EnrichWorker tests use `asyncio.sleep(0.1)` to let consumer process events from the queue
 
 ---
 
@@ -28,4 +34,32 @@ Started: Mon Apr 13 18:18:43 UTC 2026
   - The lithos_note_delete MCP tool already included "id" in NOTE_DELETED payload, only file-watcher was missing it
   - LcmaConfig has model validators for rerank_weights and note_type_priors — add new simple fields before them
   - 915 unit tests pass; 309 integration tests deselected with `-m "not integration"`
+---
+
+## 2026-04-13 - US-002
+- What was implemented:
+  - New module `src/lithos/lcma/enrich.py` with `EnrichWorker` class
+  - `_resolve_node_id()` helper with normalization contract per event type
+  - Event consumer subscribes to 6 event types, routes to enrich_queue
+  - Drain loop runs every `enrich_drain_interval_minutes`, processes pending nodes and tasks
+  - `drain()` method with error handling + requeue on failure
+  - StatsStore `drain_pending_nodes`/`drain_pending_tasks` now accept `max_attempts` kwarg
+  - `requeue_failed()` now increments `attempts` column
+  - Server integration: EnrichWorker created in constructor (when lcma.enabled), started in `initialize()`, stopped via `stop_enrich_worker()`
+  - CLI updated to call `stop_enrich_worker()` on shutdown
+  - conftest server fixture updated to stop enrich worker
+  - 21 new unit tests covering lifecycle, all event types, drain loop, max attempts
+- Files changed:
+  - src/lithos/lcma/enrich.py (new)
+  - src/lithos/lcma/stats.py (drain methods + requeue_failed)
+  - src/lithos/server.py (EnrichWorker init/start/stop)
+  - src/lithos/cli.py (shutdown)
+  - tests/conftest.py (server fixture cleanup)
+  - tests/test_enrich_worker.py (new — 21 tests)
+- **Learnings for future iterations:**
+  - Use `contextlib.suppress(asyncio.CancelledError)` instead of try/except/pass (SIM105)
+  - Ruff I001 import sorting: lithos.lcma.edges must come before lithos.lcma.enrich alphabetically
+  - EventBus.subscribe() returns a Queue; must call unsubscribe() on stop to prevent memory leaks
+  - EnrichWorker._enrich_node and _consolidate_task are stubs for US-003/US-005
+  - CLI shutdown uses asyncio.run() since the event loop is not running at KeyboardInterrupt time
 ---

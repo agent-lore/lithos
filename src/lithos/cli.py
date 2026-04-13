@@ -129,6 +129,7 @@ def serve(
     except KeyboardInterrupt:
         click.echo("\nShutting down...")
         server.stop_file_watcher()
+        asyncio.run(server.stop_enrich_worker())
     finally:
         shutdown_telemetry()
 
