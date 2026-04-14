@@ -18,11 +18,16 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import aiosqlite
 
 from lithos.config import LithosConfig, get_config
 
+if TYPE_CHECKING:
+    from lithos.telemetry import _LithosMetrics
+
+_lithos_metrics: _LithosMetrics | None = None
 try:
     from lithos.telemetry import lithos_metrics as _lithos_metrics
 
@@ -777,7 +782,7 @@ class StatsStore:
                 (node_id, initial, delta),
             )
             await db.commit()
-        if _HAS_TELEMETRY:
+        if _HAS_TELEMETRY and _lithos_metrics is not None:
             _lithos_metrics.lcma_salience_updates.add(1)
 
     async def increment_ignored(self, node_id: str) -> None:

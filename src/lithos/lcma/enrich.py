@@ -14,13 +14,6 @@ import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-try:
-    from lithos.telemetry import lithos_metrics as _lithos_metrics
-
-    _HAS_TELEMETRY = True
-except Exception:
-    _HAS_TELEMETRY = False
-
 from lithos.events import (
     EDGE_UPSERTED,
     ENRICH_SUBSCRIBER_QUEUE_SIZE,
@@ -39,6 +32,15 @@ if TYPE_CHECKING:
     from lithos.knowledge import KnowledgeManager
     from lithos.lcma.edges import EdgeStore
     from lithos.lcma.stats import StatsStore
+    from lithos.telemetry import _LithosMetrics
+
+_lithos_metrics: _LithosMetrics | None = None
+try:
+    from lithos.telemetry import lithos_metrics as _lithos_metrics
+
+    _HAS_TELEMETRY = True
+except Exception:
+    _HAS_TELEMETRY = False
 
 logger = logging.getLogger(__name__)
 
@@ -478,6 +480,7 @@ class EnrichWorker:
         """Record OTEL metrics for successfully processed enrich_queue items."""
         if not _HAS_TELEMETRY:
             return
+        assert _lithos_metrics is not None
         try:
             items = await self._stats_store.get_enrich_items_by_ids(claimed_ids)
             for item in items:
@@ -512,7 +515,7 @@ class EnrichWorker:
                 identifier,
                 max_attempts,
             )
-            if _HAS_TELEMETRY:
+            if _HAS_TELEMETRY and _lithos_metrics is not None:
                 _lithos_metrics.lcma_enrich_exhausted.add(len(exhausted))
 
     async def _enrich_node(self, node_id: str, trigger_types: object) -> None:

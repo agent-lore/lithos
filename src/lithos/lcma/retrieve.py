@@ -24,13 +24,6 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-try:
-    from lithos.telemetry import lithos_metrics as _lithos_metrics
-
-    _HAS_TELEMETRY = True
-except Exception:
-    _HAS_TELEMETRY = False
-
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
     scout_coactivation,
@@ -56,6 +49,15 @@ if TYPE_CHECKING:
     from lithos.knowledge import KnowledgeManager
     from lithos.lcma.edges import EdgeStore
     from lithos.search import SearchEngine
+    from lithos.telemetry import _LithosMetrics
+
+_lithos_metrics: _LithosMetrics | None = None
+try:
+    from lithos.telemetry import lithos_metrics as _lithos_metrics
+
+    _HAS_TELEMETRY = True
+except Exception:
+    _HAS_TELEMETRY = False
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +238,7 @@ async def compute_temperature(
     """
     del edge_store, namespace_filter  # unused in MVP 1
     temperature = lcma_config.temperature_default
-    if _HAS_TELEMETRY and temperature >= _COLD_START_TEMPERATURE:
+    if _HAS_TELEMETRY and _lithos_metrics is not None and temperature >= _COLD_START_TEMPERATURE:
         _lithos_metrics.lcma_temperature_cold_start.add(1)
     return temperature
 
@@ -330,7 +332,7 @@ async def run_retrieve(
                 continue
             executed_scouts.add(name)
             all_candidates.extend(result)
-            if _HAS_TELEMETRY:
+            if _HAS_TELEMETRY and _lithos_metrics is not None:
                 # Phase A scouts run concurrently via asyncio.gather, so all scouts
                 # share the same wall-clock elapsed time (_phase_a_elapsed). This
                 # records each scout's *share* of the Phase A wall-clock duration,
@@ -353,7 +355,7 @@ async def run_retrieve(
                 )
                 executed_scouts.add("scout_provenance")
                 all_candidates.extend(prov_candidates)
-                if _HAS_TELEMETRY:
+                if _HAS_TELEMETRY and _lithos_metrics is not None:
                     _lithos_metrics.lcma_scout_duration.record(
                         (time.perf_counter() - _t) * 1000, {"scout": "scout_provenance"}
                     )
@@ -370,7 +372,7 @@ async def run_retrieve(
                 )
                 executed_scouts.add("scout_graph")
                 all_candidates.extend(graph_candidates)
-                if _HAS_TELEMETRY:
+                if _HAS_TELEMETRY and _lithos_metrics is not None:
                     _lithos_metrics.lcma_scout_duration.record(
                         (time.perf_counter() - _t) * 1000, {"scout": "scout_graph"}
                     )
@@ -387,7 +389,7 @@ async def run_retrieve(
                 )
                 executed_scouts.add("scout_coactivation")
                 all_candidates.extend(coact_candidates)
-                if _HAS_TELEMETRY:
+                if _HAS_TELEMETRY and _lithos_metrics is not None:
                     _lithos_metrics.lcma_scout_duration.record(
                         (time.perf_counter() - _t) * 1000, {"scout": "scout_coactivation"}
                     )
@@ -404,7 +406,7 @@ async def run_retrieve(
                 )
                 executed_scouts.add("scout_source_url")
                 all_candidates.extend(src_url_candidates)
-                if _HAS_TELEMETRY:
+                if _HAS_TELEMETRY and _lithos_metrics is not None:
                     _lithos_metrics.lcma_scout_duration.record(
                         (time.perf_counter() - _t) * 1000, {"scout": "scout_source_url"}
                     )
@@ -521,7 +523,7 @@ async def run_retrieve(
 
     finally:
         # ── OTEL retrieve metrics ─────────────────────────────────
-        if _HAS_TELEMETRY:
+        if _HAS_TELEMETRY and _lithos_metrics is not None:
             try:
                 _retrieve_elapsed_ms = (time.perf_counter() - _retrieve_t0) * 1000
                 _lithos_metrics.lcma_retrieve_duration.record(_retrieve_elapsed_ms)
