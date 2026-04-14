@@ -563,6 +563,6 @@ async def _project_provenance_to_edges(
         "provenance projection applied: created=%d removed=%d",
         created_count,
         removed_count,
-        extra={"created": created_count, "removed": removed_count, "dry_run": False},
+        extra={"edges_created": created_count, "edges_removed": removed_count, "dry_run": False},
     )
     return {"created": created_count, "removed": removed_count}

@@ -90,7 +90,11 @@ def serve(
             transport,
             config.storage.data_dir,
             watch,
-            extra={"transport": transport, "data_dir": str(config.storage.data_dir), "watch": watch},
+            extra={
+                "transport": transport,
+                "data_dir": str(config.storage.data_dir),
+                "watch": watch,
+            },
         )
         await server.initialize()
         logger.info("lithos server initialized: data_dir=%s", config.storage.data_dir)

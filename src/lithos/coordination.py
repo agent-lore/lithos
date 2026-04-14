@@ -304,7 +304,7 @@ class CoordinationService:
                     agent_id,
                     name,
                     agent_type,
-                    extra={"agent_id": agent_id, "name": name, "agent_type": agent_type},
+                    extra={"agent_id": agent_id, "agent_name": name, "agent_type": agent_type},
                 )
             else:
                 logger.debug(

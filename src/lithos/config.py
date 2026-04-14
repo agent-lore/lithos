@@ -284,7 +284,8 @@ class LithosConfig(BaseSettings):
         """Load configuration from YAML file."""
         if not path.exists():
             logger.warning(
-                "Config file not found, using defaults: path=%s", path,
+                "Config file not found, using defaults: path=%s",
+                path,
                 extra={"config_path": str(path)},
             )
             return cls()
