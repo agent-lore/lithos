@@ -106,7 +106,12 @@ async def reinforce_edges_between(
             await edge_store.adjust_weight(edge_id, 0.03)
             logger.debug(
                 "reinforce_edges_between: strengthened existing edge",
-                extra={"edge_id": edge_id, "from_id": from_id, "to_id": to_id, "weight_delta": 0.03},
+                extra={
+                    "edge_id": edge_id,
+                    "from_id": from_id,
+                    "to_id": to_id,
+                    "weight_delta": 0.03,
+                },
             )
         else:
             eid = await edge_store.upsert(
@@ -153,7 +158,12 @@ async def penalize_ignored(
                 await stats_store.update_salience(node_id, -0.02)
                 logger.debug(
                     "penalize_ignored: decayed salience for chronically ignored node",
-                    extra={"node_id": node_id, "ignored_count": ignored, "cited_count": cited, "salience_delta": -0.02},
+                    extra={
+                        "node_id": node_id,
+                        "ignored_count": ignored,
+                        "cited_count": cited,
+                        "salience_delta": -0.02,
+                    },
                 )
         logger.debug(
             "penalize_ignored: incremented ignored count",

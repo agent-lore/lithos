@@ -2651,7 +2651,9 @@ class LithosServer:
                     "task_id": task_id,
                     "agent": agent,
                     "cited_count": len(cited_nodes) if cited_nodes is not None else 0,
-                    "misleading_count": len(misleading_nodes) if misleading_nodes is not None else 0,
+                    "misleading_count": len(misleading_nodes)
+                    if misleading_nodes is not None
+                    else 0,
                     "receipt_id": receipt_id,
                 },
             )

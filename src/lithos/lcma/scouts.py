@@ -651,7 +651,11 @@ async def scout_graph(
             break
     logger.debug(
         "scout_graph: completed",
-        extra={"seed_count": len(seed_ids), "neighbors_found": len(neighbor_best), "candidates": len(candidates)},
+        extra={
+            "seed_count": len(seed_ids),
+            "neighbors_found": len(neighbor_best),
+            "candidates": len(candidates),
+        },
     )
     return candidates
 
@@ -719,7 +723,11 @@ async def scout_coactivation(
             break
     logger.debug(
         "scout_coactivation: completed",
-        extra={"seed_count": len(seed_ids), "coactivated": len(coactivated), "candidates": len(candidates)},
+        extra={
+            "seed_count": len(seed_ids),
+            "coactivated": len(coactivated),
+            "candidates": len(candidates),
+        },
     )
     return candidates
 
@@ -806,7 +814,11 @@ async def scout_source_url(
             break
     logger.debug(
         "scout_source_url: completed",
-        extra={"seed_count": len(seed_ids), "domain_matches": len(matches), "candidates": len(candidates)},
+        extra={
+            "seed_count": len(seed_ids),
+            "domain_matches": len(matches),
+            "candidates": len(candidates),
+        },
     )
     return candidates
 

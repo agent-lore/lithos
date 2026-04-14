@@ -420,7 +420,12 @@ class EnrichWorker:
             if enqueued:
                 logger.debug(
                     "EnrichWorker: enqueued edge nodes",
-                    extra={"trigger_type": event.type, "from_id": from_id, "to_id": to_id, "enqueued": enqueued},
+                    extra={
+                        "trigger_type": event.type,
+                        "from_id": from_id,
+                        "to_id": to_id,
+                        "enqueued": enqueued,
+                    },
                 )
             return
 
@@ -591,7 +596,12 @@ class EnrichWorker:
 
         logger.debug(
             "EnrichWorker: enriching node",
-            extra={"node_id": node_id, "trigger_types": list(trigger_types) if isinstance(trigger_types, (list, set, tuple)) else trigger_types},
+            extra={
+                "node_id": node_id,
+                "trigger_types": list(trigger_types)
+                if isinstance(trigger_types, (list, set, tuple))
+                else trigger_types,
+            },
         )
 
         # --- Salience decay ---
