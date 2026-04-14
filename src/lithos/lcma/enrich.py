@@ -480,7 +480,8 @@ class EnrichWorker:
         """Record OTEL metrics for successfully processed enrich_queue items."""
         if not _HAS_TELEMETRY:
             return
-        assert _lithos_metrics is not None
+        if _lithos_metrics is None:
+            return
         try:
             items = await self._stats_store.get_enrich_items_by_ids(claimed_ids)
             for item in items:

@@ -155,6 +155,9 @@ class StatsStore:
     def __init__(self, config: LithosConfig | None = None) -> None:
         self._config = config
         self._opened = False
+        self._cached_enrich_queue_depth: int = 0
+        self._cached_coactivation_pairs: int = 0
+        self._cached_working_memory_active_tasks: int = 0
 
     @property
     def config(self) -> LithosConfig:
@@ -724,9 +727,6 @@ class StatsStore:
 
     # These are populated by _refresh_cached_counts() which is called
     # periodically by the OTEL metric collection loop via register_lcma_metrics.
-    _cached_enrich_queue_depth: int = 0
-    _cached_coactivation_pairs: int = 0
-    _cached_working_memory_active_tasks: int = 0
 
     def get_cached_enrich_queue_depth(self) -> int:
         """Return the last cached enrich_queue unprocessed item count (sync, cheap)."""
