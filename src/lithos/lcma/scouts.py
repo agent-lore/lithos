@@ -20,8 +20,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-import frontmatter as fm
-
 from lithos.lcma.utils import Candidate
 
 if TYPE_CHECKING:
@@ -711,31 +709,19 @@ async def scout_source_url(
     path_prefix: str | None = None,
 ) -> list[Candidate]:
     """Find notes from the same URL domain as seed notes."""
-    from lithos.knowledge import normalize_url
-
     seed_set = set(seed_ids)
     url_map = knowledge._source_url_to_id
 
-    # 1. Collect domains from seed notes themselves (not from _source_url_to_id
-    #    ownership, which may miss notes involved in URL collisions).
+    # 1. Collect domains from seed notes using the in-memory metadata cache
+    #    (avoids synchronous disk I/O from frontmatter parsing). This handles
+    #    both URL owners and non-owners in the _source_url_to_id map.
     seed_domains: set[str] = set()
     for seed_id in seed_ids:
-        file_rel = knowledge._id_to_path.get(seed_id)
-        if file_rel is None:
-            continue
-        full_path = knowledge.knowledge_path / file_rel
-        if not full_path.exists():
-            continue
-        try:
-            post = fm.load(str(full_path))
-            raw_url: str | None = post.metadata.get("source_url")  # type: ignore[assignment]
-            if raw_url:
-                norm = normalize_url(raw_url)
-                domain = _extract_domain(norm)
-                if domain:
-                    seed_domains.add(domain)
-        except Exception:
-            continue
+        cached = knowledge._meta_cache.get(seed_id)
+        if cached and cached.source_url:
+            domain = _extract_domain(cached.source_url)
+            if domain:
+                seed_domains.add(domain)
 
     if not seed_domains:
         return []

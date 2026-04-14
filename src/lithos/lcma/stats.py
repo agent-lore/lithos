@@ -609,6 +609,46 @@ class StatsStore:
             )
             await db.commit()
 
+    async def increment_node_stats_batch(self, node_ids: list[str]) -> None:
+        """Increment retrieval_count for multiple nodes in a single transaction."""
+        if not node_ids:
+            return
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executemany(
+                """INSERT INTO node_stats (node_id, retrieval_count, last_retrieved_at, salience)
+                   VALUES (?, 1, ?, 0.5)
+                   ON CONFLICT(node_id) DO UPDATE SET
+                     retrieval_count = retrieval_count + 1,
+                     last_retrieved_at = excluded.last_retrieved_at""",
+                [(nid, now) for nid in node_ids],
+            )
+            await db.commit()
+
+    async def increment_coactivation_batch(
+        self,
+        pairs: list[tuple[str, str]],
+        namespace: str,
+    ) -> None:
+        """Increment coactivation counts for multiple pairs in a single transaction."""
+        if not pairs:
+            return
+        await self._ensure_open()
+        now = datetime.now(timezone.utc).isoformat()
+        # Canonicalize pairs so node_id_a <= node_id_b
+        canonical = [(min(a, b), max(a, b)) for a, b in pairs]
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.executemany(
+                """INSERT INTO coactivation (node_id_a, node_id_b, namespace, count, last_at)
+                   VALUES (?, ?, ?, 1, ?)
+                   ON CONFLICT(node_id_a, node_id_b, namespace) DO UPDATE SET
+                     count = count + 1,
+                     last_at = excluded.last_at""",
+                [(a, b, namespace, now) for a, b in canonical],
+            )
+            await db.commit()
+
     async def get_node_stats(self, node_id: str) -> dict[str, object] | None:
         """Return all node_stats columns for *node_id*, or ``None`` if absent."""
         await self._ensure_open()
@@ -619,6 +659,25 @@ class StatsStore:
         if row is None:
             return None
         return dict(row)
+
+    async def get_node_stats_batch(self, node_ids: list[str]) -> dict[str, dict[str, object]]:
+        """Return node_stats rows for multiple nodes in a single query.
+
+        Returns a mapping of ``node_id -> dict`` for rows that exist.
+        Missing nodes are omitted from the result.
+        """
+        if not node_ids:
+            return {}
+        await self._ensure_open()
+        placeholders = ",".join("?" for _ in node_ids)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"SELECT * FROM node_stats WHERE node_id IN ({placeholders})",
+                node_ids,
+            )
+            rows = await cursor.fetchall()
+        return {row["node_id"]: dict(row) for row in rows}
 
     async def list_all_node_ids(self) -> list[str]:
         """Return all node_id values from node_stats."""

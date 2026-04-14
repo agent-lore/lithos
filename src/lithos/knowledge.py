@@ -579,6 +579,7 @@ class _CachedMeta:
     source: str | None = None
     note_type: str | None = None
     status: str | None = None
+    source_url: str | None = None
 
 
 class _UnsetType:
@@ -707,6 +708,7 @@ class KnowledgeManager:
                     raw_note_type: str | None = post.metadata.get("note_type")  # type: ignore[assignment]
                     raw_namespace: str | None = post.metadata.get("namespace")  # type: ignore[assignment]
                     raw_status: str | None = post.metadata.get("status")  # type: ignore[assignment]
+                    raw_source_url: str | None = post.metadata.get("source_url")  # type: ignore[assignment]
                     cached_namespace = (
                         raw_namespace
                         if isinstance(raw_namespace, str) and raw_namespace
@@ -726,6 +728,7 @@ class KnowledgeManager:
                         source=raw_source if isinstance(raw_source, str) else None,
                         note_type=raw_note_type if isinstance(raw_note_type, str) else None,
                         status=raw_status if isinstance(raw_status, str) else None,
+                        source_url=raw_source_url if isinstance(raw_source_url, str) else None,
                     )
 
                     # Populate source_url -> id map
@@ -977,6 +980,7 @@ class KnowledgeManager:
                 source=metadata.source,
                 note_type=metadata.note_type,
                 status=metadata.status,
+                source_url=metadata.source_url,
             )
 
             logger.info(
@@ -1347,6 +1351,7 @@ class KnowledgeManager:
                 source=doc.metadata.source,
                 note_type=doc.metadata.note_type,
                 status=doc.metadata.status,
+                source_url=doc.metadata.source_url,
             )
 
             if logger.isEnabledFor(logging.INFO):
@@ -1650,6 +1655,7 @@ class KnowledgeManager:
             source=metadata.source,
             note_type=metadata.note_type,
             status=metadata.status,
+            source_url=metadata.source_url,
         )
 
         return doc

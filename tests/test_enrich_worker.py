@@ -1028,6 +1028,90 @@ class TestExtractEntities:
         doc, _ = await km.read(id=doc_id)
         assert doc.metadata.entities == agent_entities
 
+    async def test_enrich_node_extracts_entities_only_on_create_or_update(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """_enrich_node only extracts entities when trigger_types includes note.created/updated."""
+        km = KnowledgeManager(test_config)
+
+        result = await km.create(
+            title="Trigger Gating Test",
+            content="Lithos uses [[NetworkX]] for graph operations.",
+            agent="test-agent",
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=mock_coordination,
+        )
+
+        # Call with edge.upserted trigger — should NOT extract entities
+        await worker._enrich_node(doc_id, [EDGE_UPSERTED])
+        doc, _ = await km.read(id=doc_id)
+        assert doc.metadata.entities == []
+
+        # Call with note.created trigger — SHOULD extract entities
+        await worker._enrich_node(doc_id, [NOTE_CREATED])
+        doc, _ = await km.read(id=doc_id)
+        assert len(doc.metadata.entities) > 0
+        assert "NetworkX" in doc.metadata.entities
+
+    async def test_entity_extraction_ignores_fenced_code_blocks(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """Entity extraction should not extract identifiers from fenced code blocks."""
+        km = KnowledgeManager(test_config)
+
+        content = (
+            "This note discusses Python.\n\n"
+            "```python\n"
+            "class MyInternalClass:\n"
+            "    pass\n"
+            "```\n\n"
+            "The [[NetworkX]] library is used."
+        )
+        result = await km.create(
+            title="Code Block Test",
+            content=content,
+            agent="test-agent",
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=mock_coordination,
+        )
+
+        await worker._extract_entities(doc_id)
+        doc, _ = await km.read(id=doc_id)
+        # NetworkX should be extracted (wiki-link outside code fence)
+        assert "NetworkX" in doc.metadata.entities
+        # MyInternalClass should NOT be extracted (inside code fence)
+        assert "MyInternalClass" not in doc.metadata.entities
+
 
 # ---------------------------------------------------------------------------
 # Full sweep tests

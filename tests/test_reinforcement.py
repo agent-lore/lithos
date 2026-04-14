@@ -308,6 +308,30 @@ class TestPenalizeIgnored:
         # No decay: ignored_count(6) is NOT > cited_count(10)
         assert stats["salience"] == pytest.approx(0.5)
 
+    async def test_ignored_cumulative_decay(
+        self,
+        knowledge_manager: KnowledgeManager,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """Repeated calls past threshold apply cumulative salience decay."""
+        nid = await _create_note(knowledge_manager, "Note CumDecay")
+
+        # Set cited_count to 3 so condition ignored > cited is eventually true
+        for _ in range(3):
+            await stats_store.increment_cited(nid)
+
+        # Call 8 times: first 5 only increment, calls 6-8 each decay by 0.02
+        for _ in range(8):
+            await penalize_ignored([nid], stats_store)
+
+        stats = await stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["ignored_count"] == 8
+        # Calls 6, 7, 8 each apply -0.02 (ignored > 5 and ignored > cited=3)
+        expected_salience = 0.5 - (3 * 0.02)
+        assert stats["salience"] == pytest.approx(expected_salience)
+
 
 class TestPenalizeMisleading:
     """penalize_misleading: salience penalty and quarantine threshold."""

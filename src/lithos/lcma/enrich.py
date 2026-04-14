@@ -202,6 +202,9 @@ _SUBSCRIBED_EVENT_TYPES = [
 ]
 
 
+_CODE_FENCE_RE = re.compile(r"```[\s\S]*?```")
+
+
 def _extract_entities_from_text(text: str) -> list[str]:
     """Extract entity names from text using rule-based heuristics.
 
@@ -213,6 +216,9 @@ def _extract_entities_from_text(text: str) -> list[str]:
 
     Returns a deduplicated, sorted list of entity names.
     """
+    # Strip fenced code blocks to avoid extracting code identifiers as entities
+    text = _CODE_FENCE_RE.sub("", text)
+
     entities: set[str] = set()
 
     # 1. Wiki-links
@@ -491,10 +497,11 @@ class EnrichWorker:
         ):
             await self._extract_entities(node_id)
 
-    async def _apply_decay(self, node_id: str, stats: dict[str, object]) -> None:
+    async def _apply_decay(self, node_id: str, stats: dict[str, object]) -> bool:
         """Apply salience decay to a single node.
 
         Convergent: skips if ``last_decay_applied_at`` is already today (UTC).
+        Returns ``True`` if decay was applied, ``False`` otherwise.
         """
         now = datetime.now(timezone.utc)
 
@@ -505,7 +512,7 @@ class EnrichWorker:
             if last_decay_dt.tzinfo is None:
                 last_decay_dt = last_decay_dt.replace(tzinfo=timezone.utc)
             if last_decay_dt.date() == now.date():
-                return
+                return False
 
         # Determine days since last use
         last_used_raw = stats.get("last_used_at")
@@ -513,7 +520,7 @@ class EnrichWorker:
             # Fallback to last_retrieved_at
             last_used_raw = stats.get("last_retrieved_at")
         if not isinstance(last_used_raw, str) or not last_used_raw:
-            return  # No usage data — skip decay
+            return False  # No usage data — skip decay
 
         last_used_dt = datetime.fromisoformat(last_used_raw)
         if last_used_dt.tzinfo is None:
@@ -521,7 +528,7 @@ class EnrichWorker:
 
         days_since_last_use = (now - last_used_dt).days
         if days_since_last_use <= self._config.decay_inactive_days:
-            return
+            return False
 
         decay_amount = min(0.1, days_since_last_use * 0.005)
         await self._stats_store.update_salience(node_id, -decay_amount)
@@ -532,6 +539,7 @@ class EnrichWorker:
             days_since_last_use,
             decay_amount,
         )
+        return True
 
     async def _extract_entities(self, node_id: str) -> None:
         """Extract entities from note content and write to frontmatter.
@@ -585,15 +593,12 @@ class EnrichWorker:
 
         # --- Decay all nodes ---
         node_ids = await self._stats_store.list_all_node_ids()
+        all_stats = await self._stats_store.get_node_stats_batch(node_ids)
         decayed = 0
         for node_id in node_ids:
-            stats = await self._stats_store.get_node_stats(node_id)
-            if stats is not None:
-                salience_before = stats.get("salience")
-                await self._apply_decay(node_id, stats)
-                stats_after = await self._stats_store.get_node_stats(node_id)
-                if stats_after is not None and stats_after.get("salience") != salience_before:
-                    decayed += 1
+            stats = all_stats.get(node_id)
+            if stats is not None and await self._apply_decay(node_id, stats):
+                decayed += 1
 
         # --- Evict stale working memory ---
         completed_tasks = await self._coordination.list_tasks(status="completed")

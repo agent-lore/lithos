@@ -786,7 +786,7 @@ class LithosServer:
                         lithos_metrics.file_watcher_events.add(1, {"event_type": event_type})
                         await self._emit(
                             LithosEvent(
-                                type=NOTE_UPDATED,
+                                type=NOTE_CREATED if is_new else NOTE_UPDATED,
                                 payload={"path": str(relative_path)},
                             )
                         )

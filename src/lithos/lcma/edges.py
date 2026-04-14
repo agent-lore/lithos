@@ -340,9 +340,9 @@ class EdgeStore:
             )
             if cursor.rowcount == 0:
                 return None
+            await db.commit()
             cursor = await db.execute("SELECT weight FROM edges WHERE edge_id = ?", (edge_id,))
             row = await cursor.fetchone()
-            await db.commit()
         assert row is not None
         return row[0]
 

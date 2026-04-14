@@ -376,11 +376,13 @@ async def run_retrieve(
 
         # ── Terrace 1: rerank_fast ────────────────────────────────
         # ── Pre-fetch salience map for reranking ─────��────────────
+        all_node_ids = [c.node_id for c in merged]
+        stats_batch = await stats_store.get_node_stats_batch(all_node_ids)
         salience_map: dict[str, float] = {}
-        for c in merged:
-            stats = await stats_store.get_node_stats(c.node_id)
+        for nid in all_node_ids:
+            stats = stats_batch.get(nid)
             raw = stats["salience"] if stats else 0.5
-            salience_map[c.node_id] = raw if isinstance(raw, float) else 0.5
+            salience_map[nid] = raw if isinstance(raw, float) else 0.5
 
         reranked = _rerank_fast(merged, lcma_config, knowledge, salience_map=salience_map)
         terrace_reached = 1
@@ -478,12 +480,11 @@ async def run_retrieve(
             try:
                 dom_ns = _dominant_namespace(final_node_ids, knowledge)
 
-                # Increment node_stats for every node in final_nodes
-                for nid in final_node_ids:
-                    await stats_store.increment_node_stats(node_id=nid)
+                # Batch-increment node_stats for all final nodes
+                await stats_store.increment_node_stats_batch(final_node_ids)
 
-                # Increment coactivation for every unordered pair
-                for a, b in itertools.combinations(final_node_ids, 2):
-                    await stats_store.increment_coactivation(node_a=a, node_b=b, namespace=dom_ns)
+                # Batch-increment coactivation for all unordered pairs
+                pairs = list(itertools.combinations(final_node_ids, 2))
+                await stats_store.increment_coactivation_batch(pairs, namespace=dom_ns)
             except Exception:
                 logger.warning("Coactivation/node_stats update failed", exc_info=True)
