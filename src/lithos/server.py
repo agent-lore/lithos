@@ -585,7 +585,7 @@ class LithosServer:
                     await self.edge_store.open()
 
                 # Register LCMA observable gauges when LCMA is enabled
-                if self._config.lcma.enabled and hasattr(self, "stats_store"):
+                if self._config.lcma.enabled and self.stats_store is not None:
                     register_lcma_metrics(
                         get_enrich_queue_depth=self.stats_store.get_cached_enrich_queue_depth,
                         get_coactivation_pairs=self.stats_store.get_cached_coactivation_pairs,

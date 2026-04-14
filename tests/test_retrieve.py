@@ -375,6 +375,59 @@ class TestComputeTemperature:
         temp = await compute_temperature(edge_store, lcma, None)
         assert temp == 0.5
 
+    @pytest.mark.asyncio
+    async def test_cold_start_counter_increments_when_temperature_at_threshold(
+        self, edge_store: EdgeStore
+    ) -> None:
+        """``lcma_temperature_cold_start`` counter increments when temperature
+        is at or above ``_COLD_START_TEMPERATURE`` (cold-start conditions)."""
+        from unittest.mock import MagicMock, patch
+
+        import lithos.lcma.retrieve as retrieve_module
+        import lithos.telemetry as tel_module
+
+        mock_counter = MagicMock()
+        orig = tel_module.lithos_metrics._lcma_temperature_cold_start
+        tel_module.lithos_metrics._lcma_temperature_cold_start = mock_counter
+
+        # temperature_default=0.9 is above _COLD_START_TEMPERATURE (0.8)
+        lcma = LcmaConfig(temperature_default=0.9)
+
+        try:
+            with patch.object(retrieve_module, "_HAS_TELEMETRY", True):
+                temp = await compute_temperature(edge_store, lcma, None)
+        finally:
+            tel_module.lithos_metrics._lcma_temperature_cold_start = orig
+
+        assert temp == 0.9
+        mock_counter.add.assert_called_once_with(1)
+
+    @pytest.mark.asyncio
+    async def test_cold_start_counter_does_not_increment_below_threshold(
+        self, edge_store: EdgeStore
+    ) -> None:
+        """Counter must NOT increment when temperature is below the cold-start threshold."""
+        from unittest.mock import MagicMock, patch
+
+        import lithos.lcma.retrieve as retrieve_module
+        import lithos.telemetry as tel_module
+
+        mock_counter = MagicMock()
+        orig = tel_module.lithos_metrics._lcma_temperature_cold_start
+        tel_module.lithos_metrics._lcma_temperature_cold_start = mock_counter
+
+        # temperature_default=0.3 is below _COLD_START_TEMPERATURE (0.8)
+        lcma = LcmaConfig(temperature_default=0.3)
+
+        try:
+            with patch.object(retrieve_module, "_HAS_TELEMETRY", True):
+                temp = await compute_temperature(edge_store, lcma, None)
+        finally:
+            tel_module.lithos_metrics._lcma_temperature_cold_start = orig
+
+        assert temp == 0.3
+        mock_counter.add.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # run_retrieve — Phase A parallelism

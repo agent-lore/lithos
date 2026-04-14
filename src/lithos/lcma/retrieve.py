@@ -210,7 +210,7 @@ def _dominant_namespace(
     return min(ns for ns, c in ns_counts.items() if c == max_count)
 
 
-_COLD_START_TEMPERATURE = 1.0
+_COLD_START_TEMPERATURE = 0.8  # temperatures at or above this value indicate cold-start conditions
 
 
 async def compute_temperature(
@@ -225,6 +225,10 @@ async def compute_temperature(
     MVP 3, when ``edges.db`` has been populated with enough typed edges to
     make coherence meaningful. The ``edge_store`` parameter is preserved in
     the signature so callers do not need to change when MVP 3 activates it.
+
+    Temperature semantics: high temperature (≥ ``_COLD_START_TEMPERATURE``)
+    indicates insufficient graph data (cold start). Low temperature indicates
+    a well-connected graph with high coherence.
     """
     del edge_store, namespace_filter  # unused in MVP 1
     temperature = lcma_config.temperature_default
@@ -309,7 +313,6 @@ async def run_retrieve(
                 scout_task_context(coordination, knowledge, limit=limit, **scout_kw)
             )
 
-        phase_a_timers = [time.perf_counter() for _ in phase_a_names]
         _phase_a_start = time.perf_counter()
         phase_a_results = await asyncio.gather(*phase_a_coros, return_exceptions=True)
         _phase_a_elapsed = time.perf_counter() - _phase_a_start
@@ -324,8 +327,11 @@ async def run_retrieve(
             executed_scouts.add(name)
             all_candidates.extend(result)
             if _HAS_TELEMETRY:
-                # Phase A scouts run in parallel; we report total elapsed as a proxy
-                # for each scout's contribution (individual timings require per-task wrapping)
+                # Phase A scouts run concurrently via asyncio.gather, so all scouts
+                # share the same wall-clock elapsed time (_phase_a_elapsed). This
+                # records each scout's *share* of the Phase A wall-clock duration,
+                # NOT its individual latency. Per-scout latencies are only meaningful
+                # for Phase B scouts, which run sequentially.
                 _lithos_metrics.lcma_scout_duration.record(
                     _phase_a_elapsed * 1000, {"scout": name}
                 )
