@@ -376,13 +376,37 @@ class TestComputeTemperature:
         assert temp == 0.5
 
     @pytest.mark.asyncio
-    async def test_cold_start_counter_increments_when_temperature_at_threshold(
-        self, edge_store: EdgeStore
+    @pytest.mark.parametrize(
+        "temperature_value, should_fire",
+        [
+            # At exactly the threshold (MVP1 default = 0.5 == _COLD_START_TEMPERATURE) → fires
+            (0.5, True),
+            # Above the threshold → fires
+            (0.9, True),
+            # Below the threshold → does NOT fire
+            (0.3, False),
+            (0.49, False),
+        ],
+        ids=[
+            "at_threshold_mvp1_default",
+            "above_threshold",
+            "below_threshold",
+            "just_below_threshold",
+        ],
+    )
+    async def test_cold_start_counter_threshold_parametrized(
+        self,
+        edge_store: EdgeStore,
+        temperature_value: float,
+        should_fire: bool,
     ) -> None:
-        """``lcma_temperature_cold_start`` counter increments when temperature
-        is at or above ``_COLD_START_TEMPERATURE`` (cold-start conditions)."""
-        from unittest.mock import MagicMock, patch
+        """Parametrised: ``lcma_temperature_cold_start`` fires when temperature >=
+        ``_COLD_START_TEMPERATURE`` (0.5) and must NOT fire below it.
 
+        The MVP1 default (temperature_default=0.5) sits exactly at the threshold,
+        so every MVP1 call should increment the counter — confirming cold-start
+        detection is active even before graph data is available.
+        """
         import lithos.lcma.retrieve as retrieve_module
         import lithos.telemetry as tel_module
 
@@ -390,7 +414,38 @@ class TestComputeTemperature:
         orig = tel_module.lithos_metrics._lcma_temperature_cold_start
         tel_module.lithos_metrics._lcma_temperature_cold_start = mock_counter
 
-        # temperature_default=0.9 is above _COLD_START_TEMPERATURE (0.8)
+        lcma = LcmaConfig(temperature_default=temperature_value)
+
+        try:
+            with patch.object(retrieve_module, "_HAS_TELEMETRY", True):
+                temp = await compute_temperature(edge_store, lcma, None)
+        finally:
+            tel_module.lithos_metrics._lcma_temperature_cold_start = orig
+
+        assert temp == temperature_value
+        if should_fire:
+            mock_counter.add.assert_called_once_with(1)
+        else:
+            mock_counter.add.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cold_start_counter_increments_when_temperature_at_threshold(
+        self, edge_store: EdgeStore
+    ) -> None:
+        """``lcma_temperature_cold_start`` counter increments when temperature
+        is at or above ``_COLD_START_TEMPERATURE`` (cold-start conditions).
+
+        Kept for backward compatibility; the parametrised test above is the
+        canonical coverage.
+        """
+        import lithos.lcma.retrieve as retrieve_module
+        import lithos.telemetry as tel_module
+
+        mock_counter = MagicMock()
+        orig = tel_module.lithos_metrics._lcma_temperature_cold_start
+        tel_module.lithos_metrics._lcma_temperature_cold_start = mock_counter
+
+        # temperature_default=0.9 is above _COLD_START_TEMPERATURE (0.5)
         lcma = LcmaConfig(temperature_default=0.9)
 
         try:
@@ -407,8 +462,6 @@ class TestComputeTemperature:
         self, edge_store: EdgeStore
     ) -> None:
         """Counter must NOT increment when temperature is below the cold-start threshold."""
-        from unittest.mock import MagicMock, patch
-
         import lithos.lcma.retrieve as retrieve_module
         import lithos.telemetry as tel_module
 
@@ -416,7 +469,7 @@ class TestComputeTemperature:
         orig = tel_module.lithos_metrics._lcma_temperature_cold_start
         tel_module.lithos_metrics._lcma_temperature_cold_start = mock_counter
 
-        # temperature_default=0.3 is below _COLD_START_TEMPERATURE (0.8)
+        # temperature_default=0.3 is below _COLD_START_TEMPERATURE (0.5)
         lcma = LcmaConfig(temperature_default=0.3)
 
         try:

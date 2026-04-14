@@ -448,7 +448,7 @@ class EnrichWorker:
                 logger.exception("EnrichWorker: node enrichment failed for %s, requeuing", node_id)
                 await self._stats_store.requeue_failed(claimed_ids)
                 await self._warn_exhausted(claimed_ids, max_attempts, identifier=node_id)
-                continue
+                continue  # skip _record_drain_metrics on failure path — item was requeued, not processed
             await self._record_drain_metrics(claimed_ids)
 
         # --- Task-level enrichment ---
@@ -466,7 +466,7 @@ class EnrichWorker:
                 )
                 await self._stats_store.requeue_failed(claimed_ids)
                 await self._warn_exhausted(claimed_ids, max_attempts, identifier=task_id)
-                continue
+                continue  # skip _record_drain_metrics on failure path — item was requeued, not processed
             await self._record_drain_metrics(claimed_ids)
 
         # Refresh cached gauge values after each drain cycle

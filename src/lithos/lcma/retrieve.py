@@ -210,7 +210,11 @@ def _dominant_namespace(
     return min(ns for ns, c in ns_counts.items() if c == max_count)
 
 
-_COLD_START_TEMPERATURE = 0.8  # temperatures at or above this value indicate cold-start conditions
+_COLD_START_TEMPERATURE = 0.5  # temperatures at or above this value indicate cold-start conditions
+# NOTE: temperature_default is 0.5 (LcmaConfig default), which exactly meets this threshold,
+# so the cold-start counter fires for every MVP1 call (no real graph data yet).
+# In MVP3, compute_temperature will return values derived from edge coherence; only
+# genuinely warm graphs (high coherence → low temperature) will stay below this threshold.
 
 
 async def compute_temperature(
