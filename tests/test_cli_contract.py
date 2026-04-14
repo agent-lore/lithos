@@ -322,11 +322,18 @@ class TestCLIContracts:
             def stop_file_watcher(self):
                 calls["stop"] += 1
 
+            async def stop_enrich_worker(self):
+                return None
+
         monkeypatch.setattr("lithos.server.create_server", lambda _cfg: _DummyServer())
+
+        _first_call = {"value": True}
 
         def _raise_keyboard_interrupt(coro):
             coro.close()
-            raise KeyboardInterrupt
+            if _first_call["value"]:
+                _first_call["value"] = False
+                raise KeyboardInterrupt
 
         monkeypatch.setattr("lithos.cli.asyncio.run", _raise_keyboard_interrupt)
 
