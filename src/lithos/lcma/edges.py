@@ -424,7 +424,9 @@ async def _project_node_provenance(
     to_create = desired - existing_keys
     to_remove = existing_keys - desired
 
-    for to_id, namespace in to_create:
+    # Upsert all desired edges (not just new ones) so that stale metadata
+    # on pre-existing edges is resynced to canonical values.
+    for to_id, namespace in desired:
         await edge_store.upsert(
             from_id=node_id,
             to_id=to_id,

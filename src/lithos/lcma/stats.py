@@ -171,6 +171,7 @@ class StatsStore:
             await db.executescript(SCHEMA)
             await self._migrate_add_cited_count(db)
             await self._migrate_add_last_decay_applied_at(db)
+            await self._migrate_add_enrich_queue_attempts(db)
             await db.commit()
         self._opened = True
 
@@ -568,6 +569,24 @@ class StatsStore:
             await db.commit()
         return count
 
+    async def get_exhausted_items(
+        self, claimed_ids: list[int], max_attempts: int
+    ) -> list[dict[str, object]]:
+        """Return enrich_queue rows among *claimed_ids* whose attempts >= *max_attempts*."""
+        if not claimed_ids:
+            return []
+        await self._ensure_open()
+        placeholders = ", ".join("?" for _ in claimed_ids)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"SELECT id, node_id, task_id, attempts FROM enrich_queue "
+                f"WHERE id IN ({placeholders}) AND attempts >= ?",
+                (*claimed_ids, max_attempts),
+            )
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
     # ------------------------------------------------------------------
     # Node stats operations
     # ------------------------------------------------------------------
@@ -868,6 +887,16 @@ class StatsStore:
         columns = {row[1] for row in await cursor.fetchall()}
         if "last_decay_applied_at" not in columns:
             await db.execute("ALTER TABLE node_stats ADD COLUMN last_decay_applied_at TIMESTAMP")
+
+    @staticmethod
+    async def _migrate_add_enrich_queue_attempts(db: aiosqlite.Connection) -> None:
+        """Add attempts column to existing enrich_queue tables."""
+        cursor = await db.execute("PRAGMA table_info(enrich_queue)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "attempts" not in columns:
+            await db.execute(
+                "ALTER TABLE enrich_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+            )
 
     @staticmethod
     async def _probe(path: Path) -> bool:

@@ -578,6 +578,11 @@ class LithosServer:
                     self._background_tasks.add(task)
                     task.add_done_callback(self._background_tasks.discard)
 
+                # Ensure edge store is open before the enrich worker
+                # starts — projection helpers no-op when edges.db is absent.
+                if self._config.lcma.enabled:
+                    await self.edge_store.open()
+
                 # Start enrichment worker when LCMA is enabled
                 if self._enrich_worker is not None:
                     await self._enrich_worker.start()
@@ -1722,6 +1727,7 @@ class LithosServer:
                 from_id = str(edge["from_id"])
                 to_id = str(edge["to_id"])
 
+                loser_id: str | None = None
                 if resolution == "superseded":
                     if winner_id is None:
                         return {
@@ -1753,7 +1759,7 @@ class LithosServer:
                         "message": f"Edge '{edge_id}' could not be updated",
                     }
 
-                if resolution == "superseded":
+                if resolution == "superseded" and winner_id is not None:
                     await self.knowledge.update(
                         id=winner_id,
                         agent=resolver,

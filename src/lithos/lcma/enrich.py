@@ -433,6 +433,7 @@ class EnrichWorker:
             except Exception:
                 logger.exception("EnrichWorker: node enrichment failed for %s, requeuing", node_id)
                 await self._stats_store.requeue_failed(claimed_ids)
+                await self._warn_exhausted(claimed_ids, max_attempts, identifier=node_id)
 
         # --- Task-level enrichment ---
         task_entries = await self._stats_store.drain_pending_tasks(max_attempts=max_attempts)
@@ -448,6 +449,19 @@ class EnrichWorker:
                     "EnrichWorker: task consolidation failed for %s, requeuing", task_id
                 )
                 await self._stats_store.requeue_failed(claimed_ids)
+                await self._warn_exhausted(claimed_ids, max_attempts, identifier=task_id)
+
+    async def _warn_exhausted(
+        self, claimed_ids: list[int], max_attempts: int, *, identifier: str
+    ) -> None:
+        """Log WARNING for items that have reached the retry cap after requeue."""
+        exhausted = await self._stats_store.get_exhausted_items(claimed_ids, max_attempts)
+        if exhausted:
+            logger.warning(
+                "EnrichWorker: %s has exhausted retry cap (%d attempts), dropping",
+                identifier,
+                max_attempts,
+            )
 
     async def _enrich_node(self, node_id: str, trigger_types: object) -> None:
         """Apply node-level enrichment: salience decay, edge projection, entity extraction.

@@ -238,9 +238,7 @@ class TestConflictResolveUpdateFailure:
     """Error when edge update fails (e.g. edge deleted between get and update)."""
 
     @pytest.mark.asyncio
-    async def test_returns_error_when_update_fails(
-        self, server_with_notes: LithosServer
-    ) -> None:
+    async def test_returns_error_when_update_fails(self, server_with_notes: LithosServer) -> None:
         from unittest.mock import AsyncMock, patch
 
         srv = server_with_notes

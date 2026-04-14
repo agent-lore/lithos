@@ -1167,3 +1167,179 @@ class TestFullSweep:
             from_id=derived_id, to_id=source_id, edge_type="derived_from"
         )
         assert len(valid_edges) == 1
+
+
+# ---------------------------------------------------------------------------
+# Fix-regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestAttemptsColumnMigration:
+    """Verify legacy stats.db without attempts column is migrated."""
+
+    async def test_legacy_db_without_attempts_column(
+        self,
+        test_config: LithosConfig,
+    ) -> None:
+        """Opening a stats.db that lacks the attempts column adds it via migration."""
+        import aiosqlite
+
+        db_path = test_config.storage.stats_db_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create a legacy schema without the attempts column
+        legacy_schema = """
+        CREATE TABLE IF NOT EXISTS node_stats (
+            node_id TEXT PRIMARY KEY,
+            salience REAL NOT NULL DEFAULT 0.5,
+            retrieval_count INTEGER NOT NULL DEFAULT 0,
+            last_retrieved_at TIMESTAMP,
+            last_used_at TIMESTAMP,
+            ignored_count INTEGER NOT NULL DEFAULT 0,
+            misleading_count INTEGER NOT NULL DEFAULT 0,
+            decay_rate REAL NOT NULL DEFAULT 0.0,
+            spaced_rep_strength REAL NOT NULL DEFAULT 0.0,
+            cited_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS enrich_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trigger_type TEXT NOT NULL,
+            node_id TEXT,
+            task_id TEXT,
+            triggered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS working_memory (
+            task_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            activation_count INTEGER NOT NULL DEFAULT 0,
+            first_seen_at TIMESTAMP,
+            last_seen_at TIMESTAMP,
+            last_receipt_id TEXT,
+            PRIMARY KEY (task_id, node_id)
+        );
+        CREATE TABLE IF NOT EXISTS receipts (
+            id TEXT PRIMARY KEY,
+            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            query TEXT NOT NULL,
+            "limit" INTEGER NOT NULL,
+            namespace_filter TEXT,
+            scouts_fired TEXT NOT NULL,
+            candidates_considered INTEGER NOT NULL DEFAULT 0,
+            final_nodes TEXT NOT NULL,
+            conflicts_surfaced TEXT NOT NULL,
+            surface_conflicts INTEGER NOT NULL DEFAULT 0,
+            temperature REAL NOT NULL,
+            terrace_reached INTEGER NOT NULL DEFAULT 0,
+            agent_id TEXT,
+            task_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS coactivation (
+            node_id_a TEXT NOT NULL,
+            node_id_b TEXT NOT NULL,
+            namespace TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            last_at TIMESTAMP,
+            PRIMARY KEY (node_id_a, node_id_b, namespace)
+        );
+        """
+        async with aiosqlite.connect(db_path) as db:
+            await db.executescript(legacy_schema)
+            await db.commit()
+
+        # Verify attempts column does NOT exist yet
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("PRAGMA table_info(enrich_queue)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            assert "attempts" not in columns
+
+        # Open StatsStore — migration should add the column
+        store = StatsStore(test_config)
+        store._opened = False  # force re-open
+        await store.open()
+
+        # Now drain and requeue should work without errors
+        await store.enqueue(trigger_type="note.created", node_id="test-node")
+        entries = await store.drain_pending_nodes(max_attempts=3)
+        assert len(entries) == 1
+        claimed_ids = entries[0]["claimed_ids"]
+        assert isinstance(claimed_ids, list)
+        count = await store.requeue_failed(claimed_ids)
+        assert count == len(claimed_ids)
+
+
+class TestRetryCapWarning:
+    """Verify WARNING logged when retry cap is exhausted."""
+
+    async def test_warning_logged_on_exhausted_retry(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When a node hits max_enrich_attempts, a WARNING is logged."""
+        import logging
+
+        await stats_store.enqueue(trigger_type=NOTE_CREATED, node_id="doc-exhaust")
+
+        async def failing_enrich(node_id: str, trigger_types: object) -> None:
+            raise RuntimeError("simulated failure")
+
+        worker._enrich_node = failing_enrich  # type: ignore[assignment]
+
+        # Drain 3 times to exhaust the 3 attempts
+        with caplog.at_level(logging.WARNING, logger="lithos.lcma.enrich"):
+            for _ in range(3):
+                await worker.drain()
+
+        assert any("exhausted retry cap" in r.message for r in caplog.records)
+        assert any(r.levelno == logging.WARNING for r in caplog.records if "exhausted" in r.message)
+
+
+class TestProjectNodeProvenanceUpsertStaleEdge:
+    """Verify _project_node_provenance upserts existing edges with stale metadata."""
+
+    async def test_stale_edge_metadata_resynced(
+        self,
+        edge_store: EdgeStore,
+        mock_knowledge: MagicMock,
+    ) -> None:
+        """A pre-existing derived_from edge with non-canonical metadata is resynced."""
+        node_id = "upsert-test-node"
+
+        # Create a derived_from edge with stale metadata (wrong weight and provenance_type)
+        await edge_store.upsert(
+            from_id=node_id,
+            to_id="source-1",
+            edge_type="derived_from",
+            weight=0.5,  # stale: canonical is 1.0
+            namespace="default",
+            provenance_type="manual",  # stale: canonical is "frontmatter"
+        )
+
+        # Verify stale values
+        edges_before = await edge_store.list_edges(
+            from_id=node_id, to_id="source-1", edge_type="derived_from"
+        )
+        assert len(edges_before) == 1
+        assert edges_before[0]["weight"] == 0.5
+        assert edges_before[0]["provenance_type"] == "manual"
+
+        # Set up knowledge mock
+        mock_knowledge.has_document = MagicMock(return_value=True)
+        mock_knowledge.get_doc_sources = MagicMock(return_value=["source-1"])
+        cached_meta = MagicMock()
+        cached_meta.namespace = "default"
+        mock_knowledge._meta_cache = {node_id: cached_meta}
+
+        result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
+        # No new edges created, no orphans removed — but existing one was upserted
+        assert result == {"created": 0, "removed": 0}
+
+        # Verify the edge now has canonical metadata
+        edges_after = await edge_store.list_edges(
+            from_id=node_id, to_id="source-1", edge_type="derived_from"
+        )
+        assert len(edges_after) == 1
+        assert edges_after[0]["weight"] == 1.0
+        assert edges_after[0]["provenance_type"] == "frontmatter"
