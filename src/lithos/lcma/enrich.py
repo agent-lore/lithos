@@ -11,8 +11,16 @@ import asyncio
 import contextlib
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+
+try:
+    from lithos.telemetry import lithos_metrics as _lithos_metrics
+
+    _HAS_TELEMETRY = True
+except Exception:
+    _HAS_TELEMETRY = False
 
 from lithos.events import (
     EDGE_UPSERTED,
@@ -440,6 +448,8 @@ class EnrichWorker:
                 logger.exception("EnrichWorker: node enrichment failed for %s, requeuing", node_id)
                 await self._stats_store.requeue_failed(claimed_ids)
                 await self._warn_exhausted(claimed_ids, max_attempts, identifier=node_id)
+                continue
+            await self._record_drain_metrics(claimed_ids)
 
         # --- Task-level enrichment ---
         task_entries = await self._stats_store.drain_pending_tasks(max_attempts=max_attempts)
@@ -456,6 +466,41 @@ class EnrichWorker:
                 )
                 await self._stats_store.requeue_failed(claimed_ids)
                 await self._warn_exhausted(claimed_ids, max_attempts, identifier=task_id)
+                continue
+            await self._record_drain_metrics(claimed_ids)
+
+        # Refresh cached gauge values after each drain cycle
+        try:
+            await self._stats_store.refresh_cached_counts()
+        except Exception:
+            logger.debug("EnrichWorker: failed to refresh cached counts", exc_info=True)
+
+    async def _record_drain_metrics(self, claimed_ids: list[int]) -> None:
+        """Record OTEL metrics for successfully processed enrich_queue items."""
+        if not _HAS_TELEMETRY:
+            return
+        try:
+            items = await self._stats_store.get_enrich_items_by_ids(claimed_ids)
+            for item in items:
+                triggered_at_raw = item.get("triggered_at")
+                processed_at_raw = item.get("processed_at")
+                attempts = item.get("attempts", 0)
+                if isinstance(triggered_at_raw, str) and isinstance(processed_at_raw, str):
+                    try:
+                        t0 = datetime.fromisoformat(triggered_at_raw)
+                        t1 = datetime.fromisoformat(processed_at_raw)
+                        if t0.tzinfo is None:
+                            t0 = t0.replace(tzinfo=timezone.utc)
+                        if t1.tzinfo is None:
+                            t1 = t1.replace(tzinfo=timezone.utc)
+                        lag_ms = (t1 - t0).total_seconds() * 1000
+                        _lithos_metrics.lcma_enrich_queue_processing_lag.record(lag_ms)
+                    except Exception:
+                        pass
+                if isinstance(attempts, int):
+                    _lithos_metrics.lcma_enrich_queue_attempts.record(attempts)
+        except Exception:
+            logger.debug("EnrichWorker: failed to record drain metrics", exc_info=True)
 
     async def _warn_exhausted(
         self, claimed_ids: list[int], max_attempts: int, *, identifier: str
@@ -468,6 +513,8 @@ class EnrichWorker:
                 identifier,
                 max_attempts,
             )
+            if _HAS_TELEMETRY:
+                _lithos_metrics.lcma_enrich_exhausted.add(len(exhausted))
 
     async def _enrich_node(self, node_id: str, trigger_types: object) -> None:
         """Apply node-level enrichment: salience decay, edge projection, entity extraction.

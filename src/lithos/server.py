@@ -51,6 +51,7 @@ from lithos.telemetry import (
     get_tracer,
     lithos_metrics,
     register_active_claims_observer,
+    register_lcma_metrics,
     register_resource_gauges,
     register_sse_active_clients_observer,
     tool_metrics,
@@ -582,6 +583,14 @@ class LithosServer:
                 # starts — projection helpers no-op when edges.db is absent.
                 if self._config.lcma.enabled:
                     await self.edge_store.open()
+
+                # Register LCMA observable gauges when LCMA is enabled
+                if self._config.lcma.enabled and hasattr(self, "stats_store"):
+                    register_lcma_metrics(
+                        get_enrich_queue_depth=self.stats_store.get_cached_enrich_queue_depth,
+                        get_coactivation_pairs=self.stats_store.get_cached_coactivation_pairs,
+                        get_working_memory_active_tasks=self.stats_store.get_cached_working_memory_active_tasks,
+                    )
 
                 # Start enrichment worker when LCMA is enabled
                 if self._enrich_worker is not None:

@@ -1282,3 +1282,202 @@ class TestSSEMetrics:
 
         # create_observable_gauge must be called exactly once
         assert mock_meter.create_observable_gauge.call_count == 1
+
+
+class TestLcmaMetrics:
+    """Tests for LCMA pipeline OTEL metrics."""
+
+    # ------------------------------------------------------------------
+    # No-op safety tests (OTEL inactive)
+    # ------------------------------------------------------------------
+
+    def test_lcma_counters_no_raise_without_otel(self):
+        """LCMA counters must not raise when OTEL is inactive."""
+        from lithos.telemetry import lithos_metrics
+
+        lithos_metrics.lcma_enrich_exhausted.add(1)
+        lithos_metrics.lcma_temperature_cold_start.add(1)
+        lithos_metrics.lcma_salience_updates.add(1)
+
+    def test_lcma_histograms_no_raise_without_otel(self):
+        """LCMA histograms must not raise when OTEL is inactive."""
+        from lithos.telemetry import lithos_metrics
+
+        lithos_metrics.lcma_enrich_queue_processing_lag.record(123.4)
+        lithos_metrics.lcma_enrich_queue_attempts.record(3)
+        lithos_metrics.lcma_retrieve_duration.record(500.0)
+        lithos_metrics.lcma_retrieve_candidates_considered.record(42)
+        lithos_metrics.lcma_retrieve_final_nodes.record(10)
+        lithos_metrics.lcma_scout_duration.record(15.0, {"scout": "scout_vector"})
+        lithos_metrics.lcma_scout_candidates.record(8, {"scout": "scout_vector"})
+
+    def test_register_lcma_metrics_no_raise_without_otel(self):
+        """register_lcma_metrics must not raise when OTEL is inactive."""
+        from lithos.telemetry import register_lcma_metrics
+
+        register_lcma_metrics(
+            get_enrich_queue_depth=lambda: 5,
+            get_coactivation_pairs=lambda: 100,
+            get_working_memory_active_tasks=lambda: 3,
+        )
+
+    # ------------------------------------------------------------------
+    # Gauge callback tests
+    # ------------------------------------------------------------------
+
+    def test_register_lcma_metrics_gauge_callbacks_read_live_values(self):
+        """Observable gauge callbacks must return [Observation(value)] for each gauge."""
+        from opentelemetry.metrics import Observation
+
+        from lithos.telemetry import register_lcma_metrics
+
+        captured_gauges: dict[str, object] = {}
+
+        from unittest.mock import MagicMock, patch
+
+        import lithos.telemetry as tel_module
+
+        mock_meter = MagicMock()
+
+        def _capture_gauge(name, *, callbacks, **kwargs):
+            captured_gauges[name] = callbacks[0]
+
+        mock_meter.create_observable_gauge.side_effect = _capture_gauge
+
+        orig = tel_module._lcma_metrics_registered
+        tel_module._lcma_metrics_registered = False
+        # Temporarily mark as initialized so the guard passes
+        orig_init = tel_module._initialized
+        tel_module._initialized = True
+        try:
+            with patch.object(tel_module, "get_meter", return_value=mock_meter):
+                holders = {"depth": 7, "pairs": 42, "tasks": 3}
+                register_lcma_metrics(
+                    get_enrich_queue_depth=lambda: holders["depth"],
+                    get_coactivation_pairs=lambda: holders["pairs"],
+                    get_working_memory_active_tasks=lambda: holders["tasks"],
+                )
+        finally:
+            tel_module._lcma_metrics_registered = orig
+            tel_module._initialized = orig_init
+
+        assert "lithos.lcma.enrich_queue.depth" in captured_gauges
+        assert "lithos.lcma.coactivation.pairs" in captured_gauges
+        assert "lithos.lcma.working_memory.active_tasks" in captured_gauges
+
+        assert captured_gauges["lithos.lcma.enrich_queue.depth"](None) == [Observation(7)]
+        assert captured_gauges["lithos.lcma.coactivation.pairs"](None) == [Observation(42)]
+        assert captured_gauges["lithos.lcma.working_memory.active_tasks"](None) == [Observation(3)]
+
+        # Live values update
+        holders["depth"] = 99
+        assert captured_gauges["lithos.lcma.enrich_queue.depth"](None) == [Observation(99)]
+
+    def test_register_lcma_metrics_idempotent(self):
+        """Calling register_lcma_metrics twice must register gauges only once."""
+        from unittest.mock import MagicMock, patch
+
+        import lithos.telemetry as tel_module
+
+        mock_meter = MagicMock()
+
+        orig = tel_module._lcma_metrics_registered
+        orig_init = tel_module._initialized
+        tel_module._lcma_metrics_registered = False
+        tel_module._initialized = True
+        try:
+            with patch.object(tel_module, "get_meter", return_value=mock_meter):
+                from lithos.telemetry import register_lcma_metrics
+
+                register_lcma_metrics(
+                    get_enrich_queue_depth=lambda: 1,
+                    get_coactivation_pairs=lambda: 2,
+                    get_working_memory_active_tasks=lambda: 3,
+                )
+                register_lcma_metrics(
+                    get_enrich_queue_depth=lambda: 1,
+                    get_coactivation_pairs=lambda: 2,
+                    get_working_memory_active_tasks=lambda: 3,
+                )
+        finally:
+            tel_module._lcma_metrics_registered = orig
+            tel_module._initialized = orig_init
+
+        assert mock_meter.create_observable_gauge.call_count == 3
+
+    # ------------------------------------------------------------------
+    # Counter instrumentation tests
+    # ------------------------------------------------------------------
+
+    def test_lcma_salience_updates_counter_increments(self):
+        """lcma_salience_updates.add() must be called on each update_salience."""
+        from unittest.mock import MagicMock
+
+        import lithos.telemetry as tel_module
+
+        mock_counter = MagicMock()
+        orig = tel_module.lithos_metrics._lcma_salience_updates
+        tel_module.lithos_metrics._lcma_salience_updates = mock_counter
+        try:
+            for _ in range(5):
+                tel_module.lithos_metrics.lcma_salience_updates.add(1)
+        finally:
+            tel_module.lithos_metrics._lcma_salience_updates = orig
+
+        assert mock_counter.add.call_count == 5
+
+    def test_lcma_enrich_exhausted_counter_increments(self):
+        """lcma_enrich_exhausted.add() must be called when items are abandoned."""
+        from unittest.mock import MagicMock
+
+        import lithos.telemetry as tel_module
+
+        mock_counter = MagicMock()
+        orig = tel_module.lithos_metrics._lcma_enrich_exhausted
+        tel_module.lithos_metrics._lcma_enrich_exhausted = mock_counter
+        try:
+            tel_module.lithos_metrics.lcma_enrich_exhausted.add(2)
+        finally:
+            tel_module.lithos_metrics._lcma_enrich_exhausted = orig
+
+        assert mock_counter.add.call_count == 1
+
+    # ------------------------------------------------------------------
+    # Histogram instrumentation tests
+    # ------------------------------------------------------------------
+
+    def test_lcma_scout_duration_histogram_records_with_scout_attribute(self):
+        """lcma_scout_duration.record() must be called with scout attribute."""
+        from unittest.mock import MagicMock
+
+        import lithos.telemetry as tel_module
+
+        mock_hist = MagicMock()
+        orig = tel_module.lithos_metrics._lcma_scout_duration
+        tel_module.lithos_metrics._lcma_scout_duration = mock_hist
+        try:
+            tel_module.lithos_metrics.lcma_scout_duration.record(
+                12.5, {"scout": "scout_vector"}
+            )
+        finally:
+            tel_module.lithos_metrics._lcma_scout_duration = orig
+
+        mock_hist.record.assert_called_once_with(12.5, {"scout": "scout_vector"})
+
+    def test_lcma_retrieve_duration_histogram_no_raise(self):
+        """lcma_retrieve_duration.record() must not raise when OTEL inactive."""
+        from lithos.telemetry import lithos_metrics
+
+        lithos_metrics.lcma_retrieve_duration.record(250.0)
+
+    # ------------------------------------------------------------------
+    # _reset_for_testing resets LCMA registered flag
+    # ------------------------------------------------------------------
+
+    def test_reset_for_testing_resets_lcma_flag(self):
+        """_reset_for_testing must reset _lcma_metrics_registered."""
+        import lithos.telemetry as tel_module
+
+        tel_module._lcma_metrics_registered = True
+        tel_module._reset_for_testing()
+        assert tel_module._lcma_metrics_registered is False

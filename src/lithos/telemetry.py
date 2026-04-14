@@ -610,6 +610,17 @@ class _LithosMetrics:
         self._tool_calls: Any = None
         self._tool_errors: Any = None
         self._sse_events_delivered: Any = None
+        # LCMA metrics
+        self._lcma_enrich_queue_processing_lag: Any = None
+        self._lcma_enrich_queue_attempts: Any = None
+        self._lcma_enrich_exhausted: Any = None
+        self._lcma_retrieve_duration: Any = None
+        self._lcma_retrieve_candidates_considered: Any = None
+        self._lcma_retrieve_final_nodes: Any = None
+        self._lcma_temperature_cold_start: Any = None
+        self._lcma_scout_duration: Any = None
+        self._lcma_scout_candidates: Any = None
+        self._lcma_salience_updates: Any = None
 
     @property
     def knowledge_ops(self) -> Any:
@@ -782,6 +793,125 @@ class _LithosMetrics:
             )
         return self._sse_events_delivered
 
+    # ------------------------------------------------------------------
+    # LCMA metrics
+    # ------------------------------------------------------------------
+
+    @property
+    def lcma_enrich_queue_processing_lag(self) -> Any:
+        """Histogram tracking time from triggered_at to processed_at per enrich_queue item.
+
+        Attributes:
+            (none — item-level latency, ms)
+        """
+        if self._lcma_enrich_queue_processing_lag is None:
+            self._lcma_enrich_queue_processing_lag = get_meter().create_histogram(
+                "lithos.lcma.enrich_queue.processing_lag_ms",
+                description="Time from triggered_at to processed_at per enrich_queue item",
+                unit="ms",
+            )
+        return self._lcma_enrich_queue_processing_lag
+
+    @property
+    def lcma_enrich_queue_attempts(self) -> Any:
+        """Histogram tracking attempt count per enrich_queue item at completion."""
+        if self._lcma_enrich_queue_attempts is None:
+            self._lcma_enrich_queue_attempts = get_meter().create_histogram(
+                "lithos.lcma.enrich_queue.attempts",
+                description="Attempt count per enrich_queue item at completion (success or exhausted)",
+            )
+        return self._lcma_enrich_queue_attempts
+
+    @property
+    def lcma_enrich_exhausted(self) -> Any:
+        """Counter incremented when an enrich_queue item hits max attempts and is abandoned."""
+        if self._lcma_enrich_exhausted is None:
+            self._lcma_enrich_exhausted = get_meter().create_counter(
+                "lithos.lcma.enrich.exhausted",
+                description="Enrich queue items abandoned after exhausting max retry attempts",
+            )
+        return self._lcma_enrich_exhausted
+
+    @property
+    def lcma_retrieve_duration(self) -> Any:
+        """Histogram tracking end-to-end run_retrieve latency in milliseconds."""
+        if self._lcma_retrieve_duration is None:
+            self._lcma_retrieve_duration = get_meter().create_histogram(
+                "lithos.lcma.retrieve.duration_ms",
+                description="End-to-end run_retrieve latency in milliseconds",
+                unit="ms",
+            )
+        return self._lcma_retrieve_duration
+
+    @property
+    def lcma_retrieve_candidates_considered(self) -> Any:
+        """Histogram tracking candidates_considered value per run_retrieve call."""
+        if self._lcma_retrieve_candidates_considered is None:
+            self._lcma_retrieve_candidates_considered = get_meter().create_histogram(
+                "lithos.lcma.retrieve.candidates_considered",
+                description="Number of candidates considered per run_retrieve call",
+            )
+        return self._lcma_retrieve_candidates_considered
+
+    @property
+    def lcma_retrieve_final_nodes(self) -> Any:
+        """Histogram tracking number of final result nodes returned per run_retrieve call."""
+        if self._lcma_retrieve_final_nodes is None:
+            self._lcma_retrieve_final_nodes = get_meter().create_histogram(
+                "lithos.lcma.retrieve.final_nodes",
+                description="Number of final result nodes returned per run_retrieve call",
+            )
+        return self._lcma_retrieve_final_nodes
+
+    @property
+    def lcma_temperature_cold_start(self) -> Any:
+        """Counter incremented when compute_temperature returns a cold-start result."""
+        if self._lcma_temperature_cold_start is None:
+            self._lcma_temperature_cold_start = get_meter().create_counter(
+                "lithos.lcma.temperature.cold_start",
+                description="Number of cold-start temperature results from compute_temperature",
+            )
+        return self._lcma_temperature_cold_start
+
+    @property
+    def lcma_scout_duration(self) -> Any:
+        """Histogram tracking per-scout invocation duration in milliseconds.
+
+        Attributes:
+            scout: the scout name (e.g. ``"scout_vector"``)
+        """
+        if self._lcma_scout_duration is None:
+            self._lcma_scout_duration = get_meter().create_histogram(
+                "lithos.lcma.scout.duration_ms",
+                description="Time taken per scout invocation in milliseconds",
+                unit="ms",
+            )
+        return self._lcma_scout_duration
+
+    @property
+    def lcma_scout_candidates(self) -> Any:
+        """Histogram tracking candidates returned per scout invocation.
+
+        Attributes:
+            scout: the scout name (e.g. ``"scout_vector"``)
+        """
+        if self._lcma_scout_candidates is None:
+            self._lcma_scout_candidates = get_meter().create_histogram(
+                "lithos.lcma.scout.candidates",
+                description="Number of candidates returned per scout invocation",
+            )
+        return self._lcma_scout_candidates
+
+    @property
+    def lcma_salience_updates(self) -> Any:
+        """Counter incremented on each update_salience call."""
+        if self._lcma_salience_updates is None:
+            self._lcma_salience_updates = get_meter().create_counter(
+                "lithos.lcma.salience.updates",
+                description="Total update_salience calls",
+            )
+        return self._lcma_salience_updates
+
 
 def register_active_claims_observer(get_active_claim_count: Callable[[], int]) -> None:
     """Register an observable gauge backed by real DB state."""
@@ -924,6 +1054,62 @@ def register_event_bus_metrics(event_bus: Any) -> None:
     )
 
 
+_lcma_metrics_registered: bool = False
+
+
+def register_lcma_metrics(
+    *,
+    get_enrich_queue_depth: Callable[[], int],
+    get_coactivation_pairs: Callable[[], int],
+    get_working_memory_active_tasks: Callable[[], int],
+) -> None:
+    """Register OTEL observable gauges for LCMA pipeline metrics.
+
+    Registers three observable gauges backed by live DB state:
+        - ``lithos.lcma.enrich_queue.depth`` — current queue depth (unprocessed items).
+        - ``lithos.lcma.coactivation.pairs`` — total rows in the coactivation table.
+        - ``lithos.lcma.working_memory.active_tasks`` — distinct task_ids with recent activity.
+
+    All callbacks must be **synchronous** and cheap — they run inside the OTEL SDK
+    metric collection loop. Pass lambdas that read from cached integer counters.
+
+    Idempotent: calling this more than once is a no-op.
+
+    Safe to call even when OTEL is not active — in that case it is a no-op.
+
+    Args:
+        get_enrich_queue_depth: Returns current unprocessed enrich_queue item count.
+        get_coactivation_pairs: Returns total rows in the coactivation table.
+        get_working_memory_active_tasks: Returns count of distinct task_ids with
+            last_seen_at within the last 24 hours.
+    """
+    global _lcma_metrics_registered
+    if _lcma_metrics_registered:
+        return
+    _lcma_metrics_registered = True
+
+    if not (_HAS_OTEL and _initialized):
+        return
+
+    meter = get_meter()
+
+    meter.create_observable_gauge(
+        "lithos.lcma.enrich_queue.depth",
+        callbacks=[lambda _: [Observation(int(get_enrich_queue_depth()))]],
+        description="Current number of unprocessed items in the enrich_queue table",
+    )
+    meter.create_observable_gauge(
+        "lithos.lcma.coactivation.pairs",
+        callbacks=[lambda _: [Observation(int(get_coactivation_pairs()))]],
+        description="Total number of rows in the coactivation table",
+    )
+    meter.create_observable_gauge(
+        "lithos.lcma.working_memory.active_tasks",
+        callbacks=[lambda _: [Observation(int(get_working_memory_active_tasks()))]],
+        description="Count of distinct task_ids in working_memory with activity in the last 24 hours",
+    )
+
+
 lithos_metrics = _LithosMetrics()
 
 
@@ -938,9 +1124,11 @@ def _reset_for_testing() -> None:
         _meter_provider, \
         _log_provider, \
         _trace_context_filter, \
-        _event_bus_metrics_registered
+        _event_bus_metrics_registered, \
+        _lcma_metrics_registered
     _initialized = False
     _event_bus_metrics_registered = False
+    _lcma_metrics_registered = False
     _tracer_provider = None
     _meter_provider = None
     _log_provider = None
