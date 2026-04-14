@@ -280,6 +280,19 @@ async def run_retrieve(
     conflicts_found: list[dict[str, object]] = []
     _retrieve_t0 = time.perf_counter()
 
+    logger.info(
+        "run_retrieve: started",
+        extra={
+            "receipt_id": receipt_id,
+            "query_len": len(query),
+            "limit": limit,
+            "agent_id": agent_id,
+            "task_id": task_id,
+            "namespace_filter": namespace_filter,
+            "max_context_nodes": max_context_nodes,
+        },
+    )
+
     try:
         # ── Phase A: parallel scouts ──────────────────────────────
         # All scouts receive the same set of caller-supplied filters
@@ -328,7 +341,10 @@ async def run_retrieve(
         all_candidates: list[Candidate] = []
         for name, result in zip(phase_a_names, phase_a_results, strict=True):
             if isinstance(result, BaseException):
-                logger.warning("Phase A scout %s failed: %s", name, result)
+                logger.warning(
+                    "run_retrieve: phase A scout failed",
+                    extra={"scout": name, "error": str(result)},
+                )
                 continue
             executed_scouts.add(name)
             all_candidates.extend(result)
@@ -340,13 +356,31 @@ async def run_retrieve(
                 # for Phase B scouts, which run sequentially.
                 _lithos_metrics.lcma_scout_duration.record(_phase_a_elapsed * 1000, {"scout": name})
                 _lithos_metrics.lcma_scout_candidates.record(len(result), {"scout": name})
+            logger.debug(
+                "run_retrieve: phase A scout completed",
+                extra={"scout": name, "candidates": len(result)},
+            )
 
         # ── Phase A normalisation for provenance seeding ──────────
         phase_a_normalised = merge_and_normalize(all_candidates)
         phase_a_normalised.sort(key=lambda c: c.score, reverse=True)
 
+        logger.info(
+            "run_retrieve: phase A complete",
+            extra={
+                "receipt_id": receipt_id,
+                "scouts_fired": len(executed_scouts),
+                "raw_candidates": len(all_candidates),
+                "normalised_candidates": len(phase_a_normalised),
+            },
+        )
+
         # ── Phase B: sequential scouts seeded from Phase A ─────────
         seed_ids = [c.node_id for c in phase_a_normalised[:max_context_nodes]]
+        logger.debug(
+            "run_retrieve: phase B seeding",
+            extra={"receipt_id": receipt_id, "seed_count": len(seed_ids)},
+        )
         if seed_ids:
             try:
                 _t = time.perf_counter()
@@ -362,8 +396,16 @@ async def run_retrieve(
                     _lithos_metrics.lcma_scout_candidates.record(
                         len(prov_candidates), {"scout": "scout_provenance"}
                     )
+                logger.debug(
+                    "run_retrieve: phase B scout completed",
+                    extra={"scout": "scout_provenance", "candidates": len(prov_candidates)},
+                )
             except Exception:
-                logger.warning("Phase B (provenance) failed", exc_info=True)
+                logger.warning(
+                    "run_retrieve: phase B scout failed",
+                    extra={"scout": "scout_provenance"},
+                    exc_info=True,
+                )
 
             try:
                 _t = time.perf_counter()
@@ -379,8 +421,16 @@ async def run_retrieve(
                     _lithos_metrics.lcma_scout_candidates.record(
                         len(graph_candidates), {"scout": "scout_graph"}
                     )
+                logger.debug(
+                    "run_retrieve: phase B scout completed",
+                    extra={"scout": "scout_graph", "candidates": len(graph_candidates)},
+                )
             except Exception:
-                logger.warning("Phase B (graph) failed", exc_info=True)
+                logger.warning(
+                    "run_retrieve: phase B scout failed",
+                    extra={"scout": "scout_graph"},
+                    exc_info=True,
+                )
 
             try:
                 _t = time.perf_counter()
@@ -396,8 +446,16 @@ async def run_retrieve(
                     _lithos_metrics.lcma_scout_candidates.record(
                         len(coact_candidates), {"scout": "scout_coactivation"}
                     )
+                logger.debug(
+                    "run_retrieve: phase B scout completed",
+                    extra={"scout": "scout_coactivation", "candidates": len(coact_candidates)},
+                )
             except Exception:
-                logger.warning("Phase B (coactivation) failed", exc_info=True)
+                logger.warning(
+                    "run_retrieve: phase B scout failed",
+                    extra={"scout": "scout_coactivation"},
+                    exc_info=True,
+                )
 
             try:
                 _t = time.perf_counter()
@@ -413,8 +471,16 @@ async def run_retrieve(
                     _lithos_metrics.lcma_scout_candidates.record(
                         len(src_url_candidates), {"scout": "scout_source_url"}
                     )
+                logger.debug(
+                    "run_retrieve: phase B scout completed",
+                    extra={"scout": "scout_source_url", "candidates": len(src_url_candidates)},
+                )
             except Exception:
-                logger.warning("Phase B (source_url) failed", exc_info=True)
+                logger.warning(
+                    "run_retrieve: phase B scout failed",
+                    extra={"scout": "scout_source_url"},
+                    exc_info=True,
+                )
 
         # Contradictions — only fire when surface_conflicts is True
         conflicts_found: list[dict[str, object]] = []
@@ -428,8 +494,16 @@ async def run_retrieve(
                     agent_id=agent_id,
                     task_id=task_id,
                 )
+                logger.debug(
+                    "run_retrieve: contradictions surfaced",
+                    extra={"conflict_count": len(conflicts_found)},
+                )
             except Exception:
-                logger.warning("Phase B (contradictions) failed", exc_info=True)
+                logger.warning(
+                    "run_retrieve: phase B scout failed",
+                    extra={"scout": "scout_contradictions"},
+                    exc_info=True,
+                )
 
         # Record scouts_fired using canonical names in order. A scout
         # appears here iff it executed without raising — empty result
@@ -453,6 +527,16 @@ async def run_retrieve(
 
         reranked = _rerank_fast(merged, lcma_config, knowledge, salience_map=salience_map)
         terrace_reached = 1
+
+        logger.info(
+            "run_retrieve: reranking complete",
+            extra={
+                "receipt_id": receipt_id,
+                "candidates_considered": candidates_considered,
+                "scouts_fired": scouts_fired,
+                "temperature": temperature,
+            },
+        )
 
         # Apply limit
         final_candidates = reranked[:limit]
@@ -499,6 +583,17 @@ async def run_retrieve(
                 logger.warning("Document %s not found during result building", c.node_id)
                 continue
 
+        logger.info(
+            "run_retrieve: completed",
+            extra={
+                "receipt_id": receipt_id,
+                "result_count": len(results),
+                "limit": limit,
+                "agent_id": agent_id,
+                "task_id": task_id,
+            },
+        )
+
         # ── Working memory upserts ────────────────────────────────
         if task_id is not None:
             for r in results:
@@ -509,7 +604,11 @@ async def run_retrieve(
                         receipt_id=receipt_id,
                     )
                 except Exception:
-                    logger.warning("Working memory upsert failed for %s", r["id"], exc_info=True)
+                    logger.warning(
+                        "run_retrieve: working memory upsert failed",
+                        extra={"node_id": r["id"], "task_id": task_id, "receipt_id": receipt_id},
+                        exc_info=True,
+                    )
 
         envelope: dict[str, object] = {
             "results": results,
@@ -563,5 +662,18 @@ async def run_retrieve(
                 # Batch-increment coactivation for all unordered pairs
                 pairs = list(itertools.combinations(final_node_ids, 2))
                 await stats_store.increment_coactivation_batch(pairs, namespace=dom_ns)
+                logger.debug(
+                    "run_retrieve: coactivation updated",
+                    extra={
+                        "receipt_id": receipt_id,
+                        "node_count": len(final_node_ids),
+                        "pair_count": len(pairs),
+                        "namespace": dom_ns,
+                    },
+                )
             except Exception:
-                logger.warning("Coactivation/node_stats update failed", exc_info=True)
+                logger.warning(
+                    "run_retrieve: coactivation/node_stats update failed",
+                    extra={"receipt_id": receipt_id},
+                    exc_info=True,
+                )

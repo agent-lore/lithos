@@ -35,12 +35,19 @@ async def reinforce_cited_nodes(
     - ``salience += 0.02``
     - ``spaced_rep_strength += 0.05``
     """
+    logger.info(
+        "reinforce_cited_nodes: reinforcing",
+        extra={"node_count": len(cited_ids)},
+    )
     for node_id in cited_ids:
         await stats_store.increment_cited(node_id)
         await stats_store.update_salience(node_id, 0.02)
         await stats_store.update_spaced_rep_strength(node_id, 0.05)
         await stats_store.update_last_used_at(node_id)
-        logger.debug("Reinforced cited node %s", node_id)
+        logger.debug(
+            "reinforce_cited_nodes: node reinforced",
+            extra={"node_id": node_id, "salience_delta": 0.02, "spaced_rep_delta": 0.05},
+        )
 
 
 async def reinforce_edges_between(
@@ -59,6 +66,10 @@ async def reinforce_edges_between(
 
     Cross-namespace pairs are silently skipped.
     """
+    logger.info(
+        "reinforce_edges_between: strengthening edges",
+        extra={"cited_count": len(cited_ids)},
+    )
     # Resolve namespace for each node from the meta cache.
     ns_map: dict[str, str] = {}
     for nid in cited_ids:
@@ -66,7 +77,10 @@ async def reinforce_edges_between(
         if cached is not None:
             ns_map[nid] = cached.namespace
         else:
-            logger.debug("Node %s not in _meta_cache — skipping edge reinforcement", nid)
+            logger.debug(
+                "reinforce_edges_between: node not in _meta_cache, skipping",
+                extra={"node_id": nid},
+            )
 
     # Generate canonical same-namespace pairs.
     for a, b in itertools.combinations(cited_ids, 2):
@@ -90,7 +104,10 @@ async def reinforce_edges_between(
         if existing:
             edge_id = str(existing[0]["edge_id"])
             await edge_store.adjust_weight(edge_id, 0.03)
-            logger.debug("Strengthened edge %s between %s and %s", edge_id, from_id, to_id)
+            logger.debug(
+                "reinforce_edges_between: strengthened existing edge",
+                extra={"edge_id": edge_id, "from_id": from_id, "to_id": to_id, "weight_delta": 0.03},
+            )
         else:
             eid = await edge_store.upsert(
                 from_id=from_id,
@@ -100,7 +117,10 @@ async def reinforce_edges_between(
                 namespace=namespace,
                 provenance_type="reinforcement",
             )
-            logger.debug("Created related_to edge %s between %s and %s", eid, from_id, to_id)
+            logger.debug(
+                "reinforce_edges_between: created new related_to edge",
+                extra={"edge_id": eid, "from_id": from_id, "to_id": to_id, "namespace": namespace},
+            )
 
 
 # ── Negative reinforcement ─────────────────────────────────────────────
@@ -117,6 +137,10 @@ async def penalize_ignored(
     - If ``ignored_count > 5`` **and** ``ignored_count > cited_count``,
       apply ``salience -= 0.02``.
     """
+    logger.info(
+        "penalize_ignored: applying ignored penalties",
+        extra={"node_count": len(node_ids)},
+    )
     for node_id in node_ids:
         await stats_store.increment_ignored(node_id)
         stats = await stats_store.get_node_stats(node_id)
@@ -127,8 +151,14 @@ async def penalize_ignored(
             assert isinstance(cited, int)
             if ignored > 5 and ignored > cited:
                 await stats_store.update_salience(node_id, -0.02)
-                logger.debug("Decayed salience for ignored node %s", node_id)
-        logger.debug("Penalized ignored node %s", node_id)
+                logger.debug(
+                    "penalize_ignored: decayed salience for chronically ignored node",
+                    extra={"node_id": node_id, "ignored_count": ignored, "cited_count": cited, "salience_delta": -0.02},
+                )
+        logger.debug(
+            "penalize_ignored: incremented ignored count",
+            extra={"node_id": node_id},
+        )
 
 
 async def penalize_misleading(
@@ -144,6 +174,10 @@ async def penalize_misleading(
     - If ``misleading_count >= 3``, set ``status = 'quarantined'``
       via :meth:`KnowledgeManager.update`.
     """
+    logger.info(
+        "penalize_misleading: applying misleading penalties",
+        extra={"node_count": len(node_ids)},
+    )
     for node_id in node_ids:
         await stats_store.increment_misleading(node_id)
         await stats_store.update_salience(node_id, -0.05)
@@ -153,8 +187,14 @@ async def penalize_misleading(
             assert isinstance(misleading, int)
             if misleading >= 3:
                 await knowledge.update(id=node_id, lcma_status="quarantined", agent="lithos-enrich")
-                logger.info("Quarantined misleading node %s (count=%d)", node_id, misleading)
-        logger.debug("Penalized misleading node %s", node_id)
+                logger.info(
+                    "penalize_misleading: node quarantined",
+                    extra={"node_id": node_id, "misleading_count": misleading},
+                )
+        logger.debug(
+            "penalize_misleading: node penalized",
+            extra={"node_id": node_id, "salience_delta": -0.05},
+        )
 
 
 async def weaken_edges_for_bad_context(
@@ -167,6 +207,10 @@ async def weaken_edges_for_bad_context(
     (any namespace) and weakens each by ``-0.05`` via
     :meth:`EdgeStore.adjust_weight`.
     """
+    logger.info(
+        "weaken_edges_for_bad_context: weakening edges",
+        extra={"bad_node_count": len(bad_node_ids)},
+    )
     seen: set[str] = set()
     for node_id in bad_node_ids:
         edges_from = await edge_store.list_edges(from_id=node_id)
@@ -177,4 +221,11 @@ async def weaken_edges_for_bad_context(
                 continue
             seen.add(eid)
             await edge_store.adjust_weight(eid, -0.05)
-            logger.debug("Weakened edge %s for bad node %s", eid, node_id)
+            logger.debug(
+                "weaken_edges_for_bad_context: weakened edge",
+                extra={"edge_id": eid, "node_id": node_id, "weight_delta": -0.05},
+            )
+    logger.info(
+        "weaken_edges_for_bad_context: completed",
+        extra={"bad_node_count": len(bad_node_ids), "edges_weakened": len(seen)},
+    )

@@ -1510,7 +1510,17 @@ class LithosServer:
                 Dict with results list (superset of lithos_search result
                 schema), temperature, terrace_reached, and receipt_id.
             """
-            logger.info("lithos_retrieve query_len=%d limit=%d", len(query), limit)
+            logger.info(
+                "lithos_retrieve: called",
+                extra={
+                    "query_len": len(query),
+                    "limit": limit,
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                    "namespace_filter": namespace_filter,
+                    "surface_conflicts": surface_conflicts,
+                },
+            )
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.retrieve") as span:
                 span.set_attribute("lithos.tool", "lithos_retrieve")
@@ -1520,6 +1530,7 @@ class LithosServer:
                 # Check LCMA enabled
                 lcma_config = self._config.lcma
                 if not lcma_config.enabled:
+                    logger.warning("lithos_retrieve: LCMA is disabled")
                     return {
                         "status": "error",
                         "code": "lcma_disabled",
@@ -1547,9 +1558,18 @@ class LithosServer:
                     path_prefix=path_prefix,
                 )
 
-                span.set_attribute(
-                    "lithos.result_count",
-                    len(result.get("results", [])),  # type: ignore[union-attr]
+                result_count = len(result.get("results", []))  # type: ignore[union-attr]
+                span.set_attribute("lithos.result_count", result_count)
+                logger.info(
+                    "lithos_retrieve: completed",
+                    extra={
+                        "result_count": result_count,
+                        "receipt_id": result.get("receipt_id"),  # type: ignore[union-attr]
+                        "temperature": result.get("temperature"),  # type: ignore[union-attr]
+                        "terrace_reached": result.get("terrace_reached"),  # type: ignore[union-attr]
+                        "agent_id": agent_id,
+                        "task_id": task_id,
+                    },
                 )
                 return result  # type: ignore[return-value]
 
@@ -2625,7 +2645,16 @@ class LithosServer:
             Returns:
                 Dict with success boolean, or error envelope if task not found or not open
             """
-            logger.info("lithos_task_complete task=%s agent=%s", task_id, agent)
+            logger.info(
+                "lithos_task_complete: called",
+                extra={
+                    "task_id": task_id,
+                    "agent": agent,
+                    "cited_count": len(cited_nodes) if cited_nodes is not None else 0,
+                    "misleading_count": len(misleading_nodes) if misleading_nodes is not None else 0,
+                    "receipt_id": receipt_id,
+                },
+            )
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.task_complete") as span:
                 span.set_attribute("lithos.tool", "lithos_task_complete")
@@ -2660,6 +2689,17 @@ class LithosServer:
 
                 # -- Apply reinforcement side-effects after task is completed --
                 if validated is not None:
+                    if not validated.get("skip"):
+                        logger.info(
+                            "lithos_task_complete: applying feedback reinforcement",
+                            extra={
+                                "task_id": task_id,
+                                "agent": agent,
+                                "cited_count": len(validated.get("cited") or []),
+                                "misleading_count": len(validated.get("misleading") or []),
+                                "ignored_count": len(validated.get("ignored") or []),
+                            },
+                        )
                     await self._apply_task_feedback(validated)
 
                 await self._emit(

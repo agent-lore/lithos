@@ -182,6 +182,10 @@ async def scout_vector(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_vector: completed",
+        extra={"fetched": len(results), "candidates": len(candidates), "limit": limit},
+    )
     return candidates
 
 
@@ -236,6 +240,10 @@ async def scout_lexical(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_lexical: completed",
+        extra={"fetched": len(results), "candidates": len(candidates), "limit": limit},
+    )
     return candidates
 
 
@@ -301,6 +309,10 @@ async def scout_exact_alias(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_exact_alias: completed",
+        extra={"resolved": len(found_ids), "candidates": len(candidates)},
+    )
     return candidates
 
 
@@ -348,6 +360,10 @@ async def scout_tags_recency(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_tags_recency: completed",
+        extra={"candidates": len(candidates), "tags": tags, "path_prefix": path_prefix},
+    )
     return candidates
 
 
@@ -395,6 +411,10 @@ async def scout_freshness(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_freshness: completed",
+        extra={"candidates": len(candidates)},
+    )
     return candidates
 
 
@@ -461,6 +481,10 @@ async def scout_provenance(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_provenance: completed",
+        extra={"seed_count": len(seed_ids), "related": len(related), "candidates": len(candidates)},
+    )
     return candidates
 
 
@@ -534,6 +558,10 @@ async def scout_task_context(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_task_context: completed",
+        extra={"task_id": task_id, "candidates": len(candidates)},
+    )
     return candidates
 
 
@@ -621,6 +649,10 @@ async def scout_graph(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_graph: completed",
+        extra={"seed_count": len(seed_ids), "neighbors_found": len(neighbor_best), "candidates": len(candidates)},
+    )
     return candidates
 
 
@@ -685,6 +717,10 @@ async def scout_coactivation(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_coactivation: completed",
+        extra={"seed_count": len(seed_ids), "coactivated": len(coactivated), "candidates": len(candidates)},
+    )
     return candidates
 
 
@@ -768,6 +804,10 @@ async def scout_source_url(
         )
         if len(candidates) >= limit:
             break
+    logger.debug(
+        "scout_source_url: completed",
+        extra={"seed_count": len(seed_ids), "domain_matches": len(matches), "candidates": len(candidates)},
+    )
     return candidates
 
 
@@ -837,6 +877,10 @@ async def scout_contradictions(
                 }
             )
 
+    logger.debug(
+        "scout_contradictions: completed",
+        extra={"seed_count": len(seed_ids), "unresolved_conflicts": len(results)},
+    )
     return results
 
 

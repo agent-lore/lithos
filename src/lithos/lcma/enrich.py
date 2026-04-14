@@ -389,30 +389,54 @@ class EnrichWorker:
 
     async def _handle_event(self, event: LithosEvent) -> None:
         """Route a single event to enrich_queue."""
+        logger.debug(
+            "EnrichWorker: received event",
+            extra={"event_type": event.type, "event_id": event.id},
+        )
         if event.type == TASK_COMPLETED:
             task_id = event.payload.get("task_id")
             if isinstance(task_id, str) and task_id:
                 await self._stats_store.enqueue(trigger_type=event.type, task_id=task_id)
+                logger.info(
+                    "EnrichWorker: enqueued task consolidation",
+                    extra={"trigger_type": event.type, "task_id": task_id},
+                )
             return
 
         if event.type == EDGE_UPSERTED:
             from_id = event.payload.get("from_id")
             to_id = event.payload.get("to_id")
+            enqueued = 0
             for nid in (from_id, to_id):
                 if isinstance(nid, str) and nid:
                     if self._knowledge.has_document(nid):
                         await self._stats_store.enqueue(trigger_type=event.type, node_id=nid)
+                        enqueued += 1
                     else:
                         logger.debug(
                             "EnrichWorker: edge.upserted node_id=%s not in knowledge, skipping",
                             nid,
                         )
+            if enqueued:
+                logger.debug(
+                    "EnrichWorker: enqueued edge nodes",
+                    extra={"trigger_type": event.type, "from_id": from_id, "to_id": to_id, "enqueued": enqueued},
+                )
             return
 
         # note.created, note.updated, note.deleted, finding.posted
         node_id = _resolve_node_id(event.payload, self._knowledge, event.type)
         if node_id is not None:
             await self._stats_store.enqueue(trigger_type=event.type, node_id=node_id)
+            logger.info(
+                "EnrichWorker: enqueued node enrichment",
+                extra={"trigger_type": event.type, "node_id": node_id},
+            )
+        else:
+            logger.debug(
+                "EnrichWorker: event produced no enqueue target",
+                extra={"event_type": event.type},
+            )
 
     # ------------------------------------------------------------------
     # Drain loop
@@ -437,16 +461,31 @@ class EnrichWorker:
 
         # --- Node-level enrichment ---
         node_entries = await self._stats_store.drain_pending_nodes(max_attempts=max_attempts)
+        logger.info(
+            "EnrichWorker: drain started",
+            extra={"node_count": len(node_entries)},
+        )
+        nodes_succeeded = 0
+        nodes_failed = 0
         for entry in node_entries:
             node_id = entry["node_id"]
             trigger_types = entry["trigger_types"]
             claimed_ids = entry["claimed_ids"]
             assert isinstance(node_id, str)
             assert isinstance(claimed_ids, list)
+            logger.debug(
+                "EnrichWorker: processing node",
+                extra={"node_id": node_id, "trigger_types": trigger_types},
+            )
             try:
                 await self._enrich_node(node_id, trigger_types)
+                nodes_succeeded += 1
             except Exception:
-                logger.exception("EnrichWorker: node enrichment failed for %s, requeuing", node_id)
+                nodes_failed += 1
+                logger.exception(
+                    "EnrichWorker: node enrichment failed",
+                    extra={"node_id": node_id, "claimed_count": len(claimed_ids)},
+                )
                 await self._stats_store.requeue_failed(claimed_ids)
                 await self._warn_exhausted(claimed_ids, max_attempts, identifier=node_id)
                 continue  # skip _record_drain_metrics on failure path — item was requeued, not processed
@@ -454,16 +493,25 @@ class EnrichWorker:
 
         # --- Task-level enrichment ---
         task_entries = await self._stats_store.drain_pending_tasks(max_attempts=max_attempts)
+        tasks_succeeded = 0
+        tasks_failed = 0
         for entry in task_entries:
             task_id = entry["task_id"]
             claimed_ids = entry["claimed_ids"]
             assert isinstance(task_id, str)
             assert isinstance(claimed_ids, list)
+            logger.debug(
+                "EnrichWorker: processing task consolidation",
+                extra={"task_id": task_id},
+            )
             try:
                 await self._consolidate_task(task_id)
+                tasks_succeeded += 1
             except Exception:
+                tasks_failed += 1
                 logger.exception(
-                    "EnrichWorker: task consolidation failed for %s, requeuing", task_id
+                    "EnrichWorker: task consolidation failed",
+                    extra={"task_id": task_id, "claimed_count": len(claimed_ids)},
                 )
                 await self._stats_store.requeue_failed(claimed_ids)
                 await self._warn_exhausted(claimed_ids, max_attempts, identifier=task_id)
@@ -505,6 +553,16 @@ class EnrichWorker:
         except Exception:
             logger.debug("EnrichWorker: failed to record drain metrics", exc_info=True)
 
+        logger.info(
+            "EnrichWorker: drain completed",
+            extra={
+                "nodes_succeeded": nodes_succeeded,
+                "nodes_failed": nodes_failed,
+                "tasks_succeeded": tasks_succeeded,
+                "tasks_failed": tasks_failed,
+            },
+        )
+
     async def _warn_exhausted(
         self, claimed_ids: list[int], max_attempts: int, *, identifier: str
     ) -> None:
@@ -533,6 +591,11 @@ class EnrichWorker:
         """
         from lithos.lcma.edges import _project_node_provenance
 
+        logger.info(
+            "EnrichWorker: enriching node",
+            extra={"node_id": node_id, "trigger_types": list(trigger_types) if isinstance(trigger_types, (list, set, tuple)) else trigger_types},
+        )
+
         # --- Salience decay ---
         stats = await self._stats_store.get_node_stats(node_id)
         if stats is not None:
@@ -546,6 +609,11 @@ class EnrichWorker:
             NOTE_CREATED in trigger_types or NOTE_UPDATED in trigger_types
         ):
             await self._extract_entities(node_id)
+
+        logger.debug(
+            "EnrichWorker: node enrichment complete",
+            extra={"node_id": node_id},
+        )
 
     async def _apply_decay(self, node_id: str, stats: dict[str, object]) -> bool:
         """Apply salience decay to a single node.
@@ -584,10 +652,12 @@ class EnrichWorker:
         await self._stats_store.update_salience(node_id, -decay_amount)
         await self._stats_store.update_last_decay_applied_at(node_id)
         logger.debug(
-            "Applied decay to %s: days_inactive=%d, decay=%.3f",
-            node_id,
-            days_since_last_use,
-            decay_amount,
+            "EnrichWorker: applied salience decay",
+            extra={
+                "node_id": node_id,
+                "days_inactive": days_since_last_use,
+                "decay_amount": round(decay_amount, 3),
+            },
         )
         return True
 
@@ -616,7 +686,10 @@ class EnrichWorker:
             return
 
         await self._knowledge.update(id=node_id, agent="lithos-enrich", entities=extracted)
-        logger.debug("Extracted %d entities for node %s", len(extracted), node_id)
+        logger.info(
+            "EnrichWorker: entity extraction complete",
+            extra={"node_id": node_id, "entity_count": len(extracted)},
+        )
 
     # ------------------------------------------------------------------
     # Sweep loop
@@ -643,6 +716,10 @@ class EnrichWorker:
 
         # --- Decay all nodes ---
         node_ids = await self._stats_store.list_all_node_ids()
+        logger.info(
+            "EnrichWorker: full sweep started",
+            extra={"node_count": len(node_ids)},
+        )
         all_stats = await self._stats_store.get_node_stats_batch(node_ids)
         decayed = 0
         for node_id in node_ids:
@@ -665,12 +742,13 @@ class EnrichWorker:
         prov_counts = await _project_provenance_to_edges(self._edge_store, self._knowledge)
 
         logger.info(
-            "Full sweep: decayed %d nodes, evicted %d WM entries, "
-            "provenance edges created=%d removed=%d",
-            decayed,
-            evicted,
-            prov_counts.get("created", 0),
-            prov_counts.get("removed", 0),
+            "EnrichWorker: full sweep completed",
+            extra={
+                "nodes_decayed": decayed,
+                "wm_entries_evicted": evicted,
+                "provenance_edges_created": prov_counts.get("created", 0),
+                "provenance_edges_removed": prov_counts.get("removed", 0),
+            },
         )
 
     async def _consolidate_task(self, task_id: str) -> None:
@@ -752,4 +830,7 @@ class EnrichWorker:
             )
 
         await self._stats_store.mark_task_consolidated(task_id)
-        logger.debug("Consolidated task %s: %d frequent nodes", task_id, len(frequent))
+        logger.info(
+            "EnrichWorker: task consolidation complete",
+            extra={"task_id": task_id, "frequent_node_count": len(frequent)},
+        )
