@@ -121,6 +121,8 @@ class TelemetryConfig(BaseModel):
     endpoint: str | None = None  # OTLP HTTP endpoint, e.g. "http://otel-collector:4318"
     console_fallback: bool = False  # Print spans to stdout when no endpoint
     service_name: str = "lithos"
+    # OTEL deployment.environment (e.g. "dev", "staging", "production")
+    environment: str | None = None
     export_interval_ms: int = 30_000  # Metrics export interval
 
 
@@ -246,7 +248,7 @@ class LithosConfig(BaseSettings):
         """Apply backward-compatible flat env var overrides.
 
         Handles: LITHOS_DATA_DIR, LITHOS_PORT, LITHOS_HOST,
-        LITHOS_OTEL_ENABLED, OTEL_EXPORTER_OTLP_ENDPOINT
+        LITHOS_OTEL_ENABLED, OTEL_EXPORTER_OTLP_ENDPOINT, LITHOS_ENVIRONMENT
 
         Env vars are only applied when the corresponding field was **not**
         explicitly set via a constructor argument.  This means
@@ -277,6 +279,11 @@ class LithosConfig(BaseSettings):
         ):
             self.telemetry.endpoint = otlp_endpoint
             logger.debug("Config env override: OTEL_EXPORTER_OTLP_ENDPOINT=%s", otlp_endpoint)
+        if (env_name := os.environ.get("LITHOS_ENVIRONMENT")) and (
+            "environment" not in self.telemetry.model_fields_set
+        ):
+            self.telemetry.environment = env_name
+            logger.debug("Config env override: LITHOS_ENVIRONMENT=%s", env_name)
         return self
 
     @classmethod

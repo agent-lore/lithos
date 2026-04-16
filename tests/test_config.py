@@ -208,6 +208,31 @@ class TestConfigEnvironment:
 
         assert config.telemetry.endpoint == "http://otel-collector:4318"
 
+    def test_env_override_environment(self, monkeypatch):
+        """LITHOS_ENVIRONMENT maps to telemetry.environment."""
+        monkeypatch.setenv("LITHOS_ENVIRONMENT", "staging")
+
+        config = load_config()
+
+        assert config.telemetry.environment == "staging"
+
+    def test_env_nested_environment(self, monkeypatch):
+        """LITHOS_TELEMETRY__ENVIRONMENT also works via the nested delimiter."""
+        monkeypatch.setenv("LITHOS_TELEMETRY__ENVIRONMENT", "production")
+
+        config = load_config()
+
+        assert config.telemetry.environment == "production"
+
+    def test_environment_defaults_to_none(self, monkeypatch):
+        """telemetry.environment defaults to None when no env var is set."""
+        monkeypatch.delenv("LITHOS_ENVIRONMENT", raising=False)
+        monkeypatch.delenv("LITHOS_TELEMETRY__ENVIRONMENT", raising=False)
+
+        config = load_config()
+
+        assert config.telemetry.environment is None
+
     def test_env_port_invalid_raises(self, monkeypatch):
         """LITHOS_PORT with a non-integer value raises a clear error."""
         monkeypatch.setenv("LITHOS_PORT", "abc")

@@ -674,6 +674,44 @@ class TestTraceLogCorrelation:
             shutdown_telemetry()
             _reset_for_testing()
 
+    def test_deployment_environment_attribute_included_when_set(self, test_config):
+        """deployment.environment is added to the OTEL Resource when telemetry.environment is set."""
+        pytest.importorskip("opentelemetry.sdk.trace.export.in_memory_span_exporter")
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+        from lithos.telemetry import _reset_for_testing, setup_telemetry, shutdown_telemetry
+
+        _reset_for_testing()
+        test_config.telemetry.enabled = True
+        test_config.telemetry.environment = "staging"
+        try:
+            setup_telemetry(test_config, _test_span_exporter=InMemorySpanExporter())
+            resource = trace.get_tracer_provider().resource  # type: ignore[attr-defined]
+            assert resource.attributes.get("deployment.environment") == "staging"
+        finally:
+            shutdown_telemetry()
+            _reset_for_testing()
+
+    def test_deployment_environment_attribute_absent_when_unset(self, test_config):
+        """deployment.environment is omitted from the OTEL Resource when environment is None."""
+        pytest.importorskip("opentelemetry.sdk.trace.export.in_memory_span_exporter")
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+        from lithos.telemetry import _reset_for_testing, setup_telemetry, shutdown_telemetry
+
+        _reset_for_testing()
+        test_config.telemetry.enabled = True
+        test_config.telemetry.environment = None
+        try:
+            setup_telemetry(test_config, _test_span_exporter=InMemorySpanExporter())
+            resource = trace.get_tracer_provider().resource  # type: ignore[attr-defined]
+            assert "deployment.environment" not in resource.attributes
+        finally:
+            shutdown_telemetry()
+            _reset_for_testing()
+
 
 class TestToolMetrics:
     """Tests for the @tool_metrics decorator and per-tool counters (issue #101)."""
