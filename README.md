@@ -132,3 +132,60 @@ LITHOS_DATA_PATH="<DATA DIR PATH>" docker compose up -d --build
 # stop
 cd docker && docker compose down
 ```
+
+## Docker: running multiple environments
+
+Lithos ships with `docker/run.sh`, a thin wrapper around `docker compose`
+that drives each environment from its own gitignored `.env.<name>` file
+and a distinct compose project name (`-p lithos-<name>`). This lets you
+run `prod`, `staging`, and `fuzz` side-by-side on one host without
+container name, port, or volume collisions.
+
+### Set up env files
+
+Create one file per environment under `docker/`:
+
+`docker/.env.prod`
+```bash
+LITHOS_ENVIRONMENT=production
+LITHOS_DATA_PATH=/path/to/lithos/data
+LITHOS_HOST_PORT=8765
+LITHOS_CONTAINER_NAME=lithos
+```
+
+`docker/.env.staging`
+```bash
+LITHOS_ENVIRONMENT=staging
+LITHOS_DATA_PATH=/path/to/lithos/data-staging
+LITHOS_HOST_PORT=8766
+LITHOS_CONTAINER_NAME=lithos-staging
+```
+
+`docker/.env.fuzz`
+```bash
+LITHOS_ENVIRONMENT=fuzz
+LITHOS_DATA_PATH=/path/to/lithos/data-fuzz
+LITHOS_HOST_PORT=8767
+LITHOS_CONTAINER_NAME=lithos-fuzz
+```
+
+`LITHOS_ENVIRONMENT` becomes the OTEL `deployment.environment` resource
+attribute, so metrics, traces, and logs are labelled per environment in
+your observability stack.
+
+### Use the launcher
+
+```bash
+cd docker
+
+./run.sh prod                 # build & start production (default action = up)
+./run.sh staging up           # same, explicit
+./run.sh fuzz logs            # follow container logs
+./run.sh staging status       # show running containers for this stack
+./run.sh prod down            # stop & remove the stack
+./run.sh fuzz restart         # down + up
+```
+
+Each environment gets its own container (`lithos`, `lithos-staging`,
+`lithos-fuzz`), its own host port, and its own data volume, so they can
+all run concurrently. Running `./run.sh` with no arguments prints usage.
