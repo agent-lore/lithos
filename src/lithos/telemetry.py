@@ -153,12 +153,14 @@ def setup_telemetry(config: LithosConfig, *, _test_span_exporter: Any = None) ->
     # Read version from package metadata (not hardcoded)
     service_version = _get_package_version()
 
-    resource = Resource.create(
-        {
-            "service.name": config.telemetry.service_name,
-            "service.version": service_version,
-        }
-    )
+    resource_attrs: dict[str, Any] = {
+        "service.name": config.telemetry.service_name,
+        "service.version": service_version,
+    }
+    if config.telemetry.environment:
+        resource_attrs["deployment.environment"] = config.telemetry.environment
+
+    resource = Resource.create(resource_attrs)
 
     endpoint = config.telemetry.endpoint
     # Prefer signal-specific OTEL endpoints if provided, otherwise derive from base.
@@ -247,7 +249,11 @@ def setup_telemetry(config: LithosConfig, *, _test_span_exporter: Any = None) ->
     # with zero additional dependencies.
     _inject_trace_context_into_logs(config.telemetry.service_name)
 
-    logger.info("OpenTelemetry initialized (endpoint=%s)", endpoint)
+    logger.info(
+        "OpenTelemetry initialized (endpoint=%s, environment=%s)",
+        endpoint,
+        config.telemetry.environment or "unset",
+    )
 
 
 def shutdown_telemetry() -> None:

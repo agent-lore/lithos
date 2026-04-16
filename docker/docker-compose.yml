@@ -18,6 +18,7 @@ services:
       - LITHOS_HOST=0.0.0.0
       - LITHOS_PORT=8765
       - LITHOS_OTEL_ENABLED=${LITHOS_OTEL_ENABLED:-true}
+      - LITHOS_ENVIRONMENT=${LITHOS_ENVIRONMENT:-dev}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
