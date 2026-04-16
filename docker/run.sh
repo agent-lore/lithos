@@ -53,7 +53,7 @@ case "${action}" in
         docker compose "${compose_args[@]}" up -d --build
         ;;
     logs)
-        docker compose "${compose_args[@]}" logs -f
+        docker compose "${compose_args[@]}" logs -f 2>&1 | grep -v -E 'GET /health|Batches:.*it/s'
         ;;
     status)
         docker compose "${compose_args[@]}" ps
