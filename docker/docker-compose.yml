@@ -6,13 +6,13 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: lithos
+    container_name: ${LITHOS_CONTAINER_NAME:-lithos}
     user: "${LITHOS_UID:-1000}:${LITHOS_GID:-1000}"
     restart: unless-stopped
     volumes:
       - ${LITHOS_DATA_PATH:-./data}:/data
     ports:
-      - "8765:8765"
+      - "${LITHOS_HOST_PORT:-8765}:8765"
     environment:
       - LITHOS_DATA_DIR=/data
       - LITHOS_HOST=0.0.0.0
