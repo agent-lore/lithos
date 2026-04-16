@@ -107,9 +107,11 @@ class TestRetrieveCreatesStores:
 
     @pytest.mark.asyncio
     async def test_edge_upsert_creates_edges_db(self, server: LithosServer) -> None:
-        """edges.db is created lazily on the first edge mutation."""
+        """edges.db exists after server init (LCMA enabled) and accepts upserts."""
         edges_path = server.config.storage.edges_db_path
-        assert not edges_path.exists()
+        # With LCMA enabled, server.initialize() eagerly opens the edge store so
+        # the enrich worker's projection helpers have a live DB to write to.
+        assert edges_path.exists()
 
         result = await _call_tool(
             server,
@@ -348,9 +350,10 @@ class TestNoteTypePriorsIntegration:
         assert len(result["results"]) >= 2
         scores_by_type: dict[str, float] = {}
         for r in result["results"]:
-            # Read the note to get its note_type
+            # Read the note to get its note_type (nested under metadata in the
+            # lithos_read response).
             doc_result = await _call_tool(server, "lithos_read", {"id": r["id"]})
-            nt = doc_result.get("note_type", "observation")
+            nt = doc_result.get("metadata", {}).get("note_type", "observation")
             if nt in ("agent_finding", "task_record"):
                 scores_by_type[nt] = r["score"]
 
