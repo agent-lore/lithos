@@ -277,15 +277,15 @@ class TestTelemetryIntegration:
         tool_attrs = dict(tool_span.attributes)
         assert tool_attrs.get("lithos.provenance.source_count") == 1
 
-    async def test_provenance_tool_emits_span(self, otel_server):
-        """lithos_provenance emits a span with direction and depth."""
+    async def test_related_tool_emits_span(self, otel_server):
+        """lithos_related emits a span with include subset and depth."""
         server, exporter = otel_server
 
         # Create a doc
         result = await server.mcp._call_tool_mcp(
             "lithos_write",
             {
-                "title": "OTEL Prov Query",
+                "title": "OTEL Related Query",
                 "content": "Test.",
                 "agent": "test-agent",
             },
@@ -294,23 +294,22 @@ class TestTelemetryIntegration:
 
         exporter.clear()
 
-        # Call lithos_provenance
+        # Call lithos_related with provenance-only include
         await server.mcp._call_tool_mcp(
-            "lithos_provenance",
-            {"id": doc_id, "direction": "both", "depth": 1},
+            "lithos_related",
+            {"id": doc_id, "include": ["provenance"], "depth": 1},
         )
 
         spans = exporter.get_finished_spans()
         span_names = [s.name for s in spans]
-        assert "lithos.tool.provenance" in span_names
+        assert "lithos.tool.related" in span_names
 
-        prov_span = next(s for s in spans if s.name == "lithos.tool.provenance")
-        prov_attrs = dict(prov_span.attributes)
-        assert prov_attrs.get("lithos.tool") == "lithos_provenance"
-        assert prov_attrs.get("lithos.direction") == "both"
-        assert prov_attrs.get("lithos.depth") == 1
-        assert "lithos.sources_count" in prov_attrs
-        assert "lithos.derived_count" in prov_attrs
+        related_span = next(s for s in spans if s.name == "lithos.tool.related")
+        related_attrs = dict(related_span.attributes)
+        assert related_attrs.get("lithos.tool") == "lithos_related"
+        assert related_attrs.get("lithos.include") == "provenance"
+        assert related_attrs.get("lithos.depth") == 1
+        assert "lithos.related_count" in related_attrs
 
 
 class TestWriteDurationHistogram:

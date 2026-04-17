@@ -702,9 +702,9 @@ class TestGraphEdgeConsistency:
         assert not server.graph.has_edge(linker_id, beta_id)
 
         links_before = await _call_tool(
-            server, "lithos_links", {"id": linker_id, "direction": "outgoing"}
+            server, "lithos_related", {"id": linker_id, "include": ["links"]}
         )
-        before_ids = [link["id"] for link in links_before["outgoing"]]
+        before_ids = [link["id"] for link in links_before["links"]["outgoing"]]
         assert alpha_id in before_ids
         assert beta_id not in before_ids
 
@@ -725,22 +725,22 @@ class TestGraphEdgeConsistency:
         assert server.graph.has_edge(linker_id, beta_id)
 
         links_after = await _call_tool(
-            server, "lithos_links", {"id": linker_id, "direction": "outgoing"}
+            server, "lithos_related", {"id": linker_id, "include": ["links"]}
         )
-        after_ids = [link["id"] for link in links_after["outgoing"]]
+        after_ids = [link["id"] for link in links_after["links"]["outgoing"]]
         assert beta_id in after_ids
         assert alpha_id not in after_ids
 
         # Verify incoming links on targets are consistent.
         alpha_incoming = await _call_tool(
-            server, "lithos_links", {"id": alpha_id, "direction": "incoming"}
+            server, "lithos_related", {"id": alpha_id, "include": ["links"]}
         )
-        assert not any(link["id"] == linker_id for link in alpha_incoming["incoming"])
+        assert not any(link["id"] == linker_id for link in alpha_incoming["links"]["incoming"])
 
         beta_incoming = await _call_tool(
-            server, "lithos_links", {"id": beta_id, "direction": "incoming"}
+            server, "lithos_related", {"id": beta_id, "include": ["links"]}
         )
-        assert any(link["id"] == linker_id for link in beta_incoming["incoming"])
+        assert any(link["id"] == linker_id for link in beta_incoming["links"]["incoming"])
 
 
 class TestAgentAndCoordinationMCPTools:
@@ -1427,12 +1427,12 @@ class TestSearchAndListFilters:
         assert "old-agent" not in agent_ids
 
 
-class TestLinksDepthAndDirection:
-    """Tests for lithos_links with depth > 1 and direction=both."""
+class TestRelatedLinksDepth:
+    """Tests for lithos_related (links section) with depth > 1 and both directions."""
 
     @pytest.mark.asyncio
-    async def test_links_direction_both(self, server: LithosServer):
-        """lithos_links direction=both returns outgoing and incoming."""
+    async def test_links_both_directions(self, server: LithosServer):
+        """lithos_related returns wiki-link neighbours in both directions at depth=1."""
         a = await _call_tool(
             server,
             "lithos_write",
@@ -1461,18 +1461,18 @@ class TestLinksDepthAndDirection:
             },
         )
 
-        links = await _call_tool(
-            server, "lithos_links", {"id": b["id"], "direction": "both", "depth": 1}
+        result = await _call_tool(
+            server, "lithos_related", {"id": b["id"], "include": ["links"], "depth": 1}
         )
-        outgoing_ids = [link["id"] for link in links["outgoing"]]
-        incoming_ids = [link["id"] for link in links["incoming"]]
+        outgoing_ids = [link["id"] for link in result["links"]["outgoing"]]
+        incoming_ids = [link["id"] for link in result["links"]["incoming"]]
 
         assert c["id"] in outgoing_ids
         assert a["id"] in incoming_ids
 
     @pytest.mark.asyncio
     async def test_links_depth_2_traversal(self, server: LithosServer):
-        """lithos_links depth=2 returns transitive neighbors."""
+        """depth=2 returns transitive neighbours; depth=1 does not."""
         a = await _call_tool(
             server,
             "lithos_write",
@@ -1501,25 +1501,25 @@ class TestLinksDepthAndDirection:
             },
         )
 
-        # Depth 1 from root should find middle but not leaf
-        links_d1 = await _call_tool(
-            server, "lithos_links", {"id": a["id"], "direction": "outgoing", "depth": 1}
+        # Depth 1 from root should find middle but not leaf.
+        d1 = await _call_tool(
+            server, "lithos_related", {"id": a["id"], "include": ["links"], "depth": 1}
         )
-        d1_ids = [link["id"] for link in links_d1["outgoing"]]
+        d1_ids = [link["id"] for link in d1["links"]["outgoing"]]
         assert b["id"] in d1_ids
         assert c["id"] not in d1_ids
 
-        # Depth 2 from root should find both middle and leaf
-        links_d2 = await _call_tool(
-            server, "lithos_links", {"id": a["id"], "direction": "outgoing", "depth": 2}
+        # Depth 2 from root should find both middle and leaf.
+        d2 = await _call_tool(
+            server, "lithos_related", {"id": a["id"], "include": ["links"], "depth": 2}
         )
-        d2_ids = [link["id"] for link in links_d2["outgoing"]]
+        d2_ids = [link["id"] for link in d2["links"]["outgoing"]]
         assert b["id"] in d2_ids
         assert c["id"] in d2_ids
 
     @pytest.mark.asyncio
     async def test_links_depth_2_both_directions(self, server: LithosServer):
-        """lithos_links depth=2 direction=both returns transitive links in both directions."""
+        """depth=2 covers transitive links in both directions from a mid-chain node."""
         a = await _call_tool(
             server,
             "lithos_write",
@@ -1548,12 +1548,12 @@ class TestLinksDepthAndDirection:
             },
         )
 
-        # From mid at depth=2: outgoing should reach end, incoming should reach start
-        links = await _call_tool(
-            server, "lithos_links", {"id": b["id"], "direction": "both", "depth": 2}
+        # From mid at depth=2: outgoing should reach end, incoming should reach start.
+        result = await _call_tool(
+            server, "lithos_related", {"id": b["id"], "include": ["links"], "depth": 2}
         )
-        outgoing_ids = [link["id"] for link in links["outgoing"]]
-        incoming_ids = [link["id"] for link in links["incoming"]]
+        outgoing_ids = [link["id"] for link in result["links"]["outgoing"]]
+        incoming_ids = [link["id"] for link in result["links"]["incoming"]]
 
         assert c["id"] in outgoing_ids
         assert a["id"] in incoming_ids
@@ -2731,8 +2731,8 @@ class TestRebuildIndicesProvenance:
         assert derived_id not in mgr._id_to_title
 
 
-class TestLithosProvenance:
-    """Tests for US-011: lithos_provenance MCP tool."""
+class TestRelatedProvenance:
+    """Tests for the provenance section of lithos_related (US-011 coverage)."""
 
     async def _create_doc(
         self,
@@ -2752,56 +2752,52 @@ class TestLithosProvenance:
         assert result["status"] == "created"
         return result["id"]
 
+    async def _prov(self, server: LithosServer, doc_id: str, *, depth: int = 1) -> dict[str, Any]:
+        result = await _call_tool(
+            server,
+            "lithos_related",
+            {"id": doc_id, "include": ["provenance"], "depth": depth},
+        )
+        assert "provenance" in result, result
+        return result["provenance"]
+
     async def test_single_depth_sources(self, server: LithosServer):
-        """direction='sources' returns immediate source documents."""
+        """Immediate source document shows up under provenance.sources."""
         source_id = await self._create_doc(server, "Prov Source A")
         derived_id = await self._create_doc(server, "Prov Derived A", derived_from_ids=[source_id])
 
-        result = await _call_tool(
-            server, "lithos_provenance", {"id": derived_id, "direction": "sources"}
-        )
-        assert result["id"] == derived_id
-        assert len(result["sources"]) == 1
-        assert result["sources"][0]["id"] == source_id
-        assert result["sources"][0]["title"] == "Prov Source A"
-        assert result["derived"] == []
+        prov = await self._prov(server, derived_id)
+        assert len(prov["sources"]) == 1
+        assert prov["sources"][0]["id"] == source_id
+        assert prov["sources"][0]["title"] == "Prov Source A"
+        # No incoming derives from this leaf doc.
+        assert prov["derived"] == []
 
     async def test_single_depth_derived(self, server: LithosServer):
-        """direction='derived' returns immediate derived documents."""
+        """Immediate derived document shows up under provenance.derived."""
         source_id = await self._create_doc(server, "Prov Source B")
         derived_id = await self._create_doc(server, "Prov Derived B", derived_from_ids=[source_id])
 
-        result = await _call_tool(
-            server, "lithos_provenance", {"id": source_id, "direction": "derived"}
-        )
-        assert result["id"] == source_id
-        assert result["sources"] == []
-        assert len(result["derived"]) == 1
-        assert result["derived"][0]["id"] == derived_id
+        prov = await self._prov(server, source_id)
+        assert prov["sources"] == []
+        assert len(prov["derived"]) == 1
+        assert prov["derived"][0]["id"] == derived_id
 
     async def test_multi_depth_bfs_chain(self, server: LithosServer):
-        """depth=2 BFS traverses A->B->C chain."""
+        """depth=2 BFS traverses A->B->C chain in both directions."""
         a_id = await self._create_doc(server, "Chain A")
         b_id = await self._create_doc(server, "Chain B", derived_from_ids=[a_id])
         c_id = await self._create_doc(server, "Chain C", derived_from_ids=[b_id])
 
-        # From A, derived depth=2 should find B and C
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": a_id, "direction": "derived", "depth": 2},
-        )
-        derived_ids = [n["id"] for n in result["derived"]]
+        # From A at depth=2 the derived list should reach B and C.
+        prov_a = await self._prov(server, a_id, depth=2)
+        derived_ids = [n["id"] for n in prov_a["derived"]]
         assert b_id in derived_ids
         assert c_id in derived_ids
 
-        # From C, sources depth=2 should find B and A
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": c_id, "direction": "sources", "depth": 2},
-        )
-        source_ids = [n["id"] for n in result["sources"]]
+        # From C at depth=2 the sources list should reach B and A.
+        prov_c = await self._prov(server, c_id, depth=2)
+        source_ids = [n["id"] for n in prov_c["sources"]]
         assert b_id in source_ids
         assert a_id in source_ids
 
@@ -2810,7 +2806,7 @@ class TestLithosProvenance:
         a_id = await self._create_doc(server, "Cycle A")
         b_id = await self._create_doc(server, "Cycle B", derived_from_ids=[a_id])
 
-        # Now update A to also derive from B (creates a cycle)
+        # Update A to also derive from B (creates a cycle).
         await _call_tool(
             server,
             "lithos_write",
@@ -2823,110 +2819,42 @@ class TestLithosProvenance:
             },
         )
 
-        # Should return without hanging, depth=3 to maximize traversal
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": a_id, "direction": "both", "depth": 3},
-        )
-        # Both A's sources and derived should include B
-        source_ids = [n["id"] for n in result["sources"]]
-        derived_ids = [n["id"] for n in result["derived"]]
+        # Should return without hanging at depth=3.
+        prov = await self._prov(server, a_id, depth=3)
+        source_ids = [n["id"] for n in prov["sources"]]
+        derived_ids = [n["id"] for n in prov["derived"]]
         assert b_id in source_ids
         assert b_id in derived_ids
 
     async def test_unresolved_sources_included(self, server: LithosServer):
-        """include_unresolved=True shows unresolved source UUIDs."""
+        """Unresolved source UUIDs surface under provenance.unresolved_sources."""
         missing_id = "00000000-0000-0000-0000-000000aaaaaa"
         doc_id = await self._create_doc(server, "Unresolved Prov", derived_from_ids=[missing_id])
 
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": doc_id, "include_unresolved": True},
-        )
-        assert missing_id in result["unresolved_sources"]
-
-    async def test_unresolved_sources_excluded(self, server: LithosServer):
-        """include_unresolved=False omits unresolved_sources key."""
-        missing_id = "00000000-0000-0000-0000-000000bbbbbb"
-        doc_id = await self._create_doc(server, "No Unresolved Prov", derived_from_ids=[missing_id])
-
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": doc_id, "include_unresolved": False},
-        )
-        assert "unresolved_sources" not in result
-
-    async def test_unknown_id_returns_error(self, server: LithosServer):
-        """Unknown ID returns doc_not_found error."""
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": "00000000-0000-0000-0000-ffffffffffff"},
-        )
-        assert result["status"] == "error"
-        assert result["code"] == "doc_not_found"
+        prov = await self._prov(server, doc_id)
+        assert missing_id in prov["unresolved_sources"]
 
     async def test_both_direction(self, server: LithosServer):
-        """direction='both' returns sources and derived."""
+        """provenance includes sources and derived without an explicit flag."""
         a_id = await self._create_doc(server, "Both Source")
         b_id = await self._create_doc(server, "Both Middle", derived_from_ids=[a_id])
         c_id = await self._create_doc(server, "Both Derived", derived_from_ids=[b_id])
 
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": b_id, "direction": "both"},
-        )
-        source_ids = [n["id"] for n in result["sources"]]
-        derived_ids = [n["id"] for n in result["derived"]]
+        prov = await self._prov(server, b_id)
+        source_ids = [n["id"] for n in prov["sources"]]
+        derived_ids = [n["id"] for n in prov["derived"]]
         assert a_id in source_ids
         assert c_id in derived_ids
 
-    async def test_results_sorted_by_id(self, server: LithosServer):
-        """Sources and derived lists are sorted by ID."""
+    async def test_sources_sorted_by_id(self, server: LithosServer):
+        """Sources list is sorted by ID for deterministic output."""
         s1 = await self._create_doc(server, "Sort Source 1")
         s2 = await self._create_doc(server, "Sort Source 2")
         doc_id = await self._create_doc(server, "Sort Derived", derived_from_ids=[s1, s2])
 
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": doc_id, "direction": "sources"},
-        )
-        ids = [n["id"] for n in result["sources"]]
+        prov = await self._prov(server, doc_id)
+        ids = [n["id"] for n in prov["sources"]]
         assert ids == sorted(ids)
-
-    async def test_depth_clamped(self, server: LithosServer):
-        """Depth values are clamped to 1-3."""
-        a_id = await self._create_doc(server, "Clamp A")
-        b_id = await self._create_doc(server, "Clamp B", derived_from_ids=[a_id])
-        c_id = await self._create_doc(server, "Clamp C", derived_from_ids=[b_id])
-        _d_id = await self._create_doc(server, "Clamp D", derived_from_ids=[c_id])
-
-        # depth=0 should be clamped to 1
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": a_id, "direction": "derived", "depth": 0},
-        )
-        derived_ids = [n["id"] for n in result["derived"]]
-        assert b_id in derived_ids
-        # depth=1 should not reach C
-        assert c_id not in derived_ids
-
-        # depth=100 should be clamped to 3
-        result = await _call_tool(
-            server,
-            "lithos_provenance",
-            {"id": a_id, "direction": "derived", "depth": 100},
-        )
-        derived_ids = [n["id"] for n in result["derived"]]
-        # Should reach up to 3 levels deep
-        assert b_id in derived_ids
-        assert c_id in derived_ids
 
 
 class TestDerivedFromIdsInResponses:

@@ -106,9 +106,9 @@ Sensitive-data policy:
 
 ## 6.1 Provenance API Authority
 
-- Canonical lineage queries use `lithos_provenance` (frontmatter/index authority).
+- Canonical lineage queries use the `provenance` section of `lithos_related` (frontmatter/index authority).
 - Edge queries (`lithos_edge_list`) are graph/learning oriented and may include projected lineage edges.
-- If results diverge, lineage answers follow `lithos_provenance`.
+- If results diverge, lineage answers follow `lithos_related` / `provenance`.
 
 ## 7) Conformance Test Matrix
 

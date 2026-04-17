@@ -351,11 +351,12 @@ class TestIndexLifecycleConformance:
         # This must terminate
         result = await _call_tool(
             server,
-            "lithos_provenance",
-            {"id": a["id"], "direction": "both", "depth": 3},
+            "lithos_related",
+            {"id": a["id"], "include": ["provenance"], "depth": 3},
         )
-        assert "sources" in result
-        assert "derived" in result
+        assert "provenance" in result
+        assert "sources" in result["provenance"]
+        assert "derived" in result["provenance"]
 
 
 # ---------------------------------------------------------------------------
