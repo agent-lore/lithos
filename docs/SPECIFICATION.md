@@ -523,6 +523,48 @@ Traverse provenance lineage (derived-from relationships) for a knowledge item.
 - Returns `{ status: "error", code: "doc_not_found" }` for unknown IDs.
 - Results are sorted by ID for deterministic output.
 
+#### `lithos_related`
+
+Composite "what is this document related to?" view. Merges wiki-link navigation, derived-from provenance, and typed LCMA edges into a single response so agents don't have to fan out across three tools and mentally join the results.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | string | Yes | UUID of knowledge item |
+| `include` | list[string] | No | Subset of `["links", "provenance", "edges"]` to populate (default: all three) |
+| `depth` | int | No | BFS depth 1-3 for `links` and `provenance` (default: 1). Ignored by `edges`. |
+| `namespace` | string | No | Optional namespace filter applied to `edges` only |
+
+**Returns:**
+```json
+{
+  "id": "<queried-uuid>",
+  "included": ["links", "provenance", "edges"],
+  "links": {
+    "outgoing": [{ "id": "<uuid>", "title": "<string>" }],
+    "incoming": [{ "id": "<uuid>", "title": "<string>" }]
+  },
+  "provenance": {
+    "sources": [{ "id": "<uuid>", "title": "<string>" }],
+    "derived": [{ "id": "<uuid>", "title": "<string>" }],
+    "unresolved_sources": ["<uuid>", ...]
+  },
+  "edges": {
+    "outgoing": [<edge-record>, ...],
+    "incoming": [<edge-record>, ...]
+  },
+  "related_ids": ["<uuid>", ...]
+}
+```
+
+**Behavior:**
+- Sections not listed in `include` are omitted entirely (not emitted as empty keys).
+- Unknown `include` values are silently ignored so forward-compatible callers don't break when new backends land.
+- `edges` section is empty when LCMA is disabled in config.
+- `related_ids` is the deduped, sorted union of every id referenced across the included sections. The queried document's own id is excluded so callers can iterate without filtering.
+- `lithos_links`, `lithos_provenance`, and `lithos_edge_list` remain available for scenarios that need finer-grained control (single direction, edge-type filter, etc.). This tool is for the common case.
+- Returns `{ status: "error", code: "doc_not_found" }` for unknown IDs.
+
 ### 5.3 Agent Operations
 
 #### `lithos_agent_register`
@@ -1277,7 +1319,7 @@ These are explicitly not part of the initial implementation but may be considere
 | Category | Tools |
 |----------|-------|
 | Knowledge | `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup` |
-| Graph | `lithos_links`, `lithos_tags`, `lithos_provenance` |
+| Graph | `lithos_links`, `lithos_tags`, `lithos_provenance`, `lithos_related` |
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`, `lithos_finding_post`, `lithos_finding_list` |
 | System | `lithos_stats` |

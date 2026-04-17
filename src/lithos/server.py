@@ -2341,6 +2341,146 @@ class LithosServer:
                 span.set_attribute("lithos.derived_count", len(derived))
                 return result
 
+        _RELATED_INCLUDES = ("links", "provenance", "edges")
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_related(
+            id: str,
+            include: list[str] | None = None,
+            depth: int = 1,
+            namespace: str | None = None,
+        ) -> dict[str, Any]:
+            """Composite "what is this document related to?" view.
+
+            Merges three backends into a single response so agents don't have
+            to fan out across ``lithos_links``, ``lithos_provenance``, and
+            ``lithos_edge_list`` and mentally join the results:
+
+            - **links** — structural ``[[wiki-link]]`` navigation (NetworkX).
+            - **provenance** — ``derived_from_ids`` chains (frontmatter index).
+            - **edges** — typed LCMA edges (edges.db), both directions.
+
+            The individual tools remain available for power-user scenarios
+            that need specific traversal control (directional, depth-only,
+            edge-type filtering, etc.). This tool is for the common case.
+
+            Args:
+                id: Document UUID.
+                include: Subset of ``["links", "provenance", "edges"]`` to
+                    populate. Defaults to all three. Unknown values are
+                    silently ignored so forward-compatible callers don't
+                    break when new backends land.
+                depth: BFS depth 1-3 for ``links`` and ``provenance``.
+                    Ignored for ``edges`` (LCMA edges are a flat table).
+                namespace: Optional namespace filter applied to ``edges``.
+                    ``links`` and ``provenance`` don't use namespaces.
+
+            Returns:
+                Dict shaped like::
+
+                    {
+                      "id": "<doc-id>",
+                      "included": ["links", "provenance", "edges"],
+                      "links": {"outgoing": [...], "incoming": [...]},
+                      "provenance": {
+                          "sources": [...], "derived": [...],
+                          "unresolved_sources": [...]
+                      },
+                      "edges": {"outgoing": [...], "incoming": [...]},
+                      "related_ids": ["<id>", ...]   # deduped union
+                    }
+
+                Sections not listed in ``include`` are omitted entirely
+                (not emitted as empty keys). ``related_ids`` holds the
+                deduped union of every id referenced across the included
+                sections — sorted for determinism.
+            """
+            logger.info(
+                "lithos_related: called",
+                extra={"id": id, "include": include, "depth": depth, "namespace": namespace},
+            )
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.related") as span:
+                span.set_attribute("lithos.tool", "lithos_related")
+                span.set_attribute("lithos.id", id)
+
+                if not self.knowledge.has_document(id):
+                    return {
+                        "status": "error",
+                        "code": "doc_not_found",
+                        "message": f"Document not found: {id}",
+                    }
+
+                requested = include if include is not None else list(_RELATED_INCLUDES)
+                selected = [k for k in _RELATED_INCLUDES if k in requested]
+                span.set_attribute("lithos.include", ",".join(selected))
+
+                depth = min(max(depth, 1), 3)
+                span.set_attribute("lithos.depth", depth)
+
+                result: dict[str, Any] = {
+                    "id": id,
+                    "included": selected,
+                }
+                related_ids: set[str] = set()
+
+                # --- links (NetworkX wiki-links) ---------------------------
+                if "links" in selected:
+                    links = self.graph.get_links(doc_id=id, direction="both", depth=depth)
+                    outgoing = [{"id": ln.id, "title": ln.title} for ln in links.outgoing]
+                    incoming = [{"id": ln.id, "title": ln.title} for ln in links.incoming]
+                    result["links"] = {"outgoing": outgoing, "incoming": incoming}
+                    related_ids.update(ln.id for ln in links.outgoing)
+                    related_ids.update(ln.id for ln in links.incoming)
+
+                # --- provenance (frontmatter derived_from_ids) -------------
+                if "provenance" in selected:
+                    sources = self._bfs_provenance(id, "sources", depth)
+                    derived = self._bfs_provenance(id, "derived", depth)
+                    unresolved_sources = sorted(self.knowledge.get_unresolved_sources(id))
+                    result["provenance"] = {
+                        "sources": sources,
+                        "derived": derived,
+                        "unresolved_sources": unresolved_sources,
+                    }
+                    related_ids.update(s["id"] for s in sources)
+                    related_ids.update(d["id"] for d in derived)
+
+                # --- edges (LCMA edges.db) ---------------------------------
+                if "edges" in selected:
+                    if self._config.lcma.enabled:
+                        # Fan out both directions; caller rarely wants just one.
+                        outgoing_edges = await self.edge_store.list_edges(
+                            from_id=id, namespace=namespace
+                        )
+                        incoming_edges = await self.edge_store.list_edges(
+                            to_id=id, namespace=namespace
+                        )
+                    else:
+                        outgoing_edges = []
+                        incoming_edges = []
+                    result["edges"] = {
+                        "outgoing": outgoing_edges,
+                        "incoming": incoming_edges,
+                    }
+                    for edge in outgoing_edges:
+                        tid = edge.get("to_id")
+                        if isinstance(tid, str):
+                            related_ids.add(tid)
+                    for edge in incoming_edges:
+                        fid = edge.get("from_id")
+                        if isinstance(fid, str):
+                            related_ids.add(fid)
+
+                # Exclude the document itself from related_ids so callers
+                # can iterate without filtering.
+                related_ids.discard(id)
+                result["related_ids"] = sorted(related_ids)
+                span.set_attribute("lithos.related_count", len(related_ids))
+
+                return result
+
         @self.mcp.tool()
         @tool_metrics()
         async def lithos_tags(

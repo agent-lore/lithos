@@ -3031,6 +3031,153 @@ class TestDerivedFromIdsInResponses:
         assert items[source_id]["derived_from_ids"] == []
 
 
+class TestLithosRelated:
+    """Tests for #82 lithos_related — composite links + provenance + edges."""
+
+    async def _create_doc(
+        self,
+        server: LithosServer,
+        title: str,
+        *,
+        content: str | None = None,
+        derived_from_ids: list[str] | None = None,
+    ) -> str:
+        args: dict[str, Any] = {
+            "title": title,
+            "content": content if content is not None else f"Content of {title}.",
+            "agent": "related-agent",
+        }
+        if derived_from_ids is not None:
+            args["derived_from_ids"] = derived_from_ids
+        result = await _call_tool(server, "lithos_write", args)
+        assert result["status"] == "created"
+        return result["id"]
+
+    async def test_unknown_id_returns_doc_not_found(self, server: LithosServer):
+        result = await _call_tool(
+            server, "lithos_related", {"id": "00000000-0000-4000-8000-000000000000"}
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "doc_not_found"
+
+    async def test_default_include_covers_all_three_sections(self, server: LithosServer):
+        """Omitting include returns links + provenance + edges (all three)."""
+        doc = await self._create_doc(server, "Related Default")
+        result = await _call_tool(server, "lithos_related", {"id": doc})
+        assert result["id"] == doc
+        assert set(result["included"]) == {"links", "provenance", "edges"}
+        assert "links" in result
+        assert "provenance" in result
+        assert "edges" in result
+        assert result["related_ids"] == []  # isolated doc
+
+    async def test_include_subset_omits_unselected_sections(self, server: LithosServer):
+        doc = await self._create_doc(server, "Related Subset")
+        result = await _call_tool(server, "lithos_related", {"id": doc, "include": ["links"]})
+        assert result["included"] == ["links"]
+        assert "links" in result
+        assert "provenance" not in result
+        assert "edges" not in result
+
+    async def test_unknown_include_values_are_silently_ignored(self, server: LithosServer):
+        doc = await self._create_doc(server, "Related Forward Compat")
+        result = await _call_tool(
+            server, "lithos_related", {"id": doc, "include": ["links", "future_backend"]}
+        )
+        assert result["included"] == ["links"]
+
+    async def test_wiki_links_populate_links_section(self, server: LithosServer):
+        """An outgoing [[wiki-link]] shows up under links.outgoing."""
+        target = await self._create_doc(server, "Related Target Note")
+        linker = await self._create_doc(
+            server,
+            "Related Linker Note",
+            content="See [[related-target-note]] for reference.",
+        )
+        result = await _call_tool(server, "lithos_related", {"id": linker})
+        outgoing_ids = [n["id"] for n in result["links"]["outgoing"]]
+        assert target in outgoing_ids
+        assert target in result["related_ids"]
+
+    async def test_derived_from_populates_provenance_section(self, server: LithosServer):
+        """derived_from_ids shows up under provenance.sources (and reverse)."""
+        source = await self._create_doc(server, "Source Note")
+        derived = await self._create_doc(server, "Derived Note", derived_from_ids=[source])
+
+        result_derived = await _call_tool(server, "lithos_related", {"id": derived})
+        source_ids = [n["id"] for n in result_derived["provenance"]["sources"]]
+        assert source in source_ids
+        assert source in result_derived["related_ids"]
+
+        result_source = await _call_tool(server, "lithos_related", {"id": source})
+        derived_ids = [n["id"] for n in result_source["provenance"]["derived"]]
+        assert derived in derived_ids
+        assert derived in result_source["related_ids"]
+
+    async def test_depth_is_clamped_to_valid_range(self, server: LithosServer):
+        """depth=0 or depth=99 must not blow up — clamped to 1..3."""
+        doc = await self._create_doc(server, "Depth Clamp")
+        zero = await _call_tool(server, "lithos_related", {"id": doc, "depth": 0})
+        huge = await _call_tool(server, "lithos_related", {"id": doc, "depth": 99})
+        assert "links" in zero and "links" in huge
+
+    async def test_related_ids_exclude_self(self, server: LithosServer):
+        """Self-id must never appear in related_ids even if a self-link exists."""
+        doc_id = await self._create_doc(server, "Self Exclude")
+        result = await _call_tool(server, "lithos_related", {"id": doc_id})
+        assert doc_id not in result["related_ids"]
+
+    async def test_edges_populate_both_directions(self, server: LithosServer):
+        """An LCMA edge upserted via lithos_edge_upsert shows up on both endpoints."""
+        a = await self._create_doc(server, "Edge Endpoint A")
+        b = await self._create_doc(server, "Edge Endpoint B")
+
+        up = await _call_tool(
+            server,
+            "lithos_edge_upsert",
+            {
+                "from_id": a,
+                "to_id": b,
+                "type": "related_to",
+                "weight": 0.7,
+                "namespace": "default",
+            },
+        )
+        assert up["status"] == "ok"
+
+        # Outgoing side: A's edges include one where to_id == B.
+        result_a = await _call_tool(server, "lithos_related", {"id": a})
+        outgoing_tos = [e["to_id"] for e in result_a["edges"]["outgoing"]]
+        assert b in outgoing_tos
+        assert b in result_a["related_ids"]
+
+        # Incoming side: B's edges include one where from_id == A.
+        result_b = await _call_tool(server, "lithos_related", {"id": b})
+        incoming_froms = [e["from_id"] for e in result_b["edges"]["incoming"]]
+        assert a in incoming_froms
+        assert a in result_b["related_ids"]
+
+    async def test_namespace_filter_scopes_edges_only(self, server: LithosServer):
+        """namespace='other' filters the edges section; links/provenance untouched."""
+        a = await self._create_doc(server, "NS Scoped A")
+        b = await self._create_doc(server, "NS Scoped B")
+        await _call_tool(
+            server,
+            "lithos_edge_upsert",
+            {
+                "from_id": a,
+                "to_id": b,
+                "type": "related_to",
+                "weight": 0.5,
+                "namespace": "default",
+            },
+        )
+
+        result = await _call_tool(server, "lithos_related", {"id": a, "namespace": "nonexistent"})
+        assert result["edges"]["outgoing"] == []
+        assert result["edges"]["incoming"] == []
+
+
 def test_conformance_module_exists():
     """Sanity check to keep this module discoverable in test listings."""
     assert Path(__file__).name == "test_integration_conformance.py"
