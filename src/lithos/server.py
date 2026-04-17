@@ -3,6 +3,7 @@
 import asyncio
 import collections
 import concurrent.futures
+import contextlib
 import hashlib
 import json
 import logging
@@ -101,9 +102,19 @@ class LithosServer:
                 coordination=self.coordination,
             )
 
-        # Cached count fields for synchronous OTEL observable gauge callbacks
+        # Cached count fields for synchronous OTEL observable gauge callbacks.
+        # Primed at startup by _refresh_coordination_stats_cache() and kept fresh
+        # by _coordination_stats_refresh_loop() so the gauges don't report 0
+        # until the first lithos_stats call (see #181).
         self._cached_active_claims: int = 0
         self._cached_agent_count: int = 0
+
+        # How often the background task refreshes _cached_agent_count /
+        # _cached_active_claims from the coordination DB. Small enough that
+        # observability dashboards stay in sync with reality; large enough
+        # that it's not a measurable load on the DB.
+        self._coordination_stats_refresh_seconds: float = 30.0
+        self._coordination_stats_refresh_task: asyncio.Task[None] | None = None
 
         # Background tasks (kept to prevent garbage collection)
         self._background_tasks: set[asyncio.Task[None]] = set()
@@ -530,6 +541,16 @@ class LithosServer:
                 # Initialize coordination database
                 await self.coordination.initialize()
 
+                # Prime the coordination stats cache BEFORE registering OTEL
+                # gauges — otherwise the first scrape would read the initial
+                # zero values, masking real agent/claim counts on dashboards
+                # (see #181).
+                await self._refresh_coordination_stats_cache()
+
+                # Start periodic background refresh so agent counts etc. stay
+                # in sync without requiring an explicit lithos_stats call.
+                self._start_coordination_stats_refresh()
+
                 # Register active claims gauge observer
                 register_active_claims_observer(lambda: self._cached_active_claims)
 
@@ -586,6 +607,19 @@ class LithosServer:
 
                 # Register LCMA observable gauges when LCMA is enabled
                 if self._config.lcma.enabled and self.stats_store is not None:
+                    # Prime the LCMA stats cache BEFORE OTEL gauge registration
+                    # for the same reason we prime coordination stats (#181):
+                    # EnrichWorker refreshes the cache after each drain cycle,
+                    # but the first drain is 5 minutes out by default — until
+                    # then the gauges would report zero on a populated DB.
+                    try:
+                        await self.stats_store.refresh_cached_counts()
+                    except Exception:
+                        logger.warning(
+                            "LCMA stats cache priming failed; gauges will "
+                            "start at zero until the first EnrichWorker drain.",
+                            exc_info=True,
+                        )
                     register_lcma_metrics(
                         get_enrich_queue_depth=self.stats_store.get_cached_enrich_queue_depth,
                         get_coactivation_pairs=self.stats_store.get_cached_coactivation_pairs,
@@ -605,6 +639,90 @@ class LithosServer:
                 elapsed_ms = (time.perf_counter() - _init_start) * 1000
                 lithos_metrics.startup_duration.record(elapsed_ms)
                 span.set_attribute("lithos.startup_duration", elapsed_ms)
+
+    async def _refresh_coordination_stats_cache(self) -> None:
+        """Refresh cached coordination counts that back the OTEL gauges.
+
+        OTEL observable-gauge callbacks must be synchronous and cheap; they
+        therefore read from ``self._cached_agent_count`` and
+        ``self._cached_active_claims`` rather than hitting the coordination DB
+        inside the metric collection loop. This coroutine is the single place
+        that refreshes those fields (called once at startup and then
+        periodically from :meth:`_coordination_stats_refresh_loop`, and also
+        opportunistically from the ``lithos_stats`` tool).
+
+        Regression for #181: without this priming step the gauge callbacks
+        reported 0 until the first ``lithos_stats`` call — so dashboards
+        showed "0 registered agents" on a cold server even when many agents
+        had registered.
+        """
+        try:
+            coord_stats = await self.coordination.get_stats()
+        except Exception:
+            logger.warning(
+                "Coordination stats refresh failed — OTEL gauges will keep "
+                "stale values until next successful refresh.",
+                exc_info=True,
+            )
+            return
+
+        prev_agents = self._cached_agent_count
+        prev_claims = self._cached_active_claims
+        self._cached_agent_count = coord_stats.get("agents", 0)
+        self._cached_active_claims = coord_stats.get("open_claims", 0)
+        logger.debug(
+            "Coordination stats cache refreshed",
+            extra={
+                "agents": self._cached_agent_count,
+                "open_claims": self._cached_active_claims,
+                "agents_delta": self._cached_agent_count - prev_agents,
+                "claims_delta": self._cached_active_claims - prev_claims,
+            },
+        )
+
+    def _start_coordination_stats_refresh(self) -> None:
+        """Spawn the periodic stats-refresh background task, idempotently."""
+        if (
+            self._coordination_stats_refresh_task is not None
+            and not self._coordination_stats_refresh_task.done()
+        ):
+            return
+        task = asyncio.create_task(self._coordination_stats_refresh_loop())
+        self._coordination_stats_refresh_task = task
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        logger.info(
+            "Started coordination stats refresh loop",
+            extra={"interval_seconds": self._coordination_stats_refresh_seconds},
+        )
+
+    async def _coordination_stats_refresh_loop(self) -> None:
+        """Background task: periodically refresh the coordination stats cache.
+
+        Exits cleanly on cancellation. Swallows per-iteration exceptions so a
+        transient DB hiccup doesn't kill the whole refresh loop — the next
+        tick retries.
+        """
+        interval = self._coordination_stats_refresh_seconds
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await self._refresh_coordination_stats_cache()
+        except asyncio.CancelledError:
+            logger.info("Coordination stats refresh loop cancelled")
+            raise
+
+    async def stop_coordination_stats_refresh(self) -> None:
+        """Cancel the periodic stats-refresh task, if any."""
+        task = self._coordination_stats_refresh_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            # Cancellation is expected; any other exception has already been
+            # logged from inside the loop.
+            await task
+        self._coordination_stats_refresh_task = None
 
     def _safe_tantivy_count(self) -> int:
         """Return Tantivy document count, 0 on any error."""

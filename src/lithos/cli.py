@@ -147,6 +147,7 @@ def serve(
         click.echo("\nShutting down...")
         logger.info("lithos server shutting down (KeyboardInterrupt)")
         server.stop_file_watcher()
+        asyncio.run(server.stop_coordination_stats_refresh())
         asyncio.run(server.stop_enrich_worker())
         logger.info("lithos server stopped")
     finally:
