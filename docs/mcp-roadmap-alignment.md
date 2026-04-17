@@ -12,7 +12,7 @@ MCP roadmap source: https://modelcontextprotocol.io/development/roadmap
 | MCP Roadmap Item | Lithos Status | Notes |
 |-----------------|---------------|-------|
 | Agent discovery / Server Cards | ✅ Implemented | `lithos_agent_register`, `lithos_agent_list`, `lithos_agent_info` provide a shared agent directory with type metadata |
-| Provenance metadata / Audit trails | ✅ Implemented | `derived_from_ids`, `source_url`, `lithos_provenance` — BFS traversal of provenance graph |
+| Provenance metadata / Audit trails | ✅ Implemented | `derived_from_ids`, `source_url`, exposed via the `provenance` section of `lithos_related` — BFS traversal of provenance graph |
 | Agent task lifecycle (retry, expiry) | ✅ Implemented | `lithos_task_claim` with TTL, `lithos_task_complete`, `lithos_task_status`; expiry via `expires_at` |
 | Triggers and event-driven updates | ✅ Implemented (ahead) | SSE event delivery (Phase 6.5) — real-time knowledge change stream |
 | Scalable session handling | 🟡 Partial | Stateless MCP tool surface; no session resumption semantics defined |

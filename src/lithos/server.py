@@ -2242,105 +2242,6 @@ class LithosServer:
 
         # ==================== Graph Tools ====================
 
-        @self.mcp.tool()
-        @tool_metrics()
-        async def lithos_links(
-            id: str,
-            direction: str = "both",
-            depth: int = 1,
-        ) -> dict[str, list[dict[str, str]]]:
-            """Get links for a document.
-
-            Args:
-                id: Document UUID
-                direction: "outgoing", "incoming", or "both"
-                depth: Traversal depth 1-3 (default: 1)
-
-            Returns:
-                Dict with outgoing and incoming lists of {id, title}
-            """
-            logger.info("lithos_links id=%s direction=%s depth=%d", id, direction, depth)
-            tracer = get_tracer()
-            with tracer.start_as_current_span("lithos.tool.links") as span:
-                span.set_attribute("lithos.tool", "lithos_links")
-                span.set_attribute("lithos.id", id)
-                span.set_attribute("lithos.direction", direction)
-                span.set_attribute("lithos.depth", depth)
-
-                if direction not in ("outgoing", "incoming", "both"):
-                    direction = "both"
-
-                links = self.graph.get_links(
-                    doc_id=id,
-                    direction=direction,  # type: ignore
-                    depth=depth,
-                )
-
-                return {
-                    "outgoing": [{"id": link.id, "title": link.title} for link in links.outgoing],
-                    "incoming": [{"id": link.id, "title": link.title} for link in links.incoming],
-                }
-
-        @self.mcp.tool()
-        @tool_metrics()
-        async def lithos_provenance(
-            id: str,
-            direction: str = "both",
-            depth: int = 1,
-            include_unresolved: bool = True,
-        ) -> dict[str, Any]:
-            """Query document lineage via provenance indexes.
-
-            Args:
-                id: Document UUID
-                direction: "sources", "derived", or "both"
-                depth: BFS traversal depth 1-3 (default: 1)
-                include_unresolved: Include unresolved source UUIDs (default: True)
-
-            Returns:
-                Dict with id, sources, derived, and optionally unresolved_sources
-            """
-            logger.info("lithos_provenance id=%s direction=%s depth=%d", id, direction, depth)
-            tracer = get_tracer()
-            with tracer.start_as_current_span("lithos.tool.provenance") as span:
-                span.set_attribute("lithos.tool", "lithos_provenance")
-                span.set_attribute("lithos.id", id)
-                span.set_attribute("lithos.direction", direction)
-                span.set_attribute("lithos.depth", depth)
-
-                if not self.knowledge.has_document(id):
-                    return {
-                        "status": "error",
-                        "code": "doc_not_found",
-                        "message": f"Document not found: {id}",
-                    }
-
-                if direction not in ("sources", "derived", "both"):
-                    direction = "both"
-
-                depth = min(max(depth, 1), 3)
-
-                sources: list[dict[str, str]] = []
-                derived: list[dict[str, str]] = []
-
-                if direction in ("sources", "both"):
-                    sources = self._bfs_provenance(id, "sources", depth)
-                if direction in ("derived", "both"):
-                    derived = self._bfs_provenance(id, "derived", depth)
-
-                result: dict[str, Any] = {
-                    "id": id,
-                    "sources": sources,
-                    "derived": derived,
-                }
-
-                if include_unresolved:
-                    result["unresolved_sources"] = sorted(self.knowledge.get_unresolved_sources(id))
-
-                span.set_attribute("lithos.sources_count", len(sources))
-                span.set_attribute("lithos.derived_count", len(derived))
-                return result
-
         _RELATED_INCLUDES = ("links", "provenance", "edges")
 
         @self.mcp.tool()
@@ -2353,17 +2254,18 @@ class LithosServer:
         ) -> dict[str, Any]:
             """Composite "what is this document related to?" view.
 
-            Merges three backends into a single response so agents don't have
-            to fan out across ``lithos_links``, ``lithos_provenance``, and
-            ``lithos_edge_list`` and mentally join the results:
+            Merges three graph-query backends into a single response so agents
+            don't have to fan out across multiple tools and mentally join the
+            results:
 
             - **links** — structural ``[[wiki-link]]`` navigation (NetworkX).
             - **provenance** — ``derived_from_ids`` chains (frontmatter index).
             - **edges** — typed LCMA edges (edges.db), both directions.
 
-            The individual tools remain available for power-user scenarios
-            that need specific traversal control (directional, depth-only,
-            edge-type filtering, etc.). This tool is for the common case.
+            For edge-table queries that are not centred on a single document
+            (e.g. "list all ``contradicts`` edges", "audit a namespace"), use
+            :func:`lithos_edge_list` instead — that tool is the only way to
+            express filters like ``type`` alone or ``to_id`` alone.
 
             Args:
                 id: Document UUID.

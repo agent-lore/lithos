@@ -140,7 +140,7 @@ data/
 **LCMA SQLite stores under `.lithos/`:**
 
 - **`coordination.db`** — agents, tasks, claims, findings (pre-LCMA, unchanged).
-- **`edges.db`** — LCMA typed/weighted edges. Tables: `edges` (`edge_id`, `from_id`, `to_id`, `type`, `weight`, `namespace`, `created_at`, `updated_at`, `provenance_actor`, `provenance_type`, `evidence`, `conflict_state`). Created lazily on the first `lithos_edge_upsert` call. Separate from the `.graph/` NetworkX wiki-link cache — `edges.db` carries semantic/learned relationships, NetworkX continues to power `lithos_links`.
+- **`edges.db`** — LCMA typed/weighted edges. Tables: `edges` (`edge_id`, `from_id`, `to_id`, `type`, `weight`, `namespace`, `created_at`, `updated_at`, `provenance_actor`, `provenance_type`, `evidence`, `conflict_state`). Created lazily on the first `lithos_edge_upsert` call. Separate from the `.graph/` NetworkX wiki-link cache — `edges.db` carries semantic/learned relationships, NetworkX continues to power the `links` section of `lithos_related`.
 - **`stats.db`** — LCMA retrieval state. Tables: `node_stats`, `coactivation`, `enrich_queue`, `working_memory`, `receipts`. Created lazily on the first `lithos_retrieve` call (when the first receipt is written). The `enrich_queue` and reinforcement columns in `node_stats` are placeholders for the MVP 2 `lithos-enrich` worker.
 
 ### 3.2 Knowledge File Format
@@ -466,20 +466,6 @@ List knowledge items with filters.
 
 ### 5.2 Graph Operations
 
-#### `lithos_links`
-Get links for a knowledge item.
-
-**Arguments:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | Yes | UUID of knowledge item |
-| `direction` | string | No | "outgoing", "incoming", or "both" (default: "both") |
-| `depth` | int | No | Traversal depth (default: 1, max: 3) |
-
-**Returns:** `{ outgoing: [{ id, title }], incoming: [{ id, title }] }`
-
-**Multi-hop behavior:** Returns flat lists regardless of depth. For `depth > 1`, results include all reachable nodes within N hops, deduplicated. Path information is not preserved.
-
 #### `lithos_tags`
 List all tags with document counts.
 
@@ -492,40 +478,11 @@ List all tags with document counts.
 
 **Note:** To find documents with a specific tag, use `lithos_list(tags=["tag-name"])`.
 
-#### `lithos_provenance`
-Traverse provenance lineage (derived-from relationships) for a knowledge item.
-
-**Arguments:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | Yes | UUID of knowledge item |
-| `direction` | string | No | "sources", "derived", or "both" (default: "both") |
-| `depth` | int | No | Traversal depth 1-3 (default: 1) |
-| `include_unresolved` | bool | No | Include unresolved source IDs (default: true) |
-
-**Returns:**
-```json
-{
-  "id": "<queried-uuid>",
-  "sources": [{ "id": "<uuid>", "title": "<string>" }],
-  "derived": [{ "id": "<uuid>", "title": "<string>" }],
-  "unresolved_sources": ["<uuid>", ...]
-}
-```
-
-**Behavior:**
-- Uses BFS traversal over in-memory provenance indexes.
-- `sources` walks the `derived_from_ids` chain (what was this derived from?).
-- `derived` walks the reverse index (what was derived from this?).
-- `depth` is clamped to 1-3. Depth > 1 follows multi-hop chains (e.g., A→B→C at depth 2).
-- Cycles are handled via a visited set — BFS terminates without infinite loops.
-- `unresolved_sources` is only populated when `include_unresolved=true` (the default). Contains source UUIDs that reference documents not currently in the knowledge base.
-- Returns `{ status: "error", code: "doc_not_found" }` for unknown IDs.
-- Results are sorted by ID for deterministic output.
-
 #### `lithos_related`
 
-Composite "what is this document related to?" view. Merges wiki-link navigation, derived-from provenance, and typed LCMA edges into a single response so agents don't have to fan out across three tools and mentally join the results.
+Composite "what is this document related to?" view. Merges wiki-link navigation, derived-from provenance, and typed LCMA edges into a single response.
+
+This tool replaces the previously separate `lithos_links` and `lithos_provenance` tools. Both were pure subsets of `lithos_related` and were removed pre-1.0 to keep the MCP tool count tight. For edge-table queries that are not centred on a single document (e.g. "list all `contradicts` edges"), use `lithos_edge_list` — that tool is the only way to express filters like `type` alone or `to_id` alone.
 
 **Arguments:**
 | Name | Type | Required | Description |
@@ -562,7 +519,7 @@ Composite "what is this document related to?" view. Merges wiki-link navigation,
 - Unknown `include` values are silently ignored so forward-compatible callers don't break when new backends land.
 - `edges` section is empty when LCMA is disabled in config.
 - `related_ids` is the deduped, sorted union of every id referenced across the included sections. The queried document's own id is excluded so callers can iterate without filtering.
-- `lithos_links`, `lithos_provenance`, and `lithos_edge_list` remain available for scenarios that need finer-grained control (single direction, edge-type filter, etc.). This tool is for the common case.
+- `lithos_edge_list` remains available for edge-table queries not centred on a single document (global filter by type, namespace, etc.).
 - Returns `{ status: "error", code: "doc_not_found" }` for unknown IDs.
 
 ### 5.3 Agent Operations
@@ -778,7 +735,7 @@ Get knowledge base statistics.
 
 ### 5.6 LCMA Operations (Phase 7 MVP 1)
 
-These tools are additive to the pre-LCMA surface — they do not replace `lithos_search`, `lithos_read`, or `lithos_links`. See `docs/plans/lcma-design.md` for the design rationale.
+These tools are additive to the pre-LCMA surface — they do not replace `lithos_search`, `lithos_read`, or `lithos_related`. See `docs/plans/lcma-design.md` for the design rationale.
 
 #### `lithos_retrieve`
 
@@ -1254,7 +1211,7 @@ These are explicitly not part of the initial implementation but may be considere
 - Full edit history / provenance log
 - Hierarchical multi-hop link results
 - ~~Structured MCP error codes (`NOT_FOUND`, `CLAIM_CONFLICT`, `AMBIGUOUS_LINK`, etc.)~~ (Implemented via `{ status: "error", code, message }` envelopes; see §10.2 for the full list of error codes)
-- ~~Structured `source` provenance with `derived_from` links to source knowledge items~~ (Implemented in Phase 3 via `derived_from_ids` and `lithos_provenance`)
+- ~~Structured `source` provenance with `derived_from` links to source knowledge items~~ (Implemented in Phase 3 via `derived_from_ids`, exposed through `lithos_related`)
 - ~~`lithos_tags` prefix filtering~~ (Implemented via `prefix`)
 - `lithos_delete` audit trail logging (record which agent deleted what)
 
@@ -1319,14 +1276,14 @@ These are explicitly not part of the initial implementation but may be considere
 | Category | Tools |
 |----------|-------|
 | Knowledge | `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup` |
-| Graph | `lithos_links`, `lithos_tags`, `lithos_provenance`, `lithos_related` |
+| Graph | `lithos_tags`, `lithos_related` |
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`, `lithos_finding_post`, `lithos_finding_list` |
 | System | `lithos_stats` |
 | LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list` |
 | HTTP | `GET /health` (not an MCP tool; see §5.7) |
 
-**Total: 27 MCP tools + 1 HTTP endpoint** (24 pre-LCMA + 3 LCMA MVP 1 additive)
+**Total: 28 MCP tools + 1 HTTP endpoint** (the Graph surface was tightened pre-1.0 by removing `lithos_links` and `lithos_provenance` in favour of the composite `lithos_related`; `lithos_edge_list` is retained for non-doc-centric edge-table queries)
 
 ---
 

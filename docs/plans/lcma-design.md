@@ -100,7 +100,7 @@ Rules: (1) strip `knowledge/` prefix, (2) take the directory path (everything be
 
 ### Edge
 
-LCMA introduces typed, weighted edges stored in `edges.db`. These are **separate from** the existing wiki-link graph (NetworkX DiGraph), which continues to handle `[[wiki-link]]` relationships, link resolution, and the `lithos_links` tool.
+LCMA introduces typed, weighted edges stored in `edges.db`. These are **separate from** the existing wiki-link graph (NetworkX DiGraph), which continues to handle `[[wiki-link]]` relationships, link resolution, and the `links` section of `lithos_related`.
 
 LCMA edge fields:
 
@@ -425,7 +425,7 @@ Note: `salience`, `usage_stats`, and `embedding_spaces` are stored in `stats.db`
 
 ## 4.3 Edges Store Schema (sqlite)
 
-Stored in `data/.lithos/edges.db`. This is **separate from** the existing NetworkX wiki-link graph (`data/.graph/graph.json`), which continues to power `lithos_links` and wiki-link resolution.
+Stored in `data/.lithos/edges.db`. This is **separate from** the existing NetworkX wiki-link graph (`data/.graph/graph.json`), which continues to power the `links` section of `lithos_related` and wiki-link resolution.
 
 The two systems complement each other:
 
@@ -452,7 +452,7 @@ Indexes:
 - `(from_id)`, `(to_id)`, `(type)`, `(namespace)`
 - optionally `(from_id, type)` for speed
 
-New MCP tools for LCMA edges (do not modify existing `lithos_links`):
+New MCP tools for LCMA edges (do not modify the `links` section of `lithos_related`):
 
 - `lithos_edge_upsert` — create or update a typed edge (combines former `lithos_edge_create` + `lithos_edge_update`)
 - `lithos_edge_list` — query edges by node, type, or namespace
@@ -663,7 +663,8 @@ def scout_provenance(q: QueryContext, seed_nodes: list[str], k: int) -> list[Can
     # Walk derived_from_ids forward (what was derived from these seeds?)
     # and reverse (what did these seeds derive from?).
     # Uses existing KnowledgeMetadata.derived_from_ids and provenance index
-    # (KnowledgeManager._build_provenance_index, lithos_provenance tool).
+    # (KnowledgeManager._build_provenance_index; same traversal exposed via
+    # the provenance section of lithos_related).
     # Cheap and high-signal: declared lineage is the strongest relationship signal
     # in the knowledge base.
     ...
@@ -1524,10 +1525,10 @@ Write-contract note for LCMA params:
 
 ## Alignment with Existing Lithos (preserving backward compatibility)
 
-### Existing tools preserved (24 tools, no renames or removals)
+### Existing tools preserved (post-consolidation)
 
 - Knowledge: `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup`
-- Graph: `lithos_links`, `lithos_tags`, `lithos_provenance`
+- Graph: `lithos_tags`, `lithos_related` (the composite tool that superseded the pre-1.0 `lithos_links` and `lithos_provenance`)
 - Agents: `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list`
 - Coordination: `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`
 - Findings: `lithos_finding_post`, `lithos_finding_list`
@@ -1566,7 +1567,7 @@ Write-contract note for LCMA params:
 
 Provenance query policy:
 
-- Canonical lineage queries use `lithos_provenance` (frontmatter/index based).
+- Canonical lineage queries use the `provenance` section of `lithos_related` (frontmatter/index based).
 - `lithos_edge_list` is for typed LCMA edges and projected relationships; it is not the canonical lineage API.
 
 ### Existing frontmatter fields preserved
@@ -1587,7 +1588,7 @@ LCMA is also compatible with cross-plan metadata additions: `source_url`, `deriv
 ### Key design decisions
 
 - **`confidence` vs `salience`**: `confidence` (frontmatter) = author's belief about accuracy. `salience` (stats.db) = retrieval utility learned from usage. Both are 0–1 floats but serve different purposes.
-- **NetworkX vs edges.db**: NetworkX handles structural `[[wiki-link]]` navigation and powers `lithos_links`. edges.db handles semantic/learned relationships with weights and types. Both are queried by the graph scout.
+- **NetworkX vs edges.db**: NetworkX handles structural `[[wiki-link]]` navigation and powers the `links` section of `lithos_related`. edges.db handles semantic/learned relationships with weights and types. Both are queried by the graph scout.
 - **Declared provenance vs learned edges**: `derived_from_ids` is the source of truth for declared lineage. `edges.db` can carry mirrored `derived_from` edges as an accelerator only.
 - **Frontmatter vs stats.db**: Static metadata in frontmatter (author, tags, note_type). Dynamic signals in stats.db (salience, retrieval_count, decay). This avoids constant file rewrites from learning updates.
 - **Concept nodes**: Emerge as derived clusters in `stats.db` first, then promoted to regular `KnowledgeDocument` notes with `note_type: “concept”` via `lithos_write` once stable. Not auto-materialized — promotion requires exceeding a stability threshold to avoid noisy git churn.
