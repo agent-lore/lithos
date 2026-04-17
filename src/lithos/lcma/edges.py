@@ -454,7 +454,7 @@ async def _project_node_provenance(
 
     # Node exists — build desired set
     sources = knowledge.get_doc_sources(node_id)
-    cached = knowledge._meta_cache.get(node_id)
+    cached = knowledge.get_cached_meta(node_id)
     ns = cached.namespace if cached else "default"
 
     desired: set[tuple[str, str]] = set()
@@ -514,7 +514,7 @@ async def _project_provenance_to_edges(
     for doc_id, sources in knowledge._doc_to_sources.items():
         if not sources:
             continue
-        cached = knowledge._meta_cache.get(doc_id)
+        cached = knowledge.get_cached_meta(doc_id)
         ns = cached.namespace if cached else "default"
         for source_id in sources:
             desired.add((doc_id, source_id, ns))

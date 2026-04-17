@@ -667,6 +667,7 @@ class TestProjectNodeProvenance:
         cached_meta = MagicMock()
         cached_meta.namespace = "default"
         mock_knowledge._meta_cache = {node_id: cached_meta}
+        mock_knowledge.get_cached_meta = MagicMock(side_effect=mock_knowledge._meta_cache.get)
 
         result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
         assert result["created"] == 1
@@ -699,6 +700,7 @@ class TestProjectNodeProvenance:
         cached_meta = MagicMock()
         cached_meta.namespace = "default"
         mock_knowledge._meta_cache = {node_id: cached_meta}
+        mock_knowledge.get_cached_meta = MagicMock(side_effect=mock_knowledge._meta_cache.get)
 
         result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
         assert result == {"created": 0, "removed": 0}
@@ -712,13 +714,19 @@ class TestProjectNodeProvenance:
 def _setup_meta_cache(
     mock_knowledge: MagicMock, node_ids: list[str], namespace: str = "default"
 ) -> None:
-    """Helper: populate mock _meta_cache with namespace for given node_ids."""
+    """Helper: populate mock _meta_cache with namespace for given node_ids.
+
+    Also wires ``get_cached_meta`` (the public accessor introduced in #171)
+    to the same underlying dict so either access path resolves identically.
+    """
     cache: dict[str, MagicMock] = {}
     for nid in node_ids:
         meta = MagicMock()
         meta.namespace = namespace
         cache[nid] = meta
     mock_knowledge._meta_cache = cache
+    mock_knowledge.get_cached_meta = MagicMock(side_effect=cache.get)
+    mock_knowledge.iter_cached_meta = MagicMock(side_effect=lambda: list(cache.items()))
 
 
 class TestConsolidateTask:
@@ -781,6 +789,8 @@ class TestConsolidateTask:
         """Consolidation with no WM entries is a no-op but marks task done."""
         task_id = "task-empty"
         mock_knowledge._meta_cache = {}
+        mock_knowledge.get_cached_meta = MagicMock(side_effect=mock_knowledge._meta_cache.get)
+        mock_knowledge.iter_cached_meta = MagicMock(side_effect=lambda: [])
 
         await worker._consolidate_task(task_id)
 
@@ -1415,6 +1425,7 @@ class TestProjectNodeProvenanceUpsertStaleEdge:
         cached_meta = MagicMock()
         cached_meta.namespace = "default"
         mock_knowledge._meta_cache = {node_id: cached_meta}
+        mock_knowledge.get_cached_meta = MagicMock(side_effect=mock_knowledge._meta_cache.get)
 
         result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
         # No new edges created, no orphans removed — but existing one was upserted

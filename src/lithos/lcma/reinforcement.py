@@ -73,12 +73,12 @@ async def reinforce_edges_between(
     # Resolve namespace for each node from the meta cache.
     ns_map: dict[str, str] = {}
     for nid in cited_ids:
-        cached = knowledge._meta_cache.get(nid)
+        cached = knowledge.get_cached_meta(nid)
         if cached is not None:
             ns_map[nid] = cached.namespace
         else:
             logger.debug(
-                "reinforce_edges_between: node not in _meta_cache, skipping",
+                "reinforce_edges_between: node has no cached meta, skipping",
                 extra={"node_id": nid},
             )
 

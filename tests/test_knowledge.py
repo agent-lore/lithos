@@ -482,6 +482,60 @@ class TestKnowledgeManager:
         assert tags["python"] == 2
 
 
+class TestCachedMetaAccessors:
+    """Public accessors for the internal _meta_cache (see #171)."""
+
+    @pytest.mark.asyncio
+    async def test_get_cached_meta_returns_entry_for_known_doc(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        result = await knowledge_manager.create(
+            title="Meta Cache Doc",
+            content="body",
+            agent="agent",
+            tags=["alpha"],
+        )
+        doc = result.document
+        assert doc is not None
+
+        cached = knowledge_manager.get_cached_meta(doc.id)
+        assert cached is not None
+        assert cached.title == "Meta Cache Doc"
+        assert "alpha" in cached.tags
+
+    def test_get_cached_meta_returns_none_for_unknown_doc(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        assert knowledge_manager.get_cached_meta("no-such-id") is None
+
+    @pytest.mark.asyncio
+    async def test_iter_cached_meta_yields_all_known_docs(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        r1 = await knowledge_manager.create(title="One", content="a", agent="agent")
+        r2 = await knowledge_manager.create(title="Two", content="b", agent="agent")
+        assert r1.document is not None
+        assert r2.document is not None
+
+        seen = {doc_id for doc_id, _ in knowledge_manager.iter_cached_meta()}
+        assert r1.document.id in seen
+        assert r2.document.id in seen
+
+    @pytest.mark.asyncio
+    async def test_iter_cached_meta_snapshot_safe_during_iteration(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Iteration should not blow up if the underlying cache mutates mid-loop."""
+        r1 = await knowledge_manager.create(title="A", content="a", agent="agent")
+        assert r1.document is not None
+
+        pairs = knowledge_manager.iter_cached_meta()
+        # Mutate the underlying cache while we still hold the iterator.
+        await knowledge_manager.create(title="B", content="b", agent="agent")
+        # Snapshot semantics: iteration completes without RuntimeError.
+        list(pairs)
+
+
 class TestDocumentPersistence:
     """Tests for document file persistence."""
 

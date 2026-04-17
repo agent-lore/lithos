@@ -69,7 +69,7 @@ _TOKEN_PATTERN = re.compile(r"\w+")
 
 def _title_tokens(knowledge: KnowledgeManager, node_id: str) -> set[str]:
     """Lowercased token set for a node's title+path — used by MMR similarity."""
-    cached = knowledge._meta_cache.get(node_id)
+    cached = knowledge.get_cached_meta(node_id)
     if cached is None:
         return set()
     title = getattr(cached, "title", "") or ""
@@ -163,7 +163,7 @@ def _rerank_fast(
         # Note-type prior from metadata cache
         note_type_prior = 0.5
         resolved_note_type = "unknown"  # for calibration logging only
-        cached = knowledge._meta_cache.get(c.node_id)
+        cached = knowledge.get_cached_meta(c.node_id)
         if cached:
             note_type = getattr(cached, "note_type", None) or "observation"
             note_type_prior = note_type_priors.get(note_type, 0.5)
@@ -245,7 +245,7 @@ def _dominant_namespace(
     """
     ns_counts: dict[str, int] = collections.Counter()
     for nid in node_ids:
-        cached = knowledge._meta_cache.get(nid)
+        cached = knowledge.get_cached_meta(nid)
         if cached:
             ns_counts[cached.namespace] += 1
         else:

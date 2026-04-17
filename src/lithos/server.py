@@ -224,7 +224,7 @@ class LithosServer:
         # -- Intersect with existing knowledge (prevent writes for deleted notes) --
         existing_ids: set[str] = set()
         for nid in receipt_node_ids:
-            if nid in self.knowledge._meta_cache:
+            if self.knowledge.get_cached_meta(nid) is not None:
                 existing_ids.add(nid)
 
         if cited is not None:
@@ -2917,7 +2917,7 @@ class LithosServer:
                 span.set_attribute("lithos.node_id", node_id)
 
                 # Verify node exists in knowledge manager
-                if node_id not in self.knowledge._meta_cache:
+                if self.knowledge.get_cached_meta(node_id) is None:
                     return {
                         "status": "error",
                         "code": "doc_not_found",

@@ -522,7 +522,7 @@ async def scout_task_context(
             found_ids.add(f.knowledge_id)
 
     # 2. Notes whose frontmatter source field points at this task_id
-    for doc_id, cached in knowledge._meta_cache.items():
+    for doc_id, cached in knowledge.iter_cached_meta():
         if getattr(cached, "source", None) == task_id:
             found_ids.add(doc_id)
 
@@ -761,7 +761,7 @@ async def scout_source_url(
     #    both URL owners and non-owners in the _source_url_to_id map.
     seed_domains: set[str] = set()
     for seed_id in seed_ids:
-        cached = knowledge._meta_cache.get(seed_id)
+        cached = knowledge.get_cached_meta(seed_id)
         if cached and cached.source_url:
             domain = _extract_domain(cached.source_url)
             if domain:
@@ -930,7 +930,7 @@ def _get_cached_meta(knowledge: KnowledgeManager, doc_id: str) -> _CachedMetaVie
     The namespace comes directly from the cache (which honors explicit
     frontmatter overrides) — never re-derived from path here.
     """
-    cached = knowledge._meta_cache.get(doc_id)
+    cached = knowledge.get_cached_meta(doc_id)
     if cached is None:
         return None
     return _CachedMetaView(

@@ -366,7 +366,7 @@ class TestPenalizeMisleading:
         assert stats["misleading_count"] == 3
 
         # Verify status was set to quarantined in knowledge manager
-        cached = knowledge_manager._meta_cache.get(nid)
+        cached = knowledge_manager.get_cached_meta(nid)
         assert cached is not None
         assert cached.status == "quarantined"
 
@@ -381,7 +381,7 @@ class TestPenalizeMisleading:
         for _ in range(2):
             await penalize_misleading([nid], stats_store, knowledge_manager)
 
-        cached = knowledge_manager._meta_cache.get(nid)
+        cached = knowledge_manager.get_cached_meta(nid)
         assert cached is not None
         assert cached.status != "quarantined"
 

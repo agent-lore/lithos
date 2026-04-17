@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1717,6 +1718,27 @@ class KnowledgeManager:
     def has_document(self, doc_id: str) -> bool:
         """Check whether a document ID exists."""
         return doc_id in self._id_to_path
+
+    def get_cached_meta(self, node_id: str) -> _CachedMeta | None:
+        """Return cached metadata for a node, or ``None`` if unknown.
+
+        This is the public read accessor for the internal ``_meta_cache`` dict.
+        Callers outside ``KnowledgeManager`` — notably the LCMA scout, rerank,
+        reinforcement, and enrich paths, plus the MCP server's feedback and
+        node_stats handlers — should use this rather than touching
+        ``_meta_cache`` directly, so the cache's internal shape can evolve
+        without breaking every callsite. See #171.
+        """
+        return self._meta_cache.get(node_id)
+
+    def iter_cached_meta(self) -> Iterable[tuple[str, _CachedMeta]]:
+        """Iterate over ``(node_id, cached_meta)`` pairs.
+
+        Snapshots the view so the caller can iterate safely even if the
+        underlying cache is mutated during iteration (rare, but possible
+        via concurrent writes / file-watcher projections).
+        """
+        return list(self._meta_cache.items())
 
     @property
     def document_count(self) -> int:

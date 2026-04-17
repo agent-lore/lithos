@@ -787,7 +787,7 @@ class EnrichWorker:
         node_ns: dict[str, str] = {}
         for entry in frequent:
             nid = str(entry["node_id"])
-            cached = self._knowledge._meta_cache.get(nid)
+            cached = self._knowledge.get_cached_meta(nid)
             if cached is not None:
                 node_ns[nid] = cached.namespace
 
