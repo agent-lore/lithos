@@ -239,7 +239,41 @@ class TestTaskEventEmission:
         assert event.type == TASK_COMPLETED
         assert event.agent == "test-agent"
         assert event.payload["task_id"] == task_id
+        # outcome is surfaced in the event payload; None when not supplied.
+        assert event.payload["outcome"] is None
         server.event_bus.unsubscribe(queue)
+
+    @pytest.mark.asyncio
+    async def test_lithos_task_complete_accepts_outcome(self, server: LithosServer) -> None:
+        """Regression test for #178: ``outcome`` must be an accepted parameter
+        and must flow into the persisted task + the task.completed event."""
+        result = await _call_tool(
+            server,
+            "lithos_task_create",
+            {"title": "Task with Outcome", "agent": "test-agent"},
+        )
+        task_id = result["task_id"]
+
+        queue = server.event_bus.subscribe(event_types=[TASK_COMPLETED])
+        outcome_text = "Reviewed LCMA scout architecture and filed 3 follow-ups."
+        complete_result = await _call_tool(
+            server,
+            "lithos_task_complete",
+            {"task_id": task_id, "agent": "test-agent", "outcome": outcome_text},
+        )
+        assert complete_result["success"] is True
+
+        # Event payload carries the outcome verbatim.
+        event = queue.get_nowait()
+        assert event.type == TASK_COMPLETED
+        assert event.payload["outcome"] == outcome_text
+        server.event_bus.unsubscribe(queue)
+
+        # Task row persists the outcome for later consolidation / audit.
+        task = await server.coordination.get_task(task_id)
+        assert task is not None
+        assert task.outcome == outcome_text
+        assert task.completed_at is not None
 
 
 class TestFindingEventEmission:
