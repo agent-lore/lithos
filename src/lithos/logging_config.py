@@ -112,10 +112,33 @@ def setup_logging(level: int = logging.INFO, stream: Any = None) -> None:
     """
     root = logging.getLogger()
 
-    # Idempotency guard: if we already installed our handler, skip.
+    # Idempotency guard with closed-stream recovery.
+    #
+    # If a Lithos-marked handler already exists *and* its stream is still
+    # usable, skip — this is the normal re-entrant call from tests or
+    # repeated CLI invocations.
+    #
+    # But: if the stream has been closed underneath us (for example when a
+    # prior Click ``CliRunner.invoke`` call captured ``sys.stderr`` into a
+    # buffer that the runner then closed), the pinned handler will raise
+    # ``ValueError: I/O operation on closed file`` on the very next log
+    # record. In that case we drop the stale handler and install a fresh
+    # one. See #173 for the repro.
+    survivors: list[logging.Handler] = []
+    replace = False
     for handler in root.handlers:
         if getattr(handler, _HANDLER_MARKER, False):
-            return
+            handler_stream = getattr(handler, "stream", None)
+            if handler_stream is not None and getattr(handler_stream, "closed", False):
+                replace = True
+                # Drop this stale handler — do not preserve it.
+                continue
+        survivors.append(handler)
+    root.handlers = survivors
+    if not replace:
+        for handler in root.handlers:
+            if getattr(handler, _HANDLER_MARKER, False):
+                return
 
     if stream is None:
         stream = sys.stderr

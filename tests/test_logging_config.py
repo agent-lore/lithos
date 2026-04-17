@@ -77,6 +77,30 @@ class TestSetupLogging:
         marked = [h for h in root.handlers if getattr(h, _HANDLER_MARKER, False)]
         assert len(marked) == 1
 
+    def test_replaces_handler_whose_stream_has_been_closed(self) -> None:
+        """Regression for #173: a marked handler whose stream was closed
+        underneath us (for example by Click's CliRunner after invoke) must
+        be dropped and replaced on the next setup_logging() call, so
+        subsequent log records don't raise ValueError: I/O operation on
+        closed file."""
+        buf_closed = io.StringIO()
+        setup_logging(stream=buf_closed)
+        buf_closed.close()  # simulate CliRunner closing its captured buffer
+
+        buf_new = io.StringIO()
+        setup_logging(stream=buf_new)
+
+        root = logging.getLogger()
+        marked = [h for h in root.handlers if getattr(h, _HANDLER_MARKER, False)]
+        assert len(marked) == 1, (
+            f"Expected exactly one marked handler after closed-stream recovery, got {len(marked)}."
+        )
+        # The surviving handler must be wired to the fresh (open) stream.
+        assert marked[0].stream is buf_new
+        # And a log record must now reach the fresh stream without raising.
+        logging.getLogger("test.closed_stream.recovery").info("still alive")
+        assert buf_new.getvalue(), "Expected log record to land in the new stream."
+
     def test_output_is_valid_json(self) -> None:
         buf = io.StringIO()
         setup_logging(stream=buf)

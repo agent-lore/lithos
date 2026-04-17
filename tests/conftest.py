@@ -1,5 +1,6 @@
 """Pytest configuration and fixtures."""
 
+import logging
 import shutil
 import tempfile
 from collections.abc import AsyncGenerator, Generator
@@ -12,6 +13,7 @@ from lithos.config import LithosConfig, StorageConfig, _reset_config, set_config
 from lithos.coordination import CoordinationService
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
+from lithos.logging_config import _HANDLER_MARKER
 from lithos.search import SearchEngine
 from lithos.server import LithosServer
 
@@ -23,6 +25,29 @@ _LITHOS_ENV_VARS = (
     "LITHOS_OTEL_ENABLED",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
 )
+
+
+@pytest.fixture(autouse=True)
+def _evict_lithos_log_handlers() -> Generator[None, None, None]:
+    """Drop Lithos-marked root-logger handlers before and after each test.
+
+    Regression guard for #173: when a test invokes the CLI via Click's
+    ``CliRunner``, the CLI calls ``setup_logging()``, which attaches a
+    ``StreamHandler`` pinned to the runner's captured ``sys.stderr``.
+    When the runner finishes, it closes the captured buffer, but the
+    handler remains on the root logger with a closed stream reference.
+    Any later log emit raises ``ValueError: I/O operation on closed
+    file``, surfacing as a flaky test. Evicting our handler between
+    tests isolates that state.
+    """
+    root = logging.getLogger()
+
+    def _evict() -> None:
+        root.handlers = [h for h in root.handlers if not getattr(h, _HANDLER_MARKER, False)]
+
+    _evict()
+    yield
+    _evict()
 
 
 @pytest.fixture
