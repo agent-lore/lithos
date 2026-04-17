@@ -30,6 +30,17 @@ class TestLcmaConfigDefaults:
         cfg = LcmaConfig()
         assert abs(sum(cfg.rerank_weights.values()) - 1.0) < 1e-9
 
+    def test_lexical_weight_not_below_vector(self) -> None:
+        """Regression for #179: cold-KB calibration.
+
+        With lexical < vector, a scout_vector-only candidate structurally
+        outscored a scout_lexical exact-term match of equal normalised score.
+        The default must keep lexical at or above vector so exact-term hits
+        are not pre-empted by semantically-adjacent vector hits on a cold KB.
+        """
+        cfg = LcmaConfig()
+        assert cfg.rerank_weights["lexical"] >= cfg.rerank_weights["vector"]
+
     def test_default_note_type_priors(self) -> None:
         cfg = LcmaConfig()
         assert cfg.note_type_priors == _DEFAULT_NOTE_TYPE_PRIORS
@@ -74,7 +85,10 @@ class TestLcmaConfigRerankWeights:
 
     def test_default_key_values(self) -> None:
         cfg = LcmaConfig()
-        assert cfg.rerank_weights["vector"] == 0.25
+        # vector/lexical rebalanced in #179 so lexical ≥ vector. Other scouts
+        # are unchanged.
+        assert cfg.rerank_weights["vector"] == 0.21
+        assert cfg.rerank_weights["lexical"] == 0.22
         assert cfg.rerank_weights["graph"] == 0.13
         assert cfg.rerank_weights["coactivation"] == 0.10
         assert cfg.rerank_weights["source_url"] == 0.05
