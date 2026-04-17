@@ -161,6 +161,70 @@ class TestTantivyIndex:
         assert results[0].id == doc1.id
 
     @pytest.mark.asyncio
+    async def test_search_with_tag_containing_colon(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """Regression for #191: tags with colons (e.g. ``project:foo``) must
+        filter correctly instead of silently returning no results."""
+        target = (
+            await knowledge_manager.create(
+                title="Knowledge graph construction",
+                content="Notes on building a knowledge graph from wiki-links.",
+                agent="agent",
+                tags=["project:lithos-core", "priority:high"],
+            )
+        ).document
+        other = (
+            await knowledge_manager.create(
+                title="Unrelated document",
+                content="Notes on building a knowledge graph from wiki-links.",
+                agent="agent",
+                tags=["project:other-project"],
+            )
+        ).document
+        search_engine.index_document(target)
+        search_engine.index_document(other)
+
+        results = search_engine.full_text_search("knowledge graph", tags=["project:lithos-core"])
+        result_ids = {r.id for r in results}
+
+        assert target.id in result_ids
+        assert other.id not in result_ids
+
+    @pytest.mark.asyncio
+    async def test_search_tag_filter_requires_all_tags(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """Multiple tag filters behave as AND, including tags with colons."""
+        match = (
+            await knowledge_manager.create(
+                title="Both tags match",
+                content="Content describing a topic of interest.",
+                agent="agent",
+                tags=["project:lithos-core", "priority:high"],
+            )
+        ).document
+        missing_priority = (
+            await knowledge_manager.create(
+                title="Only project tag",
+                content="Content describing a topic of interest.",
+                agent="agent",
+                tags=["project:lithos-core"],
+            )
+        ).document
+        search_engine.index_document(match)
+        search_engine.index_document(missing_priority)
+
+        results = search_engine.full_text_search(
+            "topic of interest",
+            tags=["project:lithos-core", "priority:high"],
+        )
+        result_ids = {r.id for r in results}
+
+        assert match.id in result_ids
+        assert missing_priority.id not in result_ids
+
+    @pytest.mark.asyncio
     async def test_search_no_results(self, search_engine: SearchEngine):
         """Search with no matches returns empty list."""
         results = search_engine.full_text_search("xyznonexistentterm123")

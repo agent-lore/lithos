@@ -380,20 +380,29 @@ class TantivyIndex:
         self.index.reload()
         searcher = self.index.searcher()
 
-        # Build query with filters
+        # Build query with filters. Tags and path_prefix are applied as
+        # post-filters below; including them in the Tantivy query string is
+        # unsafe because values may contain reserved characters (e.g. a colon
+        # in ``project:lithos-core`` is parsed as a field separator, which
+        # then raises a parse error and silently returns no results — see
+        # GitHub #191).
         query_parts = [query]
-        if tags:
-            for tag in tags:
-                query_parts.append(f"tags:{tag}")
         if author:
             query_parts.append(f"author:{author}")
 
         full_query = " AND ".join(f"({p})" for p in query_parts)
 
+        # When filtering by tags or path_prefix we may discard hits after
+        # the fact, so request extra results to reduce the chance of returning
+        # fewer than ``limit`` when matches do exist. Tantivy still caps this
+        # at the number of documents in the index.
+        effective_limit = limit * 5 if (tags or path_prefix) else limit
+
         try:
             parsed_query = self.index.parse_query(full_query, ["title", "content"])
-            results = searcher.search(parsed_query, limit).hits
-        except Exception:
+            results = searcher.search(parsed_query, effective_limit).hits
+        except Exception as exc:
+            logger.warning("Tantivy query parse/search failed: %s | query=%r", exc, full_query)
             return []
 
         search_results: list[SearchResult] = []
@@ -404,6 +413,16 @@ class TantivyIndex:
             # Apply path prefix filter
             if path_prefix and not str(doc_path).startswith(path_prefix):
                 continue
+
+            # Apply tags filter (AND across requested tags).
+            # Tags are stored as a single space-separated string via the
+            # ``en_stem`` tokenizer; the stored field preserves the original
+            # input, so we can compare tag values verbatim.
+            if tags:
+                doc_tags_raw = doc.get_first("tags") or ""
+                doc_tag_set = set(str(doc_tags_raw).split())
+                if not all(t in doc_tag_set for t in tags):
+                    continue
 
             # Generate snippet from content
             content = doc.get_first("content") or ""
@@ -422,6 +441,9 @@ class TantivyIndex:
                     is_stale=_compute_is_stale(expires_at_str),
                 )
             )
+
+            if len(search_results) >= limit:
+                break
 
         return search_results
 
