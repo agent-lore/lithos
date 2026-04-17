@@ -207,4 +207,24 @@ Write and batch paths are instrumented through OTEL foundation (`telemetry.py`, 
 
 ## API Ergonomics Follow-up
 
-The pre-1.0 interface may expose many optional write parameters. A follow-up API cleanup can introduce grouped objects (for example `provenance`, `freshness`, `lcma`) without changing on-disk semantics defined here.
+The pre-1.0 interface exposes many optional write parameters. Two options were considered:
+
+1. **Grouped request objects** at the MCP boundary (`provenance`, `freshness`, `lcma`).
+2. **Grouped documentation only** — keep the flat parameter surface, but introduce section headers in the tool docstring and spec tables mirroring the same taxonomy.
+
+Phase 8 is scoped to **option 2**. Rationale:
+
+- The primary caller is an MCP agent reading a flat tool schema. Nested object params tend to raise argument-construction errors in tool-use rather than reduce them.
+- The flat shape does not prevent any invariant that the canonical field contract (this document) already enforces in the manager layer — grouping would be purely cosmetic.
+- A breaking change to every caller and every conformance test is disproportionate to the ergonomic delta.
+
+The canonical taxonomy used in docs and the `lithos_write` docstring is:
+
+- **Core (required):** `title`, `content`, `agent`
+- **Identity & metadata:** `id`, `tags`, `confidence`, `path`
+- **Provenance:** `source_url`, `derived_from_ids`, `source_task`
+- **Freshness:** `ttl_hours`, `expires_at`
+- **Concurrency:** `expected_version`, and the batch-only `if_match_updated_at` / `if_match_hash`
+- **LCMA:** `schema_version`, `namespace`, `access_scope`, `note_type`, `status`, `summaries`, `entities`
+
+Grouped request objects remain a possible post-1.0 addition, introduced **additively** (accepted alongside the flat params) rather than as a replacement, and only if pressure from human-facing MCP client authors materialises.

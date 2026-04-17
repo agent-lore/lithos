@@ -950,30 +950,45 @@ class LithosServer:
         ) -> dict[str, Any]:
             """Create or update a knowledge file.
 
+            Args are grouped below by role. The grouping is documentation only —
+            all parameters remain flat at the MCP boundary. See
+            `docs/plans/unified-write-contract.md` for the normative field
+            contract.
+
             Args:
-                title: Title of the knowledge item
-                content: Markdown content (without frontmatter)
-                agent: Your agent identifier
+                title: Title of the knowledge item.
+                content: Markdown content (without frontmatter).
+                agent: Your agent identifier.
+
+                --- Identity & metadata ---
+                id: UUID to update existing; omit to create new.
                 tags: List of tags. On update: null/omit preserves existing; [] clears
                     all tags; non-empty list replaces.
                 confidence: Confidence score 0-1 (default: 1.0 on create). On update:
                     null/omit preserves existing; float sets new value.
-                path: Subdirectory path (e.g., "procedures")
-                id: UUID to update existing; omit to create new
-                source_task: Task ID this knowledge came from
+                path: Subdirectory path (e.g., "procedures").
+
+                --- Provenance ---
                 source_url: URL provenance for this knowledge. On update: null/omit
                     preserves existing; "" clears; string sets new value.
                 derived_from_ids: List of source document UUIDs this note was derived
                     from. On update: null/omit preserves existing; [] clears;
                     non-empty list replaces.
+                source_task: Task ID this knowledge came from.
+
+                --- Freshness ---
                 ttl_hours: Time-to-live in hours from now. Computes expires_at.
                     Mutually exclusive with expires_at.
                 expires_at: Absolute ISO 8601 expiry datetime. On update: null/omit
                     preserves existing; "" clears; ISO string sets new value.
                     Mutually exclusive with ttl_hours.
+
+                --- Concurrency ---
                 expected_version: If provided on update, reject with version_conflict if the
                     document's current version differs. Omit to skip version checking.
                     On create, this parameter is silently ignored.
+
+                --- LCMA ---
                 schema_version: LCMA schema version (default 1 on create).
                 namespace: LCMA namespace. Persisted only if explicitly passed;
                     derived at read time otherwise.
