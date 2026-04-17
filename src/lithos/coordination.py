@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     status TEXT DEFAULT 'open',
     created_by TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    tags JSON
+    tags JSON,
+    outcome TEXT,
+    completed_at TIMESTAMP
 );
 
 -- Claims (with automatic expiry)
@@ -104,6 +106,8 @@ class Task:
     created_by: str = ""
     created_at: datetime | None = None
     tags: list[str] = field(default_factory=list)
+    outcome: str | None = None
+    completed_at: datetime | None = None
 
 
 @dataclass
@@ -214,8 +218,28 @@ class CoordinationService:
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            await self._migrate_tasks_add_outcome(db)
+            await self._migrate_tasks_add_completed_at(db)
             await db.commit()
         logger.info("coordination service initialized: db_path=%s", self.db_path)
+
+    @staticmethod
+    async def _migrate_tasks_add_outcome(db: aiosqlite.Connection) -> None:
+        """Add outcome column to existing tasks tables (pre-outcome databases)."""
+        cursor = await db.execute("PRAGMA table_info(tasks)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "outcome" not in columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN outcome TEXT")
+            logger.info("coordination.db migration applied: added tasks.outcome")
+
+    @staticmethod
+    async def _migrate_tasks_add_completed_at(db: aiosqlite.Connection) -> None:
+        """Add completed_at column to existing tasks tables (pre-outcome databases)."""
+        cursor = await db.execute("PRAGMA table_info(tasks)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "completed_at" not in columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN completed_at TIMESTAMP")
+            logger.info("coordination.db migration applied: added tasks.completed_at")
 
     async def _get_db(self) -> aiosqlite.Connection:
         """Get database connection."""
@@ -448,6 +472,12 @@ class CoordinationService:
                 with contextlib.suppress(json.JSONDecodeError):
                     tags = json.loads(row["tags"])
 
+            # outcome/completed_at may be absent on legacy rows (pre-migration
+            # reads should not be possible, but defend against it defensively).
+            row_keys = row.keys()
+            outcome = row["outcome"] if "outcome" in row_keys else None
+            completed_at_raw = row["completed_at"] if "completed_at" in row_keys else None
+
             return Task(
                 id=row["id"],
                 title=row["title"],
@@ -456,6 +486,8 @@ class CoordinationService:
                 created_by=row["created_by"],
                 created_at=_parse_datetime(row["created_at"]),
                 tags=tags,
+                outcome=outcome,
+                completed_at=_parse_datetime(completed_at_raw),
             )
 
     @traced("lithos.coordination.update_task")
@@ -523,8 +555,20 @@ class CoordinationService:
             return updated
 
     @traced("lithos.coordination.complete_task")
-    async def complete_task(self, task_id: str, agent: str) -> bool:
+    async def complete_task(
+        self,
+        task_id: str,
+        agent: str,
+        outcome: str | None = None,
+    ) -> bool:
         """Mark task as completed and release all claims.
+
+        Args:
+            task_id: Task ID to complete.
+            agent: Agent completing the task.
+            outcome: Optional free-text completion summary persisted alongside
+                the task. Downstream consolidation (LCMA enrich) can use this
+                as the ``outcome`` slot of the frame extracted from the task.
 
         Returns:
             True if task was completed
@@ -532,11 +576,19 @@ class CoordinationService:
         lithos_metrics.coordination_ops.add(1, {"op": "complete"})
         await self.ensure_agent_known(agent)
 
+        now = _format_datetime(datetime.now(timezone.utc))
+
         async with aiosqlite.connect(self.db_path) as db:
-            # Update task status
+            # Update task status, outcome, and completed_at in a single statement
             cursor = await db.execute(
-                "UPDATE tasks SET status = 'completed' WHERE id = ? AND status = 'open'",
-                (task_id,),
+                """
+                UPDATE tasks
+                   SET status = 'completed',
+                       outcome = ?,
+                       completed_at = ?
+                 WHERE id = ? AND status = 'open'
+                """,
+                (outcome, now, task_id),
             )
             if cursor.rowcount == 0:
                 return False
@@ -548,7 +600,18 @@ class CoordinationService:
             )
 
             await db.commit()
-            logger.info("Task completed: task_id=%s agent=%s", task_id, agent)
+            logger.info(
+                "Task completed: task_id=%s agent=%s outcome_len=%d",
+                task_id,
+                agent,
+                len(outcome) if outcome else 0,
+                extra={
+                    "task_id": task_id,
+                    "agent": agent,
+                    "outcome_provided": outcome is not None,
+                    "outcome_len": len(outcome) if outcome else 0,
+                },
+            )
             return True
 
     @traced("lithos.coordination.cancel_task")

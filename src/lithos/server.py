@@ -2629,6 +2629,7 @@ class LithosServer:
         async def lithos_task_complete(
             task_id: str,
             agent: str,
+            outcome: str | None = None,
             cited_nodes: list[str] | None = None,
             misleading_nodes: list[str] | None = None,
             receipt_id: str | None = None,
@@ -2638,6 +2639,10 @@ class LithosServer:
             Args:
                 task_id: Task ID
                 agent: Agent completing the task
+                outcome: Optional free-text completion summary. Persisted on
+                    the task row and forwarded in the ``task.completed`` event
+                    payload so LCMA consolidation can use it as the frame
+                    ``outcome`` slot.
                 cited_nodes: Node IDs the agent found useful (None = no feedback)
                 misleading_nodes: Node IDs the agent found misleading (None = no feedback)
                 receipt_id: Specific receipt to bind feedback to (optional)
@@ -2645,11 +2650,14 @@ class LithosServer:
             Returns:
                 Dict with success boolean, or error envelope if task not found or not open
             """
+            outcome_len = len(outcome) if outcome else 0
             logger.info(
                 "lithos_task_complete: called",
                 extra={
                     "task_id": task_id,
                     "agent": agent,
+                    "outcome_provided": outcome is not None,
+                    "outcome_len": outcome_len,
                     "cited_count": len(cited_nodes) if cited_nodes is not None else 0,
                     "misleading_count": len(misleading_nodes)
                     if misleading_nodes is not None
@@ -2662,6 +2670,8 @@ class LithosServer:
                 span.set_attribute("lithos.tool", "lithos_task_complete")
                 span.set_attribute("lithos.agent", agent)
                 span.set_attribute("lithos.task_id", task_id)
+                span.set_attribute("lithos.outcome_provided", outcome is not None)
+                span.set_attribute("lithos.outcome_len", outcome_len)
                 # -- Validate feedback BEFORE completing the task --
                 feedback_supplied = cited_nodes is not None or misleading_nodes is not None
                 validated: dict[str, Any] | None = None
@@ -2679,6 +2689,7 @@ class LithosServer:
                 success = await self.coordination.complete_task(
                     task_id=task_id,
                     agent=agent,
+                    outcome=outcome,
                 )
                 span.set_attribute("lithos.success", success)
 
@@ -2710,6 +2721,7 @@ class LithosServer:
                         payload={
                             "task_id": task_id,
                             "agent": agent,
+                            "outcome": outcome,
                             "cited_nodes": json.dumps(cited_nodes),
                             "misleading_nodes": json.dumps(misleading_nodes),
                             "receipt_id": json.dumps(receipt_id),

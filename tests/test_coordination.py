@@ -3,8 +3,10 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+import aiosqlite
 import pytest
 
+from lithos.config import LithosConfig, StorageConfig
 from lithos.coordination import CoordinationService
 
 
@@ -148,6 +150,43 @@ class TestTaskLifecycle:
         assert success
         task = await coordination_service.get_task(task_id)
         assert task.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_complete_task_persists_outcome(self, coordination_service: CoordinationService):
+        """complete_task(outcome=...) persists the free-text summary and completed_at."""
+        task_id = await coordination_service.create_task(
+            title="Task with Outcome",
+            agent="agent",
+        )
+
+        outcome = "Resolved: salience weights recalibrated and smoke tested."
+        success = await coordination_service.complete_task(task_id, "agent", outcome=outcome)
+
+        assert success
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.status == "completed"
+        assert task.outcome == outcome
+        assert task.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_complete_task_outcome_defaults_none(
+        self, coordination_service: CoordinationService
+    ):
+        """Omitting outcome is backward-compatible — task.outcome is None."""
+        task_id = await coordination_service.create_task(
+            title="Task without Outcome",
+            agent="agent",
+        )
+
+        success = await coordination_service.complete_task(task_id, "agent")
+
+        assert success
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.status == "completed"
+        assert task.outcome is None
+        assert task.completed_at is not None
 
     @pytest.mark.asyncio
     async def test_complete_releases_claims(self, coordination_service: CoordinationService):
@@ -901,3 +940,59 @@ class TestTaskUpdate:
         task = await coordination_service.get_task(task_id)
         assert task is not None
         assert task.status == "open"
+
+
+class TestTaskOutcomeMigration:
+    """Verify ALTER-TABLE migrations add outcome/completed_at to pre-existing DBs."""
+
+    @pytest.mark.asyncio
+    async def test_migration_adds_outcome_and_completed_at_columns(self, tmp_path):
+        """Simulate a pre-#178 coordination.db and confirm initialize() migrates it."""
+        db_path = tmp_path / "coordination.db"
+
+        # Build a legacy tasks table with the pre-#178 schema (no outcome/completed_at).
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSON
+                )
+                """
+            )
+            await db.execute(
+                "INSERT INTO tasks (id, title, created_by) VALUES (?, ?, ?)",
+                ("legacy-task", "Legacy", "legacy-agent"),
+            )
+            await db.commit()
+
+        config = LithosConfig(storage=StorageConfig(data_dir=tmp_path))
+        service = CoordinationService(config=config)
+        service._db_path = db_path
+        await service.initialize()
+
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("PRAGMA table_info(tasks)")
+            columns = {row[1] for row in await cursor.fetchall()}
+
+        assert "outcome" in columns
+        assert "completed_at" in columns
+
+        # Legacy row still readable and reports None for the new fields.
+        task = await service.get_task("legacy-task")
+        assert task is not None
+        assert task.outcome is None
+        assert task.completed_at is None
+
+        # Completing the legacy task works and persists outcome on the migrated schema.
+        success = await service.complete_task("legacy-task", "legacy-agent", outcome="done")
+        assert success
+        task = await service.get_task("legacy-task")
+        assert task is not None
+        assert task.outcome == "done"
+        assert task.completed_at is not None
