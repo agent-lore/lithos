@@ -60,6 +60,9 @@ lithos serve --no-watch
 | `--host` | `127.0.0.1` | Host for SSE transport |
 | `-p, --port` | `8765` | Port for SSE transport |
 | `--watch / --no-watch` | watch enabled | Watch for file changes |
+| `--telemetry-console` | off | Route OTEL metrics + spans to stdout (for local debugging without a collector) |
+
+> **Metrics:** Lithos exports metrics via OTLP push to a configured OTEL collector — there is no `/metrics` scrape endpoint on the process itself. See the "Telemetry & Observability" section in the main README for the full push→collector→Prometheus data flow, or use `--telemetry-console` above when no collector is available.
 
 ### `search` — Search the knowledge base
 

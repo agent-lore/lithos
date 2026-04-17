@@ -189,3 +189,67 @@ cd docker
 Each environment gets its own container (`lithos`, `lithos-staging`,
 `lithos-fuzz`), its own host port, and its own data volume, so they can
 all run concurrently. Running `./run.sh` with no arguments prints usage.
+
+## Telemetry & Observability
+
+Lithos emits OpenTelemetry metrics, traces, and logs when telemetry is enabled.
+The **only** supported export path is **OTLP/HTTP push to a collector** — there
+is no `/metrics` scrape endpoint on the Lithos process itself (see closed
+issue [#164](https://github.com/agent-lore/lithos/issues/164) for the
+rationale).
+
+### How metrics reach your dashboards
+
+```
+  Lithos process
+       │  OTLP/HTTP  (push every export_interval_ms, default 30 s)
+       ▼
+  OTEL Collector   ← lithos-observability/otel-collector/config.yml
+       │  Prometheus exporter on :8889
+       ▼
+  Prometheus       ← lithos-observability/prometheus/prometheus.yml
+       │
+       ▼
+  Grafana
+```
+
+Traces fan out to Tempo, logs to Loki, via the same collector.
+
+### Configuration
+
+```yaml
+telemetry:
+  enabled: false               # master switch
+  endpoint: null               # OTLP base URL, e.g. http://otel-collector:4318
+  console_fallback: false      # print spans/metrics to stdout when no endpoint
+  service_name: lithos
+  environment: null            # becomes OTEL deployment.environment
+  export_interval_ms: 30000
+```
+
+Environment variables override `endpoint` per signal when needed:
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`.
+
+### Local debugging without a collector
+
+Pass `--telemetry-console` to `lithos serve` to route metrics and spans to
+stdout via console exporters. This is equivalent to setting
+`telemetry.enabled=true` + `telemetry.console_fallback=true` in config, and is
+the shortest path to "is my instrumentation even firing?" when no collector is
+running.
+
+```bash
+lithos --data-dir ./data serve --telemetry-console
+```
+
+### Running the full observability stack locally
+
+See `lithos-observability/` for a one-command Docker Compose stack (OTEL
+Collector + Prometheus + Grafana + Tempo + Loki). Point Lithos at it with:
+
+```bash
+LITHOS_TELEMETRY__ENABLED=true \
+LITHOS_TELEMETRY__ENDPOINT=http://localhost:4318 \
+lithos serve
+```

@@ -67,6 +67,16 @@ def cli(ctx: click.Context, config: Path | None, data_dir: Path | None) -> None:
     default=True,
     help="Watch for file changes (default: enabled)",
 )
+@click.option(
+    "--telemetry-console",
+    is_flag=True,
+    default=False,
+    help=(
+        "Route OTEL metrics and spans to stdout via console exporters. "
+        "Useful for local debugging when no OTEL collector is running. "
+        "Equivalent to setting telemetry.enabled=true + telemetry.console_fallback=true."
+    ),
+)
 @click.pass_context
 def serve(
     ctx: click.Context,
@@ -74,12 +84,22 @@ def serve(
     host: str,
     port: int,
     watch: bool,
+    telemetry_console: bool,
 ) -> None:
     """Start the Lithos MCP server."""
     from lithos.server import create_server
     from lithos.telemetry import setup_telemetry, shutdown_telemetry
 
     config: LithosConfig = ctx.obj["config"]
+
+    # --telemetry-console: ensure telemetry runs in console-fallback mode so
+    # metrics/spans land on stdout even when no OTLP collector is configured.
+    # This is a DX shortcut for local debugging — see also #164.
+    if telemetry_console:
+        config.telemetry.enabled = True
+        config.telemetry.console_fallback = True
+        click.echo("Telemetry console-fallback enabled (metrics + spans will print to stdout).")
+
     server = create_server(config)
 
     async def run_server() -> None:

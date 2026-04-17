@@ -301,6 +301,61 @@ class TestCLIContracts:
         assert calls["watch_started"] == 1
         assert calls["watch_stopped"] == 0
 
+    def test_serve_telemetry_console_flag_sets_config_fields(self, temp_dir, monkeypatch):
+        """`--telemetry-console` must flip telemetry.enabled + console_fallback
+        on the live config before ``setup_telemetry`` reads them, so metrics and
+        spans actually land on stdout without requiring an OTLP endpoint."""
+        config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
+        config.ensure_directories()
+        set_config(config)
+
+        captured: dict[str, LithosConfig | None] = {"config": None}
+
+        class _DummyMCP:
+            async def run_stdio_async(self, show_banner=False):
+                return None
+
+        class _DummyServer:
+            def __init__(self):
+                self.mcp = _DummyMCP()
+
+            async def initialize(self):
+                return None
+
+            def start_file_watcher(self):
+                return None
+
+            def stop_file_watcher(self):
+                return None
+
+            async def stop_enrich_worker(self):
+                return None
+
+            async def stop_coordination_stats_refresh(self):
+                return None
+
+        monkeypatch.setattr("lithos.server.create_server", lambda _cfg: _DummyServer())
+
+        def _capture_setup(cfg: LithosConfig) -> None:
+            # Snapshot the config at the moment setup_telemetry() would read it.
+            captured["config"] = cfg
+
+        monkeypatch.setattr("lithos.telemetry.setup_telemetry", _capture_setup)
+        monkeypatch.setattr("lithos.telemetry.shutdown_telemetry", lambda: None)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--data-dir", str(temp_dir), "serve", "--no-watch", "--telemetry-console"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Telemetry console-fallback enabled" in result.output
+
+        snapshot = captured["config"]
+        assert snapshot is not None
+        assert snapshot.telemetry.enabled is True
+        assert snapshot.telemetry.console_fallback is True
+
     def test_serve_keyboard_interrupt_stops_watcher(self, temp_dir, monkeypatch):
         config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
         config.ensure_directories()

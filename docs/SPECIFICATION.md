@@ -1096,11 +1096,17 @@ index:
   watch_debounce_ms: 500    # Debounce file changes
 
 # Telemetry
+# Metrics, traces, and logs are exported via OpenTelemetry OTLP/HTTP push to a
+# configured collector. There is no /metrics scrape endpoint on the Lithos
+# process itself — the observability stack in `lithos-observability/` runs a
+# collector whose Prometheus exporter (on :8889) is what Prometheus scrapes.
+# See README → "Telemetry & Observability" for the full data-flow diagram.
 telemetry:
   enabled: false
-  endpoint: null
-  console_fallback: false
+  endpoint: null           # OTLP base URL, e.g. http://otel-collector:4318
+  console_fallback: false  # print spans/metrics to stdout when no endpoint
   service_name: lithos
+  environment: null        # OTEL deployment.environment
   export_interval_ms: 30000
 
 # Event Bus
@@ -1123,6 +1129,9 @@ lithos --data-dir ./data serve --transport sse --host 0.0.0.0 --port 8765
 
 # Disable file watcher
 lithos --data-dir ./data serve --no-watch
+
+# Route OTEL metrics + spans to stdout (local debugging without a collector)
+lithos --data-dir ./data serve --telemetry-console
 
 # Rebuild indices (incremental by default)
 lithos --data-dir ./data reindex
