@@ -267,6 +267,29 @@ class TestRerankFast:
         assert result_without[0].node_id == result_default[0].node_id
         assert result_without[1].node_id == result_default[1].node_id
 
+    def test_lexical_not_dominated_by_vector_at_equal_normalised_score(
+        self, seeded_km: KnowledgeManager
+    ) -> None:
+        """Regression for #179: under default weights and cold-KB (uniform
+        salience), a scout_lexical candidate must not be ranked below a
+        scout_vector candidate of equal normalised score purely due to
+        lexical < vector calibration. With the rebalanced defaults
+        (lexical=0.22, vector=0.21) the lexical candidate ranks first."""
+        candidates = [
+            # Vector scout exact-match normalised score.
+            Candidate(node_id=_ID1, score=1.0, reasons=["vec"], scouts=["scout_vector"]),
+            # Lexical scout exact-match normalised score (same).
+            Candidate(node_id=_ID2, score=1.0, reasons=["lex"], scouts=["scout_lexical"]),
+        ]
+        # Uniform salience simulates a cold KB where no signal differentiates.
+        salience_map = {_ID1: 0.5, _ID2: 0.5}
+        result = _rerank_fast(candidates, LcmaConfig(), seeded_km, salience_map=salience_map)
+        # Lexical must rank first (or at least not lower than vector).
+        assert result[0].node_id == _ID2, (
+            "Expected scout_lexical to rank first under rebalanced default "
+            f"weights; got ranking: {[c.node_id for c in result]}"
+        )
+
 
 class TestStoredSalienceAffectsRetrieval:
     """Verify that salience stored in StatsStore flows through run_retrieve."""

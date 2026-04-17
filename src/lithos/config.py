@@ -16,10 +16,16 @@ _LCMA_NOTE_TYPES = frozenset(
     {"observation", "agent_finding", "summary", "concept", "task_record", "hypothesis"}
 )
 
-# Default rerank weights keyed by scout name (minus scout_ prefix)
+# Default rerank weights keyed by scout name (minus scout_ prefix).
+#
+# Lexical is weighted at or above vector so exact-term-match notes are not
+# structurally dominated by semantically-adjacent vector hits on a cold KB
+# (see #179). Previously vector=0.25, lexical=0.18 which gave vector-only
+# candidates a built-in edge of ~0.07 on top of any normalisation noise.
+# Weights must sum to 1.0 — enforced by LcmaConfig validator.
 _DEFAULT_RERANK_WEIGHTS: dict[str, float] = {
-    "vector": 0.25,
-    "lexical": 0.18,
+    "vector": 0.21,
+    "lexical": 0.22,
     "exact_alias": 0.10,
     "tags_recency": 0.07,
     "freshness": 0.04,

@@ -149,6 +149,7 @@ def _rerank_fast(
     rerank_weights = lcma_config.rerank_weights
     note_type_priors = lcma_config.note_type_priors
 
+    debug_rows: list[dict[str, object]] = []
     scored: list[tuple[float, Candidate]] = []
     for c in candidates:
         # Weighted scout contribution — average weight across all contributing scouts
@@ -161,10 +162,12 @@ def _rerank_fast(
 
         # Note-type prior from metadata cache
         note_type_prior = 0.5
+        resolved_note_type = "unknown"  # for calibration logging only
         cached = knowledge._meta_cache.get(c.node_id)
         if cached:
             note_type = getattr(cached, "note_type", None) or "observation"
             note_type_prior = note_type_priors.get(note_type, 0.5)
+            resolved_note_type = note_type
 
         # Salience: read from StatsStore via pre-fetched map when available,
         # otherwise fall back to normalised score (pre-reinforcement path).
@@ -183,9 +186,51 @@ def _rerank_fast(
                 ),
             )
         )
+        # Capture per-candidate score breakdown for calibration debugging (#179).
+        # Only collected when DEBUG is enabled to avoid overhead on the hot path.
+        if logger.isEnabledFor(logging.DEBUG):
+            debug_rows.append(
+                {
+                    "node_id": c.node_id,
+                    "scouts": list(c.scouts),
+                    "base_score": round(c.score, 4),
+                    "scout_weight": round(scout_weight, 4),
+                    "note_type": resolved_note_type,
+                    "note_type_prior": round(note_type_prior, 4),
+                    "salience": round(salience, 4),
+                    "final": round(final, 4),
+                }
+            )
 
     scored.sort(key=lambda t: t[0], reverse=True)
     ranked = [c for _, c in scored]
+
+    # Emit calibration breakdown at DEBUG (per-candidate) and a top-N summary
+    # at INFO so over-ranking regressions like #179 are observable in prod
+    # without requiring DEBUG.
+    if debug_rows:
+        debug_rows.sort(key=lambda r: r["final"], reverse=True)  # type: ignore[arg-type,return-value]
+        logger.debug(
+            "_rerank_fast: per-candidate score breakdown",
+            extra={"candidates": debug_rows[:50]},
+        )
+    if ranked:
+        top_summary = [
+            {
+                "node_id": c.node_id,
+                "scouts": list(c.scouts),
+                "final": round(c.score, 4),
+            }
+            for c in ranked[:10]
+        ]
+        logger.info(
+            "_rerank_fast: ranked top-N",
+            extra={
+                "num_candidates": len(ranked),
+                "top": top_summary,
+            },
+        )
+
     return _mmr_diversify(ranked, knowledge)
 
 
