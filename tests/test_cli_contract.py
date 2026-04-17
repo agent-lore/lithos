@@ -325,6 +325,9 @@ class TestCLIContracts:
             async def stop_enrich_worker(self):
                 return None
 
+            async def stop_coordination_stats_refresh(self):
+                return None
+
         monkeypatch.setattr("lithos.server.create_server", lambda _cfg: _DummyServer())
 
         _first_call = {"value": True}
