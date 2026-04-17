@@ -27,6 +27,60 @@ class TestServerInitialization:
         assert server.coordination is not None
 
     @pytest.mark.asyncio
+    async def test_agent_count_cache_primed_at_startup(self, server: LithosServer):
+        """Regression for #181: _cached_agent_count must reflect reality
+        *before* any lithos_stats call — otherwise the OTEL gauge reports 0
+        until somebody happens to call lithos_stats, even on a server with
+        many registered agents. The fixture already runs server.initialize(),
+        so priming should have happened via _refresh_coordination_stats_cache."""
+        # Register three agents through the coordination service directly.
+        for agent_id in ("alpha", "beta", "gamma"):
+            await server.coordination.register_agent(agent_id=agent_id)
+
+        # Force a refresh so the cache reflects the newly registered agents.
+        await server._refresh_coordination_stats_cache()
+
+        assert server._cached_agent_count >= 3, (
+            "Coordination stats cache did not reflect registered agents — "
+            f"got {server._cached_agent_count}, expected >= 3."
+        )
+
+    @pytest.mark.asyncio
+    async def test_refresh_coordination_stats_cache_updates_claims(self, server: LithosServer):
+        """_cached_active_claims is refreshed alongside _cached_agent_count."""
+        task_id = await server.coordination.create_task(title="T", agent="a")
+        await server.coordination.claim_task(task_id, aspect="x", agent="a")
+        # Pre-refresh value may be stale; force a refresh and verify.
+        await server._refresh_coordination_stats_cache()
+        assert server._cached_active_claims >= 1
+
+    @pytest.mark.asyncio
+    async def test_refresh_survives_coordination_failure(
+        self, server: LithosServer, caplog: pytest.LogCaptureFixture
+    ):
+        """If coordination.get_stats raises, the refresh logs a warning and
+        leaves the cached values unchanged (no crash, no zeroing)."""
+        server._cached_agent_count = 42
+        server._cached_active_claims = 7
+        with (
+            patch.object(
+                server.coordination, "get_stats", AsyncMock(side_effect=RuntimeError("db down"))
+            ),
+            caplog.at_level(logging.WARNING),
+        ):
+            await server._refresh_coordination_stats_cache()
+        assert server._cached_agent_count == 42
+        assert server._cached_active_claims == 7
+        assert any("Coordination stats refresh failed" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_stop_coordination_stats_refresh_is_idempotent(self, server: LithosServer):
+        """Stopping twice (or when no task exists) must not raise."""
+        await server.stop_coordination_stats_refresh()
+        await server.stop_coordination_stats_refresh()
+        assert server._coordination_stats_refresh_task is None
+
+    @pytest.mark.asyncio
     async def test_server_registers_tools(self, server: LithosServer):
         """Server registers all MCP tools."""
         # The server should have registered tools
