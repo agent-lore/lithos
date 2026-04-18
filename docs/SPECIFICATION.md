@@ -288,21 +288,51 @@ Normative contract references for the write path:
 Create or update a knowledge file.
 
 **Arguments:**
+
+Parameters are flat at the MCP boundary but grouped below by role to aid discoverability. The grouping is documentation only and mirrors the canonical field taxonomy in `unified-write-contract.md`.
+
+*Core (required):*
+
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `title` | string | Yes | Title of the knowledge item |
 | `content` | string | Yes | Markdown content (without frontmatter) |
 | `agent` | string | Yes | Your agent identifier |
+
+*Identity & metadata:*
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | string | No | UUID to update existing; omit to create new |
 | `tags` | string[] | No | List of tags |
 | `confidence` | float | No | Confidence score 0-1 (default: 1.0) |
 | `path` | string | No | Subdirectory path (e.g., "procedures") |
-| `id` | string | No | UUID to update existing; omit to create new |
-| `source_task` | string | No | Task ID or provenance note (stored as `source` in frontmatter) |
+
+*Provenance:*
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
 | `source_url` | string | No | Canonical URL provenance (http/https), dedup key after normalization. Pass `""` to clear on update. |
 | `derived_from_ids` | string[] | No | Canonical declared lineage (UUIDs). On create: `null`/omit stores `[]`. On update: `null`/omit preserves existing, `[]` clears, non-empty replaces. Self-references rejected. |
+| `source_task` | string | No | Task ID or provenance note (stored as `source` in frontmatter) |
+
+*Freshness:*
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
 | `ttl_hours` | float | No | Relative freshness window; converted to `expires_at` |
 | `expires_at` | string | No | Absolute ISO datetime freshness deadline |
+
+*Concurrency:*
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
 | `expected_version` | int | No | Optimistic-locking guard for updates; ignored on create |
+
+*LCMA:*
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
 | `schema_version` | int | No | LCMA schema version (default: 1 on create). Preserved on update if omitted. |
 | `namespace` | string | No | LCMA namespace. Persisted only when explicitly passed; derived from path at read time otherwise. |
 | `access_scope` | enum | No | `shared` \| `task` \| `agent_private` (default: `shared` on create). `task` requires `source_task`. |
