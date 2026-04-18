@@ -775,7 +775,7 @@ class LithosServer:
                 try:
                     relative_path = file_path.relative_to(knowledge_path)
                     doc, _ = await self.knowledge.read(path=str(relative_path))
-                    self.search.index_document(doc)
+                    await asyncio.to_thread(self.search.index_document, doc)
                     self.graph.add_document(doc)
                     file_count += 1
                 except Exception as e:
@@ -907,13 +907,13 @@ class LithosServer:
                             )
 
                             await self.knowledge.delete(doc_id)
-                            self.search.remove_document(doc_id)
+                            await asyncio.to_thread(self.search.remove_document, doc_id)
                             self.graph.remove_document(doc_id)
                             self.graph.save_cache()
                     else:
                         is_new = not self.knowledge.get_id_by_path(relative_path)
                         doc = await self.knowledge.sync_from_disk(relative_path)
-                        self.search.index_document(doc)
+                        await asyncio.to_thread(self.search.index_document, doc)
                         self.graph.add_document(doc)
                         self.graph.save_cache()
 
@@ -1308,8 +1308,11 @@ class LithosServer:
                 assert doc is not None
                 warnings.extend(result.warnings)
 
-                # Update indices
-                self.search.index_document(doc)
+                # Update indices. ``index_document`` is wrapped in
+                # ``asyncio.to_thread`` so Tantivy commits and ChromaDB
+                # embedding don't block the event loop during concurrent
+                # reads — see #199.
+                await asyncio.to_thread(self.search.index_document, doc)
                 self.graph.add_document(doc)
                 self.graph.save_cache()
 
@@ -1446,7 +1449,7 @@ class LithosServer:
                         "message": f"Document not found: {id}",
                     }
 
-                self.search.remove_document(id)
+                await asyncio.to_thread(self.search.remove_document, id)
                 self.graph.remove_document(id)
                 self.graph.save_cache()
 
@@ -1541,12 +1544,12 @@ class LithosServer:
                     }
 
                 # Thread safety note: SearchManager read methods (full_text_search, semantic_search,
-                # hybrid_search) are wrapped in asyncio.to_thread() to avoid blocking the event loop.
-                # Concurrent reads via tantivy-py and ChromaDB are safe. Known risk: lithos_write
-                # calls index_document() synchronously without to_thread() — concurrent read+write
-                # is not protected by a lock. This is an existing limitation pre-LCMA; tracked for
-                # future hardening. ChromaDB model init race on ensure_embeddings_loaded() is
-                # mitigated by the existing warmup call at server startup.
+                # hybrid_search) and the mutating methods (index_document, remove_document) are
+                # all wrapped in asyncio.to_thread() so Tantivy commits and ChromaDB embedding
+                # don't block the event loop. Concurrent read+write is not protected by a lock,
+                # but tantivy-py and ChromaDB are thread-safe for these operations. ChromaDB
+                # model init race on ensure_embeddings_loaded() is mitigated by the existing
+                # warmup call at server startup.
                 if mode == "fulltext":
                     ft_results = await asyncio.to_thread(
                         self.search.full_text_search,

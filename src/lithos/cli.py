@@ -233,7 +233,7 @@ def reindex(ctx: click.Context, clear: bool) -> None:
 
         # Show stats
         stats = search.get_stats()
-        click.echo(f"Total chunks: {stats.get('chunks', 0)}")
+        click.echo(f"Total chunks: {stats.get('chroma_chunk_count', 0)}")
         click.echo(f"Graph nodes: {graph.node_count()}")
         click.echo(f"Graph edges: {graph.edge_count()}")
 
