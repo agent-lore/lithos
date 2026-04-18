@@ -347,6 +347,73 @@ class TestStoredSalienceAffectsRetrieval:
         assert result_ids.index(_ID2) < result_ids.index(_ID1)
 
 
+class TestRetrieveSnippetParity:
+    """lithos_retrieve must produce snippets from the same string Tantivy
+    indexes so title-only matches surface the matching term.
+
+    Regression guard for #196.
+    """
+
+    @pytest.mark.asyncio
+    async def test_snippet_includes_title_only_matches(
+        self,
+        seeded_config: LithosConfig,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        kp = seeded_config.storage.knowledge_path
+        nid = "11111111-2222-4333-4444-555555555555"
+        note = fm.Post(
+            "# Quantum Title Match\n\nBody talks only about pottery and lemons.",
+            id=nid,
+            title="Quantum Title Match",
+            author="agent-alpha",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            tags=["testing"],
+            access_scope="shared",
+            note_type="observation",
+        )
+        (kp / "quantum-title.md").write_text(fm.dumps(note))
+        km = KnowledgeManager(seeded_config)  # fresh scan picks the note up
+
+        from lithos.search import SearchResult
+
+        hit = [
+            SearchResult(
+                id=nid,
+                score=0.9,
+                title="Quantum Title Match",
+                snippet="tantivy-indexed-snippet-ignored",
+                path="quantum-title.md",
+            ),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=hit),
+            patch.object(seeded_search, "full_text_search", return_value=hit),
+        ):
+            result = await run_retrieve(
+                query="Quantum",
+                search=seeded_search,
+                knowledge=km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        row = next(r for r in result["results"] if r["id"] == nid)
+        # Under the old behaviour (snippet against doc.content only) the
+        # query term never appears and the snippet falls back to the
+        # opening of the body. With full_content the title is included.
+        assert "Quantum" in row["snippet"]
+
+
 # ---------------------------------------------------------------------------
 # compute_temperature
 # ---------------------------------------------------------------------------
