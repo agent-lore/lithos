@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -634,6 +635,93 @@ class TestKnowledgeToolWorkflow:
             | {i["id"] for i in page3["items"]}
         )
         assert all_returned_ids == set(widget_ids)
+
+    @pytest.mark.asyncio
+    async def test_lithos_list_content_query_pushes_filters_to_tantivy(self, server: LithosServer):
+        """content_query must push tags/author/path_prefix into full_text_search
+        so ranking runs over the filtered candidate set. Regression guard for
+        #194, where a global-then-intersect strategy silently dropped matches
+        when filtered docs ranked deep globally.
+        """
+        await server.knowledge.create(
+            title="Tagged Doc",
+            content="payload about widgets",
+            tags=["target"],
+            agent="agent",
+        )
+        tool = await server.mcp.get_tool("lithos_list")
+
+        captured: dict[str, object] = {}
+
+        def _capture(**kwargs: object) -> list[object]:
+            captured.update(kwargs)
+            return []
+
+        with patch.object(server.search, "full_text_search", side_effect=_capture):
+            await tool.fn(
+                content_query="widgets",
+                tags=["target"],
+                author="someone",
+                path_prefix="notes/",
+            )
+
+        assert captured.get("tags") == ["target"]
+        assert captured.get("author") == "someone"
+        assert captured.get("path_prefix") == "notes/"
+        # The limit must be a large cap, not the base-filtered count —
+        # pegging the limit to the base set was the root cause of #194.
+        assert isinstance(captured.get("limit"), int)
+        assert captured["limit"] >= 1000
+
+    @pytest.mark.asyncio
+    async def test_lithos_list_content_query_applies_since_and_title_contains(
+        self, server: LithosServer
+    ):
+        """``since`` and ``title_contains`` have no Tantivy-backed filter and
+        are applied post-rank against the metadata cache. Make sure both
+        drop non-matching hits.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        old = (
+            await server.knowledge.create(
+                title="Alpha Widget",
+                content="payload",
+                agent="agent",
+            )
+        ).document
+        new = (
+            await server.knowledge.create(
+                title="Beta Widget",
+                content="payload",
+                agent="agent",
+            )
+        ).document
+
+        # Backdate ``old`` so ``since`` filter excludes it.
+        old_meta = server.knowledge._meta_cache[old.id]
+        server.knowledge._meta_cache[old.id] = replace(
+            old_meta, updated_at=datetime.now(timezone.utc) - timedelta(days=30)
+        )
+
+        hits = [
+            SimpleNamespace(id=old.id),
+            SimpleNamespace(id=new.id),
+        ]
+        tool = await server.mcp.get_tool("lithos_list")
+
+        # ``since`` drops the backdated doc.
+        with patch.object(server.search, "full_text_search", return_value=hits):
+            r = await tool.fn(
+                content_query="payload",
+                since=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+            )
+        assert {i["id"] for i in r["items"]} == {new.id}
+
+        # ``title_contains`` drops the non-matching title.
+        with patch.object(server.search, "full_text_search", return_value=hits):
+            r = await tool.fn(content_query="payload", title_contains="alpha")
+        assert {i["id"] for i in r["items"]} == {old.id}
 
     @pytest.mark.asyncio
     async def test_lithos_list_content_query_search_backend_error(self, server: LithosServer):
