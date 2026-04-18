@@ -624,7 +624,7 @@ async def run_retrieve(
                         # LCMA extras
                         "reasons": c.reasons,
                         "scouts": c.scouts,
-                        "salience": c.score,
+                        "salience": salience_map.get(c.node_id, 0.5),
                     }
                 )
             except FileNotFoundError:

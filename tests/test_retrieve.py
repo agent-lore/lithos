@@ -346,6 +346,91 @@ class TestStoredSalienceAffectsRetrieval:
         # _ID2 (salience=0.9) should rank above _ID1 (salience=0.1)
         assert result_ids.index(_ID2) < result_ids.index(_ID1)
 
+    @pytest.mark.asyncio
+    async def test_salience_field_reflects_stored_salience_not_score(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """The `salience` field in results must come from StatsStore, not
+        from the reranked candidate score. Regression guard for #197.
+        """
+        # Store a distinctive salience for _ID1 so it cannot be confused
+        # with the reranked score (which lands around scout_weight ≈ 0.3
+        # for a single scout).
+        await stats_store.update_salience(_ID1, 0.37)  # 0.5 + 0.37 → 0.87
+
+        from lithos.search import SearchResult
+
+        hits = [
+            SearchResult(
+                id=_ID1, score=0.99, title="Alpha Note", snippet="alpha", path="alpha-note.md"
+            ),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=hits),
+            patch.object(seeded_search, "full_text_search", return_value=hits),
+        ):
+            result = await run_retrieve(
+                query="testing",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        row = next(r for r in result["results"] if r["id"] == _ID1)
+        # Stored salience for _ID1 is 0.87; rerank score is a weighted
+        # fusion that cannot equal 0.87 by coincidence.
+        assert row["salience"] == pytest.approx(0.87, abs=1e-6)
+        # And the salience must not alias the candidate score.
+        assert row["salience"] != row["score"]
+
+    @pytest.mark.asyncio
+    async def test_salience_defaults_to_half_when_unseen(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+    ) -> None:
+        """Nodes with no stored stats get the 0.5 default, not c.score."""
+        from lithos.search import SearchResult
+
+        hits = [
+            SearchResult(
+                id=_ID1, score=0.91, title="Alpha Note", snippet="alpha", path="alpha-note.md"
+            ),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=hits),
+            patch.object(seeded_search, "full_text_search", return_value=hits),
+        ):
+            result = await run_retrieve(
+                query="testing",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        row = next(r for r in result["results"] if r["id"] == _ID1)
+        assert row["salience"] == pytest.approx(0.5, abs=1e-6)
+
 
 class TestRetrieveSnippetParity:
     """lithos_retrieve must produce snippets from the same string Tantivy
