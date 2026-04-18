@@ -43,6 +43,7 @@ from lithos.knowledge import (
     VALID_NOTE_TYPES,
     VALID_STATUSES,
     KnowledgeManager,
+    _normalize_datetime,
     _UnsetType,
 )
 from lithos.lcma.migrations import MigrationRegistry, run_migrations
@@ -59,6 +60,13 @@ from lithos.telemetry import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Practical upper bound for ``lithos_list(content_query=...)``. Tantivy
+# returns up to this many hits before Python-side filters run. A million
+# matches from a single FTS query would already be degenerate; at that
+# point the caller should tighten the query, not ask for more results.
+_CONTENT_QUERY_FTS_CAP = 1_000_000
 
 
 class LithosServer:
@@ -2156,12 +2164,13 @@ class LithosServer:
                 limit: Max results (default: 50)
                 offset: Pagination offset
                 title_contains: Filter by case-insensitive substring match on title
-                content_query: Filter by full-text search query (Tantivy). When
-                    provided the entire base-filtered set is searched in-memory,
-                    so results and ``total`` are always correct across pages.
-                    full_text_search is called with a limit equal to the total
-                    number of base-filtered documents so no matches are silently
-                    dropped.
+                content_query: Filter by full-text search query (Tantivy).
+                    Tantivy-native filters (``tags``, ``author``,
+                    ``path_prefix``) are pushed down into the search query so
+                    ranking runs over the already-filtered candidate set,
+                    which is necessary for correctness under ranking pressure
+                    (see #194). ``since`` and ``title_contains`` are applied
+                    against the metadata cache after ranking.
 
             Returns:
                 Dict with items list and total count
@@ -2176,11 +2185,62 @@ class LithosServer:
                 if since:
                     since_dt = datetime.fromisoformat(since)
 
-                if title_contains is not None or content_query is not None:
-                    # When post-fetch filters are active we must fetch the full
-                    # base-filtered set first; filtering after pagination would
-                    # miss docs on earlier pages and produce wrong totals.
-                    # Step 1: get total count with limit=0 (returns count, no docs).
+                if content_query is not None:
+                    # Push the Tantivy-native filters into the search call so
+                    # ranking runs over the filtered candidate set. Using a
+                    # global ranked window and then intersecting (the prior
+                    # approach) silently dropped matches when filtered docs
+                    # ranked deep globally — see #194.
+                    try:
+                        fts_results = await asyncio.to_thread(
+                            self.search.full_text_search,
+                            query=content_query,
+                            limit=_CONTENT_QUERY_FTS_CAP,
+                            tags=tags,
+                            author=author,
+                            path_prefix=path_prefix,
+                        )
+                    except SearchBackendError as exc:
+                        return {
+                            "status": "error",
+                            "code": "search_backend_error",
+                            "message": f"Full-text search failed: {exc}",
+                        }
+
+                    # Apply the filters Tantivy doesn't handle: ``since`` and
+                    # ``title_contains``. Consult the metadata cache so we
+                    # don't incur a disk read per candidate.
+                    matching_ids: list[str] = []
+                    for r in fts_results:
+                        cached = self.knowledge.get_cached_meta(r.id)
+                        if cached is None:
+                            continue
+                        if since_dt is not None:
+                            cached_updated = _normalize_datetime(cached.updated_at)
+                            if cached_updated < since_dt:
+                                continue
+                        if (
+                            title_contains is not None
+                            and title_contains.lower() not in (cached.title or "").lower()
+                        ):
+                            continue
+                        matching_ids.append(r.id)
+
+                    total = len(matching_ids)
+                    page_ids = matching_ids[offset : offset + limit]
+                    docs = []
+                    for doc_id in page_ids:
+                        try:
+                            doc, _ = await self.knowledge.read(id=doc_id)
+                            docs.append(doc)
+                        except Exception:
+                            # Cache can briefly lag the filesystem during
+                            # reconcile; skipping mirrors list_all's behaviour.
+                            continue
+                elif title_contains is not None:
+                    # ``title_contains`` has no Tantivy-backed fast path; fall
+                    # back to list_all and filter in memory. Tracked in #201
+                    # for a metadata-cache-only variant.
                     _, total_base = await self.knowledge.list_all(
                         path_prefix=path_prefix,
                         tags=tags,
@@ -2189,7 +2249,6 @@ class LithosServer:
                         limit=0,
                         offset=0,
                     )
-                    # Step 2: fetch all base-filtered docs for in-memory filtering.
                     if total_base > 0:
                         all_docs, _ = await self.knowledge.list_all(
                             path_prefix=path_prefix,
@@ -2201,30 +2260,7 @@ class LithosServer:
                         )
                     else:
                         all_docs = []
-
-                    if title_contains is not None:
-                        all_docs = [
-                            d for d in all_docs if title_contains.lower() in d.title.lower()
-                        ]
-
-                    if content_query is not None:
-                        try:
-                            fts_results = await asyncio.to_thread(
-                                self.search.full_text_search,
-                                query=content_query,
-                                # Use total_base as the cap so we never silently
-                                # truncate matches from the base-filtered set.
-                                limit=max(total_base, 1),
-                            )
-                            fts_ids = {r.id for r in fts_results}
-                            all_docs = [d for d in all_docs if d.id in fts_ids]
-                        except SearchBackendError as exc:
-                            return {
-                                "status": "error",
-                                "code": "search_backend_error",
-                                "message": f"Full-text search failed: {exc}",
-                            }
-
+                    all_docs = [d for d in all_docs if title_contains.lower() in d.title.lower()]
                     total = len(all_docs)
                     docs = all_docs[offset : offset + limit]
                 else:
