@@ -606,7 +606,10 @@ async def run_retrieve(
             try:
                 doc, _ = await knowledge.read(id=c.node_id)
                 meta = doc.metadata
-                snippet = generate_snippet(doc.content, query)
+                # Tantivy indexes ``doc.full_content`` (title prepended as
+                # H1), so snippet against the same string to match the
+                # ``lithos_search`` behaviour for title-only query matches.
+                snippet = generate_snippet(doc.full_content, query)
                 results.append(
                     {
                         "id": doc.id,
