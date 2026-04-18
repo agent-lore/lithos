@@ -1265,6 +1265,47 @@ class TestGlobalTagsAndPathFilters:
         )
         assert hits == []
 
+    @pytest.mark.asyncio
+    async def test_exact_alias_multi_tag_and_semantics(
+        self, seeded_km: KnowledgeManager, seeded_graph: KnowledgeGraph
+    ) -> None:
+        """Multi-tag filters use AND semantics (all tags must match)."""
+        # _ID1 has tags=["testing", "alpha"].
+        # Both tags present → pass.
+        hits = await scout_exact_alias(
+            "note-one",
+            seeded_graph,
+            seeded_km,
+            tags=["testing", "alpha"],
+        )
+        assert _ID1 in {c.node_id for c in hits}
+
+        # One matching, one missing → AND drops the note. Under the old
+        # OR behaviour this would incorrectly surface _ID1.
+        hits = await scout_exact_alias(
+            "note-one",
+            seeded_graph,
+            seeded_km,
+            tags=["testing", "nonexistent"],
+        )
+        assert _ID1 not in {c.node_id for c in hits}
+
+    @pytest.mark.asyncio
+    async def test_provenance_multi_tag_and_semantics(self, seeded_km: KnowledgeManager) -> None:
+        """Provenance scout applies AND across multiple requested tags.
+
+        _ID6 derives from _ID1. Seeding the scout with _ID6 surfaces its
+        source _ID1 (tags=["testing", "alpha"]).
+        """
+        hits = await scout_provenance([_ID6], seeded_km, tags=["testing", "alpha"])
+        assert _ID1 in {c.node_id for c in hits}
+
+        # Under the old OR behaviour the presence of "testing" would let
+        # _ID1 slip through; AND correctly drops it because "nonexistent"
+        # is not on the note.
+        hits = await scout_provenance([_ID6], seeded_km, tags=["testing", "nonexistent"])
+        assert _ID1 not in {c.node_id for c in hits}
+
 
 # ---------------------------------------------------------------------------
 # Explicit namespace override regression test
