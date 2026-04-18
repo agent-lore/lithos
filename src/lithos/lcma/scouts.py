@@ -102,16 +102,20 @@ def _passes_access_scope(
 
 
 def _passes_tags_filter(meta_tags: list[str] | None, tags: list[str] | None) -> bool:
-    """Return True if the note has at least one of the requested tags.
+    """Return True if the note has *all* requested tags (AND semantics).
 
     ``tags=None`` (the common case) means "no filter" — all notes pass.
     Empty list also means "no filter".
+
+    AND semantics match the ``lithos_retrieve`` docstring and
+    ``KnowledgeManager.list_all``, giving agents a consistent filter
+    contract across the legacy and LCMA tool surfaces.
     """
     if not tags:
         return True
     if not meta_tags:
         return False
-    return any(t in meta_tags for t in tags)
+    return all(t in meta_tags for t in tags)
 
 
 def _passes_path_prefix(meta_path: object | None, path_prefix: str | None) -> bool:
