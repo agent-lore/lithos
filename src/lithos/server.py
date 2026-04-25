@@ -2593,6 +2593,7 @@ class LithosServer:
             agent: str,
             description: str | None = None,
             tags: list[str] | None = None,
+            metadata: dict[str, Any] | None = None,
         ) -> dict[str, str]:
             """Create a new coordination task.
 
@@ -2601,6 +2602,7 @@ class LithosServer:
                 agent: Creating agent identifier
                 description: Task description
                 tags: Task tags
+                metadata: Arbitrary JSON metadata dict (optional)
 
             Returns:
                 Dict with task_id
@@ -2615,6 +2617,7 @@ class LithosServer:
                     agent=agent,
                     description=description,
                     tags=tags,
+                    metadata=metadata,
                 )
                 span.set_attribute("lithos.task_id", task_id)
 
@@ -2636,10 +2639,12 @@ class LithosServer:
             title: str | None = None,
             description: str | None = None,
             tags: list[str] | None = None,
+            metadata: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
-            """Update mutable task metadata (title, description, tags).
+            """Update mutable task metadata (title, description, tags, metadata).
 
-            At least one of title, description, or tags must be provided.
+            At least one of title, description, tags, or metadata must be provided.
+            Pass an empty dict ``{}`` for metadata to clear it.
 
             Args:
                 task_id: Task ID to update
@@ -2647,15 +2652,16 @@ class LithosServer:
                 title: New task title (optional)
                 description: New task description (optional)
                 tags: New task tags (optional)
+                metadata: Arbitrary JSON metadata dict; pass {} to clear (optional)
 
             Returns:
                 Dict with success and message
             """
-            if title is None and description is None and tags is None:
+            if title is None and description is None and tags is None and metadata is None:
                 return {
                     "status": "error",
                     "code": "invalid_input",
-                    "message": "At least one of title, description, or tags must be provided",
+                    "message": "At least one of title, description, tags, or metadata must be provided",
                 }
 
             logger.info("lithos_task_update task=%s agent=%s", task_id, agent)
@@ -2670,6 +2676,7 @@ class LithosServer:
                     title=title,
                     description=description,
                     tags=tags,
+                    metadata=metadata,
                 )
                 span.set_attribute("lithos.success", updated)
 
@@ -3116,6 +3123,7 @@ class LithosServer:
                             "id": s.id,
                             "title": s.title,
                             "status": s.status,
+                            "metadata": s.metadata,
                             "claims": [
                                 {
                                     "agent": c.agent,

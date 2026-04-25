@@ -2327,3 +2327,170 @@ class TestHealthEndpoint:
             response = await server._health_endpoint(request)
 
         assert response.status_code == 503
+
+
+class TestTaskMetadataTool:
+    """Tests for metadata field in lithos_task_create, lithos_task_update, lithos_task_list, lithos_task_status (#215)."""
+
+    async def _call_task_create(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_task_create")
+        return await tool.fn(**kwargs)
+
+    async def _call_task_update(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_task_update")
+        return await tool.fn(**kwargs)
+
+    async def _call_task_list(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_task_list")
+        return await tool.fn(**kwargs)
+
+    async def _call_task_status(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_task_status")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_task_create_with_metadata(self, server: LithosServer):
+        """lithos_task_create: metadata is stored and readable back via get_task."""
+        meta = {"priority": "high", "source": "mcp-tool-test"}
+        result = await self._call_task_create(
+            server,
+            title="Task With Metadata",
+            agent="test-agent",
+            metadata=meta,
+        )
+        assert "task_id" in result
+
+        task = await server.coordination.get_task(result["task_id"])
+        assert task is not None
+        assert task.metadata == meta
+
+    @pytest.mark.asyncio
+    async def test_task_create_no_metadata_returns_empty_dict(self, server: LithosServer):
+        """lithos_task_create: omitting metadata results in task.metadata == {}."""
+        result = await self._call_task_create(
+            server,
+            title="Task No Metadata",
+            agent="test-agent",
+        )
+        assert "task_id" in result
+
+        task = await server.coordination.get_task(result["task_id"])
+        assert task is not None
+        assert task.metadata == {}
+
+    @pytest.mark.asyncio
+    async def test_task_update_metadata(self, server: LithosServer):
+        """lithos_task_update: metadata field is updated correctly."""
+        task_id = await server.coordination.create_task(
+            title="Update Meta Task",
+            agent="test-agent",
+            metadata={"old_key": "old_val"},
+        )
+
+        result = await self._call_task_update(
+            server,
+            task_id=task_id,
+            agent="test-agent",
+            metadata={"new_key": "new_val", "count": 99},
+        )
+        assert result["success"] is True
+
+        task = await server.coordination.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"new_key": "new_val", "count": 99}
+
+    @pytest.mark.asyncio
+    async def test_task_update_clear_metadata(self, server: LithosServer):
+        """lithos_task_update: passing {} clears metadata."""
+        task_id = await server.coordination.create_task(
+            title="Clear Meta Task",
+            agent="test-agent",
+            metadata={"to_be": "cleared"},
+        )
+
+        result = await self._call_task_update(
+            server,
+            task_id=task_id,
+            agent="test-agent",
+            metadata={},
+        )
+        assert result["success"] is True
+
+        task = await server.coordination.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {}
+
+    @pytest.mark.asyncio
+    async def test_task_list_includes_metadata(self, server: LithosServer):
+        """lithos_task_list: response dicts include metadata field."""
+        meta = {"sprint": 3}
+        task_id = await server.coordination.create_task(
+            title="Listed Meta Task",
+            agent="test-agent",
+            metadata=meta,
+        )
+
+        result = await self._call_task_list(server)
+        task_dict = next((t for t in result["tasks"] if t["id"] == task_id), None)
+        assert task_dict is not None
+        assert "metadata" in task_dict
+        assert task_dict["metadata"] == meta
+
+    @pytest.mark.asyncio
+    async def test_task_list_no_metadata_returns_empty_dict(self, server: LithosServer):
+        """lithos_task_list: tasks without metadata return {} not null."""
+        task_id = await server.coordination.create_task(
+            title="No Meta Listed Task",
+            agent="test-agent",
+        )
+
+        result = await self._call_task_list(server)
+        task_dict = next((t for t in result["tasks"] if t["id"] == task_id), None)
+        assert task_dict is not None
+        assert task_dict["metadata"] == {}
+
+    @pytest.mark.asyncio
+    async def test_task_status_includes_metadata(self, server: LithosServer):
+        """lithos_task_status: response includes metadata field."""
+        meta = {"team": "forge", "issue": 215}
+        task_id = await server.coordination.create_task(
+            title="Status Meta Task",
+            agent="test-agent",
+            metadata=meta,
+        )
+
+        result = await self._call_task_status(server, task_id=task_id)
+        assert len(result["tasks"]) == 1
+        assert "metadata" in result["tasks"][0]
+        assert result["tasks"][0]["metadata"] == meta
+
+    @pytest.mark.asyncio
+    async def test_task_status_no_metadata_returns_empty_dict(self, server: LithosServer):
+        """lithos_task_status: tasks without metadata return {} not null."""
+        task_id = await server.coordination.create_task(
+            title="Status No Meta Task",
+            agent="test-agent",
+        )
+
+        result = await self._call_task_status(server, task_id=task_id)
+        assert len(result["tasks"]) == 1
+        assert result["tasks"][0]["metadata"] == {}
+
+    @pytest.mark.asyncio
+    async def test_task_update_metadata_only_no_other_fields_returns_error(
+        self, server: LithosServer
+    ):
+        """lithos_task_update: metadata=None with no other fields returns invalid_input."""
+        task_id = await server.coordination.create_task(
+            title="Guard Test Task",
+            agent="test-agent",
+        )
+
+        result = await self._call_task_update(
+            server,
+            task_id=task_id,
+            agent="test-agent",
+            # no fields at all
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
