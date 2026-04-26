@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     tags JSON,
     outcome TEXT,
-    completed_at TIMESTAMP
+    completed_at TIMESTAMP,
+    metadata JSON
 );
 
 -- Claims (with automatic expiry)
@@ -108,6 +109,7 @@ class Task:
     tags: list[str] = field(default_factory=list)
     outcome: str | None = None
     completed_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -146,6 +148,7 @@ class TaskStatus:
     title: str
     status: str
     claims: list[Claim]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -220,6 +223,7 @@ class CoordinationService:
             await db.executescript(SCHEMA)
             await self._migrate_tasks_add_outcome(db)
             await self._migrate_tasks_add_completed_at(db)
+            await self._migrate_tasks_add_metadata(db)
             await db.commit()
         logger.info("coordination service initialized: db_path=%s", self.db_path)
 
@@ -240,6 +244,15 @@ class CoordinationService:
         if "completed_at" not in columns:
             await db.execute("ALTER TABLE tasks ADD COLUMN completed_at TIMESTAMP")
             logger.info("coordination.db migration applied: added tasks.completed_at")
+
+    @staticmethod
+    async def _migrate_tasks_add_metadata(db: aiosqlite.Connection) -> None:
+        """Add metadata column to existing tasks tables."""
+        cursor = await db.execute("PRAGMA table_info(tasks)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "metadata" not in columns:
+            await db.execute("ALTER TABLE tasks ADD COLUMN metadata JSON")
+            logger.info("coordination.db migration applied: added tasks.metadata")
 
     async def _get_db(self) -> aiosqlite.Connection:
         """Get database connection."""
@@ -423,8 +436,16 @@ class CoordinationService:
         agent: str,
         description: str | None = None,
         tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Create a new task.
+
+        Args:
+            title: Task title
+            agent: Creating agent identifier
+            description: Task description
+            tags: Task tags
+            metadata: Arbitrary JSON metadata dict (optional)
 
         Returns:
             Task ID
@@ -436,15 +457,16 @@ class CoordinationService:
 
         task_id = str(uuid.uuid4())
         tags_json = json.dumps(tags) if tags else None
+        metadata_json = json.dumps(metadata) if metadata is not None else None
         now = _format_datetime(datetime.now(timezone.utc))
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
-                INSERT INTO tasks (id, title, description, created_by, tags, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO tasks (id, title, description, created_by, tags, created_at, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (task_id, title, description, agent, tags_json, now),
+                (task_id, title, description, agent, tags_json, now, metadata_json),
             )
             await db.commit()
 
@@ -472,11 +494,16 @@ class CoordinationService:
                 with contextlib.suppress(json.JSONDecodeError):
                     tags = json.loads(row["tags"])
 
-            # outcome/completed_at may be absent on legacy rows (pre-migration
+            # outcome/completed_at/metadata may be absent on legacy rows (pre-migration
             # reads should not be possible, but defend against it defensively).
             row_keys = row.keys()
             outcome = row["outcome"] if "outcome" in row_keys else None
             completed_at_raw = row["completed_at"] if "completed_at" in row_keys else None
+
+            task_metadata: dict[str, Any] = {}
+            if "metadata" in row_keys and row["metadata"]:
+                with contextlib.suppress(json.JSONDecodeError):
+                    task_metadata = json.loads(row["metadata"])
 
             return Task(
                 id=row["id"],
@@ -488,6 +515,7 @@ class CoordinationService:
                 tags=tags,
                 outcome=outcome,
                 completed_at=_parse_datetime(completed_at_raw),
+                metadata=task_metadata,
             )
 
     @traced("lithos.coordination.update_task")
@@ -498,12 +526,15 @@ class CoordinationService:
         title: str | None = None,
         description: str | None = None,
         tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Update mutable task metadata.
 
         Only updates fields that are not None (partial update pattern).
         Only open tasks can be updated; completed or cancelled tasks are
         treated as not found (consistent with complete_task behaviour).
+
+        To clear metadata entirely, pass an empty dict ``{}``.
 
         Returns:
             True if task was found, is open, and was updated; False otherwise
@@ -525,6 +556,9 @@ class CoordinationService:
         if tags is not None:
             sets.append("tags = ?")
             params.append(json.dumps(tags))
+        if metadata is not None:
+            sets.append("metadata = ?")
+            params.append(json.dumps(metadata))
 
         if not sets:
             # Nothing to update; check task exists and is open
@@ -690,7 +724,11 @@ class CoordinationService:
             rows = await cursor.fetchall()
 
             results: list[dict[str, Any]] = []
+            row_keys: list[str] | None = None
             for row in rows:
+                if row_keys is None:
+                    row_keys = list(row.keys())
+
                 task_tags: list[str] = []
                 if row["tags"]:
                     with contextlib.suppress(json.JSONDecodeError):
@@ -699,6 +737,11 @@ class CoordinationService:
                 # Filter by tags: task must contain all requested tags
                 if tags and not all(t in task_tags for t in tags):
                     continue
+
+                task_metadata: dict[str, Any] = {}
+                if "metadata" in row_keys and row["metadata"]:
+                    with contextlib.suppress(json.JSONDecodeError):
+                        task_metadata = json.loads(row["metadata"])
 
                 results.append(
                     {
@@ -709,6 +752,7 @@ class CoordinationService:
                         "created_by": row["created_by"],
                         "created_at": row["created_at"],
                         "tags": task_tags,
+                        "metadata": task_metadata,
                     }
                 )
 
@@ -726,6 +770,8 @@ class CoordinationService:
             task_id: Specific task ID, or None for all active tasks
             include_all: When True and task_id is None, include non-open tasks
         """
+        import json
+
         now = _format_datetime(datetime.now(timezone.utc))
 
         async with aiosqlite.connect(self.db_path) as db:
@@ -744,8 +790,12 @@ class CoordinationService:
 
             tasks = await cursor.fetchall()
             result: list[TaskStatus] = []
+            task_row_keys: list[str] | None = None
 
             for task in tasks:
+                if task_row_keys is None:
+                    task_row_keys = list(task.keys())
+
                 # Get active (non-expired) claims
                 claims_cursor = await db.execute(
                     """
@@ -767,12 +817,18 @@ class CoordinationService:
                     for row in claim_rows
                 ]
 
+                task_metadata: dict[str, Any] = {}
+                if "metadata" in task_row_keys and task["metadata"]:
+                    with contextlib.suppress(json.JSONDecodeError):
+                        task_metadata = json.loads(task["metadata"])
+
                 result.append(
                     TaskStatus(
                         id=task["id"],
                         title=task["title"],
                         status=task["status"],
                         claims=claims,
+                        metadata=task_metadata,
                     )
                 )
 

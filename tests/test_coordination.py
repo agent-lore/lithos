@@ -996,3 +996,166 @@ class TestTaskOutcomeMigration:
         assert task is not None
         assert task.outcome == "done"
         assert task.completed_at is not None
+
+
+class TestTaskMetadata:
+    """Tests for metadata JSON field on tasks (#215)."""
+
+    @pytest.mark.asyncio
+    async def test_create_task_with_metadata(self, coordination_service: CoordinationService):
+        """create_task(metadata=...) persists the metadata dict."""
+        meta = {"priority": "high", "source": "forge", "count": 42}
+        task_id = await coordination_service.create_task(
+            title="Task With Metadata",
+            agent="agent",
+            metadata=meta,
+        )
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == meta
+
+    @pytest.mark.asyncio
+    async def test_create_task_without_metadata_defaults_empty(
+        self, coordination_service: CoordinationService
+    ):
+        """Omitting metadata is backward-compatible — task.metadata is {}."""
+        task_id = await coordination_service.create_task(
+            title="Task Without Metadata",
+            agent="agent",
+        )
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {}
+
+    @pytest.mark.asyncio
+    async def test_update_task_metadata(self, coordination_service: CoordinationService):
+        """update_task(metadata=...) replaces the stored metadata."""
+        task_id = await coordination_service.create_task(
+            title="Updatable Task",
+            agent="agent",
+            metadata={"initial": True},
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id,
+            agent="agent",
+            metadata={"priority": "low", "revised": True},
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"priority": "low", "revised": True}
+
+    @pytest.mark.asyncio
+    async def test_update_task_metadata_clear(self, coordination_service: CoordinationService):
+        """Passing metadata={} clears the stored metadata."""
+        task_id = await coordination_service.create_task(
+            title="Task To Clear",
+            agent="agent",
+            metadata={"to_be": "cleared"},
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id,
+            agent="agent",
+            metadata={},
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {}
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_includes_metadata(self, coordination_service: CoordinationService):
+        """list_tasks response dicts include the metadata field."""
+        meta = {"env": "test"}
+        task_id = await coordination_service.create_task(
+            title="Listed Task",
+            agent="agent",
+            metadata=meta,
+        )
+
+        tasks = await coordination_service.list_tasks()
+        task_dict = next((t for t in tasks if t["id"] == task_id), None)
+        assert task_dict is not None
+        assert "metadata" in task_dict
+        assert task_dict["metadata"] == meta
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_no_metadata_returns_empty_dict(
+        self, coordination_service: CoordinationService
+    ):
+        """Tasks created without metadata return {} in list_tasks, not null."""
+        task_id = await coordination_service.create_task(
+            title="No Meta Task",
+            agent="agent",
+        )
+
+        tasks = await coordination_service.list_tasks()
+        task_dict = next((t for t in tasks if t["id"] == task_id), None)
+        assert task_dict is not None
+        assert task_dict["metadata"] == {}
+
+    @pytest.mark.asyncio
+    async def test_get_task_status_includes_metadata(
+        self, coordination_service: CoordinationService
+    ):
+        """get_task_status response includes metadata from the task."""
+        meta = {"sprint": 7, "team": "alpha"}
+        task_id = await coordination_service.create_task(
+            title="Status Task",
+            agent="agent",
+            metadata=meta,
+        )
+
+        statuses = await coordination_service.get_task_status(task_id)
+        assert len(statuses) == 1
+        assert statuses[0].metadata == meta
+
+    @pytest.mark.asyncio
+    async def test_migration_adds_metadata_column(self, tmp_path):
+        """Simulate a pre-#215 coordination.db and confirm initialize() migrates it."""
+        db_path = tmp_path / "coordination.db"
+
+        # Build a legacy tasks table without metadata column.
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSON,
+                    outcome TEXT,
+                    completed_at TIMESTAMP
+                )
+                """
+            )
+            await db.execute(
+                "INSERT INTO tasks (id, title, created_by) VALUES (?, ?, ?)",
+                ("legacy-task-215", "Legacy", "legacy-agent"),
+            )
+            await db.commit()
+
+        config = LithosConfig(storage=StorageConfig(data_dir=tmp_path))
+        service = CoordinationService(config=config)
+        service._db_path = db_path
+        await service.initialize()
+
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("PRAGMA table_info(tasks)")
+            columns = {row[1] for row in await cursor.fetchall()}
+
+        assert "metadata" in columns
+
+        # Legacy row returns {} for metadata (not null).
+        task = await service.get_task("legacy-task-215")
+        assert task is not None
+        assert task.metadata == {}
