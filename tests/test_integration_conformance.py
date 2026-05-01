@@ -1907,8 +1907,7 @@ class TestSourceUrlMCPResponses:
                 "source_url": "ftp://not-http.example.com/file",
             },
         )
-        assert result["status"] == "error"
-        assert result["code"] == "invalid_input"
+        assert result["status"] == "invalid_input"
         assert "message" in result
         assert isinstance(result["warnings"], list)
 
@@ -2370,8 +2369,7 @@ class TestDerivedFromIdsMCPBoundary:
                 "derived_from_ids": ["not-a-uuid"],
             },
         )
-        assert result["status"] == "error"
-        assert result["code"] == "invalid_input"
+        assert result["status"] == "invalid_input"
 
 
 class TestSyncFromDisk:

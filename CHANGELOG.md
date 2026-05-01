@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- **`lithos_write` error envelopes are now canonical top-level statuses.** Each error code surfaces as `status="<code>"` (e.g. `status="slug_collision"`, `status="invalid_input"`) instead of `status="error"` plus a separate `code` field. Affects `slug_collision`, `invalid_input`, `content_too_large`, and `version_conflict`. `status="error"` is retained as a generic fallback. **MCP-boundary breaking change** — clients that dispatched on `(status, code)` need to dispatch on `status` alone. Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
+- **`slug_collision` envelopes now include a structured `existing_id` field** (the colliding document UUID) so clients can avoid scraping the message string.
+- `WriteResult.error_code` is removed; `WriteResult.status` is the single source of truth and is one of `created` / `updated` / `duplicate` / `invalid_input` / `content_too_large` / `version_conflict` / `error`.
+
 ---
 
 ## [0.2.0] — 2026-04-12

@@ -342,19 +342,23 @@ Parameters are flat at the MCP boundary but grouped below by role to aid discove
 
 **Returns (status envelope):**
 
+The error code is the canonical top-level `status` value (e.g. `status="slug_collision"`); there is no separate `code` discriminator field on `lithos_write` envelopes. `status="error"` is retained as a generic fallback for unforeseen failures.
+
 `{ status: "created", id: string, path: string, version: int, warnings: string[] }`
 
 `{ status: "updated", id: string, path: string, version: int, warnings: string[] }`
 
 `{ status: "duplicate", duplicate_of: { id, title, source_url }, message: string, warnings: string[] }`
 
-`{ status: "error", code: "invalid_input", message: string, warnings: [] }`
+`{ status: "invalid_input", message: string, warnings: string[] }`
 
-`{ status: "error", code: "content_too_large", message: string, warnings: [] }`
+`{ status: "content_too_large", message: string, warnings: string[] }`
 
-`{ status: "error", code: "slug_collision", message: string, warnings: [] }`
+`{ status: "slug_collision", message: string, existing_id: string, warnings: string[] }`
 
-`{ status: "error", code: "version_conflict", message: string, current_version: int, warnings: [] }`
+`{ status: "version_conflict", message: string, current_version: int, warnings: string[] }`
+
+`{ status: "error", message: string, warnings: string[] }`  *(generic fallback)*
 
 **Behavior on update:** If `id` is provided and exists, the agent is added to `contributors` if not already present.
 

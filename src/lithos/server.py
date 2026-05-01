@@ -1021,8 +1021,7 @@ class LithosServer:
 
                 if len(content.encode("utf-8")) > self._config.storage.max_content_size_bytes:
                     return {
-                        "status": "error",
-                        "code": "content_too_large",
+                        "status": "content_too_large",
                         "message": f"Content exceeds maximum size of {self._config.storage.max_content_size_bytes} bytes",
                         "warnings": [],
                     }
@@ -1032,8 +1031,7 @@ class LithosServer:
                 # Validate ttl_hours / expires_at mutual exclusion
                 if ttl_hours is not None and expires_at is not None:
                     return {
-                        "status": "error",
-                        "code": "invalid_input",
+                        "status": "invalid_input",
                         "message": "Provide either ttl_hours or expires_at, not both.",
                         "warnings": [],
                     }
@@ -1046,8 +1044,7 @@ class LithosServer:
                     or ttl_hours <= 0
                 ):
                     return {
-                        "status": "error",
-                        "code": "invalid_input",
+                        "status": "invalid_input",
                         "message": "ttl_hours must be a finite positive number.",
                         "warnings": [],
                     }
@@ -1055,24 +1052,21 @@ class LithosServer:
                 # Validate LCMA enum fields
                 if access_scope is not None and access_scope not in VALID_ACCESS_SCOPES:
                     return {
-                        "status": "error",
-                        "code": "invalid_input",
+                        "status": "invalid_input",
                         "message": f"Invalid access_scope: {access_scope!r}. "
                         f"Must be one of {sorted(VALID_ACCESS_SCOPES)}",
                         "warnings": [],
                     }
                 if note_type is not None and note_type not in VALID_NOTE_TYPES:
                     return {
-                        "status": "error",
-                        "code": "invalid_input",
+                        "status": "invalid_input",
                         "message": f"Invalid note_type: {note_type!r}. "
                         f"Must be one of {sorted(VALID_NOTE_TYPES)}",
                         "warnings": [],
                     }
                 if status is not None and status not in VALID_STATUSES:
                     return {
-                        "status": "error",
-                        "code": "invalid_input",
+                        "status": "invalid_input",
                         "message": f"Invalid status: {status!r}. "
                         f"Must be one of {sorted(VALID_STATUSES)}",
                         "warnings": [],
@@ -1082,8 +1076,7 @@ class LithosServer:
                 if summaries is not None:
                     if not isinstance(summaries, dict):
                         return {
-                            "status": "error",
-                            "code": "invalid_input",
+                            "status": "invalid_input",
                             "message": "summaries must be an object with "
                             "'short' and/or 'long' string fields.",
                             "warnings": [],
@@ -1091,8 +1084,7 @@ class LithosServer:
                     unknown_keys = set(summaries.keys()) - {"short", "long"}
                     if unknown_keys:
                         return {
-                            "status": "error",
-                            "code": "invalid_input",
+                            "status": "invalid_input",
                             "message": f"summaries has unknown keys: "
                             f"{sorted(unknown_keys)}. "
                             f"Allowed keys: ['long', 'short'].",
@@ -1101,8 +1093,7 @@ class LithosServer:
                     for k, v in summaries.items():
                         if not isinstance(v, str):
                             return {
-                                "status": "error",
-                                "code": "invalid_input",
+                                "status": "invalid_input",
                                 "message": f"summaries.{k} must be a string, "
                                 f"got {type(v).__name__}.",
                                 "warnings": [],
@@ -1114,8 +1105,7 @@ class LithosServer:
                         # Create: require source_task
                         if not source_task:
                             return {
-                                "status": "error",
-                                "code": "invalid_input",
+                                "status": "invalid_input",
                                 "message": "access_scope='task' requires source_task",
                                 "warnings": [],
                             }
@@ -1126,8 +1116,7 @@ class LithosServer:
                                 existing_doc, _ = await self.knowledge.read(id=id)
                                 if not existing_doc.metadata.source:
                                     return {
-                                        "status": "error",
-                                        "code": "invalid_input",
+                                        "status": "invalid_input",
                                         "message": "access_scope='task' requires source_task",
                                         "warnings": [],
                                     }
@@ -1160,8 +1149,7 @@ class LithosServer:
                                 expires_at_dt = expires_at_dt.astimezone(timezone.utc)
                         except ValueError:
                             return {
-                                "status": "error",
-                                "code": "invalid_input",
+                                "status": "invalid_input",
                                 "message": f"Invalid expires_at datetime: {expires_at}",
                                 "warnings": [],
                             }
@@ -1178,8 +1166,7 @@ class LithosServer:
                                 expires_at_dt = expires_at_dt.astimezone(timezone.utc)
                         except ValueError:
                             return {
-                                "status": "error",
-                                "code": "invalid_input",
+                                "status": "invalid_input",
                                 "message": f"Invalid expires_at datetime: {expires_at}",
                                 "warnings": [],
                             }
@@ -1268,11 +1255,11 @@ class LithosServer:
                             summaries=summaries,
                         )
                 except SlugCollisionError as exc:
-                    span.set_attribute("lithos.write_status", "error")
+                    span.set_attribute("lithos.write_status", "slug_collision")
                     return {
-                        "status": "error",
-                        "code": "slug_collision",
+                        "status": "slug_collision",
                         "message": str(exc),
+                        "existing_id": exc.existing_id,
                         "warnings": [],
                     }
 
@@ -1292,11 +1279,20 @@ class LithosServer:
                         "message": result.message,
                         "warnings": warnings + result.warnings,
                     }
-                elif result.status == "error":
-                    span.set_attribute("lithos.write_status", "error")
+                elif result.status in (
+                    "invalid_input",
+                    "version_conflict",
+                    "content_too_large",
+                    "error",
+                ):
+                    # WriteResult.status now carries the canonical error
+                    # code as the top-level status (e.g. "invalid_input"),
+                    # so we propagate it directly rather than wrapping it
+                    # in {status: "error", code: <X>}.  Plain "error" is
+                    # retained as a generic fallback.
+                    span.set_attribute("lithos.write_status", result.status)
                     error_response: dict[str, Any] = {
-                        "status": "error",
-                        "code": result.error_code,
+                        "status": result.status,
                         "message": result.message,
                         "warnings": warnings + result.warnings,
                     }

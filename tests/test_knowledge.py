@@ -1188,8 +1188,7 @@ class TestDedupOnCreate:
             agent="agent",
             source_url="ftp://not-http.com",
         )
-        assert result.status == "error"
-        assert result.error_code == "invalid_input"
+        assert result.status == "invalid_input"
 
     @pytest.mark.asyncio
     async def test_create_empty_url_returns_error(self, knowledge_manager: KnowledgeManager):
@@ -1200,8 +1199,7 @@ class TestDedupOnCreate:
             agent="agent",
             source_url="   ",
         )
-        assert result.status == "error"
-        assert result.error_code == "invalid_input"
+        assert result.status == "invalid_input"
 
     @pytest.mark.asyncio
     async def test_create_updates_map(self, knowledge_manager: KnowledgeManager):
@@ -1335,8 +1333,7 @@ class TestDedupOnUpdate:
         result = await knowledge_manager.update(
             id=doc.id, agent="editor", source_url="ftp://invalid.com"
         )
-        assert result.status == "error"
-        assert result.error_code == "invalid_input"
+        assert result.status == "invalid_input"
 
 
 class TestUpdateTagsConfidenceSentinel:
@@ -2127,8 +2124,7 @@ class TestCreateProvenance:
             agent="agent",
             derived_from_ids=["not-a-uuid"],
         )
-        assert result.status == "error"
-        assert result.error_code == "invalid_input"
+        assert result.status == "invalid_input"
         assert result.document is None
 
         # No doc should have been created
@@ -2143,8 +2139,7 @@ class TestCreateProvenance:
             agent="agent",
             derived_from_ids=[""],
         )
-        assert result.status == "error"
-        assert result.error_code == "invalid_input"
+        assert result.status == "invalid_input"
 
     @pytest.mark.asyncio
     async def test_create_provenance_normalizes_uppercase(
@@ -2405,8 +2400,7 @@ class TestUpdateProvenance:
         result = await knowledge_manager.update(
             id=doc.id, agent="editor", derived_from_ids=[doc.id]
         )
-        assert result.status == "error"
-        assert result.error_code == "invalid_input"
+        assert result.status == "invalid_input"
         assert "self-reference" in result.message
 
     @pytest.mark.asyncio
@@ -2419,8 +2413,7 @@ class TestUpdateProvenance:
         result = await knowledge_manager.update(
             id=doc.id, agent="editor", derived_from_ids=["not-a-uuid"]
         )
-        assert result.status == "error"
-        assert result.error_code == "invalid_input"
+        assert result.status == "invalid_input"
 
     @pytest.mark.asyncio
     async def test_update_title_updates_id_to_title(self, knowledge_manager: KnowledgeManager):
@@ -3243,8 +3236,7 @@ class TestOptimisticLocking:
             content="stale write",
             expected_version=1,
         )
-        assert result.status == "error"
-        assert result.error_code == "version_conflict"
+        assert result.status == "version_conflict"
         assert result.message is not None
         assert "1" in result.message
         assert "2" in result.message
@@ -3373,10 +3365,10 @@ class TestOptimisticLocking:
 
         statuses = {result_a.status, result_b.status}
         assert "updated" in statuses, "Expected one writer to succeed"
-        assert "error" in statuses, "Expected one writer to get a conflict"
+        assert "version_conflict" in statuses, "Expected one writer to get a conflict"
 
-        conflict_result = result_a if result_a.status == "error" else result_b
-        assert conflict_result.error_code == "version_conflict"
+        conflict_result = result_a if result_a.status == "version_conflict" else result_b
+        assert conflict_result.status == "version_conflict"
 
 
 class TestSlugCollision:
