@@ -426,12 +426,27 @@ class DuplicateInfo:
 
 @dataclass
 class WriteResult:
-    """Structured result type for create/update operations."""
+    """Structured result type for create/update operations.
 
-    status: Literal["created", "updated", "duplicate", "error"]
+    Error outcomes use the error code as the canonical ``status`` value
+    (``invalid_input`` / ``version_conflict`` / ``content_too_large``)
+    rather than ``status="error"`` plus a separate discriminator field.
+    The plain ``"error"`` status remains as a generic fallback for
+    unforeseen failures and ``slug_collision`` is raised as a
+    ``SlugCollisionError`` exception (not represented in WriteResult).
+    """
+
+    status: Literal[
+        "created",
+        "updated",
+        "duplicate",
+        "error",
+        "invalid_input",
+        "version_conflict",
+        "content_too_large",
+    ]
     document: KnowledgeDocument | None = None
     warnings: list[str] = field(default_factory=list)
-    error_code: str | None = None
     message: str | None = None
     duplicate_of: DuplicateInfo | None = None
     current_version: int | None = None
@@ -838,8 +853,7 @@ class KnowledgeManager:
                     norm_url = normalize_url(source_url)
                 except ValueError as e:
                     return WriteResult(
-                        status="error",
-                        error_code="invalid_input",
+                        status="invalid_input",
                         message=str(e),
                     )
 
@@ -874,8 +888,7 @@ class KnowledgeManager:
                     normalized_provenance = validate_derived_from_ids(derived_from_ids)
                 except ValueError as e:
                     return WriteResult(
-                        status="error",
-                        error_code="invalid_input",
+                        status="invalid_input",
                         message=str(e),
                     )
 
@@ -1145,8 +1158,7 @@ class KnowledgeManager:
                     doc.metadata.version,
                 )
                 return WriteResult(
-                    status="error",
-                    error_code="version_conflict",
+                    status="version_conflict",
                     message=f"Version conflict: expected {expected_version}, got {doc.metadata.version}",
                     current_version=doc.metadata.version,
                 )
@@ -1182,8 +1194,7 @@ class KnowledgeManager:
                         new_norm = normalize_url(source_url)
                     except ValueError as e:
                         return WriteResult(
-                            status="error",
-                            error_code="invalid_input",
+                            status="invalid_input",
                             message=str(e),
                         )
 
@@ -1235,8 +1246,7 @@ class KnowledgeManager:
                         normalized = validate_derived_from_ids(derived_from_ids, self_id=id)
                     except ValueError as e:
                         return WriteResult(
-                            status="error",
-                            error_code="invalid_input",
+                            status="invalid_input",
                             message=str(e),
                         )
 

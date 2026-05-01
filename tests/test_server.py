@@ -2086,15 +2086,87 @@ class TestSlugCollisionServerBoundary:
         return await tool.fn(**kwargs)
 
     @pytest.mark.asyncio
-    async def test_write_slug_collision_returns_error_dict(self, server: LithosServer):
-        """lithos_write returns slug_collision error dict when slug is already taken."""
-        await self._call_write(server, title="Collision Doc", content="First.", agent="agent")
+    async def test_write_slug_collision_returns_canonical_envelope(
+        self, server: LithosServer
+    ):
+        """lithos_write surfaces slug clashes as ``status="slug_collision"``
+        with a structured ``existing_id`` field, so callers can dispatch on
+        the top-level status without scraping the message string.
+        """
+        first = await self._call_write(
+            server, title="Collision Doc", content="First.", agent="agent"
+        )
+        assert first["status"] == "created"
+        existing_id = first["id"]
+
         result = await self._call_write(
             server, title="Collision Doc", content="Second.", agent="agent"
         )
-        assert result["status"] == "error"
-        assert result["code"] == "slug_collision"
+        assert result["status"] == "slug_collision"
+        assert "code" not in result  # legacy discriminator removed
         assert "collision-doc" in result["message"]
+        assert result["existing_id"] == existing_id
+        assert result["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_write_invalid_input_returns_canonical_envelope(
+        self, server: LithosServer
+    ):
+        """``invalid_input`` errors surface as ``status="invalid_input"``
+        rather than ``status="error"`` plus a discriminator field.
+        """
+        result = await self._call_write(
+            server,
+            title="Conflicting TTL",
+            content="body",
+            agent="agent",
+            ttl_hours=1,
+            expires_at="2030-01-01T00:00:00+00:00",
+        )
+        assert result["status"] == "invalid_input"
+        assert "code" not in result
+        assert result["message"]
+        assert result["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_write_version_conflict_returns_canonical_envelope(
+        self, server: LithosServer
+    ):
+        """``version_conflict`` surfaces as ``status="version_conflict"``
+        with a ``current_version`` integer.
+        """
+        first = await self._call_write(
+            server, title="Versioned Doc", content="v1", agent="agent"
+        )
+        assert first["status"] == "created"
+        doc_id = first["id"]
+
+        result = await self._call_write(
+            server,
+            id=doc_id,
+            title="Versioned Doc",
+            content="v2",
+            agent="agent",
+            expected_version=99,
+        )
+        assert result["status"] == "version_conflict"
+        assert "code" not in result
+        assert isinstance(result.get("current_version"), int)
+        assert result["message"]
+
+    @pytest.mark.asyncio
+    async def test_write_content_too_large_returns_canonical_envelope(
+        self, server: LithosServer
+    ):
+        """Oversize content surfaces as ``status="content_too_large"``."""
+        max_bytes = server._config.storage.max_content_size_bytes
+        oversized = "x" * (max_bytes + 1)
+        result = await self._call_write(
+            server, title="Big Doc", content=oversized, agent="agent"
+        )
+        assert result["status"] == "content_too_large"
+        assert "code" not in result
+        assert result["message"]
 
 
 class TestTaskUpdateTool:
