@@ -1915,8 +1915,7 @@ class TestWriteMutualExclusion:
             ttl_hours=24.0,
             expires_at="",
         )
-        assert result["status"] == "error"
-        assert result["code"] == "invalid_input"
+        assert result["status"] == "invalid_input"
 
     @pytest.mark.asyncio
     async def test_write_via_tool_with_ttl_hours(self, server: LithosServer):
@@ -1993,8 +1992,7 @@ class TestOptimisticLockingServerLayer:
             agent="agent",
             expected_version=99,
         )
-        assert conflict_result["status"] == "error"
-        assert conflict_result["code"] == "version_conflict"
+        assert conflict_result["status"] == "version_conflict"
         assert conflict_result["current_version"] == 1
 
     @pytest.mark.asyncio
@@ -2060,8 +2058,7 @@ class TestWriteContentSizeLimit:
             content=oversized,
             agent="agent",
         )
-        assert result["status"] == "error"
-        assert result["code"] == "content_too_large"
+        assert result["status"] == "content_too_large"
         assert "10" in result["message"]
 
     @pytest.mark.asyncio
