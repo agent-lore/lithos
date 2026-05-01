@@ -2083,9 +2083,7 @@ class TestSlugCollisionServerBoundary:
         return await tool.fn(**kwargs)
 
     @pytest.mark.asyncio
-    async def test_write_slug_collision_returns_canonical_envelope(
-        self, server: LithosServer
-    ):
+    async def test_write_slug_collision_returns_canonical_envelope(self, server: LithosServer):
         """lithos_write surfaces slug clashes as ``status="slug_collision"``
         with a structured ``existing_id`` field, so callers can dispatch on
         the top-level status without scraping the message string.
@@ -2106,9 +2104,7 @@ class TestSlugCollisionServerBoundary:
         assert result["warnings"] == []
 
     @pytest.mark.asyncio
-    async def test_write_invalid_input_returns_canonical_envelope(
-        self, server: LithosServer
-    ):
+    async def test_write_invalid_input_returns_canonical_envelope(self, server: LithosServer):
         """``invalid_input`` errors surface as ``status="invalid_input"``
         rather than ``status="error"`` plus a discriminator field.
         """
@@ -2126,15 +2122,11 @@ class TestSlugCollisionServerBoundary:
         assert result["warnings"] == []
 
     @pytest.mark.asyncio
-    async def test_write_version_conflict_returns_canonical_envelope(
-        self, server: LithosServer
-    ):
+    async def test_write_version_conflict_returns_canonical_envelope(self, server: LithosServer):
         """``version_conflict`` surfaces as ``status="version_conflict"``
         with a ``current_version`` integer.
         """
-        first = await self._call_write(
-            server, title="Versioned Doc", content="v1", agent="agent"
-        )
+        first = await self._call_write(server, title="Versioned Doc", content="v1", agent="agent")
         assert first["status"] == "created"
         doc_id = first["id"]
 
@@ -2152,15 +2144,11 @@ class TestSlugCollisionServerBoundary:
         assert result["message"]
 
     @pytest.mark.asyncio
-    async def test_write_content_too_large_returns_canonical_envelope(
-        self, server: LithosServer
-    ):
+    async def test_write_content_too_large_returns_canonical_envelope(self, server: LithosServer):
         """Oversize content surfaces as ``status="content_too_large"``."""
         max_bytes = server._config.storage.max_content_size_bytes
         oversized = "x" * (max_bytes + 1)
-        result = await self._call_write(
-            server, title="Big Doc", content=oversized, agent="agent"
-        )
+        result = await self._call_write(server, title="Big Doc", content=oversized, agent="agent")
         assert result["status"] == "content_too_large"
         assert "code" not in result
         assert result["message"]

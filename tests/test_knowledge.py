@@ -3367,9 +3367,7 @@ class TestOptimisticLocking:
         assert "updated" in statuses, "Expected one writer to succeed"
         assert "version_conflict" in statuses, "Expected one writer to get a conflict"
 
-        conflict_result = (
-            result_a if result_a.status == "version_conflict" else result_b
-        )
+        conflict_result = result_a if result_a.status == "version_conflict" else result_b
         assert conflict_result.status == "version_conflict"
 
 
