@@ -1262,8 +1262,7 @@ class LithosServer:
                     # response body.  Discovered in the 2026-05-02 staging
                     # incident.
                     logger.warning(
-                        "lithos_write slug_collision: agent=%s "
-                        "title=%.120s slug=%s existing_id=%s",
+                        "lithos_write slug_collision: agent=%s title=%.120s slug=%s existing_id=%s",
                         agent,
                         title,
                         exc.slug,

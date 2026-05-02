@@ -2104,9 +2104,7 @@ class TestSlugCollisionServerBoundary:
         assert result["warnings"] == []
 
     @pytest.mark.asyncio
-    async def test_write_slug_collision_emits_warning(
-        self, server: LithosServer, caplog
-    ):
+    async def test_write_slug_collision_emits_warning(self, server: LithosServer, caplog):
         """A slug collision must emit a WARNING with the squatting id so
         operators can find the offending note from ``docker logs`` alone,
         even when the client throws away ``existing_id`` from the
@@ -2114,9 +2112,7 @@ class TestSlugCollisionServerBoundary:
         """
         import logging
 
-        first = await self._call_write(
-            server, title="Squatter", content="First.", agent="influx"
-        )
+        first = await self._call_write(server, title="Squatter", content="First.", agent="influx")
         assert first["status"] == "created"
         existing_id = first["id"]
 
