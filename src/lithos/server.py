@@ -1255,6 +1255,19 @@ class LithosServer:
                             summaries=summaries,
                         )
                 except SlugCollisionError as exc:
+                    # Log the collision so the squatting doc is visible from
+                    # ``docker logs lithos-*`` — clients are free to discard
+                    # ``existing_id`` from the response envelope, and without
+                    # this WARNING the only signal of the collision is the
+                    # response body.  Discovered in the 2026-05-02 staging
+                    # incident.
+                    logger.warning(
+                        "lithos_write slug_collision: agent=%s title=%.120s slug=%s existing_id=%s",
+                        agent,
+                        title,
+                        exc.slug,
+                        exc.existing_id,
+                    )
                     span.set_attribute("lithos.write_status", "slug_collision")
                     return {
                         "status": "slug_collision",
