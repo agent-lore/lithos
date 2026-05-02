@@ -639,7 +639,7 @@ collection.count()
 
     def health_check(self) -> None:
         """Probe the embedding model (warm-up / liveness). Raises on failure."""
-        self.model.encode(["health check"])  # result discarded; exercises model load
+        self.model.encode(["health check"], show_progress_bar=False)
 
     @property
     def client(self) -> ClientAPI:
@@ -690,7 +690,7 @@ collection.count()
             return 0
 
         # Generate embeddings
-        embeddings = self.model.encode(chunks).tolist()
+        embeddings = self.model.encode(chunks, show_progress_bar=False).tolist()
 
         # Prepare data for ChromaDB
         ids = [self._chunk_id(doc.id, i) for i in range(len(chunks))]
@@ -759,7 +759,7 @@ collection.count()
             List of semantic results (deduplicated by document)
         """
         # Generate query embedding
-        query_embedding = self.model.encode([query]).tolist()[0]
+        query_embedding = self.model.encode([query], show_progress_bar=False).tolist()[0]
 
         # Build where filter
         # where_filter not used - ChromaDB filtering done post-query
