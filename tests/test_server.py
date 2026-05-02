@@ -2580,3 +2580,47 @@ class TestTaskMetadataTool:
         )
         assert result["status"] == "error"
         assert result["code"] == "invalid_input"
+
+
+class TestTaskListWithClaims:
+    """lithos_task_list `with_claims` flag at the MCP boundary."""
+
+    async def _call_task_list(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_task_list")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_default_omits_claims_field(self, server: LithosServer):
+        """Existing callers see no claims key when with_claims is not passed."""
+        task_id = await server.coordination.create_task(title="No Claims Field", agent="test-agent")
+        await server.coordination.claim_task(task_id, "work", "test-agent")
+
+        result = await self._call_task_list(server)
+        task = next(t for t in result["tasks"] if t["id"] == task_id)
+        assert "claims" not in task
+
+    @pytest.mark.asyncio
+    async def test_with_claims_inlines_active_claims(self, server: LithosServer):
+        """with_claims=True returns the same claim shape as lithos_task_status."""
+        task_id = await server.coordination.create_task(
+            title="With Inline Claims", agent="test-agent"
+        )
+        await server.coordination.claim_task(task_id, "implementation", "worker-a", ttl_minutes=10)
+
+        list_result = await self._call_task_list(server, with_claims=True)
+        list_task = next(t for t in list_result["tasks"] if t["id"] == task_id)
+
+        status_tool = await server.mcp.get_tool("lithos_task_status")
+        status_result = await status_tool.fn(task_id=task_id)
+        status_claims = status_result["tasks"][0]["claims"]
+
+        assert list_task["claims"] == status_claims
+
+    @pytest.mark.asyncio
+    async def test_with_claims_unclaimed_returns_empty_list(self, server: LithosServer):
+        """Unclaimed tasks get claims=[], not a missing key."""
+        task_id = await server.coordination.create_task(title="Unclaimed", agent="test-agent")
+
+        result = await self._call_task_list(server, with_claims=True)
+        task = next(t for t in result["tasks"] if t["id"] == task_id)
+        assert task["claims"] == []

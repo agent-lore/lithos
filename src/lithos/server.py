@@ -3074,6 +3074,7 @@ class LithosServer:
             status: str | None = None,
             tags: list[str] | None = None,
             since: str | None = None,
+            with_claims: bool = False,
         ) -> dict[str, list[dict[str, Any]]]:
             """List tasks with optional filters.
 
@@ -3082,12 +3083,23 @@ class LithosServer:
                 status: Filter by status: "open", "completed", or "cancelled" (None = all)
                 tags: Filter by tags (task must have all specified tags)
                 since: Filter by created_at >= this ISO datetime string (e.g. "2024-01-01T00:00:00Z")
+                with_claims: When True, each task in the response includes its
+                    active (non-expired) claims inline as a ``claims`` array
+                    (same shape as ``lithos_task_status``). Defaults to False.
+                    Use to avoid an N+1 of ``lithos_task_status`` calls when
+                    rendering a list view that needs claim info.
 
             Returns:
-                Dict with tasks list containing id, title, description, status, created_by, created_at, tags
+                Dict with tasks list containing id, title, description, status,
+                created_by, created_at, tags, metadata, and (when with_claims) claims.
             """
             logger.info(
-                "lithos_task_list agent=%s status=%s tags=%s since=%s", agent, status, tags, since
+                "lithos_task_list agent=%s status=%s tags=%s since=%s with_claims=%s",
+                agent,
+                status,
+                tags,
+                since,
+                with_claims,
             )
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.task_list") as span:
@@ -3096,12 +3108,14 @@ class LithosServer:
                     span.set_attribute("lithos.agent", agent)
                 if status:
                     span.set_attribute("lithos.status", status)
+                span.set_attribute("lithos.with_claims", with_claims)
 
                 tasks = await self.coordination.list_tasks(
                     agent=agent,
                     status=status,
                     tags=tags,
                     since=since,
+                    with_claims=with_claims,
                 )
                 return {"tasks": tasks}
 

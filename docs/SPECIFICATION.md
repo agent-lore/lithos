@@ -706,8 +706,9 @@ List tasks with optional filters.
 | `status` | string | No | Filter by task status: `open`, `completed`, or `cancelled` |
 | `tags` | string[] | No | Filter to tasks containing all listed tags |
 | `since` | string | No | Filter by `created_at >= since` (ISO datetime) |
+| `with_claims` | boolean | No | When `true`, each task in the response includes its active (non-expired) claims inline as a `claims` array (same shape as `lithos_task_status`). Defaults to `false`. Use to avoid an N+1 of `lithos_task_status` calls when rendering a list view. |
 
-**Returns:** `{ tasks: [{ id, title, description, status, created_by, created_at, tags }] }`
+**Returns:** `{ tasks: [{ id, title, description, status, created_by, created_at, tags, metadata }] }`. When `with_claims=true`, each task also carries `claims: [{ agent, aspect, expires_at }]`.
 
 #### `lithos_task_status`
 Get task status and claims.
