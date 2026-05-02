@@ -2104,6 +2104,39 @@ class TestSlugCollisionServerBoundary:
         assert result["warnings"] == []
 
     @pytest.mark.asyncio
+    async def test_write_slug_collision_emits_warning(
+        self, server: LithosServer, caplog
+    ):
+        """A slug collision must emit a WARNING with the squatting id so
+        operators can find the offending note from ``docker logs`` alone,
+        even when the client throws away ``existing_id`` from the
+        response envelope (2026-05-02 staging incident).
+        """
+        import logging
+
+        first = await self._call_write(
+            server, title="Squatter", content="First.", agent="influx"
+        )
+        assert first["status"] == "created"
+        existing_id = first["id"]
+
+        with caplog.at_level(logging.WARNING, logger="lithos.server"):
+            result = await self._call_write(
+                server, title="Squatter", content="Second.", agent="influx"
+            )
+
+        assert result["status"] == "slug_collision"
+        # The WARNING must carry enough breadcrumbs to find the squatter:
+        # status keyword, agent, slug, and the existing doc id.
+        warnings_text = "\n".join(
+            r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING
+        )
+        assert "slug_collision" in warnings_text
+        assert "squatter" in warnings_text  # slug
+        assert existing_id in warnings_text
+        assert "agent=influx" in warnings_text
+
+    @pytest.mark.asyncio
     async def test_write_invalid_input_returns_canonical_envelope(self, server: LithosServer):
         """``invalid_input`` errors surface as ``status="invalid_input"``
         rather than ``status="error"`` plus a discriminator field.
