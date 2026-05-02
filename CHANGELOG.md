@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **`lithos_task_list` `with_claims` flag.** When set to `true`, each task in the response includes its active (non-expired) claims inline as a `claims` array (same shape as `lithos_task_status`). Defaults to `false`, so existing payloads are unchanged. Lets list views avoid an N+1 of `lithos_task_status` calls. Implementation issues a single batched `WHERE task_id IN (...)` query rather than one per task.
+
 ### Changed
 
 - **`lithos_write` error envelopes are now canonical top-level statuses.** Each error code surfaces as `status="<code>"` (e.g. `status="slug_collision"`, `status="invalid_input"`) instead of `status="error"` plus a separate `code` field. Affects `slug_collision`, `invalid_input`, `content_too_large`, and `version_conflict`. `status="error"` is retained as a generic fallback. **MCP-boundary breaking change** — clients that dispatched on `(status, code)` need to dispatch on `status` alone. Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.

@@ -687,6 +687,7 @@ class CoordinationService:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        with_claims: bool = False,
     ) -> list[dict[str, Any]]:
         """List tasks with optional filters.
 
@@ -695,9 +696,14 @@ class CoordinationService:
             status: Filter by status (open/completed/cancelled), or None for all
             tags: Filter by tags (task must have all specified tags)
             since: Filter by created_at >= this ISO datetime string
+            with_claims: When True, include each task's active (non-expired)
+                claims inline as a ``claims`` array. Defaults to False to
+                preserve the lightweight payload for callers that don't need
+                them.
 
         Returns:
-            List of task dicts with id, title, description, status, created_by, created_at, tags
+            List of task dicts with id, title, description, status, created_by,
+            created_at, tags, metadata, and (when with_claims) claims.
         """
         import json
 
@@ -756,7 +762,50 @@ class CoordinationService:
                     }
                 )
 
+            if with_claims and results:
+                claims_by_task = await self._fetch_active_claims_for(db, [r["id"] for r in results])
+                for task in results:
+                    task["claims"] = claims_by_task.get(task["id"], [])
+
             return results
+
+    async def _fetch_active_claims_for(
+        self,
+        db: aiosqlite.Connection,
+        task_ids: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Fetch active (non-expired) claims for a batch of task IDs.
+
+        Issues a single SQL query rather than one per task. Returns a dict
+        mapping task_id -> list of claim dicts in the same shape the
+        ``lithos_task_status`` MCP tool emits.
+        """
+        if not task_ids:
+            return {}
+
+        now = _format_datetime(datetime.now(timezone.utc))
+        placeholders = ",".join("?" for _ in task_ids)
+        cursor = await db.execute(
+            f"""
+            SELECT task_id, agent, aspect, expires_at
+            FROM claims
+            WHERE task_id IN ({placeholders}) AND expires_at > ?
+            """,
+            (*task_ids, now),
+        )
+        rows = await cursor.fetchall()
+
+        grouped: dict[str, list[dict[str, Any]]] = {tid: [] for tid in task_ids}
+        for row in rows:
+            expires_dt = _parse_datetime(row["expires_at"]) or datetime.now(timezone.utc)
+            grouped[row["task_id"]].append(
+                {
+                    "agent": row["agent"],
+                    "aspect": row["aspect"],
+                    "expires_at": expires_dt.isoformat(),
+                }
+            )
+        return grouped
 
     @traced("lithos.coordination.get_task_status")
     async def get_task_status(

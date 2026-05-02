@@ -830,6 +830,61 @@ class TestListTasks:
         assert "tag1" in task["tags"]
         assert task["created_at"] is not None
 
+    @pytest.mark.asyncio
+    async def test_list_tasks_without_with_claims_omits_claims_field(
+        self, coordination_service: CoordinationService
+    ):
+        """By default list_tasks does not attach a claims field."""
+        task_id = await coordination_service.create_task(title="Plain", agent="agent")
+        await coordination_service.claim_task(task_id, "work", "agent")
+
+        tasks = await coordination_service.list_tasks()
+        task = next(t for t in tasks if t["id"] == task_id)
+        assert "claims" not in task
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_with_claims_inlines_active_claims(
+        self, coordination_service: CoordinationService
+    ):
+        """with_claims=True attaches the same claim shape lithos_task_status emits."""
+        claimed_id = await coordination_service.create_task(title="Claimed", agent="agent")
+        await coordination_service.claim_task(
+            claimed_id, "implementation", "worker-a", ttl_minutes=10
+        )
+        unclaimed_id = await coordination_service.create_task(title="Unclaimed", agent="agent")
+
+        tasks = await coordination_service.list_tasks(with_claims=True)
+        by_id = {t["id"]: t for t in tasks}
+
+        assert "claims" in by_id[claimed_id]
+        assert by_id[claimed_id]["claims"] == [
+            {
+                "agent": "worker-a",
+                "aspect": "implementation",
+                "expires_at": by_id[claimed_id]["claims"][0]["expires_at"],
+            }
+        ]
+        # And unclaimed tasks get an empty list, not a missing key.
+        assert by_id[unclaimed_id]["claims"] == []
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_with_claims_excludes_expired(
+        self, coordination_service: CoordinationService
+    ):
+        """Expired claims are filtered out, matching lithos_task_status semantics."""
+        task_id = await coordination_service.create_task(title="Expiry", agent="agent")
+        await coordination_service.claim_task(task_id, "work", "agent", ttl_minutes=10)
+
+        # Force-expire the claim by rewriting its expires_at directly.
+        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        async with aiosqlite.connect(coordination_service.db_path) as db:
+            await db.execute("UPDATE claims SET expires_at = ? WHERE task_id = ?", (past, task_id))
+            await db.commit()
+
+        tasks = await coordination_service.list_tasks(with_claims=True)
+        task = next(t for t in tasks if t["id"] == task_id)
+        assert task["claims"] == []
+
 
 class TestCoordinationStats:
     """Tests for coordination statistics."""
