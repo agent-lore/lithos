@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from lithos.knowledge import KnowledgeManager
 from lithos.server import LithosServer
 
 
@@ -1097,7 +1098,7 @@ class TestFileWatcherEventsCounter:
                 agent="test-agent",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
         server.graph.add_document(doc)
 
         file_path = server.config.storage.knowledge_path / doc.path
@@ -1125,7 +1126,7 @@ class TestFileWatcherEventsCounter:
                 agent="test-agent",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
         server.graph.add_document(doc)
 
         file_path = server.config.storage.knowledge_path / doc.path

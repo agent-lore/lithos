@@ -839,7 +839,7 @@ class TestGraphSearch:
             )
         ).document
         knowledge_graph.add_document(doc)
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         hybrid_results = search_engine.hybrid_search("isolation test")
         graph_results = search_engine.graph_search(
@@ -880,7 +880,7 @@ class TestGraphSearch:
 
         for doc in (doc_a, doc_b):
             knowledge_graph.add_document(doc)
-            search_engine.index_document(doc)
+            search_engine.index(KnowledgeManager.to_indexable(doc))
 
         # No seed_ids — should be discovered via hybrid search on query
         results = search_engine.graph_search(

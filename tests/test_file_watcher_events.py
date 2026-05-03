@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from lithos.events import NOTE_DELETED, NOTE_UPDATED
+from lithos.knowledge import KnowledgeManager
 from lithos.server import LithosServer
 
 pytestmark = pytest.mark.integration
@@ -24,7 +25,7 @@ class TestFileWatcherEventEmission:
                 path="watched",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
         server.graph.add_document(doc)
 
         queue = server.event_bus.subscribe(event_types=[NOTE_UPDATED])
@@ -46,7 +47,7 @@ class TestFileWatcherEventEmission:
                 path="watched",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
         server.graph.add_document(doc)
 
         queue = server.event_bus.subscribe(event_types=[NOTE_DELETED])
@@ -90,7 +91,7 @@ class TestFileWatcherEventEmission:
                 path="watched",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
         server.graph.add_document(doc)
 
         # Replace event_bus.emit with a mock that raises
@@ -112,7 +113,7 @@ class TestFileWatcherEventEmission:
                 path="watched",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
         server.graph.add_document(doc)
 
         file_path = server.config.storage.knowledge_path / doc.path

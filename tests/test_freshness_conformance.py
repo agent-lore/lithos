@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from lithos.knowledge import KnowledgeManager
 from lithos.search import TantivyIndex
 from lithos.server import LithosServer
 
@@ -188,7 +189,7 @@ class TestStalenessInSearchConformance:
                 expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         results = server.search.full_text_search("search stale conformance")
         match = [r for r in results if r.id == doc.id]
@@ -206,7 +207,7 @@ class TestStalenessInSearchConformance:
                 expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         results = server.search.semantic_search("machine learning algorithms expired")
         match = [r for r in results if r.id == doc.id]
@@ -232,7 +233,7 @@ class TestCacheLookupConformance:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(server, query="distributed systems")
         assert result["hit"] is True
@@ -251,7 +252,7 @@ class TestCacheLookupConformance:
                 expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(server, query="graph databases")
         assert result["hit"] is False
@@ -287,7 +288,7 @@ class TestStaleUpdateFlowConformance:
                 expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         # Cache lookup should return stale
         result1 = await self._call_cache_lookup(server, query="serverless computing")
@@ -304,7 +305,7 @@ class TestStaleUpdateFlowConformance:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(updated)
+        server.search.index(KnowledgeManager.to_indexable(updated))
 
         # Cache lookup should now return hit
         result2 = await self._call_cache_lookup(server, query="serverless computing")
@@ -331,7 +332,7 @@ class TestSourceUrlFastPathConformance:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(
             server,
@@ -372,7 +373,7 @@ class TestOnDiskCompatibilityConformance:
                 confidence=0.9,
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         tool = await server.mcp.get_tool("lithos_cache_lookup")
         result = await tool.fn(query="container orchestration")
@@ -401,7 +402,7 @@ class TestSchemaConformance:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         # Corrupt the schema version marker to simulate mismatch
         index_path = test_config.storage.tantivy_path

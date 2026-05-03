@@ -11,6 +11,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from lithos.config import LithosConfig
+from lithos.knowledge import KnowledgeManager
 from lithos.server import LithosServer, _FileChangeHandler
 
 pytestmark = pytest.mark.integration
@@ -402,7 +403,7 @@ class TestFileWatcherRace:
                 path="watched",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
         server.graph.add_document(doc)
 
         file_path = server.config.storage.knowledge_path / doc.path

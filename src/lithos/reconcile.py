@@ -182,12 +182,13 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
             apply_span.set_attribute("lithos.reconcile.backend", backend)
             try:
                 if backend == "tantivy":
-                    search.tantivy.rebuild_from_docs(corpus_docs)
+                    indexables = [KnowledgeManager.to_indexable(d) for d in corpus_docs]
+                    search.tantivy.rebuild_from_docs(indexables)
                     repaired += 1
                 elif backend == "chroma":
                     search.chroma.clear()
                     for doc in corpus_docs:
-                        search.chroma.add_document(doc)
+                        search.chroma.add_document(KnowledgeManager.to_indexable(doc))
                     repaired += 1
             except Exception as exc:
                 logger.error("Failed to repair %s backend: %s", backend, exc)

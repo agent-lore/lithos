@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import frontmatter
@@ -19,6 +19,9 @@ import frontmatter
 from lithos.config import LithosConfig
 from lithos.errors import SlugCollisionError
 from lithos.telemetry import lithos_metrics, timed_write, traced
+
+if TYPE_CHECKING:
+    from lithos.search import IndexableDocument
 
 logger = logging.getLogger(__name__)
 
@@ -615,6 +618,29 @@ _UNSET = _UnsetType()
 
 class KnowledgeManager:
     """Manages knowledge documents - CRUD operations."""
+
+    @staticmethod
+    def to_indexable(doc: KnowledgeDocument) -> "IndexableDocument":
+        """Translate a :class:`KnowledgeDocument` into the search seam type.
+
+        The single point where ``None`` values, ``Path`` objects, and
+        list-typed tags are coerced into the seam's all-string form. After
+        this translation, no ``KnowledgeDocument`` shape crosses into
+        :class:`~lithos.search.SearchEngine`.
+        """
+        from lithos.search import IndexableDocument
+
+        return IndexableDocument(
+            id=doc.id,
+            title=doc.title,
+            content=doc.content,
+            path=str(doc.path),
+            author=doc.metadata.author,
+            tags=tuple(doc.metadata.tags),
+            source_url=doc.metadata.source_url or "",
+            updated_at=(doc.metadata.updated_at.isoformat() if doc.metadata.updated_at else ""),
+            expires_at=(doc.metadata.expires_at.isoformat() if doc.metadata.expires_at else ""),
+        )
 
     def __init__(self, config: LithosConfig):
         """Initialize knowledge manager.

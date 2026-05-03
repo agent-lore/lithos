@@ -5,6 +5,7 @@ Run with:  uv run pytest tests/test_smoke.py -v
 
 import pytest
 
+from lithos.knowledge import KnowledgeManager
 from lithos.server import LithosServer
 
 pytestmark = pytest.mark.integration
@@ -22,7 +23,7 @@ async def test_smoke_write_index_search(server: LithosServer):
             tags=["smoke", "test"],
         )
     ).document
-    server.search.index_document(doc)
+    server.search.index(KnowledgeManager.to_indexable(doc))
     server.graph.add_document(doc)
 
     # Full-text search

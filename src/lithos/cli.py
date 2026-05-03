@@ -216,7 +216,7 @@ def reindex(ctx: click.Context, clear: bool) -> None:
                 try:
                     relative_path = file_path.relative_to(knowledge_path)
                     doc, _ = await knowledge.read(path=str(relative_path))
-                    search.index_document(doc)
+                    search.index(KnowledgeManager.to_indexable(doc))
                     graph.add_document(doc)
                     indexed += 1
                 except Exception as e:

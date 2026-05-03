@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from lithos.config import LithosConfig
+from lithos.knowledge import KnowledgeManager
 from lithos.search import SearchEngine
 from lithos.server import LithosServer, _FileChangeHandler, create_server, get_server
 
@@ -210,7 +211,7 @@ class TestServerInitialization:
                 path="watched",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
         server.graph.add_document(doc)
 
         file_path = server.config.storage.knowledge_path / doc.path
@@ -408,7 +409,7 @@ class TestKnowledgeToolWorkflow:
                 agent="agent",
             )
         ).document
-        server.search.index_document(target)
+        server.search.index(KnowledgeManager.to_indexable(target))
         server.graph.add_document(target)
 
         # Create source with link
@@ -419,7 +420,7 @@ class TestKnowledgeToolWorkflow:
                 agent="agent",
             )
         ).document
-        server.search.index_document(source)
+        server.search.index(KnowledgeManager.to_indexable(source))
         server.graph.add_document(source)
 
         # Verify graph has edge
@@ -782,7 +783,7 @@ class TestKnowledgeToolWorkflow:
                 path="watched",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
         server.graph.add_document(doc)
 
         file_path = server.config.storage.knowledge_path / doc.path
@@ -811,7 +812,7 @@ class TestSearchToolWorkflow:
                 tags=["kubernetes", "deployment"],
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         # Search should find it
         results = server.search.full_text_search("Kubernetes kubectl")
@@ -830,7 +831,7 @@ class TestSearchToolWorkflow:
                 agent="agent",
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         # Search with related but different terms
         results = server.search.semantic_search("dealing with failures in software")
@@ -858,8 +859,8 @@ class TestSearchToolWorkflow:
                 tags=["java"],
             )
         ).document
-        server.search.index_document(python_doc)
-        server.search.index_document(java_doc)
+        server.search.index(KnowledgeManager.to_indexable(python_doc))
+        server.search.index(KnowledgeManager.to_indexable(java_doc))
 
         # Search with tag filter
         results = server.search.full_text_search("Programming", tags=["python"])
@@ -1106,7 +1107,7 @@ class TestEndToEndScenarios:
                 tags=["research", "api"],
             )
         ).document
-        server.search.index_document(research_doc)
+        server.search.index(KnowledgeManager.to_indexable(research_doc))
         server.graph.add_document(research_doc)
 
         # Step 4: Researcher posts finding
@@ -1152,7 +1153,7 @@ Based on [[api-research-notes]].
                 tags=["documentation", "api"],
             )
         ).document
-        server.search.index_document(docs)
+        server.search.index(KnowledgeManager.to_indexable(docs))
         server.graph.add_document(docs)
 
         # Step 9: Verify graph connection
@@ -1202,7 +1203,7 @@ Based on [[api-research-notes]].
                     tags=tags,
                 )
             ).document
-            server.search.index_document(doc)
+            server.search.index(KnowledgeManager.to_indexable(doc))
             server.graph.add_document(doc)
             created_docs[title] = doc
 
@@ -1235,7 +1236,7 @@ Based on [[api-research-notes]].
                     tags=["stats"],
                 )
             ).document
-            server.search.index_document(doc)
+            server.search.index(KnowledgeManager.to_indexable(doc))
             server.graph.add_document(doc)
 
         await server.coordination.register_agent("stats-agent")
@@ -1469,7 +1470,7 @@ class TestCacheLookup:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(server, query="quantum computing", tags=["research"])
         assert result["hit"] is True
@@ -1493,7 +1494,7 @@ class TestCacheLookup:
                 expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(server, query="AI trends", tags=["research"])
         assert result["hit"] is False
@@ -1524,7 +1525,7 @@ class TestCacheLookup:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(
             server,
@@ -1548,7 +1549,7 @@ class TestCacheLookup:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(
             server,
@@ -1572,7 +1573,7 @@ class TestCacheLookup:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(
             server, query="dark matter theories", min_confidence=0.5
@@ -1595,7 +1596,7 @@ class TestCacheLookup:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(low_doc)
+        server.search.index(KnowledgeManager.to_indexable(low_doc))
 
         high_doc = (
             await server.knowledge.create(
@@ -1606,7 +1607,7 @@ class TestCacheLookup:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(high_doc)
+        server.search.index(KnowledgeManager.to_indexable(high_doc))
 
         # Force both docs into candidates list to test sorting
         with patch.object(
@@ -1648,7 +1649,7 @@ class TestCacheLookup:
         path.write_text(doc.to_markdown())
         # Re-read to reload from disk
         server.knowledge._id_to_path[doc.id] = doc.path
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(
             server, query="blockchain consensus", max_age_hours=24
@@ -1671,7 +1672,7 @@ class TestCacheLookup:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        server.search.index_document(doc)
+        server.search.index(KnowledgeManager.to_indexable(doc))
 
         # Should fail tag filter (doc has "python" but we ask for "rust")
         result = await self._call_cache_lookup(
