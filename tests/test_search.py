@@ -541,7 +541,7 @@ class TestChromaIndexFilters:
         search_engine.index(KnowledgeManager.to_indexable(alice_doc))
         search_engine.index(KnowledgeManager.to_indexable(bob_doc))
 
-        results = search_engine.chroma.search(
+        results = search_engine._chroma.search(
             "deep learning transformers", limit=10, threshold=0.0, author="alice"
         )
         result_ids = [r.id for r in results]
@@ -563,7 +563,7 @@ class TestChromaIndexFilters:
         ).document
         search_engine.index(KnowledgeManager.to_indexable(doc))
 
-        results = search_engine.chroma.search(
+        results = search_engine._chroma.search(
             "machine learning", limit=10, threshold=0.0, author="nobody"
         )
         assert results == []
@@ -592,7 +592,7 @@ class TestChromaIndexFilters:
         search_engine.index(KnowledgeManager.to_indexable(procedures_doc))
         search_engine.index(KnowledgeManager.to_indexable(notes_doc))
 
-        results = search_engine.chroma.search(
+        results = search_engine._chroma.search(
             "deploying microservices", limit=10, threshold=0.0, path_prefix="procedures"
         )
         result_ids = [r.id for r in results]
@@ -633,7 +633,7 @@ class TestChromaIndexFilters:
         search_engine.index(KnowledgeManager.to_indexable(wrong_author_doc))
         search_engine.index(KnowledgeManager.to_indexable(wrong_path_doc))
 
-        results = search_engine.chroma.search(
+        results = search_engine._chroma.search(
             "database indexing",
             limit=10,
             threshold=0.0,
@@ -716,7 +716,7 @@ class TestSearchEngineResiliency:
         self, search_engine: SearchEngine, monkeypatch: pytest.MonkeyPatch
     ):
         """A broken persisted Chroma store is moved aside before in-process access."""
-        marker = search_engine.chroma.chroma_path / "corrupt-marker.txt"
+        marker = search_engine._chroma.chroma_path / "corrupt-marker.txt"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("bad-store")
 
@@ -734,7 +734,7 @@ class TestSearchEngineResiliency:
                 return False, "simulated corruption"
             return True, None
 
-        monkeypatch.setattr(search_engine.chroma, "probe_store", _probe)
+        monkeypatch.setattr(search_engine._chroma, "probe_store", _probe)
 
         healthy, backup = search_engine.ensure_semantic_backend_healthy()
 
@@ -742,7 +742,7 @@ class TestSearchEngineResiliency:
         assert backup is not None
         assert backup.exists()
         assert (backup / "corrupt-marker.txt").exists()
-        assert search_engine.chroma.chroma_path.exists()
+        assert search_engine._chroma.chroma_path.exists()
         assert not marker.exists()
         assert calls["count"] == 2
 
@@ -762,7 +762,7 @@ class TestSearchEngineResiliency:
             calls["count"] += 1
             return True, None
 
-        monkeypatch.setattr(search_engine.chroma, "probe_store", _probe)
+        monkeypatch.setattr(search_engine._chroma, "probe_store", _probe)
 
         first = search_engine.ensure_semantic_backend_healthy()
         second = search_engine.ensure_semantic_backend_healthy()
@@ -784,7 +784,7 @@ class TestSearchEngineResiliency:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated tantivy failure")
 
-        search_engine.tantivy.search = _boom  # type: ignore[method-assign]
+        search_engine._tantivy.search = _boom  # type: ignore[method-assign]
 
         with pytest.raises(SearchBackendError) as exc_info:
             search_engine.full_text_search("anything")
@@ -805,7 +805,7 @@ class TestSearchEngineResiliency:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated chroma failure")
 
-        search_engine.chroma.search = _boom  # type: ignore[method-assign]
+        search_engine._chroma.search = _boom  # type: ignore[method-assign]
 
         with pytest.raises(SearchBackendError) as exc_info:
             search_engine.semantic_search("anything")
@@ -839,7 +839,7 @@ class TestSearchEngineResiliency:
         def _boom(*args, **kwargs):
             raise RuntimeError("boom")
 
-        search_engine.tantivy.search = _boom  # type: ignore[method-assign]
+        search_engine._tantivy.search = _boom  # type: ignore[method-assign]
 
         with pytest.raises(LithosError):
             search_engine.full_text_search("anything")
@@ -853,7 +853,7 @@ class TestSearchEngineResiliency:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        search_engine.tantivy.add_document = _boom  # type: ignore[method-assign]
+        search_engine._tantivy.add_document = _boom  # type: ignore[method-assign]
 
         doc = (
             await knowledge_manager.create(
@@ -876,8 +876,8 @@ class TestSearchEngineResiliency:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        search_engine.tantivy.add_document = _boom  # type: ignore[method-assign]
-        search_engine.chroma.add_document = _boom  # type: ignore[method-assign]
+        search_engine._tantivy.add_document = _boom  # type: ignore[method-assign]
+        search_engine._chroma.add_document = _boom  # type: ignore[method-assign]
 
         doc = (
             await knowledge_manager.create(
@@ -902,7 +902,7 @@ class TestSearchEngineResiliency:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        search_engine.tantivy.remove_document = _boom  # type: ignore[method-assign]
+        search_engine._tantivy.remove_document = _boom  # type: ignore[method-assign]
 
         doc = (
             await knowledge_manager.create(
@@ -925,8 +925,8 @@ class TestSearchEngineResiliency:
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        search_engine.tantivy.remove_document = _boom  # type: ignore[method-assign]
-        search_engine.chroma.remove_document = _boom  # type: ignore[method-assign]
+        search_engine._tantivy.remove_document = _boom  # type: ignore[method-assign]
+        search_engine._chroma.remove_document = _boom  # type: ignore[method-assign]
 
         with pytest.raises(IndexingError) as exc_info:
             search_engine.remove("fake-doc-id")

@@ -35,7 +35,7 @@ async def test_plan_returns_noop_when_corpus_matches(test_config: LithosConfig) 
     engine.index(indexable)
     # Tantivy may have flipped needs_rebuild during create(); flatten by
     # rebuilding through the public reconcile flow once first.
-    engine.tantivy.needs_rebuild = False
+    engine._tantivy.needs_rebuild = False
 
     plan = engine.plan_reconcile_to([indexable])
 
@@ -50,7 +50,7 @@ async def test_plan_reports_schema_mismatch_when_tantivy_needs_rebuild(
 ) -> None:
     """Tantivy.needs_rebuild=True surfaces as full_rebuild / schema_mismatch."""
     engine = await SearchEngine.create(test_config)
-    engine.tantivy.needs_rebuild = True
+    engine._tantivy.needs_rebuild = True
 
     plan = engine.plan_reconcile_to([_make_indexable()])
 
@@ -64,7 +64,7 @@ async def test_plan_reports_schema_mismatch_when_tantivy_needs_rebuild(
 async def test_plan_reports_doc_set_mismatch(test_config: LithosConfig) -> None:
     """Corpus and index disagree → full_rebuild / doc_set_mismatch on both backends."""
     engine = await SearchEngine.create(test_config)
-    engine.tantivy.needs_rebuild = False
+    engine._tantivy.needs_rebuild = False
     # Index nothing; corpus has one doc.
     plan = engine.plan_reconcile_to([_make_indexable()])
 
@@ -78,7 +78,7 @@ async def test_apply_repairs_drifted_index(test_config: LithosConfig) -> None:
     """apply_reconcile rebuilds both backends so subsequent search finds the doc."""
     engine = await SearchEngine.create(test_config)
     indexable = _make_indexable()
-    engine.tantivy.needs_rebuild = False
+    engine._tantivy.needs_rebuild = False
 
     plan = engine.plan_reconcile_to([indexable])
     result = engine.apply_reconcile(plan)
@@ -92,7 +92,7 @@ async def test_apply_repairs_drifted_index(test_config: LithosConfig) -> None:
 async def test_apply_is_idempotent(test_config: LithosConfig) -> None:
     """Applying the same plan twice leaves the index in the same state."""
     engine = await SearchEngine.create(test_config)
-    engine.tantivy.needs_rebuild = False
+    engine._tantivy.needs_rebuild = False
     indexable = _make_indexable()
     plan = engine.plan_reconcile_to([indexable])
 
@@ -108,14 +108,14 @@ async def test_apply_is_idempotent(test_config: LithosConfig) -> None:
 async def test_apply_surfaces_per_backend_failures(test_config: LithosConfig) -> None:
     """A single backend failure lands as a ReconcileFailure; the other still repairs."""
     engine = await SearchEngine.create(test_config)
-    engine.tantivy.needs_rebuild = False
+    engine._tantivy.needs_rebuild = False
     indexable = _make_indexable()
     plan = engine.plan_reconcile_to([indexable])
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("simulated tantivy failure")
 
-    engine.tantivy.rebuild_from_docs = _boom  # type: ignore[method-assign]
+    engine._tantivy.rebuild_from_docs = _boom  # type: ignore[method-assign]
 
     result = engine.apply_reconcile(plan)
 
@@ -128,7 +128,7 @@ async def test_apply_surfaces_per_backend_failures(test_config: LithosConfig) ->
 async def test_km_plan_matches_search_engine_plan(test_config: LithosConfig) -> None:
     """KM.plan_reconcile.search slice matches SearchEngine.plan_reconcile_to() for the same corpus."""
     engine = await SearchEngine.create(test_config)
-    engine.tantivy.needs_rebuild = False
+    engine._tantivy.needs_rebuild = False
     knowledge = KnowledgeManager(test_config)
 
     km_plan = await knowledge.plan_reconcile(engine)
@@ -146,7 +146,7 @@ async def test_km_apply_repairs_drifted_corpus(
 ) -> None:
     """End-to-end: KM.apply_reconcile rebuilds indices to match the on-disk corpus."""
     engine = await SearchEngine.create(test_config)
-    engine.tantivy.needs_rebuild = False
+    engine._tantivy.needs_rebuild = False
 
     # Seed a real document via the knowledge manager — this writes markdown
     # but does not index, leaving the indices drifted.
