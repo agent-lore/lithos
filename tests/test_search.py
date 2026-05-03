@@ -934,11 +934,15 @@ class TestSearchEngineResiliency:
         assert "tantivy" in exc_info.value.backend_errors
         assert "chroma" in exc_info.value.backend_errors
 
-    def test_health_returns_ok_when_backends_available(self, search_engine: SearchEngine):
-        """health() reports ok for both backends when they are up."""
-        status = search_engine.health()
-        assert status.get("tantivy") == "ok"
-        assert status.get("chroma") == "ok"
+    def test_health_returns_healthy_when_backends_available(self, search_engine: SearchEngine):
+        """health() returns Healthy when both backends are up.
+
+        Detailed Unhealthy paths are covered in tests/test_search_health.py;
+        this is the regression sanity check on the engine fixture.
+        """
+        from lithos.search import Healthy
+
+        assert isinstance(search_engine.health(), Healthy)
 
     def test_tantivy_open_or_create_recovers_from_corruption(self, tmp_path):
         """open_or_create recreates a corrupted index rather than raising."""

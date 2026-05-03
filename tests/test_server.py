@@ -130,7 +130,7 @@ class TestServerInitialization:
         # async create() and the eager embedding-model load.
         mock_search = MagicMock(spec=SearchEngine)
         mock_search.ensure_semantic_backend_healthy.return_value = (True, backup_path)
-        mock_search.tantivy = SimpleNamespace(needs_rebuild=False)
+        mock_search.needs_initial_rebuild.return_value = False
         server.search = mock_search
         server._rebuild_indices = rebuild  # type: ignore[assignment]
 
@@ -150,7 +150,7 @@ class TestServerInitialization:
         mock_search = MagicMock(spec=SearchEngine)
         mock_search.ensure_semantic_backend_healthy.return_value = (False, None)
         mock_search._semantic_store_error = "simulated corruption"
-        mock_search.tantivy = SimpleNamespace(needs_rebuild=False)
+        mock_search.needs_initial_rebuild.return_value = False
         server.search = mock_search
         server._rebuild_indices = rebuild  # type: ignore[assignment]
         server.graph.load_cache = MagicMock(return_value=True)  # type: ignore[method-assign]
@@ -2325,25 +2325,25 @@ class TestHealthEndpoint:
         result = await server._get_health()
         assert result["status"] == "ok"
         assert result["components"]["kb_directory"]["status"] == "ok"
-        assert result["components"]["embedding_model"]["status"] == "ok"
+        assert result["components"]["search"]["status"] == "ok"
         assert result["components"]["knowledge_base"]["status"] == "ok"
         assert "timestamp" in result
 
     @pytest.mark.asyncio
-    async def test_health_degraded_when_embedding_fails(self, server: LithosServer):
-        """_get_health returns 'degraded' when embedding model is unavailable."""
+    async def test_health_degraded_when_search_unhealthy(self, server: LithosServer):
+        """_get_health returns 'degraded' when SearchEngine.health() reports Unhealthy."""
         from unittest.mock import patch
 
+        from lithos.search import Unhealthy
+
         with patch.object(
-            server.search.chroma,
-            "health_check",
-            side_effect=RuntimeError("model unavailable"),
+            server.search, "health", return_value=Unhealthy(reason="embedding model: boom")
         ):
             result = await server._get_health()
 
         assert result["status"] == "degraded"
-        assert result["components"]["embedding_model"]["status"] == "unavailable"
-        assert "error" in result["components"]["embedding_model"]
+        assert result["components"]["search"]["status"] == "unavailable"
+        assert "embedding model: boom" in result["components"]["search"]["error"]
 
     @pytest.mark.asyncio
     async def test_health_degraded_when_kb_directory_missing(self, server: LithosServer):
@@ -2405,11 +2405,11 @@ class TestHealthEndpoint:
         """HTTP /health returns 503 when any component is degraded."""
         from unittest.mock import MagicMock, patch
 
+        from lithos.search import Unhealthy
+
         request = MagicMock()
         with patch.object(
-            server.search.chroma,
-            "health_check",
-            side_effect=RuntimeError("model unavailable"),
+            server.search, "health", return_value=Unhealthy(reason="model unavailable")
         ):
             response = await server._health_endpoint(request)
 

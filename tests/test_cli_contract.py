@@ -218,29 +218,33 @@ class TestCLIContracts:
         healthy = runner.invoke(cli, ["--data-dir", str(temp_dir), "inspect", "health"])
         assert healthy.exit_code == 0, healthy.output
         assert "Backend health" in healthy.output
-        assert "tantivy: ok" in healthy.output
-        assert "chroma: ok" in healthy.output
+        assert "search: ok" in healthy.output
 
         from lithos import search as search_module
+        from lithos.search import Unhealthy
 
-        class _BrokenCollection:
-            def count(self):
-                raise RuntimeError("forced health failure")
-
-        class _BrokenSearchEngine:
+        class _StubSearchEngine:
             def __init__(self, _config):
-                self.tantivy = type("T", (), {"index": object()})()
-                self.chroma = type("C", (), {"collection": _BrokenCollection()})()
+                pass
 
             @classmethod
             async def create(cls, config):
                 return cls(config)
 
-        monkeypatch.setattr(search_module, "SearchEngine", _BrokenSearchEngine)
+            def health(self):
+                return Unhealthy(reason="forced health failure")
+
+            def count_documents(self):
+                return 0
+
+            def count_chunks(self):
+                return 0
+
+        monkeypatch.setattr(search_module, "SearchEngine", _StubSearchEngine)
         unhealthy = runner.invoke(cli, ["--data-dir", str(temp_dir), "inspect", "health"])
         assert unhealthy.exit_code == 1, unhealthy.output
         assert "Backend health" in unhealthy.output
-        assert "chroma: unavailable: forced health failure" in unhealthy.output
+        assert "search: unavailable: forced health failure" in unhealthy.output
 
     def test_serve_stdio_and_sse_paths(self, temp_dir, monkeypatch):
         config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
