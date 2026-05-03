@@ -526,7 +526,7 @@ def inspect() -> None:
 @click.pass_context
 def inspect_health(ctx: click.Context) -> None:
     """Show backend health (single signal via SearchEngine.health())."""
-    from lithos.search import Healthy, HealthStatus, SearchEngine
+    from lithos.search import HealthStatus, Healthy, SearchEngine
 
     config: LithosConfig = ctx.obj["config"]
 
