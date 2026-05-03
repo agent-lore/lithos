@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 NOTE_CREATED = "note.created"
 NOTE_UPDATED = "note.updated"
 NOTE_DELETED = "note.deleted"
+NOTE_RENAMED = "note.renamed"
 
 TASK_CREATED = "task.created"
 TASK_CLAIMED = "task.claimed"
