@@ -232,6 +232,10 @@ class TestCLIContracts:
                 self.tantivy = type("T", (), {"index": object()})()
                 self.chroma = type("C", (), {"collection": _BrokenCollection()})()
 
+            @classmethod
+            async def create(cls, config):
+                return cls(config)
+
         monkeypatch.setattr(search_module, "SearchEngine", _BrokenSearchEngine)
         unhealthy = runner.invoke(cli, ["--data-dir", str(temp_dir), "inspect", "health"])
         assert unhealthy.exit_code == 1, unhealthy.output
