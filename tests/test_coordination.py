@@ -1214,3 +1214,35 @@ class TestTaskMetadata:
         task = await service.get_task("legacy-task-215")
         assert task is not None
         assert task.metadata == {}
+
+
+class TestParseDatetimeWarnsOnFailure:
+    """Regression for #205: silent None on parse failure hid data corruption."""
+
+    def test_returns_none_and_warns_on_unparseable_value(self, caplog):
+        """An unparseable string still returns None but emits a WARNING."""
+        import logging
+
+        from lithos.coordination import _parse_datetime
+
+        with caplog.at_level(logging.WARNING, logger="lithos.coordination"):
+            result = _parse_datetime("not-a-real-timestamp")
+
+        assert result is None
+        assert any(
+            "Failed to parse datetime" in r.getMessage()
+            and "not-a-real-timestamp" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_none_input_does_not_warn(self, caplog):
+        """Legitimately-missing values stay silent — only corruption is logged."""
+        import logging
+
+        from lithos.coordination import _parse_datetime
+
+        with caplog.at_level(logging.WARNING, logger="lithos.coordination"):
+            result = _parse_datetime(None)
+
+        assert result is None
+        assert not any("Failed to parse datetime" in r.getMessage() for r in caplog.records)
