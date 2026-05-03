@@ -208,16 +208,22 @@ class TestMCPToolContracts:
         doc_id = write_payload["id"]
         await _wait_for_semantic_hit(server, "quantum entanglement particles", doc_id)
 
-        initial_count = server.search.chroma.collection.count()
+        initial_count = server.search.count_chunks()
         assert initial_count > 0
 
         await _call_tool(server, "lithos_delete", {"id": doc_id, "agent": "test-agent"})
 
         await _wait_for_semantic_miss(server, "quantum entanglement particles", doc_id)
 
-        # No orphaned chunks should remain for this document.
-        remaining = server.search.chroma.collection.get(where={"doc_id": doc_id})
-        assert len(remaining["ids"]) == 0
+        # No orphaned chunks should remain for this document — verified via the
+        # public search interface rather than reaching into the Chroma backend.
+        miss = await _call_tool(
+            server,
+            "lithos_search",
+            {"query": "quantum entanglement particles", "mode": "semantic", "limit": 10},
+        )
+        result_ids = [r["id"] for r in miss.get("results", [])]
+        assert doc_id not in result_ids
 
     @pytest.mark.asyncio
     async def test_delete_cascade_all_subsystems(self, server: LithosServer):
@@ -2175,10 +2181,11 @@ class TestSourceUrlMCPResponses:
         )
         assert server.knowledge.document_count >= 1
 
-        # Simulate a stale / out-of-sync Tantivy index by making count_docs()
-        # return a value that does NOT match the in-memory document count.
+        # Simulate a stale / out-of-sync full-text index by making
+        # count_documents() return a value that does NOT match the in-memory
+        # document count.
         stale_count = server.knowledge.document_count - 1
-        monkeypatch.setattr(server.search.tantivy, "count_docs", lambda: stale_count)
+        monkeypatch.setattr(server.search, "count_documents", lambda: stale_count)
 
         stats = await _call_tool(server, "lithos_stats", {})
 

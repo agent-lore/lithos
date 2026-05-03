@@ -525,39 +525,26 @@ def inspect() -> None:
 @inspect.command(name="health")
 @click.pass_context
 def inspect_health(ctx: click.Context) -> None:
-    """Show backend health (Tantivy, ChromaDB)."""
-    from lithos.search import SearchEngine
+    """Show backend health (single signal via SearchEngine.health())."""
+    from lithos.search import Healthy, HealthStatus, SearchEngine
 
     config: LithosConfig = ctx.obj["config"]
 
-    async def probe() -> dict[str, str]:
+    async def probe() -> tuple[HealthStatus, int, int]:
         engine = await SearchEngine.create(config)
-        result: dict[str, str] = {}
-        try:
-            _ = engine.tantivy.index  # triggers open_or_create if needed
-            result["tantivy"] = "ok"
-        except Exception as exc:
-            result["tantivy"] = f"unavailable: {exc}"
+        return engine.health(), engine.count_documents(), engine.count_chunks()
 
-        try:
-            _ = engine.chroma.collection.count()
-            result["chroma"] = "ok"
-        except Exception as exc:
-            result["chroma"] = f"unavailable: {exc}"
-        return result
-
-    status = asyncio.run(probe())
+    status, doc_count, chunk_count = asyncio.run(probe())
 
     click.echo("Backend health")
     click.echo("=" * 30)
-    all_ok = True
-    for backend, state in status.items():
-        icon = "✓" if state == "ok" else "✗"
-        click.echo(f"  {icon}  {backend}: {state}")
-        if state != "ok":
-            all_ok = False
-
-    sys.exit(0 if all_ok else 1)
+    if isinstance(status, Healthy):
+        click.echo("  ✓  search: ok")
+        click.echo(f"     documents: {doc_count}")
+        click.echo(f"     chunks:    {chunk_count}")
+        sys.exit(0)
+    click.echo(f"  ✗  search: unavailable: {status.reason}")
+    sys.exit(1)
 
 
 @inspect.command(name="agents")

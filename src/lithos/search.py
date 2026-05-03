@@ -64,6 +64,28 @@ class SemanticResult:
     is_stale: bool = False
 
 
+@dataclass(frozen=True)
+class Healthy:
+    """The search engine is operational."""
+
+
+@dataclass(frozen=True)
+class Unhealthy:
+    """The search engine is degraded; ``reason`` is a short human-readable string."""
+
+    reason: str
+
+
+HealthStatus = Healthy | Unhealthy
+"""Sealed shape returned by :meth:`SearchEngine.health`.
+
+Agents see one signal — either everything is operational, or it's not and
+there is a reason. Subsystem-specific diagnostics (which backend failed,
+the underlying exception) are operator concerns surfaced via logs and
+telemetry, not via this return type.
+"""
+
+
 def _compute_is_stale(expires_at_str: str) -> bool:
     """Compute staleness from an expires_at ISO string."""
     if not expires_at_str:
@@ -1548,27 +1570,65 @@ class SearchEngine:
             lithos_metrics.search_ops.add(1, {"type": "graph"})
             lithos_metrics.search_duration.record(elapsed_ms, {"type": "graph", "success": success})
 
-    def health(self) -> dict[str, str]:
-        """Return a health status dict for each backend.
+    def health(self) -> HealthStatus:
+        """Return a single agent-facing health signal.
 
-        Values are "ok" or a short error description.  Does not raise.
+        Composes the existing Tantivy and Chroma probes plus an embedding-model
+        liveness check. Subsystem-specific detail is logged at WARN/ERROR so
+        operators retain the diagnostic, but only one signal crosses the seam.
+        Does not raise.
         """
-        status: dict[str, str] = {}
+        failures: list[str] = []
 
         try:
             _ = self.tantivy.index  # triggers open_or_create if needed
-            status["tantivy"] = "ok"
         except Exception as exc:
-            status["tantivy"] = f"unavailable: {exc}"
+            logger.error("Tantivy backend unavailable: %s", exc, exc_info=True)
+            failures.append(f"tantivy: {exc}")
 
         healthy, _ = self.ensure_semantic_backend_healthy()
-        if healthy:
+        if not healthy:
+            reason = self._semantic_store_error or "chroma store unavailable"
+            logger.warning("Chroma store probe reports unhealthy: %s", reason)
+            failures.append(f"chroma: {reason}")
+        else:
             try:
                 _ = self.chroma.collection.count()
-                status["chroma"] = "ok"
             except Exception as exc:
-                status["chroma"] = f"unavailable: {exc}"
-        else:
-            status["chroma"] = f"unavailable: {self._semantic_store_error}"
+                logger.error("Chroma backend unavailable: %s", exc, exc_info=True)
+                failures.append(f"chroma: {exc}")
+            try:
+                self.chroma.health_check()
+            except Exception as exc:
+                logger.error("Embedding model probe failed: %s", exc, exc_info=True)
+                failures.append(f"embedding model: {exc}")
 
-        return status
+        if failures:
+            return Unhealthy(reason="; ".join(failures))
+        return Healthy()
+
+    def count_documents(self) -> int:
+        """Return the number of indexed documents in the full-text backend."""
+        return self.tantivy.count_docs()
+
+    def count_chunks(self) -> int:
+        """Return the number of indexed chunks in the semantic backend.
+
+        Returns 0 when the Chroma store is quarantined or otherwise unhealthy,
+        matching the behaviour callers previously got via
+        ``ensure_semantic_backend_healthy`` + ``chroma.count_chunks()``.
+        """
+        healthy, _ = self.ensure_semantic_backend_healthy()
+        if not healthy:
+            return 0
+        return self.chroma.count_chunks()
+
+    def needs_initial_rebuild(self) -> bool:
+        """Whether the full-text index was just (re)created and needs to be filled.
+
+        Set during :meth:`create` when the Tantivy schema-version check forces a
+        recreate. Read by the server lifespan to decide whether to trigger an
+        initial corpus rebuild. After #226 lands this becomes part of the
+        ``KnowledgeManager.plan_reconcile`` result.
+        """
+        return self.tantivy.needs_rebuild

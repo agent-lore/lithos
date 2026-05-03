@@ -47,7 +47,7 @@ from lithos.knowledge import (
     _UnsetType,
 )
 from lithos.lcma.migrations import MigrationRegistry, run_migrations
-from lithos.search import SearchEngine
+from lithos.search import Healthy, SearchEngine
 from lithos.telemetry import (
     StatusCode,
     get_tracer,
@@ -299,12 +299,15 @@ class LithosServer:
         else:
             components["kb_directory"] = {"status": "ok"}
 
-        # Check embedding model
+        # Check the search engine (composes Tantivy, Chroma, and embedding-model probes)
         try:
-            await asyncio.to_thread(self.search.chroma.health_check)
-            components["embedding_model"] = {"status": "ok"}
+            search_status = await asyncio.to_thread(self.search.health)
+            if isinstance(search_status, Healthy):
+                components["search"] = {"status": "ok"}
+            else:
+                components["search"] = {"status": "unavailable", "error": search_status.reason}
         except Exception as e:
-            components["embedding_model"] = {"status": "unavailable", "error": str(e)}
+            components["search"] = {"status": "unavailable", "error": str(e)}
 
         # Check knowledge base
         try:
@@ -596,9 +599,11 @@ class LithosServer:
                         self.search._semantic_store_error,
                     )
 
-                # Load or build indices.
-                # Force access to the tantivy property so schema version check runs.
-                tantivy_needs_rebuild = self.search.tantivy.needs_rebuild
+                # Load or build indices. ``SearchEngine.create`` already opened
+                # Tantivy and ran the schema-version check; ``needs_initial_rebuild``
+                # surfaces that flag without reaching into the backend. After
+                # #226 lands this becomes part of ``KnowledgeManager.plan_reconcile``.
+                tantivy_needs_rebuild = self.search.needs_initial_rebuild()
                 if (
                     self.config.index.rebuild_on_start
                     or tantivy_needs_rebuild
@@ -735,19 +740,20 @@ class LithosServer:
         self._coordination_stats_refresh_task = None
 
     def _safe_tantivy_count(self) -> int:
-        """Return Tantivy document count, 0 on any error."""
+        """Return full-text document count, 0 on any error (OTEL gauge probe)."""
         try:
-            return self.search.tantivy.count_docs()
+            return self.search.count_documents()
         except Exception:
             return 0
 
     def _safe_chroma_count(self) -> int:
-        """Return ChromaDB chunk count, 0 on any error."""
+        """Return semantic chunk count, 0 on any error (OTEL gauge probe).
+
+        ``SearchEngine.count_chunks`` already returns 0 when the Chroma store
+        is quarantined.
+        """
         try:
-            healthy, _ = self.search.ensure_semantic_backend_healthy()
-            if not healthy:
-                return 0
-            return self.search.chroma.count_chunks()
+            return self.search.count_chunks()
         except Exception:
             return 0
 
@@ -3266,11 +3272,11 @@ class LithosServer:
                 # Get document count (from in-memory cache — always available)
                 total_docs = self.knowledge.document_count
 
-                # Get search stats
-                search_stats = self.search.get_stats()
-                chroma_chunk_count: int = search_stats.get("chroma_chunk_count", 0)
+                # Semantic chunk count via the public surface (returns 0 when
+                # the Chroma store is quarantined).
+                chroma_chunk_count: int = self.search.count_chunks()
 
-                # Tantivy document count with None-sentinel on failure.
+                # Full-text document count with None-sentinel on failure.
                 # NOTE: this deliberately diverges from _safe_tantivy_count(),
                 # which returns *0* on error (used by OTEL gauge probes where a
                 # numeric value is always required).  Here we return *None* so
@@ -3280,7 +3286,7 @@ class LithosServer:
                 # error behaviour, use _safe_tantivy_count() instead.
                 tantivy_doc_count: int | None
                 try:
-                    tantivy_doc_count = self.search.tantivy.count_docs()
+                    tantivy_doc_count = self.search.count_documents()
                 except Exception:
                     tantivy_doc_count = None
 
