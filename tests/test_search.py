@@ -85,7 +85,7 @@ class TestTantivyIndex:
                 tags=["python", "tutorial"],
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.full_text_search("Python programming")
 
@@ -104,7 +104,7 @@ class TestTantivyIndex:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.full_text_search("Kubernetes")
 
@@ -123,7 +123,7 @@ class TestTantivyIndex:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.full_text_search("microservices architecture")
 
@@ -151,8 +151,8 @@ class TestTantivyIndex:
                 tags=["python", "data"],
             )
         ).document
-        search_engine.index_document(doc1)
-        search_engine.index_document(doc2)
+        search_engine.index(KnowledgeManager.to_indexable(doc1))
+        search_engine.index(KnowledgeManager.to_indexable(doc2))
 
         # Search with tag filter
         results = search_engine.full_text_search("Python", tags=["web"])
@@ -182,8 +182,8 @@ class TestTantivyIndex:
                 tags=["project:other-project"],
             )
         ).document
-        search_engine.index_document(target)
-        search_engine.index_document(other)
+        search_engine.index(KnowledgeManager.to_indexable(target))
+        search_engine.index(KnowledgeManager.to_indexable(other))
 
         results = search_engine.full_text_search("knowledge graph", tags=["project:lithos-core"])
         result_ids = {r.id for r in results}
@@ -212,8 +212,8 @@ class TestTantivyIndex:
                 tags=["project:lithos-core"],
             )
         ).document
-        search_engine.index_document(match)
-        search_engine.index_document(missing_priority)
+        search_engine.index(KnowledgeManager.to_indexable(match))
+        search_engine.index(KnowledgeManager.to_indexable(missing_priority))
 
         results = search_engine.full_text_search(
             "topic of interest",
@@ -242,7 +242,7 @@ class TestTantivyIndex:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.full_text_search("REST API")
 
@@ -261,7 +261,7 @@ class TestTantivyIndex:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         # Update document
         updated = (
@@ -271,7 +271,7 @@ class TestTantivyIndex:
                 content="Updated content about caching strategies.",
             )
         ).document
-        search_engine.index_document(updated)
+        search_engine.index(KnowledgeManager.to_indexable(updated))
 
         # Old content should not match
         old_results = search_engine.full_text_search("databases")
@@ -293,14 +293,14 @@ class TestTantivyIndex:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         # Verify it's searchable
         results = search_engine.full_text_search("Temporary")
         assert any(r.id == doc.id for r in results)
 
         # Remove from index
-        search_engine.remove_document(doc.id)
+        search_engine.remove(doc.id)
 
         # Should no longer appear
         results = search_engine.full_text_search("Temporary")
@@ -322,7 +322,7 @@ class TestChromaIndex:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         # Search with semantically similar but different words
         results = search_engine.semantic_search("how to handle failures gracefully")
@@ -342,7 +342,7 @@ class TestChromaIndex:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         # High threshold should filter out weak matches
         results = search_engine.semantic_search(
@@ -375,7 +375,7 @@ class TestChromaIndex:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.semantic_search("Python programming", limit=10)
 
@@ -395,7 +395,7 @@ class TestChromaIndex:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.semantic_search("database performance tuning")
 
@@ -424,7 +424,7 @@ class TestSearchEngineIntegration:
                     tags=doc_data["tags"],
                 )
             ).document
-            search_engine.index_document(doc)
+            search_engine.index(KnowledgeManager.to_indexable(doc))
             created_docs.append(doc)
 
         # Full-text search
@@ -463,9 +463,9 @@ class TestSearchEngineIntegration:
             )
         ).document
 
-        search_engine.index_document(highly_relevant)
-        search_engine.index_document(somewhat_relevant)
-        search_engine.index_document(not_relevant)
+        search_engine.index(KnowledgeManager.to_indexable(highly_relevant))
+        search_engine.index(KnowledgeManager.to_indexable(somewhat_relevant))
+        search_engine.index(KnowledgeManager.to_indexable(not_relevant))
 
         results = search_engine.full_text_search("Python testing pytest")
 
@@ -485,7 +485,7 @@ class TestSearchEngineIntegration:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         # Verify indexed
         assert len(search_engine.full_text_search("cleared")) >= 1
@@ -508,7 +508,7 @@ class TestSearchEngineIntegration:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         stats = search_engine.get_stats()
 
@@ -538,8 +538,8 @@ class TestChromaIndexFilters:
                 agent="bob",
             )
         ).document
-        search_engine.index_document(alice_doc)
-        search_engine.index_document(bob_doc)
+        search_engine.index(KnowledgeManager.to_indexable(alice_doc))
+        search_engine.index(KnowledgeManager.to_indexable(bob_doc))
 
         results = search_engine.chroma.search(
             "deep learning transformers", limit=10, threshold=0.0, author="alice"
@@ -561,7 +561,7 @@ class TestChromaIndexFilters:
                 agent="charlie",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.chroma.search(
             "machine learning", limit=10, threshold=0.0, author="nobody"
@@ -589,8 +589,8 @@ class TestChromaIndexFilters:
                 path="notes",
             )
         ).document
-        search_engine.index_document(procedures_doc)
-        search_engine.index_document(notes_doc)
+        search_engine.index(KnowledgeManager.to_indexable(procedures_doc))
+        search_engine.index(KnowledgeManager.to_indexable(notes_doc))
 
         results = search_engine.chroma.search(
             "deploying microservices", limit=10, threshold=0.0, path_prefix="procedures"
@@ -629,9 +629,9 @@ class TestChromaIndexFilters:
                 path="notes",
             )
         ).document
-        search_engine.index_document(match_doc)
-        search_engine.index_document(wrong_author_doc)
-        search_engine.index_document(wrong_path_doc)
+        search_engine.index(KnowledgeManager.to_indexable(match_doc))
+        search_engine.index(KnowledgeManager.to_indexable(wrong_author_doc))
+        search_engine.index(KnowledgeManager.to_indexable(wrong_path_doc))
 
         results = search_engine.chroma.search(
             "database indexing",
@@ -665,8 +665,8 @@ class TestChromaIndexFilters:
                 agent="bob",
             )
         ).document
-        search_engine.index_document(alice_doc)
-        search_engine.index_document(bob_doc)
+        search_engine.index(KnowledgeManager.to_indexable(alice_doc))
+        search_engine.index(KnowledgeManager.to_indexable(bob_doc))
 
         results = search_engine.semantic_search(
             "reinforcement learning", limit=10, threshold=0.0, author="alice"
@@ -697,8 +697,8 @@ class TestChromaIndexFilters:
                 path="scratch",
             )
         ).document
-        search_engine.index_document(arch_doc)
-        search_engine.index_document(other_doc)
+        search_engine.index(KnowledgeManager.to_indexable(arch_doc))
+        search_engine.index(KnowledgeManager.to_indexable(other_doc))
 
         results = search_engine.semantic_search(
             "event-driven message queues", limit=10, threshold=0.0, path_prefix="architecture"
@@ -863,7 +863,7 @@ class TestSearchEngineResiliency:
             )
         ).document
         # Should not raise even though Tantivy is broken
-        chunks = search_engine.index_document(doc)
+        chunks = search_engine.index(KnowledgeManager.to_indexable(doc))
         # Chroma still works, so chunks > 0
         assert chunks >= 1
 
@@ -888,7 +888,7 @@ class TestSearchEngineResiliency:
         ).document
 
         with pytest.raises(IndexingError) as exc_info:
-            search_engine.index_document(doc)
+            search_engine.index(KnowledgeManager.to_indexable(doc))
 
         assert "tantivy" in exc_info.value.backend_errors
         assert "chroma" in exc_info.value.backend_errors
@@ -911,10 +911,10 @@ class TestSearchEngineResiliency:
                 agent="test-agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         # Should not raise even though Tantivy remove is broken
-        search_engine.remove_document(doc.id)  # no exception
+        search_engine.remove(doc.id)  # no exception
 
     @pytest.mark.asyncio
     async def test_remove_document_total_failure_raises(
@@ -929,7 +929,7 @@ class TestSearchEngineResiliency:
         search_engine.chroma.remove_document = _boom  # type: ignore[method-assign]
 
         with pytest.raises(IndexingError) as exc_info:
-            search_engine.remove_document("fake-doc-id")
+            search_engine.remove("fake-doc-id")
 
         assert "tantivy" in exc_info.value.backend_errors
         assert "chroma" in exc_info.value.backend_errors
@@ -1022,8 +1022,7 @@ class TestSchemaVersionDetection:
 
     def test_rebuild_index_still_functional(self, tmp_path):
         """After schema version rebuild, index is still functional."""
-        from lithos.knowledge import KnowledgeDocument, KnowledgeMetadata
-        from lithos.search import TantivyIndex
+        from lithos.search import IndexableDocument, TantivyIndex
 
         index_path = tmp_path / "tantivy"
         idx = TantivyIndex(index_path)
@@ -1036,22 +1035,17 @@ class TestSchemaVersionDetection:
         idx2.open_or_create()
         assert idx2.needs_rebuild is True
 
-        # Index should work after rebuild
-        from datetime import datetime, timezone
-        from pathlib import Path
-
-        doc = KnowledgeDocument(
+        # Index should work after rebuild — the backend now accepts the seam type.
+        doc = IndexableDocument(
             id="test-id",
             title="Test",
             content="Test content.",
-            metadata=KnowledgeMetadata(
-                id="test-id",
-                title="Test",
-                author="agent",
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-            ),
-            path=Path("test.md"),
+            path="test.md",
+            author="agent",
+            tags=(),
+            source_url="",
+            updated_at="",
+            expires_at="",
         )
         idx2.add_document(doc)
         results = idx2.search("test")
@@ -1076,7 +1070,7 @@ class TestExpiresAtInSearch:
                 expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.full_text_search("expired research")
         assert len(results) >= 1
@@ -1099,7 +1093,7 @@ class TestExpiresAtInSearch:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.full_text_search("fresh research")
         assert len(results) >= 1
@@ -1119,7 +1113,7 @@ class TestExpiresAtInSearch:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.full_text_search("no expiry research")
         assert len(results) >= 1
@@ -1142,7 +1136,7 @@ class TestExpiresAtInSearch:
                 expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.semantic_search("machine learning expired")
         match = [r for r in results if r.id == doc.id]
@@ -1164,7 +1158,7 @@ class TestExpiresAtInSearch:
                 expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.semantic_search("deep learning fresh")
         match = [r for r in results if r.id == doc.id]
@@ -1183,7 +1177,7 @@ class TestExpiresAtInSearch:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.semantic_search("neural networks no expiry")
         match = [r for r in results if r.id == doc.id]
@@ -1228,7 +1222,7 @@ class TestHybridSearch:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.hybrid_search("distributed systems consensus")
 
@@ -1250,7 +1244,7 @@ class TestHybridSearch:
                 agent="agent",
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.full_text_search("BM25 full text")
 
@@ -1270,7 +1264,7 @@ class TestHybridSearch:
                 tags=["python"],
             )
         ).document
-        search_engine.index_document(doc)
+        search_engine.index(KnowledgeManager.to_indexable(doc))
 
         results = search_engine.hybrid_search("Python programming")
 

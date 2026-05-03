@@ -118,11 +118,11 @@ class TestAsyncSearchNonBlocking:
     @pytest.mark.asyncio
     async def test_server_search_mutation_sites_use_to_thread(self) -> None:
         """Regression guard for #199: ``lithos_write`` and the file-watcher
-        path used to call ``self.search.index_document()`` synchronously,
-        blocking the event loop for Tantivy commits and ChromaDB embeddings.
+        path used to call ``self.search.index()`` synchronously, blocking
+        the event loop for Tantivy commits and ChromaDB embeddings.
 
         Greps the server source to ensure no direct (non-``to_thread``)
-        call to ``index_document`` / ``remove_document`` remains.
+        call to the seam mutation methods remains.
         """
         import inspect
 
@@ -134,7 +134,7 @@ class TestAsyncSearchNonBlocking:
             # Skip comments and inline references; only flag real call sites.
             if stripped.startswith("#"):
                 continue
-            for method in ("index_document", "remove_document"):
+            for method in ("index", "remove"):
                 if f"self.search.{method}(" in stripped:
                     assert "asyncio.to_thread" in stripped, (
                         f"Direct self.search.{method}() call — must be wrapped in "

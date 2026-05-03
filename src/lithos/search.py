@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +26,6 @@ from sentence_transformers import SentenceTransformer
 
 from lithos.config import LithosConfig, get_config
 from lithos.errors import IndexingError, SearchBackendError
-from lithos.knowledge import KnowledgeDocument
 from lithos.telemetry import lithos_metrics, traced
 
 if TYPE_CHECKING:
@@ -62,6 +62,34 @@ class SemanticResult:
     source_url: str = ""
     updated_at: str = ""
     is_stale: bool = False
+
+
+@dataclass(frozen=True)
+class IndexableDocument:
+    """The slice of a note the search seam consumes.
+
+    Distinct from :class:`~lithos.knowledge.KnowledgeDocument` (the manager-
+    facing type carrying frontmatter, links, and lifecycle). The fields here
+    are exactly those Tantivy and Chroma write — coercions (None → "",
+    Path → str, list → tuple) live in
+    :meth:`~lithos.knowledge.KnowledgeManager.to_indexable`, the single
+    translation point. See :doc:`CONTEXT.md` and ADR 0002.
+    """
+
+    id: str
+    title: str
+    content: str
+    path: str
+    author: str
+    tags: tuple[str, ...]
+    source_url: str
+    updated_at: str
+    expires_at: str
+
+    @property
+    def full_content(self) -> str:
+        """Title + body, the form Tantivy stores in its ``content`` field."""
+        return f"# {self.title}\n\n{self.content}"
 
 
 @dataclass(frozen=True)
@@ -313,7 +341,7 @@ class TantivyIndex:
             self._schema = self._build_schema()
         return self._schema
 
-    def add_document(self, doc: KnowledgeDocument) -> None:
+    def add_document(self, doc: IndexableDocument) -> None:
         """Add or update a document in the index."""
         writer = self.index.writer(heap_size=15_000_000)
 
@@ -326,12 +354,12 @@ class TantivyIndex:
                 id=doc.id,
                 title=doc.title,
                 content=doc.full_content,
-                path=str(doc.path),
-                author=doc.metadata.author,
-                tags=" ".join(doc.metadata.tags),
-                source_url=doc.metadata.source_url or "",
-                updated_at=doc.metadata.updated_at.isoformat() if doc.metadata.updated_at else "",
-                expires_at=doc.metadata.expires_at.isoformat() if doc.metadata.expires_at else "",
+                path=doc.path,
+                author=doc.author,
+                tags=" ".join(doc.tags),
+                source_url=doc.source_url,
+                updated_at=doc.updated_at,
+                expires_at=doc.expires_at,
             )
         )
 
@@ -340,7 +368,7 @@ class TantivyIndex:
         # Reload to see changes immediately
         self.index.reload()
 
-    def rebuild_from_docs(self, docs: list[KnowledgeDocument]) -> None:
+    def rebuild_from_docs(self, docs: Iterable[IndexableDocument]) -> None:
         """Clear the index and re-index *docs* in a single commit.
 
         Prefer this over calling ``clear()`` + ``add_document()`` in a loop to
@@ -354,16 +382,12 @@ class TantivyIndex:
                     id=doc.id,
                     title=doc.title,
                     content=doc.full_content,
-                    path=str(doc.path),
-                    author=doc.metadata.author,
-                    tags=" ".join(doc.metadata.tags),
-                    source_url=doc.metadata.source_url or "",
-                    updated_at=(
-                        doc.metadata.updated_at.isoformat() if doc.metadata.updated_at else ""
-                    ),
-                    expires_at=(
-                        doc.metadata.expires_at.isoformat() if doc.metadata.expires_at else ""
-                    ),
+                    path=doc.path,
+                    author=doc.author,
+                    tags=" ".join(doc.tags),
+                    source_url=doc.source_url,
+                    updated_at=doc.updated_at,
+                    expires_at=doc.expires_at,
                 )
             )
         writer.commit()
@@ -687,7 +711,7 @@ collection.count()
 
     def add_document(
         self,
-        doc: KnowledgeDocument,
+        doc: IndexableDocument,
         chunk_size: int = 500,
         chunk_max: int = 1000,
     ) -> int:
@@ -704,7 +728,9 @@ collection.count()
         # Remove existing chunks for this document
         self.remove_document(doc.id)
 
-        # Chunk the content
+        # Chunk the content. Chroma uses a plain title prefix (no leading
+        # ``#``) to match the form the embedding model was tuned on; Tantivy
+        # stores ``full_content`` with the ``# `` heading.
         full_text = f"{doc.title}\n\n{doc.content}"
         chunks = chunk_text(full_text, chunk_size, chunk_max)
 
@@ -721,16 +747,12 @@ collection.count()
                 "doc_id": doc.id,
                 "chunk_index": i,
                 "title": doc.title,
-                "path": str(doc.path),
-                "author": doc.metadata.author,
-                "tags": ",".join(doc.metadata.tags),
-                "source_url": doc.metadata.source_url or "",
-                "updated_at": (
-                    doc.metadata.updated_at.isoformat() if doc.metadata.updated_at else ""
-                ),
-                "expires_at": (
-                    doc.metadata.expires_at.isoformat() if doc.metadata.expires_at else ""
-                ),
+                "path": doc.path,
+                "author": doc.author,
+                "tags": ",".join(doc.tags),
+                "source_url": doc.source_url,
+                "updated_at": doc.updated_at,
+                "expires_at": doc.expires_at,
             }
             for i in range(len(chunks))
         ]
@@ -982,9 +1004,9 @@ class SearchEngine:
             self._semantic_store_error = error
             return healthy, backup_path
 
-    @traced("lithos.search.index_document")
-    def index_document(self, doc: KnowledgeDocument) -> int:
-        """Index a document in both search engines.
+    @traced("lithos.search.index")
+    def index(self, doc: IndexableDocument) -> int:
+        """Index an :class:`IndexableDocument` in both backends.
 
         Partial failures (one backend succeeds) are logged as warnings.
         If *both* backends fail the operation is considered a total failure and
@@ -1033,7 +1055,7 @@ class SearchEngine:
             )
 
         logger.debug(
-            "index_document: doc_id=%s chunks=%d backends_failed=%d",
+            "index: doc_id=%s chunks=%d backends_failed=%d",
             doc.id,
             chunks,
             len(errors),
@@ -1041,8 +1063,8 @@ class SearchEngine:
         )
         return chunks
 
-    @traced("lithos.search.remove_document")
-    def remove_document(self, doc_id: str) -> None:
+    @traced("lithos.search.remove")
+    def remove(self, doc_id: str) -> None:
         """Remove a document from both search engines.
 
         Partial failures (one backend succeeds) are logged as warnings.
