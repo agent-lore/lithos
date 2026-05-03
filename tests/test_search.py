@@ -1022,8 +1022,7 @@ class TestSchemaVersionDetection:
 
     def test_rebuild_index_still_functional(self, tmp_path):
         """After schema version rebuild, index is still functional."""
-        from lithos.knowledge import KnowledgeDocument, KnowledgeMetadata
-        from lithos.search import TantivyIndex
+        from lithos.search import IndexableDocument, TantivyIndex
 
         index_path = tmp_path / "tantivy"
         idx = TantivyIndex(index_path)
@@ -1036,22 +1035,17 @@ class TestSchemaVersionDetection:
         idx2.open_or_create()
         assert idx2.needs_rebuild is True
 
-        # Index should work after rebuild
-        from datetime import datetime, timezone
-        from pathlib import Path
-
-        doc = KnowledgeDocument(
+        # Index should work after rebuild — the backend now accepts the seam type.
+        doc = IndexableDocument(
             id="test-id",
             title="Test",
             content="Test content.",
-            metadata=KnowledgeMetadata(
-                id="test-id",
-                title="Test",
-                author="agent",
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-            ),
-            path=Path("test.md"),
+            path="test.md",
+            author="agent",
+            tags=(),
+            source_url="",
+            updated_at="",
+            expires_at="",
         )
         idx2.add_document(doc)
         results = idx2.search("test")
