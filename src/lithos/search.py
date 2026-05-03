@@ -93,6 +93,56 @@ class IndexableDocument:
 
 
 @dataclass(frozen=True)
+class ReconcileAction:
+    """One action a search-engine reconcile would take.
+
+    ``backend`` names the affected backend (``tantivy`` or ``chroma``);
+    ``action`` is the operation (currently always ``full_rebuild``);
+    ``reason`` is the drift signal that prompted it.
+    """
+
+    backend: str
+    action: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ReconcileFailure:
+    """A backend that errored while applying a reconcile action."""
+
+    backend: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class SearchReconcilePlan:
+    """The dry-run output of :meth:`SearchEngine.plan_reconcile_to`.
+
+    Carries enough context that applying it is mechanical: the list of
+    actions plus the corpus snapshot used to build them.
+    """
+
+    actions: tuple[ReconcileAction, ...]
+    docs: tuple[IndexableDocument, ...]
+    scanned: int
+
+    @property
+    def is_noop(self) -> bool:
+        """True when no drift was detected."""
+        return not self.actions
+
+
+@dataclass(frozen=True)
+class SearchReconcileResult:
+    """The outcome of applying a :class:`SearchReconcilePlan`."""
+
+    actions: tuple[ReconcileAction, ...]
+    repaired: int
+    failed: tuple[ReconcileFailure, ...]
+    scanned: int
+
+
+@dataclass(frozen=True)
 class Healthy:
     """The search engine is operational."""
 
@@ -1650,7 +1700,91 @@ class SearchEngine:
 
         Set during :meth:`create` when the Tantivy schema-version check forces a
         recreate. Read by the server lifespan to decide whether to trigger an
-        initial corpus rebuild. After #226 lands this becomes part of the
-        ``KnowledgeManager.plan_reconcile`` result.
+        initial corpus rebuild. After the graph fold this becomes part of the
+        :meth:`~lithos.knowledge.KnowledgeManager.plan_reconcile` result.
         """
         return self.tantivy.needs_rebuild
+
+    def plan_reconcile_to(self, docs: Iterable[IndexableDocument]) -> SearchReconcilePlan:
+        """Compute a :class:`SearchReconcilePlan` describing drift against *docs*.
+
+        Internal to :class:`~lithos.knowledge.KnowledgeManager` — agents call
+        ``KnowledgeManager.plan_reconcile``, which delegates here. Stores the
+        snapshot of *docs* on the plan so that
+        :meth:`apply_reconcile` is mechanical.
+        """
+        snapshot = tuple(docs)
+        corpus_ids = {d.id for d in snapshot}
+        actions: list[ReconcileAction] = []
+
+        # --- Tantivy drift detection ---
+        try:
+            if self.tantivy.needs_rebuild:
+                actions.append(
+                    ReconcileAction(
+                        backend="tantivy", action="full_rebuild", reason="schema_mismatch"
+                    )
+                )
+            else:
+                tantivy_ids = self.tantivy.get_indexed_doc_ids()
+                if tantivy_ids != corpus_ids:
+                    actions.append(
+                        ReconcileAction(
+                            backend="tantivy",
+                            action="full_rebuild",
+                            reason="doc_set_mismatch",
+                        )
+                    )
+        except Exception as exc:
+            logger.warning("Tantivy drift check failed: %s", exc)
+            actions.append(
+                ReconcileAction(backend="tantivy", action="full_rebuild", reason="check_failed")
+            )
+
+        # --- ChromaDB drift detection ---
+        try:
+            chroma_ids = self.chroma.get_indexed_doc_ids()
+            if chroma_ids != corpus_ids:
+                actions.append(
+                    ReconcileAction(
+                        backend="chroma", action="full_rebuild", reason="doc_set_mismatch"
+                    )
+                )
+        except Exception as exc:
+            logger.warning("ChromaDB drift check failed: %s", exc)
+            actions.append(
+                ReconcileAction(backend="chroma", action="full_rebuild", reason="check_failed")
+            )
+
+        return SearchReconcilePlan(actions=tuple(actions), docs=snapshot, scanned=len(snapshot))
+
+    def apply_reconcile(self, plan: SearchReconcilePlan) -> SearchReconcileResult:
+        """Execute *plan* against both backends; return per-action status.
+
+        Idempotent — applying twice produces the same backend state. Per-backend
+        failures surface via :attr:`SearchReconcileResult.failed`; one
+        backend's failure does not block the other from being repaired.
+        """
+        repaired = 0
+        failures: list[ReconcileFailure] = []
+
+        for action in plan.actions:
+            try:
+                if action.backend == "tantivy":
+                    self.tantivy.rebuild_from_docs(plan.docs)
+                    repaired += 1
+                elif action.backend == "chroma":
+                    self.chroma.clear()
+                    for doc in plan.docs:
+                        self.chroma.add_document(doc)
+                    repaired += 1
+            except Exception as exc:
+                logger.error("Failed to repair %s backend: %s", action.backend, exc)
+                failures.append(ReconcileFailure(backend=action.backend, detail=str(exc)))
+
+        return SearchReconcileResult(
+            actions=plan.actions,
+            repaired=repaired,
+            failed=tuple(failures),
+            scanned=plan.scanned,
+        )
