@@ -142,8 +142,14 @@ class LithosServer:
             instructions="Local shared knowledge base for AI agents",
         )
 
-        # SSE delivery: track active client count
-        self._sse_client_count: int = 0
+        # SSE delivery: capacity-gated by an asyncio semaphore (#206).
+        # Replaces a plain int counter whose check-then-increment was a soft
+        # race. Single-threaded asyncio makes ``locked()`` + ``acquire()``
+        # atomic when no ``await`` lies between them — see
+        # :meth:`_try_acquire_sse_slot`.
+        self._sse_semaphore: asyncio.Semaphore = asyncio.BoundedSemaphore(
+            self._config.events.max_sse_clients
+        )
 
         # Register all tools
         self._register_tools()
@@ -450,7 +456,11 @@ class LithosServer:
                     media_type="text/plain",
                 )
 
-        if self._sse_client_count >= sse_config.max_sse_clients:
+        # Atomic capacity gate: locked() + acquire() are not preempted in
+        # single-threaded asyncio because acquire() returns synchronously when
+        # the semaphore is not locked (no ``await`` between observe and
+        # decrement). Replaces a soft-race int-counter check (#206).
+        if not await self._try_acquire_sse_slot():
             return Response(
                 content="Too many SSE clients",
                 status_code=429,
@@ -474,11 +484,6 @@ class LithosServer:
         )
 
         queue = self.event_bus.subscribe(event_types=event_types, tags=tag_filter)
-
-        # Increment before returning the StreamingResponse to avoid a soft race
-        # where concurrent requests all pass the capacity check before any
-        # generator starts and increments the counter.
-        self._sse_client_count += 1
 
         async def _event_stream():
             tracer = get_tracer()
@@ -520,7 +525,7 @@ class LithosServer:
                     conn_span.set_status(StatusCode.ERROR, str(exc))
                     logger.exception("SSE stream error")
                 finally:
-                    self._sse_client_count -= 1
+                    self._sse_semaphore.release()
                     self.event_bus.unsubscribe(queue)
 
         return StreamingResponse(
@@ -531,6 +536,28 @@ class LithosServer:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    async def _try_acquire_sse_slot(self) -> bool:
+        """Non-blocking acquire of an SSE-client slot (#206).
+
+        Single-threaded asyncio guarantees atomicity: ``Semaphore.acquire``
+        returns synchronously when the semaphore is not locked, so the
+        ``locked()`` check and the decrement happen in the same event-loop
+        tick with no opportunity for a concurrent coroutine to race.
+        """
+        if self._sse_semaphore.locked():
+            return False
+        await self._sse_semaphore.acquire()
+        return True
+
+    def _sse_active_count(self) -> int:
+        """Number of currently-acquired SSE slots — backs the OTEL gauge.
+
+        ``asyncio.Semaphore`` does not expose remaining capacity through a
+        public API, so the active count is computed as ``max - available``
+        via the documented internal ``_value`` attribute.
+        """
+        return self._config.events.max_sse_clients - self._sse_semaphore._value  # type: ignore[attr-defined]
 
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -576,7 +603,7 @@ class LithosServer:
                 register_active_claims_observer(lambda: self._cached_active_claims)
 
                 # Register SSE active clients gauge observer
-                register_sse_active_clients_observer(lambda: self._sse_client_count)
+                register_sse_active_clients_observer(self._sse_active_count)
 
                 # Register resource-level OTEL gauges
                 register_resource_gauges(
