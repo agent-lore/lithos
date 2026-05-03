@@ -720,6 +720,12 @@ class TestSearchEngineResiliency:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("bad-store")
 
+        # SearchEngine.create() already primed the probe cache; reset so
+        # this test's monkeypatched probe is the one that runs.
+        search_engine._semantic_store_checked = False
+        search_engine._semantic_store_healthy = True
+        search_engine._semantic_store_error = None
+
         calls = {"count": 0}
 
         def _probe(timeout_seconds: float = 10.0):
@@ -744,6 +750,12 @@ class TestSearchEngineResiliency:
         self, search_engine: SearchEngine, monkeypatch: pytest.MonkeyPatch
     ):
         """The Chroma probe only runs once after a successful health check."""
+        # SearchEngine.create() already primed the probe cache; reset so this
+        # test sees the monkeypatched probe.
+        search_engine._semantic_store_checked = False
+        search_engine._semantic_store_healthy = True
+        search_engine._semantic_store_error = None
+
         calls = {"count": 0}
 
         def _probe(timeout_seconds: float = 10.0):

@@ -84,10 +84,10 @@ def knowledge_manager(test_config: LithosConfig) -> KnowledgeManager:
     return KnowledgeManager(test_config)
 
 
-@pytest.fixture
-def search_engine(test_config: LithosConfig) -> SearchEngine:
+@pytest_asyncio.fixture
+async def search_engine(test_config: LithosConfig) -> SearchEngine:
     """Create search engine for testing."""
-    return SearchEngine(test_config)
+    return await SearchEngine.create(test_config)
 
 
 @pytest.fixture

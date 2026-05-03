@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from lithos.config import LithosConfig
+from lithos.search import SearchEngine
 from lithos.server import LithosServer, _FileChangeHandler, create_server, get_server
 
 pytestmark = pytest.mark.integration
@@ -125,17 +126,18 @@ class TestServerInitialization:
         rebuild = AsyncMock()
         backup_path = test_config.storage.data_dir / ".chroma.corrupt-test"
 
+        # Pre-inject a mock SearchEngine so initialize() skips the real
+        # async create() and the eager embedding-model load.
+        mock_search = MagicMock(spec=SearchEngine)
+        mock_search.ensure_semantic_backend_healthy.return_value = (True, backup_path)
+        mock_search.tantivy = SimpleNamespace(needs_rebuild=False)
+        server.search = mock_search
         server._rebuild_indices = rebuild  # type: ignore[assignment]
-        server.search.ensure_semantic_backend_healthy = MagicMock(  # type: ignore[method-assign]
-            return_value=(True, backup_path)
-        )
-        server.search._tantivy = SimpleNamespace(needs_rebuild=False)
-        server.search._chroma = SimpleNamespace(_model=object())
 
         await server.initialize()
 
         rebuild.assert_awaited_once()
-        server.search.ensure_semantic_backend_healthy.assert_called_once_with()
+        mock_search.ensure_semantic_backend_healthy.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_initialize_warns_but_stays_up_when_semantic_backend_unavailable(
@@ -145,13 +147,12 @@ class TestServerInitialization:
         server = LithosServer(test_config)
         rebuild = AsyncMock()
 
+        mock_search = MagicMock(spec=SearchEngine)
+        mock_search.ensure_semantic_backend_healthy.return_value = (False, None)
+        mock_search._semantic_store_error = "simulated corruption"
+        mock_search.tantivy = SimpleNamespace(needs_rebuild=False)
+        server.search = mock_search
         server._rebuild_indices = rebuild  # type: ignore[assignment]
-        server.search.ensure_semantic_backend_healthy = MagicMock(  # type: ignore[method-assign]
-            return_value=(False, None)
-        )
-        server.search._semantic_store_error = "simulated corruption"
-        server.search._tantivy = SimpleNamespace(needs_rebuild=False)
-        server.search._chroma = SimpleNamespace(_model=object())
         server.graph.load_cache = MagicMock(return_value=True)  # type: ignore[method-assign]
 
         with caplog.at_level(logging.WARNING, logger="lithos.server"):

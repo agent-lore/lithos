@@ -10,6 +10,7 @@ from pathlib import Path
 
 import frontmatter as fm
 import pytest
+import pytest_asyncio
 
 from lithos.config import LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
@@ -190,10 +191,10 @@ def seeded_graph(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -> Kn
     return graph
 
 
-@pytest.fixture
-def seeded_search(seeded_config: LithosConfig) -> SearchEngine:
+@pytest_asyncio.fixture
+async def seeded_search(seeded_config: LithosConfig) -> SearchEngine:
     """SearchEngine for testing (not indexed, tests mock as needed)."""
-    return SearchEngine(seeded_config)
+    return await SearchEngine.create(seeded_config)
 
 
 # ---------------------------------------------------------------------------

@@ -121,7 +121,7 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
             )
         corpus_ids = {doc.id for doc in corpus_docs}
 
-    search = SearchEngine(config)
+    search = await SearchEngine.create(config)
     with tracer.start_as_current_span("lithos.reconcile.diff") as diff_span:
         diff_span.set_attribute("lithos.reconcile.scope", "indices")
 
