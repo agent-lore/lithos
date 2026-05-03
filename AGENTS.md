@@ -33,3 +33,17 @@ A change is **not done** unless all five are green:
 - All MCP tools prefixed `lithos_` (e.g., `lithos_write`, `lithos_search`, `lithos_task_create`)
 - Config via `LithosConfig` pydantic-settings model; env vars use `LITHOS_` prefix
 - Tests use temp directories via `test_config` fixture; always clean up
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live as GitHub issues on `agent-lore/lithos` (use `gh`). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) using default label strings. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily). See `docs/agents/domain.md`.
