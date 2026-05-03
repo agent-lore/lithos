@@ -125,7 +125,8 @@ class TestServerInitialization:
         """Initialization rebuilds indices after semantic-store quarantine succeeds."""
         server = LithosServer(test_config)
         rebuild = AsyncMock()
-        backup_path = test_config.storage.data_dir / ".chroma.corrupt-test"
+        # Stand-in path for the quarantine return value — never written to disk.
+        backup_path = test_config.storage.data_dir / "quarantine-test-backup"
 
         # Pre-inject a mock SearchEngine so initialize() skips the real
         # async create() and the eager embedding-model load.

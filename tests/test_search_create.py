@@ -17,7 +17,7 @@ async def test_create_loads_embedding_model_eagerly(test_config: LithosConfig) -
     with patch("lithos.search.SentenceTransformer", return_value=MagicMock()) as ctor:
         engine = await SearchEngine.create(test_config)
 
-    assert engine.chroma._model is not None, "embedding model should be loaded by create()"
+    assert engine._chroma._model is not None, "embedding model should be loaded by create()"
     ctor.assert_called_once()
 
 
@@ -61,4 +61,4 @@ async def test_create_quarantines_corrupt_chroma_store(test_config: LithosConfig
     backup_dirs = [p for p in siblings if p.name.startswith(f"{chroma_path.name}.corrupt-")]
     assert backup_dirs, "expected a quarantined backup directory after corrupt probe"
     assert chroma_path.exists(), "fresh chroma path should exist after quarantine"
-    assert engine.chroma._model is not None
+    assert engine._chroma._model is not None

@@ -45,7 +45,7 @@ async def test_health_returns_unhealthy_when_embedding_model_load_fails(
     def _boom(*_args, **_kwargs):
         raise RuntimeError("model probe failed")
 
-    with patch.object(search_engine.chroma, "health_check", side_effect=_boom):
+    with patch.object(search_engine._chroma, "health_check", side_effect=_boom):
         status = search_engine.health()
 
     assert isinstance(status, Unhealthy)
@@ -57,7 +57,7 @@ async def test_health_returns_unhealthy_when_embedding_model_load_fails(
 async def test_count_documents_matches_backend(search_engine: SearchEngine) -> None:
     """count_documents() agrees with the underlying full-text backend count."""
     # Empty engine — no docs indexed.
-    assert search_engine.count_documents() == search_engine.tantivy.count_docs() == 0
+    assert search_engine.count_documents() == search_engine._tantivy.count_docs() == 0
 
 
 @pytest.mark.asyncio

@@ -965,8 +965,8 @@ class SearchEngine:
             config: Configuration. Uses global config if not provided.
         """
         self._config = config
-        self._tantivy: TantivyIndex | None = None
-        self._chroma: ChromaIndex | None = None
+        self._tantivy_idx: TantivyIndex | None = None
+        self._chroma_idx: ChromaIndex | None = None
         self._semantic_probe_lock = threading.Lock()
         self._semantic_store_checked = False
         self._semantic_store_healthy = True
@@ -985,7 +985,7 @@ class SearchEngine:
         engine = cls(config=config)
 
         # Open the Tantivy index (triggers schema-version check / rebuild).
-        _ = engine.tantivy
+        _ = engine._tantivy
 
         # Probe the persisted Chroma store; quarantine it if unreadable.
         engine.ensure_semantic_backend_healthy()
@@ -994,11 +994,11 @@ class SearchEngine:
         # the open cost. Skip when the store is unhealthy — semantic search
         # will surface the error through the standard backend path.
         if engine._semantic_store_healthy:
-            _ = engine.chroma.collection
+            _ = engine._chroma.collection
 
         # Eagerly load the embedding model. Failure propagates so callers
         # see a clear error rather than a silently-degraded engine.
-        await engine.chroma.ensure_model_loaded()
+        await engine._chroma.ensure_model_loaded()
 
         return engine
 
@@ -1008,22 +1008,22 @@ class SearchEngine:
         return self._config or get_config()
 
     @property
-    def tantivy(self) -> TantivyIndex:
-        """Get Tantivy index."""
-        if self._tantivy is None:
-            self._tantivy = TantivyIndex(self.config.storage.tantivy_path)
-            self._tantivy.open_or_create()
-        return self._tantivy
+    def _tantivy(self) -> TantivyIndex:
+        """Internal: Tantivy backend. Lazy-init for tests that bypass create()."""
+        if self._tantivy_idx is None:
+            self._tantivy_idx = TantivyIndex(self.config.storage.tantivy_path)
+            self._tantivy_idx.open_or_create()
+        return self._tantivy_idx
 
     @property
-    def chroma(self) -> ChromaIndex:
-        """Get ChromaDB index."""
-        if self._chroma is None:
-            self._chroma = ChromaIndex(
+    def _chroma(self) -> ChromaIndex:
+        """Internal: Chroma backend. Lazy-init for tests that bypass create()."""
+        if self._chroma_idx is None:
+            self._chroma_idx = ChromaIndex(
                 self.config.storage.chroma_path,
                 self.config.search.embedding_model,
             )
-        return self._chroma
+        return self._chroma_idx
 
     def ensure_semantic_backend_healthy(self) -> tuple[bool, Path | None]:
         """Repair a corrupted Chroma store before touching it in-process."""
@@ -1034,13 +1034,13 @@ class SearchEngine:
             if self._semantic_store_checked:
                 return self._semantic_store_healthy, None
 
-            healthy, error = self.chroma.probe_store()
+            healthy, error = self._chroma.probe_store()
             backup_path: Path | None = None
 
             if not healthy:
                 logger.warning("Chroma store probe failed: %s", error)
-                backup_path = self.chroma.quarantine_store()
-                healthy, error = self.chroma.probe_store()
+                backup_path = self._chroma.quarantine_store()
+                healthy, error = self._chroma.probe_store()
                 if healthy:
                     logger.warning(
                         "Quarantined unreadable Chroma store%s and created a clean replacement",
@@ -1071,7 +1071,7 @@ class SearchEngine:
         errors: dict[str, Exception] = {}
 
         try:
-            self.tantivy.add_document(doc)
+            self._tantivy.add_document(doc)
         except Exception as exc:
             logger.warning("Full-text indexing failed for doc %s: %s", doc.id, exc)
             errors["tantivy"] = exc
@@ -1080,7 +1080,7 @@ class SearchEngine:
         healthy, _ = self.ensure_semantic_backend_healthy()
         if healthy:
             try:
-                chunks = self.chroma.add_document(
+                chunks = self._chroma.add_document(
                     doc,
                     self.config.search.chunk_size,
                     self.config.search.chunk_max,
@@ -1126,7 +1126,7 @@ class SearchEngine:
         errors: dict[str, Exception] = {}
 
         try:
-            self.tantivy.remove_document(doc_id)
+            self._tantivy.remove_document(doc_id)
         except Exception as exc:
             logger.warning("Full-text removal failed for doc %s: %s", doc_id, exc)
             errors["tantivy"] = exc
@@ -1134,7 +1134,7 @@ class SearchEngine:
         healthy, _ = self.ensure_semantic_backend_healthy()
         if healthy:
             try:
-                self.chroma.remove_document(doc_id)
+                self._chroma.remove_document(doc_id)
             except Exception as exc:
                 logger.warning("Semantic removal failed for doc %s: %s", doc_id, exc)
                 errors["chroma"] = exc
@@ -1173,7 +1173,7 @@ class SearchEngine:
         start = time.perf_counter()
         success = True
         try:
-            results = self.tantivy.search(
+            results = self._tantivy.search(
                 query=query,
                 limit=limit,
                 tags=tags,
@@ -1242,7 +1242,7 @@ class SearchEngine:
                         )
                     },
                 )
-            results = self.chroma.search(
+            results = self._chroma.search(
                 query=query,
                 limit=limit,
                 threshold=threshold,
@@ -1307,7 +1307,7 @@ class SearchEngine:
             sem_failed = False
 
             try:
-                ft_results = self.tantivy.search(
+                ft_results = self._tantivy.search(
                     query=query,
                     limit=limit,
                     tags=tags,
@@ -1321,7 +1321,7 @@ class SearchEngine:
             healthy, _ = self.ensure_semantic_backend_healthy()
             if healthy:
                 try:
-                    sem_results = self.chroma.search(
+                    sem_results = self._chroma.search(
                         query=query,
                         limit=limit,
                         threshold=threshold
@@ -1421,16 +1421,16 @@ class SearchEngine:
 
     def clear_all(self) -> None:
         """Clear all indices."""
-        self.tantivy.clear()
+        self._tantivy.clear()
         healthy, _ = self.ensure_semantic_backend_healthy()
         if healthy:
-            self.chroma.clear()
+            self._chroma.clear()
 
     def get_stats(self) -> dict[str, int]:
         """Get search index statistics."""
         healthy, _ = self.ensure_semantic_backend_healthy()
         return {
-            "chroma_chunk_count": self.chroma.count_chunks() if healthy else 0,
+            "chroma_chunk_count": self._chroma.count_chunks() if healthy else 0,
         }
 
     @traced("lithos.search.graph")
@@ -1562,7 +1562,7 @@ class SearchEngine:
             sem_by_id: dict[str, SemanticResult] = {}
             if fuse_semantic:
                 try:
-                    sem_results = self.chroma.search(
+                    sem_results = self._chroma.search(
                         query,
                         limit=len(candidate_ids) + 10,
                         threshold=0.0,  # include all candidates regardless of similarity score —
@@ -1653,7 +1653,7 @@ class SearchEngine:
         failures: list[str] = []
 
         try:
-            _ = self.tantivy.index  # triggers open_or_create if needed
+            _ = self._tantivy.index  # triggers open_or_create if needed
         except Exception as exc:
             logger.error("Tantivy backend unavailable: %s", exc, exc_info=True)
             failures.append(f"tantivy: {exc}")
@@ -1665,12 +1665,12 @@ class SearchEngine:
             failures.append(f"chroma: {reason}")
         else:
             try:
-                _ = self.chroma.collection.count()
+                _ = self._chroma.collection.count()
             except Exception as exc:
                 logger.error("Chroma backend unavailable: %s", exc, exc_info=True)
                 failures.append(f"chroma: {exc}")
             try:
-                self.chroma.health_check()
+                self._chroma.health_check()
             except Exception as exc:
                 logger.error("Embedding model probe failed: %s", exc, exc_info=True)
                 failures.append(f"embedding model: {exc}")
@@ -1681,7 +1681,7 @@ class SearchEngine:
 
     def count_documents(self) -> int:
         """Return the number of indexed documents in the full-text backend."""
-        return self.tantivy.count_docs()
+        return self._tantivy.count_docs()
 
     def count_chunks(self) -> int:
         """Return the number of indexed chunks in the semantic backend.
@@ -1693,7 +1693,7 @@ class SearchEngine:
         healthy, _ = self.ensure_semantic_backend_healthy()
         if not healthy:
             return 0
-        return self.chroma.count_chunks()
+        return self._chroma.count_chunks()
 
     def needs_initial_rebuild(self) -> bool:
         """Whether the full-text index was just (re)created and needs to be filled.
@@ -1703,7 +1703,7 @@ class SearchEngine:
         initial corpus rebuild. After the graph fold this becomes part of the
         :meth:`~lithos.knowledge.KnowledgeManager.plan_reconcile` result.
         """
-        return self.tantivy.needs_rebuild
+        return self._tantivy.needs_rebuild
 
     def plan_reconcile_to(self, docs: Iterable[IndexableDocument]) -> SearchReconcilePlan:
         """Compute a :class:`SearchReconcilePlan` describing drift against *docs*.
@@ -1719,14 +1719,14 @@ class SearchEngine:
 
         # --- Tantivy drift detection ---
         try:
-            if self.tantivy.needs_rebuild:
+            if self._tantivy.needs_rebuild:
                 actions.append(
                     ReconcileAction(
                         backend="tantivy", action="full_rebuild", reason="schema_mismatch"
                     )
                 )
             else:
-                tantivy_ids = self.tantivy.get_indexed_doc_ids()
+                tantivy_ids = self._tantivy.get_indexed_doc_ids()
                 if tantivy_ids != corpus_ids:
                     actions.append(
                         ReconcileAction(
@@ -1743,7 +1743,7 @@ class SearchEngine:
 
         # --- ChromaDB drift detection ---
         try:
-            chroma_ids = self.chroma.get_indexed_doc_ids()
+            chroma_ids = self._chroma.get_indexed_doc_ids()
             if chroma_ids != corpus_ids:
                 actions.append(
                     ReconcileAction(
@@ -1771,12 +1771,12 @@ class SearchEngine:
         for action in plan.actions:
             try:
                 if action.backend == "tantivy":
-                    self.tantivy.rebuild_from_docs(plan.docs)
+                    self._tantivy.rebuild_from_docs(plan.docs)
                     repaired += 1
                 elif action.backend == "chroma":
-                    self.chroma.clear()
+                    self._chroma.clear()
                     for doc in plan.docs:
-                        self.chroma.add_document(doc)
+                        self._chroma.add_document(doc)
                     repaired += 1
             except Exception as exc:
                 logger.error("Failed to repair %s backend: %s", action.backend, exc)
