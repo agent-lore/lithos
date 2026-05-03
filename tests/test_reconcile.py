@@ -55,7 +55,7 @@ async def test_indices_dry_run_no_mutation(
     assert any(a.get("action") == "full_rebuild" for a in result["actions"])
 
     # Verify the index was NOT populated (no mutation on dry-run)
-    search = SearchEngine(test_config)
+    search = await SearchEngine.create(test_config)
     ft_results = search.full_text_search("alpha document")
     assert len(ft_results) == 0
 
@@ -74,7 +74,7 @@ async def test_indices_real_run_rebuilds_index(
     )
 
     # Index is empty before reconcile
-    search_before = SearchEngine(test_config)
+    search_before = await SearchEngine.create(test_config)
     assert len(search_before.full_text_search("beta integration")) == 0
 
     result = await reconcile(scope="indices", dry_run=False, config=test_config)
@@ -85,7 +85,7 @@ async def test_indices_real_run_rebuilds_index(
     assert result["summary"]["repaired"] > 0
 
     # Search should now find the document
-    search_after = SearchEngine(test_config)
+    search_after = await SearchEngine.create(test_config)
     ft_results = search_after.full_text_search("beta integration")
     assert any(r.id == doc_id for r in ft_results)
 

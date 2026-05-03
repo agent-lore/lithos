@@ -864,6 +864,9 @@ class SearchEngine:
     def __init__(self, config: LithosConfig | None = None):
         """Initialize search engine.
 
+        Internal constructor: prefer :meth:`create` so the embedding model is
+        loaded eagerly and callers never observe a half-initialised engine.
+
         Args:
             config: Configuration. Uses global config if not provided.
         """
@@ -874,6 +877,36 @@ class SearchEngine:
         self._semantic_store_checked = False
         self._semantic_store_healthy = True
         self._semantic_store_error: str | None = None
+
+    @classmethod
+    async def create(cls, config: LithosConfig | None = None) -> SearchEngine:
+        """Construct a fully-initialised :class:`SearchEngine`.
+
+        Opens both backends and awaits the embedding-model load before
+        returning, so no caller ever observes an unloaded engine. A corrupt
+        Chroma store is quarantined and replaced with a fresh one (preserving
+        the behaviour of :meth:`ensure_semantic_backend_healthy`). Failure of
+        the embedding-model load propagates to the caller.
+        """
+        engine = cls(config=config)
+
+        # Open the Tantivy index (triggers schema-version check / rebuild).
+        _ = engine.tantivy
+
+        # Probe the persisted Chroma store; quarantine it if unreadable.
+        engine.ensure_semantic_backend_healthy()
+
+        # Open the Chroma client/collection so the first query does not pay
+        # the open cost. Skip when the store is unhealthy — semantic search
+        # will surface the error through the standard backend path.
+        if engine._semantic_store_healthy:
+            _ = engine.chroma.collection
+
+        # Eagerly load the embedding model. Failure propagates so callers
+        # see a clear error rather than a silently-degraded engine.
+        await engine.chroma.ensure_model_loaded()
+
+        return engine
 
     @property
     def config(self) -> LithosConfig:
@@ -926,10 +959,6 @@ class SearchEngine:
             self._semantic_store_healthy = healthy
             self._semantic_store_error = error
             return healthy, backup_path
-
-    async def ensure_embeddings_loaded(self) -> None:
-        """Pre-warm the embedding model asynchronously."""
-        await self.chroma.ensure_model_loaded()
 
     @traced("lithos.search.index_document")
     def index_document(self, doc: KnowledgeDocument) -> int:

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -191,10 +192,10 @@ def reindex(ctx: click.Context, clear: bool) -> None:
     config.ensure_directories()
 
     knowledge = KnowledgeManager(config)
-    search = SearchEngine(config)
     graph = KnowledgeGraph(config)
 
     async def do_reindex() -> None:
+        search = await SearchEngine.create(config)
         if clear:
             click.echo("Clearing existing indices...")
             logger.info("reindex: clearing existing indices clear=True")
@@ -369,11 +370,11 @@ def stats(ctx: click.Context) -> None:
     config: LithosConfig = ctx.obj["config"]
 
     knowledge = KnowledgeManager(config)
-    search = SearchEngine(config)
     graph = KnowledgeGraph(config)
     coordination = CoordinationService(config)
 
     async def show_stats() -> None:
+        search = await SearchEngine.create(config)
         # Initialize coordination DB
         await coordination.initialize()
 
@@ -422,22 +423,26 @@ def search(ctx: click.Context, query: str, semantic: bool, limit: int) -> None:
     from lithos.search import SearchEngine
 
     config: LithosConfig = ctx.obj["config"]
-    engine = SearchEngine(config)
 
-    if semantic:
-        click.echo(f"Semantic search: {query}\n")
-        results = engine.semantic_search(query, limit=limit)
-        for i, r in enumerate(results, 1):
-            click.echo(f"{i}. {r.title} (similarity: {r.similarity:.2f})")
-            click.echo(f"   Path: {r.path}")
-            click.echo(f"   {r.snippet[:100]}...\n")
-    else:
+    async def run() -> list[Any]:
+        engine = await SearchEngine.create(config)
+        if semantic:
+            click.echo(f"Semantic search: {query}\n")
+            sem = engine.semantic_search(query, limit=limit)
+            for i, r in enumerate(sem, 1):
+                click.echo(f"{i}. {r.title} (similarity: {r.similarity:.2f})")
+                click.echo(f"   Path: {r.path}")
+                click.echo(f"   {r.snippet[:100]}...\n")
+            return list(sem)
         click.echo(f"Full-text search: {query}\n")
-        results = engine.full_text_search(query, limit=limit)
-        for i, r in enumerate(results, 1):
+        ft = engine.full_text_search(query, limit=limit)
+        for i, r in enumerate(ft, 1):
             click.echo(f"{i}. {r.title} (score: {r.score:.2f})")
             click.echo(f"   Path: {r.path}")
             click.echo(f"   {r.snippet[:100]}...\n")
+        return list(ft)
+
+    results = asyncio.run(run())
 
     if not results:
         click.echo("No results found.")
@@ -524,21 +529,24 @@ def inspect_health(ctx: click.Context) -> None:
     from lithos.search import SearchEngine
 
     config: LithosConfig = ctx.obj["config"]
-    engine = SearchEngine(config)
 
-    status: dict[str, str] = {}
+    async def probe() -> dict[str, str]:
+        engine = await SearchEngine.create(config)
+        result: dict[str, str] = {}
+        try:
+            _ = engine.tantivy.index  # triggers open_or_create if needed
+            result["tantivy"] = "ok"
+        except Exception as exc:
+            result["tantivy"] = f"unavailable: {exc}"
 
-    try:
-        _ = engine.tantivy.index  # triggers open_or_create if needed
-        status["tantivy"] = "ok"
-    except Exception as exc:
-        status["tantivy"] = f"unavailable: {exc}"
+        try:
+            _ = engine.chroma.collection.count()
+            result["chroma"] = "ok"
+        except Exception as exc:
+            result["chroma"] = f"unavailable: {exc}"
+        return result
 
-    try:
-        _ = engine.chroma.collection.count()
-        status["chroma"] = "ok"
-    except Exception as exc:
-        status["chroma"] = f"unavailable: {exc}"
+    status = asyncio.run(probe())
 
     click.echo("Backend health")
     click.echo("=" * 30)

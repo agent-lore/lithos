@@ -86,8 +86,11 @@ class LithosServer:
         set_config(self._config)
 
         # Initialize components — all receive self._config explicitly.
+        # ``search`` is created asynchronously in :meth:`initialize` via
+        # ``SearchEngine.create`` so the embedding model is loaded eagerly
+        # before any caller can observe an unloaded engine.
         self.knowledge = KnowledgeManager(self._config)
-        self.search = SearchEngine(self._config)
+        self.search: SearchEngine = None  # type: ignore[assignment]
         self.graph = KnowledgeGraph(self._config)
         self.coordination = CoordinationService(self._config)
         self.event_bus = EventBus(self._config.events)
@@ -538,6 +541,13 @@ class LithosServer:
                 # Ensure directories exist
                 self.config.ensure_directories()
 
+                # Build the search engine eagerly so the embedding model is
+                # loaded before any request arrives. Tests may pre-inject a
+                # ``search`` instance (e.g. a MagicMock) to avoid the real
+                # backend cost.
+                if self.search is None:
+                    self.search = await SearchEngine.create(self._config)
+
                 # Initialize and run schema migrations
                 registry_path = (
                     self.config.storage.lithos_store_path / "migrations" / "registry.json"
@@ -599,14 +609,6 @@ class LithosServer:
                     # Try to load cached graph
                     if not self.graph.load_cache():
                         await self._rebuild_indices()
-
-                # Pre-warm the embedding model in the background so the first real
-                # request does not block the event loop.  Skip if the rebuild path
-                # already loaded it synchronously.
-                if self.search.chroma._model is None:
-                    task = asyncio.create_task(self._prewarm_embeddings())
-                    self._background_tasks.add(task)
-                    task.add_done_callback(self._background_tasks.discard)
 
                 # Ensure edge store is open before the enrich worker
                 # starts — projection helpers no-op when edges.db is absent.
@@ -748,17 +750,6 @@ class LithosServer:
             return self.search.chroma.count_chunks()
         except Exception:
             return 0
-
-    async def _prewarm_embeddings(self) -> None:
-        """Pre-warm the embedding model, logging errors instead of crashing."""
-        tracer = get_tracer()
-        with tracer.start_as_current_span("lithos.embeddings.prewarm") as span:
-            try:
-                await self.search.ensure_embeddings_loaded()
-                span.set_attribute("lithos.embeddings.status", "ok")
-            except Exception:
-                span.set_attribute("lithos.embeddings.status", "failed")
-                logger.warning("Background embedding model pre-warm failed", exc_info=True)
 
     async def _rebuild_indices(self) -> None:
         """Rebuild all search indices from files."""
@@ -1556,9 +1547,9 @@ class LithosServer:
                 # hybrid_search) and the mutating methods (index_document, remove_document) are
                 # all wrapped in asyncio.to_thread() so Tantivy commits and ChromaDB embedding
                 # don't block the event loop. Concurrent read+write is not protected by a lock,
-                # but tantivy-py and ChromaDB are thread-safe for these operations. ChromaDB
-                # model init race on ensure_embeddings_loaded() is mitigated by the existing
-                # warmup call at server startup.
+                # but tantivy-py and ChromaDB are thread-safe for these operations. The
+                # embedding model is loaded eagerly in SearchEngine.create() at server
+                # startup, so no model-init race is reachable here.
                 if mode == "fulltext":
                     ft_results = await asyncio.to_thread(
                         self.search.full_text_search,

@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 import aiosqlite
 import frontmatter as fm
 import pytest
+import pytest_asyncio
 
 from lithos.config import LcmaConfig, LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
@@ -122,9 +123,9 @@ def seeded_graph(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -> Kn
     return graph
 
 
-@pytest.fixture
-def seeded_search(seeded_config: LithosConfig) -> SearchEngine:
-    return SearchEngine(seeded_config)
+@pytest_asyncio.fixture
+async def seeded_search(seeded_config: LithosConfig) -> SearchEngine:
+    return await SearchEngine.create(seeded_config)
 
 
 @pytest.fixture
