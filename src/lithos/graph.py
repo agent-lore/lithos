@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -42,6 +43,16 @@ class LinkInfo:
 class KnowledgeGraph:
     """NetworkX-based knowledge graph for wiki-links."""
 
+    # Debounce thresholds for the cache flush (#203). Bursts of writes used to
+    # serialise the entire graph on every mutation; now ``add_document`` /
+    # ``remove_document`` / ``clear`` mark dirty and only flush when one of:
+    #   - ``_FLUSH_AFTER_OPS`` mutations have elapsed since the last flush, or
+    #   - ``_FLUSH_AFTER_SECONDS`` seconds have elapsed since the last flush.
+    # Explicit flush points (CLI reindex completion, reconcile completion,
+    # server shutdown) keep calling :meth:`save_cache` directly to force-write.
+    _FLUSH_AFTER_OPS: int = 50
+    _FLUSH_AFTER_SECONDS: float = 5.0
+
     def __init__(self, config: LithosConfig | None = None):
         """Initialize knowledge graph.
 
@@ -55,6 +66,9 @@ class KnowledgeGraph:
         self._path_to_node: dict[str, str] = {}  # relative_path -> node_id
         self._filename_to_nodes: dict[str, list[str]] = {}  # filename -> [node_ids]
         self._alias_to_node: dict[str, str] = {}  # alias -> node_id
+        # Debounce state for save_cache (#203)
+        self._dirty_ops: int = 0
+        self._last_flush_at: float = time.monotonic()
 
     @property
     def config(self) -> LithosConfig:
@@ -149,6 +163,24 @@ class KnowledgeGraph:
                 os.unlink(tmp_path)
             raise
 
+        # Reset debounce state — every flush starts a fresh ops/seconds window.
+        self._dirty_ops = 0
+        self._last_flush_at = time.monotonic()
+
+    def _maybe_flush(self) -> None:
+        """Flush to disk if N ops or K seconds have elapsed since the last flush.
+
+        Internal — invoked by ``add_document`` / ``remove_document`` /
+        ``clear``. Bulk-write workflows hit the threshold and stop paying
+        the per-op serialisation cost (#203). Explicit flush points
+        continue to call :meth:`save_cache` directly.
+        """
+        if self._dirty_ops == 0:
+            return
+        elapsed = time.monotonic() - self._last_flush_at
+        if self._dirty_ops >= self._FLUSH_AFTER_OPS or elapsed >= self._FLUSH_AFTER_SECONDS:
+            self.save_cache()
+
     @traced("lithos.graph.add_document")
     def add_document(self, doc: KnowledgeDocument) -> None:
         """Add or update a document in the graph.
@@ -221,6 +253,10 @@ class KnowledgeGraph:
 
         # Resolve any previously unresolved links that now point to this document
         self._resolve_pending_links(doc)
+
+        # Mark dirty and consider a debounced flush (#203).
+        self._dirty_ops += 1
+        self._maybe_flush()
 
     def _remove_node_lookups(self, node_id: str) -> None:
         """Remove a node from lookup tables."""
@@ -307,6 +343,9 @@ class KnowledgeGraph:
             self._remove_node_lookups(node_id)
             self.graph.remove_node(node_id)
             logger.info("graph remove_document: doc_id=%s", doc_id)
+            # Mark dirty and consider a debounced flush (#203).
+            self._dirty_ops += 1
+            self._maybe_flush()
         else:
             logger.debug("graph remove_document: doc_id=%s not found (no-op)", doc_id)
 
@@ -513,12 +552,15 @@ class KnowledgeGraph:
         return ambiguous
 
     def clear(self) -> None:
-        """Clear the graph."""
+        """Clear the graph (in-memory and reset debounce state)."""
         self._graph = nx.DiGraph()
         self._id_to_node.clear()
         self._path_to_node.clear()
         self._filename_to_nodes.clear()
         self._alias_to_node.clear()
+        # Discard pending dirty state — there's nothing left to flush.
+        self._dirty_ops = 0
+        self._last_flush_at = time.monotonic()
 
     def get_doc_ids(self) -> set[str]:
         """Return the set of doc_ids tracked by the graph."""
