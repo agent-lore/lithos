@@ -865,11 +865,15 @@ class LithosServer:
         self._observer = observer
 
     def stop_file_watcher(self) -> None:
-        """Stop file watcher."""
+        """Stop file watcher and flush any debounced graph-cache writes."""
         if self._observer:
             self._observer.stop()
             self._observer.join()
             self._observer = None
+        # Force-flush the graph cache so pending mutations land on disk before
+        # the process exits (#203).
+        if self.graph._dirty_ops > 0:
+            self.graph.save_cache()
 
     async def stop_enrich_worker(self) -> None:
         """Stop the enrichment background worker."""
@@ -906,15 +910,15 @@ class LithosServer:
 
                             await self.knowledge.delete(doc_id)
                             await asyncio.to_thread(self.search.remove, doc_id)
+                            # graph.remove_document() debounces its own flush (#203)
                             self.graph.remove_document(doc_id)
-                            self.graph.save_cache()
                     else:
                         is_new = not self.knowledge.get_id_by_path(relative_path)
                         doc = await self.knowledge.sync_from_disk(relative_path)
                         indexable = KnowledgeManager.to_indexable(doc)
                         await asyncio.to_thread(self.search.index, indexable)
+                        # graph.add_document() debounces its own flush (#203)
                         self.graph.add_document(doc)
-                        self.graph.save_cache()
 
                         event_type = "created" if is_new else "updated"
                         lithos_metrics.file_watcher_events.add(1, {"event_type": event_type})
@@ -1322,8 +1326,8 @@ class LithosServer:
                 # reads — see #199.
                 indexable = KnowledgeManager.to_indexable(doc)
                 await asyncio.to_thread(self.search.index, indexable)
+                # graph.add_document() debounces its own flush (#203)
                 self.graph.add_document(doc)
-                self.graph.save_cache()
 
                 span.set_attribute("lithos.doc_id", doc.id)
                 span.set_attribute("lithos.write_status", result.status)
@@ -1459,8 +1463,8 @@ class LithosServer:
                     }
 
                 await asyncio.to_thread(self.search.remove, id)
+                # graph.remove_document() debounces its own flush (#203)
                 self.graph.remove_document(id)
-                self.graph.save_cache()
 
                 await self._emit(
                     LithosEvent(
