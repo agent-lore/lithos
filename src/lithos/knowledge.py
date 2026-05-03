@@ -21,7 +21,12 @@ from lithos.errors import SlugCollisionError
 from lithos.telemetry import lithos_metrics, timed_write, traced
 
 if TYPE_CHECKING:
-    from lithos.search import IndexableDocument
+    from lithos.search import (
+        IndexableDocument,
+        SearchEngine,
+        SearchReconcilePlan,
+        SearchReconcileResult,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -616,6 +621,24 @@ _UNSET = _UnsetType()
 """Sentinel for omit-vs-clear distinction on optional fields."""
 
 
+@dataclass(frozen=True)
+class ReconcilePlan:
+    """Aggregate reconcile plan owned by :class:`KnowledgeManager`.
+
+    Carries one slice per derived view. Today only the search slice exists;
+    ``graph=`` and ``provenance=`` fields land in later ADR-0001 phases.
+    """
+
+    search: "SearchReconcilePlan"
+
+
+@dataclass(frozen=True)
+class ReconcileResult:
+    """Outcome of applying a :class:`ReconcilePlan`."""
+
+    search: "SearchReconcileResult"
+
+
 class KnowledgeManager:
     """Manages knowledge documents - CRUD operations."""
 
@@ -641,6 +664,32 @@ class KnowledgeManager:
             updated_at=(doc.metadata.updated_at.isoformat() if doc.metadata.updated_at else ""),
             expires_at=(doc.metadata.expires_at.isoformat() if doc.metadata.expires_at else ""),
         )
+
+    async def _scan_corpus(self) -> list[KnowledgeDocument]:
+        """Return every document in the authoritative markdown corpus.
+
+        Owned by KnowledgeManager because the corpus is its source of truth.
+        Reconciliation reads through here; it never writes.
+        """
+        _, total = await self.list_all(limit=0)
+        if total == 0:
+            return []
+        docs, _ = await self.list_all(limit=total)
+        return docs
+
+    async def plan_reconcile(self, search: "SearchEngine") -> ReconcilePlan:
+        """Plan a reconcile of every derived view against the corpus.
+
+        Today only the search slice is populated. The ``graph`` and
+        ``provenance`` fields land in later ADR-0001 phases.
+        """
+        corpus = await self._scan_corpus()
+        indexables = [self.to_indexable(d) for d in corpus]
+        return ReconcilePlan(search=search.plan_reconcile_to(indexables))
+
+    async def apply_reconcile(self, plan: ReconcilePlan, search: "SearchEngine") -> ReconcileResult:
+        """Apply *plan* — bringing each derived view back into agreement."""
+        return ReconcileResult(search=search.apply_reconcile(plan.search))
 
     def __init__(self, config: LithosConfig):
         """Initialize knowledge manager.

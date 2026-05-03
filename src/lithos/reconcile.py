@@ -65,17 +65,14 @@ def _make_result(
 
 
 async def _scan_corpus(config: LithosConfig) -> list[KnowledgeDocument]:
-    """Return all documents from the authoritative markdown corpus.
+    """Backwards-compatibility shim around :meth:`KnowledgeManager._scan_corpus`.
 
-    Passes ``config`` explicitly into KnowledgeManager so that callers
-    using a non-global config (e.g. tests) get the correct knowledge path.
+    The corpus scan itself moved onto :class:`KnowledgeManager` in #226 because
+    the corpus is its source of truth. This shim still feeds the
+    ``_reconcile_graph`` and ``_reconcile_provenance_projection`` paths; both
+    fold onto KM in later ADR-0001 phases, at which point this shim is deleted.
     """
-    knowledge = KnowledgeManager(config=config)
-    _, total = await knowledge.list_all(limit=0)
-    if total == 0:
-        return []
-    docs, _ = await knowledge.list_all(limit=total)
-    return docs
+    return await KnowledgeManager(config=config)._scan_corpus()
 
 
 def _aggregate_status(statuses: list[ReconcileStatus]) -> ReconcileStatus:
@@ -96,107 +93,69 @@ def _aggregate_status(statuses: list[ReconcileStatus]) -> ReconcileStatus:
 
 
 async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, Any]:
-    """Reconcile Tantivy and ChromaDB indices against the markdown corpus."""
+    """Reconcile the search indices via :class:`KnowledgeManager` (#226).
+
+    KM owns the corpus scan and orchestrates the search slice; this function
+    is a thin adapter that translates the structured
+    :class:`~lithos.knowledge.ReconcilePlan` /
+    :class:`~lithos.knowledge.ReconcileResult` back into the legacy dict shape
+    the public ``reconcile()`` aggregator returns.
+    """
     tracer = get_tracer()
-    actions: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
 
     logger.info(
         "reconcile indices started: dry_run=%s",
         dry_run,
         extra={"scope": "indices", "dry_run": dry_run},
     )
-    with tracer.start_as_current_span("lithos.reconcile.scan") as scan_span:
-        scan_span.set_attribute("lithos.reconcile.scope", "indices")
-        try:
-            corpus_docs = await _scan_corpus(config)
-        except Exception as exc:
-            logger.error("Failed to scan corpus for indices reconcile: %s", exc)
-            return _make_result(
-                "indices",
-                dry_run,
-                status="failed",
-                failed=1,
-                failures=[{"code": "internal_error", "detail": str(exc)}],
-            )
-        corpus_ids = {doc.id for doc in corpus_docs}
 
-    search = await SearchEngine.create(config)
-    with tracer.start_as_current_span("lithos.reconcile.diff") as diff_span:
-        diff_span.set_attribute("lithos.reconcile.scope", "indices")
+    knowledge = KnowledgeManager(config=config)
+    try:
+        with tracer.start_as_current_span("lithos.reconcile.scan") as scan_span:
+            scan_span.set_attribute("lithos.reconcile.scope", "indices")
+            search = await SearchEngine.create(config)
+            with tracer.start_as_current_span("lithos.reconcile.diff") as diff_span:
+                diff_span.set_attribute("lithos.reconcile.scope", "indices")
+                plan = await knowledge.plan_reconcile(search)
+    except Exception as exc:
+        logger.error("Failed to plan indices reconcile: %s", exc)
+        return _make_result(
+            "indices",
+            dry_run,
+            status="failed",
+            failed=1,
+            failures=[{"code": "internal_error", "detail": str(exc)}],
+        )
 
-        # --- Tantivy drift detection ---
-        try:
-            if search.tantivy.needs_rebuild:
-                actions.append(
-                    {"backend": "tantivy", "action": "full_rebuild", "reason": "schema_mismatch"}
-                )
-            else:
-                tantivy_ids = search.tantivy.get_indexed_doc_ids()
-                if tantivy_ids != corpus_ids:
-                    actions.append(
-                        {
-                            "backend": "tantivy",
-                            "action": "full_rebuild",
-                            "reason": "doc_set_mismatch",
-                        }
-                    )
-        except Exception as exc:
-            logger.warning("Tantivy drift check failed: %s", exc)
-            actions.append(
-                {"backend": "tantivy", "action": "full_rebuild", "reason": "check_failed"}
-            )
+    actions = [
+        {"backend": a.backend, "action": a.action, "reason": a.reason} for a in plan.search.actions
+    ]
+    scanned = plan.search.scanned
 
-        # --- ChromaDB drift detection ---
-        try:
-            chroma_doc_ids = search.chroma.get_indexed_doc_ids()
-            if chroma_doc_ids != corpus_ids:
-                actions.append(
-                    {"backend": "chroma", "action": "full_rebuild", "reason": "doc_set_mismatch"}
-                )
-        except Exception as exc:
-            logger.warning("ChromaDB drift check failed: %s", exc)
-            actions.append(
-                {"backend": "chroma", "action": "full_rebuild", "reason": "check_failed"}
-            )
-
-    if not actions:
-        return _make_result("indices", dry_run, status="noop", scanned=len(corpus_docs))
+    if plan.search.is_noop:
+        return _make_result("indices", dry_run, status="noop", scanned=scanned)
 
     if dry_run:
         return _make_result(
             "indices",
             dry_run,
             status="ok",
-            scanned=len(corpus_docs),
+            scanned=scanned,
             repaired=len(actions),
             actions=actions,
         )
 
-    # Apply repairs
-    repaired = 0
     with tracer.start_as_current_span("lithos.reconcile.apply") as apply_span:
         apply_span.set_attribute("lithos.reconcile.scope", "indices")
-        for action in actions:
-            backend = action["backend"]
-            apply_span.set_attribute("lithos.reconcile.backend", backend)
-            try:
-                if backend == "tantivy":
-                    indexables = [KnowledgeManager.to_indexable(d) for d in corpus_docs]
-                    search.tantivy.rebuild_from_docs(indexables)
-                    repaired += 1
-                elif backend == "chroma":
-                    search.chroma.clear()
-                    for doc in corpus_docs:
-                        search.chroma.add_document(KnowledgeManager.to_indexable(doc))
-                    repaired += 1
-            except Exception as exc:
-                logger.error("Failed to repair %s backend: %s", backend, exc)
-                failures.append(
-                    {"code": "index_rebuild_failed", "backend": backend, "detail": str(exc)}
-                )
+        result = await knowledge.apply_reconcile(plan, search)
 
+    repaired = result.search.repaired
+    failures = [
+        {"code": "index_rebuild_failed", "backend": f.backend, "detail": f.detail}
+        for f in result.search.failed
+    ]
     n_failed = len(failures)
+
     if n_failed == 0:
         status: ReconcileStatus = "ok"
     elif repaired == 0:
@@ -208,14 +167,14 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
     logger.info(
         "reconcile indices complete: status=%s scanned=%d repaired=%d failed=%d dry_run=%s",
         status,
-        len(corpus_docs),
+        scanned,
         repaired,
         n_failed,
         dry_run,
         extra={
             "scope": "indices",
             "status": status,
-            "scanned": len(corpus_docs),
+            "scanned": scanned,
             "repaired": repaired,
             "failed": n_failed,
             "dry_run": dry_run,
@@ -225,7 +184,7 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
         "indices",
         dry_run,
         status=status,
-        scanned=len(corpus_docs),
+        scanned=scanned,
         repaired=repaired,
         failed=n_failed,
         actions=actions,
