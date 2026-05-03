@@ -734,8 +734,23 @@ collection.count()
         return backup_path
 
     def health_check(self) -> None:
-        """Probe the embedding model (warm-up / liveness). Raises on failure."""
-        self.model.encode(["health check"], show_progress_bar=False)
+        """Cheap liveness probe of the embedding model.
+
+        Asserts the model is loaded and exposes its expected attributes.
+        Does **not** run a fresh ``encode`` — earlier this method invoked
+        ``self.model.encode(["health check"])`` on every probe, which
+        Docker HEALTHCHECKs and load-balancer liveness checks called every
+        few seconds. Cold starts also paid the full model load. (#198)
+
+        Raises ``RuntimeError`` if the model has not been loaded.
+        """
+        if self._model is None:
+            raise RuntimeError("embedding model not loaded")
+        # ``get_sentence_embedding_dimension`` is an O(1) attribute read on
+        # the loaded model — exercises that the model is structurally
+        # usable without doing any tensor work.
+        if self._model.get_sentence_embedding_dimension() is None:
+            raise RuntimeError("embedding model has no sentence-embedding dimension")
 
     @property
     def client(self) -> ClientAPI:

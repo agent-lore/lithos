@@ -87,3 +87,32 @@ async def test_needs_initial_rebuild_reflects_tantivy_state(
     # A freshly-created index has no schema marker on disk before create runs,
     # so open_or_create writes one and flips the rebuild flag.
     assert engine.needs_initial_rebuild() is True
+
+
+@pytest.mark.asyncio
+async def test_chroma_health_check_does_not_call_encode(
+    search_engine: SearchEngine,
+) -> None:
+    """Regression for #198: liveness probe must not invoke the embedding model.
+
+    The previous implementation called ``self.model.encode(["health check"])`` on
+    every HTTP /health hit, which Docker HEALTHCHECKs and load-balancer liveness
+    probes call every few seconds.
+    """
+    with patch.object(search_engine._chroma._model, "encode") as encode_spy:
+        search_engine._chroma.health_check()
+    encode_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chroma_health_check_raises_when_model_unloaded(
+    search_engine: SearchEngine,
+) -> None:
+    """Liveness probe still fails loudly when the model is genuinely missing."""
+    original = search_engine._chroma._model
+    search_engine._chroma._model = None
+    try:
+        with pytest.raises(RuntimeError, match="not loaded"):
+            search_engine._chroma.health_check()
+    finally:
+        search_engine._chroma._model = original
