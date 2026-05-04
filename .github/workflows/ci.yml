@@ -39,6 +39,8 @@ jobs:
         run: uv sync
 
       - name: Run tests with coverage
+        env:
+          LITHOS_DETECT_THREAD_LEAKS: "1"
         run: uv run pytest tests/ -m "not integration" --cov=lithos --cov-report=xml -v --tb=short
 
       - name: Upload coverage

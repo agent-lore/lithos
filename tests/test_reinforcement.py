@@ -514,4 +514,4 @@ class TestQuarantineFiltering:
             assert good_id in retrieved_ids, "Active note should appear in retrieval"
             assert bad_id not in retrieved_ids, "Quarantined note must be excluded from retrieval"
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()

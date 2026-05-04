@@ -60,7 +60,7 @@ async def _local_sse_endpoint(temp_dir: Path):
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        server.stop_file_watcher()
+        await server.shutdown()
 
 
 @asynccontextmanager

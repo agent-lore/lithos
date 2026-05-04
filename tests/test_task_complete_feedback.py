@@ -23,7 +23,7 @@ async def srv(test_config: LithosConfig) -> LithosServer:
     server = LithosServer(test_config)
     await server.initialize()
     yield server  # type: ignore[misc]
-    server.stop_file_watcher()
+    await server.shutdown()
 
 
 async def _call(server: LithosServer, tool_name: str, **kwargs: Any) -> dict[str, Any]:

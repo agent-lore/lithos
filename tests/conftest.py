@@ -1,9 +1,9 @@
 """Pytest configuration and fixtures."""
 
+import gc
 import logging
 import os
 import shutil
-import sys
 import tempfile
 import threading
 from collections.abc import AsyncGenerator, Generator
@@ -67,11 +67,16 @@ def _detect_aiosqlite_thread_leaks(request: pytest.FixtureRequest) -> Generator[
     after = _aiosqlite_worker_threads()
     leaked = [t for t in after if t.ident not in before]
     if leaked:
+        # Some leaked Connection objects become collectible only after the test
+        # frame unwinds; give them one GC cycle before declaring a leak.
+        gc.collect()
+        after_gc = _aiosqlite_worker_threads()
+        leaked = [t for t in after_gc if t.ident not in before]
+    if leaked:
         names = ", ".join(t.name for t in leaked)
-        print(
-            f"\n[THREAD LEAK] {request.node.nodeid} leaked {len(leaked)} aiosqlite "
-            f"worker thread(s): {names}",
-            file=sys.stderr,
+        pytest.fail(
+            f"{request.node.nodeid} leaked {len(leaked)} aiosqlite worker thread(s): {names}",
+            pytrace=False,
         )
 
 
