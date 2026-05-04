@@ -817,9 +817,7 @@ class TestScoutGraph:
 
 
 @pytest.fixture
-async def coactivation_stats_store(
-    seeded_config: LithosConfig, seeded_km: KnowledgeManager
-):
+async def coactivation_stats_store(seeded_config: LithosConfig, seeded_km: KnowledgeManager):
     """StatsStore with seeded coactivation data."""
     store = StatsStore(seeded_config)
     await store.open()
@@ -871,9 +869,7 @@ class TestScoutCoactivation:
             # note (_ID2) lives in the "default" namespace, but the
             # evidence is from "other".
             for _ in range(5):
-                await store.increment_coactivation(
-                    node_a=_ID1, node_b=_ID2, namespace="other"
-                )
+                await store.increment_coactivation(node_a=_ID1, node_b=_ID2, namespace="other")
             candidates = await scout_coactivation(
                 [_ID1], store, seeded_km, namespace_filter=["default"]
             )
