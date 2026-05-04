@@ -17,19 +17,25 @@ from lithos.lcma.stats import StatsStore
 
 
 @pytest_asyncio.fixture
-async def edge_store(test_config: LithosConfig) -> EdgeStore:
-    """Create and open an EdgeStore for testing."""
+async def edge_store(test_config: LithosConfig):
+    """Create, open, and close an EdgeStore around the test."""
     store = EdgeStore(test_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 @pytest_asyncio.fixture
-async def stats_store(test_config: LithosConfig) -> StatsStore:
-    """Create and open a StatsStore for testing."""
+async def stats_store(test_config: LithosConfig):
+    """Create, open, and close a StatsStore around the test."""
     store = StatsStore(test_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 async def _create_note(
@@ -508,4 +514,4 @@ class TestQuarantineFiltering:
             assert good_id in retrieved_ids, "Active note should appear in retrieval"
             assert bad_id not in retrieved_ids, "Quarantined note must be excluded from retrieval"
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()

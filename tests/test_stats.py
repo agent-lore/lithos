@@ -12,11 +12,14 @@ from lithos.lcma.stats import StatsStore
 
 
 @pytest_asyncio.fixture
-async def stats_store(test_config: LithosConfig) -> StatsStore:
-    """Create and open a StatsStore for testing."""
+async def stats_store(test_config: LithosConfig):
+    """Create, open, and close a StatsStore around the test."""
     store = StatsStore(test_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 class TestStatsStoreCreation:
@@ -26,7 +29,10 @@ class TestStatsStoreCreation:
         store = StatsStore(test_config)
         assert not store.db_path.exists()
         await store.open()
-        assert store.db_path.exists()
+        try:
+            assert store.db_path.exists()
+        finally:
+            await store.close()
 
     async def test_schema_has_all_tables(self, stats_store: StatsStore) -> None:
         conn = sqlite3.connect(str(stats_store.db_path))
@@ -165,8 +171,10 @@ class TestIdempotentReopen:
     async def test_reopen_preserves_rows(self, test_config: LithosConfig) -> None:
         store = StatsStore(test_config)
         await store.open()
+        # Close the first store so its persistent WAL writer does not
+        # contend with the standalone insert below for the same DB file.
+        await store.close()
 
-        # Insert a row into node_stats
         async with __import__("aiosqlite").connect(store.db_path) as db:
             await db.execute(
                 "INSERT INTO node_stats (node_id, retrieval_count, salience) VALUES (?, ?, ?)",
@@ -174,18 +182,21 @@ class TestIdempotentReopen:
             )
             await db.commit()
 
-        # Re-open
+        # Re-open and verify rows are preserved.
         store2 = StatsStore(test_config)
         await store2.open()
-
-        async with __import__("aiosqlite").connect(store2.db_path) as db:
-            cursor = await db.execute(
-                "SELECT retrieval_count, salience FROM node_stats WHERE node_id = ?", ("n1",)
-            )
-            row = await cursor.fetchone()
-        assert row is not None
-        assert row[0] == 5
-        assert row[1] == 0.8
+        try:
+            async with __import__("aiosqlite").connect(store2.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT retrieval_count, salience FROM node_stats WHERE node_id = ?",
+                    ("n1",),
+                )
+                row = await cursor.fetchone()
+            assert row is not None
+            assert row[0] == 5
+            assert row[1] == 0.8
+        finally:
+            await store2.close()
 
 
 class TestInsertSelectRoundTrip:
@@ -397,9 +408,12 @@ class TestCorruptRecovery:
         store.db_path.write_bytes(b"not a sqlite database at all")
 
         await store.open()
-        assert store.db_path.exists()
-        quarantined = list(store.db_path.parent.glob("stats.db.corrupt-*"))
-        assert len(quarantined) == 1
+        try:
+            assert store.db_path.exists()
+            quarantined = list(store.db_path.parent.glob("stats.db.corrupt-*"))
+            assert len(quarantined) == 1
+        finally:
+            await store.close()
 
     async def test_quarantined_db_contains_original_bytes(self, test_config: LithosConfig) -> None:
         store = StatsStore(test_config)
@@ -408,8 +422,11 @@ class TestCorruptRecovery:
         store.db_path.write_bytes(garbage)
 
         await store.open()
-        quarantined = list(store.db_path.parent.glob("stats.db.corrupt-*"))
-        assert quarantined[0].read_bytes() == garbage
+        try:
+            quarantined = list(store.db_path.parent.glob("stats.db.corrupt-*"))
+            assert quarantined[0].read_bytes() == garbage
+        finally:
+            await store.close()
 
     async def test_recreated_db_has_all_tables(self, test_config: LithosConfig) -> None:
         store = StatsStore(test_config)
@@ -417,23 +434,26 @@ class TestCorruptRecovery:
         store.db_path.write_bytes(b"garbage")
 
         await store.open()
-        conn = sqlite3.connect(str(store.db_path))
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        )
-        tables = {row[0] for row in cursor.fetchall()}
-        conn.close()
-        assert tables == {
-            "node_stats",
-            "coactivation",
-            "enrich_queue",
-            "working_memory",
-            "receipts",
-            "task_consolidation_log",
-            "consolidation_edge_ops",
-            "consolidation_salience_ops",
-        }
+        try:
+            conn = sqlite3.connect(str(store.db_path))
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+            tables = {row[0] for row in cursor.fetchall()}
+            conn.close()
+            assert tables == {
+                "node_stats",
+                "coactivation",
+                "enrich_queue",
+                "working_memory",
+                "receipts",
+                "task_consolidation_log",
+                "consolidation_edge_ops",
+                "consolidation_salience_ops",
+            }
+        finally:
+            await store.close()
 
 
 class TestStoreLocation:
@@ -615,10 +635,12 @@ class TestCitedCountMigration:
         # Open via StatsStore — should run migration
         store = StatsStore(test_config)
         await store.open()
-
-        row = await store.get_node_stats("old_node")
-        assert row is not None
-        assert row["cited_count"] == 0
+        try:
+            row = await store.get_node_stats("old_node")
+            assert row is not None
+            assert row["cited_count"] == 0
+        finally:
+            await store.close()
 
 
 class TestGetWorkingMemory:
@@ -1074,3 +1096,70 @@ class TestConsolidationTracking:
         # Idempotent
         await stats_store.record_consolidation_salience_op("t1", "node-1")
         assert await stats_store.has_consolidation_salience_op("t1", "node-1")
+
+
+class TestPersistentConnectionHardening:
+    """Shared-connection isolation and recovery regressions for #172."""
+
+    async def test_reads_wait_for_inflight_transaction(self, stats_store: StatsStore) -> None:
+        db = stats_store._conn()
+        original_execute = db.execute
+        txn_statement_applied = asyncio.Event()
+        release_transaction = asyncio.Event()
+        paused = False
+
+        async def execute(sql: str, params=()) -> object:
+            nonlocal paused
+            result = await original_execute(sql, params)
+            if not paused and "INSERT INTO node_stats (node_id, salience)" in sql:
+                paused = True
+                txn_statement_applied.set()
+                await release_transaction.wait()
+            return result
+
+        db.execute = execute  # type: ignore[method-assign]
+
+        writer = asyncio.create_task(
+            stats_store.update_salience_and_record_consolidation(
+                node_id="node-1",
+                delta=0.3,
+                task_id="task-1",
+            )
+        )
+        await asyncio.wait_for(txn_statement_applied.wait(), timeout=1)
+
+        reader = asyncio.create_task(stats_store.get_node_stats("node-1"))
+        done, pending = await asyncio.wait({reader}, timeout=0.05)
+        assert not done
+        assert pending == {reader}
+
+        release_transaction.set()
+        await writer
+
+        row = await asyncio.wait_for(reader, timeout=1)
+        assert row is not None
+        assert row["salience"] == pytest.approx(0.8)
+
+    async def test_reopens_after_connection_liveness_error(self, stats_store: StatsStore) -> None:
+        db = stats_store._conn()
+        original_execute = db.execute
+        fail_once = True
+
+        async def execute(sql: str, params=()) -> object:
+            nonlocal fail_once
+            if fail_once:
+                fail_once = False
+                raise ValueError("no active connection")
+            return await original_execute(sql, params)
+
+        db.execute = execute  # type: ignore[method-assign]
+
+        with pytest.raises(ValueError, match="no active connection"):
+            await stats_store.increment_node_stats(node_id="node-1")
+
+        assert stats_store._db is not db
+
+        await stats_store.increment_node_stats(node_id="node-1")
+        row = await stats_store.get_node_stats("node-1")
+        assert row is not None
+        assert row["retrieval_count"] == 1

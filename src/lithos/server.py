@@ -904,9 +904,32 @@ class LithosServer:
             self.graph.save_cache()
 
     async def stop_enrich_worker(self) -> None:
-        """Stop the enrichment background worker."""
+        """Stop the enrichment background worker and close LCMA stores.
+
+        StatsStore and EdgeStore now hold persistent connections (#172); they
+        must be closed to release the SQLite WAL handles cleanly.
+        """
         if self._enrich_worker is not None:
             await self._enrich_worker.stop()
+        if self.stats_store is not None:
+            await self.stats_store.close()
+        if self.edge_store is not None:
+            await self.edge_store.close()
+
+    async def shutdown(self) -> None:
+        """Stop every background worker and close every persistent handle.
+
+        Idempotent. Aggregates :meth:`stop_coordination_stats_refresh`,
+        :meth:`stop_enrich_worker`, and :meth:`stop_file_watcher` so callers
+        — especially test fixtures — do not need to track which subsystems
+        own which handles. Forgetting any one of these used to leave
+        aiosqlite worker threads alive past test event-loop teardown,
+        which surfaced as ``RuntimeError: Event loop is closed``
+        warnings and (on CI) job-hanging orphan processes.
+        """
+        await self.stop_coordination_stats_refresh()
+        await self.stop_enrich_worker()
+        self.stop_file_watcher()
 
     async def handle_file_rename(self, src_path: Path, dest_path: Path) -> None:
         """Handle a file-rename watchdog event (#202).

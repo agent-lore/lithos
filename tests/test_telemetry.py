@@ -206,7 +206,7 @@ class TestTelemetryIntegration:
         await srv.initialize()
         yield srv, exporter
 
-        srv.stop_file_watcher()
+        await srv.shutdown()
         shutdown_telemetry()
         _reset_for_testing()
 
@@ -1057,7 +1057,7 @@ class TestStartupDurationMetric:
         try:
             srv = LithosServer(test_config)
             await srv.initialize()
-            srv.stop_file_watcher()
+            await srv.shutdown()
         finally:
             tel_module.lithos_metrics._startup_duration = orig
 

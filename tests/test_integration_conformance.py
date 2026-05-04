@@ -319,7 +319,7 @@ class TestRestartPersistence:
                 "ttl_minutes": 30,
             },
         )
-        first.stop_file_watcher()
+        await first.shutdown()
 
         second = LithosServer(test_config)
         await second.initialize()
@@ -333,7 +333,7 @@ class TestRestartPersistence:
         assert len(status_payload["tasks"]) == 1
         assert status_payload["tasks"][0]["id"] == task_id
         assert any(c["aspect"] == "verification" for c in status_payload["tasks"][0]["claims"])
-        second.stop_file_watcher()
+        await second.shutdown()
 
     @pytest.mark.asyncio
     async def test_rebuild_skips_malformed_files(self, test_config: LithosConfig):
@@ -353,7 +353,7 @@ class TestRestartPersistence:
                 },
             )
             ids.append(payload["id"])
-        first.stop_file_watcher()
+        await first.shutdown()
 
         # Inject malformed markdown files into the knowledge directory.
         # broken-yaml.md has invalid YAML and will be skipped by _rebuild_indices.
@@ -387,7 +387,7 @@ class TestRestartPersistence:
         for doc_id in ids:
             assert second.graph.has_node(doc_id)
 
-        second.stop_file_watcher()
+        await second.shutdown()
 
 
 class TestFileWatcherRace:

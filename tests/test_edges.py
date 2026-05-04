@@ -11,11 +11,14 @@ from lithos.lcma.edges import EdgeStore
 
 
 @pytest_asyncio.fixture
-async def edge_store(test_config: LithosConfig) -> EdgeStore:
-    """Create and open an EdgeStore for testing."""
+async def edge_store(test_config: LithosConfig):
+    """Create, open, and close an EdgeStore around the test."""
     store = EdgeStore(test_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 class TestEdgeStoreCreation:
@@ -25,7 +28,10 @@ class TestEdgeStoreCreation:
         store = EdgeStore(test_config)
         assert not store.db_path.exists()
         await store.open()
-        assert store.db_path.exists()
+        try:
+            assert store.db_path.exists()
+        finally:
+            await store.close()
 
     async def test_schema_has_edges_table(self, edge_store: EdgeStore) -> None:
         conn = sqlite3.connect(str(edge_store.db_path))
@@ -90,20 +96,26 @@ class TestIdempotentReopen:
     async def test_reopen_preserves_rows(self, test_config: LithosConfig) -> None:
         store = EdgeStore(test_config)
         await store.open()
-        edge_id = await store.upsert(
-            from_id="n1",
-            to_id="n2",
-            edge_type="derived_from",
-            weight=1.0,
-            namespace="default",
-        )
+        try:
+            edge_id = await store.upsert(
+                from_id="n1",
+                to_id="n2",
+                edge_type="derived_from",
+                weight=1.0,
+                namespace="default",
+            )
+        finally:
+            await store.close()
 
         # Re-open
         store2 = EdgeStore(test_config)
         await store2.open()
-        edges = await store2.list_edges(from_id="n1")
-        assert len(edges) == 1
-        assert edges[0]["edge_id"] == edge_id
+        try:
+            edges = await store2.list_edges(from_id="n1")
+            assert len(edges) == 1
+            assert edges[0]["edge_id"] == edge_id
+        finally:
+            await store2.close()
 
 
 class TestNoopWhenExists:
@@ -112,15 +124,17 @@ class TestNoopWhenExists:
     async def test_open_does_not_drop_data(self, test_config: LithosConfig) -> None:
         store = EdgeStore(test_config)
         await store.open()
+        try:
+            # Insert multiple edges
+            await store.upsert(from_id="a", to_id="b", edge_type="t1", weight=1.0, namespace="ns")
+            await store.upsert(from_id="c", to_id="d", edge_type="t2", weight=0.5, namespace="ns")
+            assert await store.count() == 2
 
-        # Insert multiple edges
-        await store.upsert(from_id="a", to_id="b", edge_type="t1", weight=1.0, namespace="ns")
-        await store.upsert(from_id="c", to_id="d", edge_type="t2", weight=0.5, namespace="ns")
-        assert await store.count() == 2
-
-        # Re-open and verify
-        await store.open()
-        assert await store.count() == 2
+            # Re-open (idempotent — short-circuits because already opened)
+            await store.open()
+            assert await store.count() == 2
+        finally:
+            await store.close()
 
 
 class TestCorruptRecovery:
@@ -133,11 +147,14 @@ class TestCorruptRecovery:
         store.db_path.write_bytes(b"not a sqlite database at all")
 
         await store.open()
-        # DB should now be healthy
-        assert store.db_path.exists()
-        # Quarantine file should exist
-        quarantined = list(store.db_path.parent.glob("edges.db.corrupt-*"))
-        assert len(quarantined) == 1
+        try:
+            # DB should now be healthy
+            assert store.db_path.exists()
+            # Quarantine file should exist
+            quarantined = list(store.db_path.parent.glob("edges.db.corrupt-*"))
+            assert len(quarantined) == 1
+        finally:
+            await store.close()
 
     async def test_quarantined_db_contains_original_bytes(self, test_config: LithosConfig) -> None:
         store = EdgeStore(test_config)
@@ -146,8 +163,11 @@ class TestCorruptRecovery:
         store.db_path.write_bytes(garbage)
 
         await store.open()
-        quarantined = list(store.db_path.parent.glob("edges.db.corrupt-*"))
-        assert quarantined[0].read_bytes() == garbage
+        try:
+            quarantined = list(store.db_path.parent.glob("edges.db.corrupt-*"))
+            assert quarantined[0].read_bytes() == garbage
+        finally:
+            await store.close()
 
     async def test_recreated_db_has_schema(self, test_config: LithosConfig) -> None:
         store = EdgeStore(test_config)
@@ -155,15 +175,18 @@ class TestCorruptRecovery:
         store.db_path.write_bytes(b"garbage")
 
         await store.open()
-        # Should be able to upsert into the fresh DB
-        edge_id = await store.upsert(
-            from_id="x",
-            to_id="y",
-            edge_type="test",
-            weight=1.0,
-            namespace="default",
-        )
-        assert edge_id.startswith("edge_")
+        try:
+            # Should be able to upsert into the fresh DB
+            edge_id = await store.upsert(
+                from_id="x",
+                to_id="y",
+                edge_type="test",
+                weight=1.0,
+                namespace="default",
+            )
+            assert edge_id.startswith("edge_")
+        finally:
+            await store.close()
 
 
 class TestStoreLocation:
@@ -387,3 +410,67 @@ class TestAdjustWeightConcurrency:
         # Final weight should reflect all 10 deltas
         edges = await edge_store.list_edges(from_id="a")
         assert edges[0]["weight"] == pytest.approx(0.6, abs=1e-9)
+
+
+class TestPersistentConnectionHardening:
+    """Shared-connection isolation and recovery regressions for #172."""
+
+    async def test_reads_wait_for_inflight_transaction(self, edge_store: EdgeStore) -> None:
+        edge_id = await edge_store.upsert(
+            from_id="a",
+            to_id="b",
+            edge_type="rel",
+            weight=0.5,
+            namespace="ns",
+        )
+        db = edge_store._conn()
+        original_execute = db.execute
+        txn_statement_applied = asyncio.Event()
+        release_transaction = asyncio.Event()
+        paused = False
+
+        async def execute(sql: str, params=()) -> object:
+            nonlocal paused
+            result = await original_execute(sql, params)
+            if not paused and "UPDATE edges SET weight = MAX" in sql:
+                paused = True
+                txn_statement_applied.set()
+                await release_transaction.wait()
+            return result
+
+        db.execute = execute  # type: ignore[method-assign]
+
+        writer = asyncio.create_task(edge_store.adjust_weight(edge_id, 0.2))
+        await asyncio.wait_for(txn_statement_applied.wait(), timeout=1)
+
+        reader = asyncio.create_task(edge_store.get_edge(edge_id))
+        done, pending = await asyncio.wait({reader}, timeout=0.05)
+        assert not done
+        assert pending == {reader}
+
+        release_transaction.set()
+        assert await writer == pytest.approx(0.7)
+
+        edge = await asyncio.wait_for(reader, timeout=1)
+        assert edge is not None
+        assert edge["weight"] == pytest.approx(0.7)
+
+    async def test_reopens_after_connection_liveness_error(self, edge_store: EdgeStore) -> None:
+        db = edge_store._conn()
+        original_execute = db.execute
+        fail_once = True
+
+        async def execute(sql: str, params=()) -> object:
+            nonlocal fail_once
+            if fail_once:
+                fail_once = False
+                raise ValueError("no active connection")
+            return await original_execute(sql, params)
+
+        db.execute = execute  # type: ignore[method-assign]
+
+        with pytest.raises(ValueError, match="no active connection"):
+            await edge_store.count()
+
+        assert edge_store._db is not db
+        assert await edge_store.count() == 0

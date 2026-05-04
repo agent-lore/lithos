@@ -116,9 +116,11 @@ class TestServerInitialization:
         server = LithosServer(test_config)
         rebuild = AsyncMock()
         server._rebuild_indices = rebuild  # type: ignore[assignment]
-
-        await server.initialize()
-        rebuild.assert_awaited_once()
+        try:
+            await server.initialize()
+            rebuild.assert_awaited_once()
+        finally:
+            await server.shutdown()
 
     @pytest.mark.asyncio
     async def test_initialize_rebuilds_after_semantic_store_quarantine(self, test_config):
@@ -135,11 +137,12 @@ class TestServerInitialization:
         mock_search.needs_initial_rebuild.return_value = False
         server.search = mock_search
         server._rebuild_indices = rebuild  # type: ignore[assignment]
-
-        await server.initialize()
-
-        rebuild.assert_awaited_once()
-        mock_search.ensure_semantic_backend_healthy.assert_called_once_with()
+        try:
+            await server.initialize()
+            rebuild.assert_awaited_once()
+            mock_search.ensure_semantic_backend_healthy.assert_called_once_with()
+        finally:
+            await server.shutdown()
 
     @pytest.mark.asyncio
     async def test_initialize_warns_but_stays_up_when_semantic_backend_unavailable(
@@ -156,13 +159,15 @@ class TestServerInitialization:
         server.search = mock_search
         server._rebuild_indices = rebuild  # type: ignore[assignment]
         server.graph.load_cache = MagicMock(return_value=True)  # type: ignore[method-assign]
+        try:
+            with caplog.at_level(logging.WARNING, logger="lithos.server"):
+                await server.initialize()
 
-        with caplog.at_level(logging.WARNING, logger="lithos.server"):
-            await server.initialize()
-
-        rebuild.assert_not_awaited()
-        server.graph.load_cache.assert_called_once_with()
-        assert "Semantic search backend remains unavailable after repair attempt" in caplog.text
+            rebuild.assert_not_awaited()
+            server.graph.load_cache.assert_called_once_with()
+            assert "Semantic search backend remains unavailable after repair attempt" in caplog.text
+        finally:
+            await server.shutdown()
 
     def test_start_file_watcher_requires_running_loop(self, test_config):
         """Watcher startup without a running loop raises a clear RuntimeError."""
