@@ -1228,8 +1228,13 @@ class TestSSEMetrics:
 
         assert mock_counter.add.call_count == 3
 
-    async def test_sse_client_count_decrements_on_disconnect(self):
-        """_sse_client_count must decrement when the SSE async generator is closed early."""
+    async def test_sse_active_count_decrements_on_disconnect(self):
+        """The SSE semaphore slot must be released when the generator closes early.
+
+        Regression for #206: before the semaphore migration, this test asserted
+        on the now-removed ``_sse_client_count`` int.
+        """
+        import asyncio
         from unittest.mock import MagicMock
 
         from starlette.requests import Request
@@ -1241,10 +1246,9 @@ class TestSSEMetrics:
 
         # Build a minimal server skeleton — avoid full initialise()
         server = LithosServer.__new__(LithosServer)
-        server._sse_client_count = 0
-
         cfg = LithosConfig()
         server._config = cfg
+        server._sse_semaphore = asyncio.BoundedSemaphore(cfg.events.max_sse_clients)
 
         # No auth needed
         server.mcp = MagicMock()
@@ -1274,9 +1278,9 @@ class TestSSEMetrics:
         try:
             response = await server._sse_endpoint(request)
 
-            # At this point the count must have been incremented
-            assert server._sse_client_count == 1, (
-                f"Expected _sse_client_count=1 before streaming, got {server._sse_client_count}"
+            # The slot must have been acquired before the streaming response returns.
+            assert server._sse_active_count() == 1, (
+                f"Expected active=1 before streaming, got {server._sse_active_count()}"
             )
 
             body_iter = response.body_iterator
@@ -1293,9 +1297,9 @@ class TestSSEMetrics:
             if hasattr(body_iter, "aclose"):
                 await body_iter.aclose()
 
-            # After closing, the finally block must have run and decremented
-            assert server._sse_client_count == 0, (
-                f"Expected _sse_client_count=0 after disconnect, got {server._sse_client_count}"
+            # After closing, the finally block must have released the slot.
+            assert server._sse_active_count() == 0, (
+                f"Expected active=0 after disconnect, got {server._sse_active_count()}"
             )
         finally:
             tel_module.lithos_metrics._sse_events_delivered = orig

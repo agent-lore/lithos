@@ -456,8 +456,9 @@ class TestMaxClients:
         server = LithosServer(config)
         await server.initialize()
         try:
-            # Simulate already-at-limit by bumping the counter
-            server._sse_client_count = 2
+            # Saturate the semaphore by acquiring every available slot.
+            for _ in range(2):
+                await server._sse_semaphore.acquire()
 
             request = _make_mock_request(server)
             response = await server._sse_endpoint(request)
@@ -473,7 +474,9 @@ class TestMaxClients:
         server = LithosServer(config)
         await server.initialize()
         try:
-            server._sse_client_count = 4  # one below limit
+            # Acquire 4 slots so only one remains free.
+            for _ in range(4):
+                await server._sse_semaphore.acquire()
 
             request = _make_mock_request(server)
             response = await server._sse_endpoint(request)
@@ -518,19 +521,19 @@ class TestSSEDisabled:
 class TestSSEClientCount:
     @pytest.mark.asyncio
     async def test_client_count_increments_decrements(self, temp_dir: Path) -> None:
-        """_sse_client_count should increment during streaming and decrement when done."""
+        """_sse_active_count() should report 0 before connect and 0 again after stream end."""
         config = _make_config(temp_dir)
         server = LithosServer(config)
         await server.initialize()
         try:
-            assert server._sse_client_count == 0
+            assert server._sse_active_count() == 0
 
             request = _make_mock_request(server)
             evt = LithosEvent(type=NOTE_CREATED)
             await _collect_sse_lines(server, request, emit_events=[evt])
 
-            # After streaming completes the count should return to 0
-            assert server._sse_client_count == 0
+            # After streaming completes the slot must be released.
+            assert server._sse_active_count() == 0
         finally:
             server.stop_file_watcher()
 
