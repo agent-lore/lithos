@@ -212,6 +212,7 @@ async def scout_lexical(
         limit=limit * 3,
         tags=tags,
         path_prefix=path_prefix,
+        query_mode="literal",
     )
     candidates: list[Candidate] = []
     for r in results:

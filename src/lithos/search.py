@@ -17,7 +17,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import chromadb
 import networkx as nx
@@ -34,6 +34,18 @@ if TYPE_CHECKING:
     from lithos.graph import KnowledgeGraph
 
 logger = logging.getLogger(__name__)
+
+_TANTIVY_RESERVED_CHAR_RE = re.compile(r'([+\-!(){}\[\]^"~*?:\\/|&])')
+
+
+def _literalize_tantivy_query(query: str) -> str:
+    """Escape Tantivy metacharacters in natural-language input.
+
+    This keeps BM25 tokenization on the indexed fields while preventing paper
+    titles and other ordinary prose from being parsed as explicit Tantivy
+    syntax.
+    """
+    return _TANTIVY_RESERVED_CHAR_RE.sub(r"\\\1", query)
 
 
 @dataclass
@@ -460,15 +472,18 @@ class TantivyIndex:
         tags: list[str] | None = None,
         author: str | None = None,
         path_prefix: str | None = None,
+        query_mode: Literal["syntax", "literal"] = "syntax",
     ) -> list[SearchResult]:
         """Search the index.
 
         Args:
-            query: Search query (Tantivy query syntax)
+            query: Search query
             limit: Maximum results
             tags: Filter by tags (AND)
             author: Filter by author
             path_prefix: Filter by path prefix
+            query_mode: ``syntax`` for raw Tantivy syntax, ``literal`` for
+                natural-language text that must be parser-safe
 
         Returns:
             List of search results
@@ -476,23 +491,17 @@ class TantivyIndex:
         self.index.reload()
         searcher = self.index.searcher()
 
-        # Build query with filters. Tags and path_prefix are applied as
-        # post-filters below; including them in the Tantivy query string is
-        # unsafe because values may contain reserved characters (e.g. a colon
-        # in ``project:lithos-core`` is parsed as a field separator, which
-        # then raises a parse error and silently returns no results — see
-        # GitHub #191).
-        query_parts = [query]
-        if author:
-            query_parts.append(f"author:{author}")
+        # Tags, author, and path_prefix are applied as post-filters below.
+        # Including their values in the Tantivy query string is unsafe because
+        # reserved characters like ``:`` and ``(`` are parsed as query syntax
+        # rather than literal text (see GitHub #191 and #240).
+        full_query = query if query_mode == "syntax" else _literalize_tantivy_query(query)
 
-        full_query = " AND ".join(f"({p})" for p in query_parts)
-
-        # When filtering by tags or path_prefix we may discard hits after
+        # When filtering by tags, author, or path_prefix we may discard hits after
         # the fact, so request extra results to reduce the chance of returning
         # fewer than ``limit`` when matches do exist. Tantivy still caps this
         # at the number of documents in the index.
-        effective_limit = limit * 5 if (tags or path_prefix) else limit
+        effective_limit = limit * 5 if (tags or author or path_prefix) else limit
 
         try:
             parsed_query = self.index.parse_query(full_query, ["title", "content"])
@@ -505,6 +514,10 @@ class TantivyIndex:
         for score, doc_address in results:
             doc = searcher.doc(doc_address)
             doc_path = doc.get_first("path")
+
+            # Apply author filter
+            if author is not None and str(doc.get_first("author") or "") != author:
+                continue
 
             # Apply path prefix filter
             if path_prefix and not str(doc_path).startswith(path_prefix):
@@ -1177,8 +1190,13 @@ class SearchEngine:
         tags: list[str] | None = None,
         author: str | None = None,
         path_prefix: str | None = None,
+        query_mode: Literal["syntax", "literal"] = "syntax",
     ) -> list[SearchResult]:
         """Full-text search using Tantivy.
+
+        ``query_mode="syntax"`` preserves the historical explicit Tantivy
+        query syntax contract. ``query_mode="literal"`` hardens natural-
+        language callers by escaping parser metacharacters before execution.
 
         Raises:
             SearchBackendError: If the Tantivy backend raises an exception.
@@ -1194,13 +1212,20 @@ class SearchEngine:
                 tags=tags,
                 author=author,
                 path_prefix=path_prefix,
+                query_mode=query_mode,
             )
             logger.debug(
-                "full_text_search: query_len=%d limit=%d result_count=%d",
+                "full_text_search: query_len=%d limit=%d query_mode=%s result_count=%d",
                 len(query),
                 limit,
+                query_mode,
                 len(results),
-                extra={"query_len": len(query), "limit": limit, "result_count": len(results)},
+                extra={
+                    "query_len": len(query),
+                    "limit": limit,
+                    "query_mode": query_mode,
+                    "result_count": len(results),
+                },
             )
             return results
         except Exception as exc:
@@ -1328,6 +1353,7 @@ class SearchEngine:
                     tags=tags,
                     author=author,
                     path_prefix=path_prefix,
+                    query_mode="literal",
                 )
             except Exception as exc:
                 logger.warning("Hybrid search: full-text backend failed: %s", exc)

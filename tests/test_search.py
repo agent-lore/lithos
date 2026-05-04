@@ -1,5 +1,8 @@
 """Tests for search module - Tantivy and ChromaDB search."""
 
+import logging
+from unittest.mock import patch
+
 import pytest
 
 from lithos.errors import IndexingError, SearchBackendError
@@ -159,6 +162,78 @@ class TestTantivyIndex:
 
         assert len(results) == 1
         assert results[0].id == doc1.id
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("title", "query"),
+        [
+            (
+                "When LLMs Stop Following Steps: A Diagnostic Study",
+                "When LLMs Stop Following Steps: A Diagnostic Study",
+            ),
+            ("Why Agents Don't 'Just Work'", "Why Agents Don't 'Just Work'"),
+            ("Observability (for) Retrieval", "Observability (for) Retrieval"),
+            ('He Said "Quote This"', 'He Said "Quote This"'),
+            (r"Windows \ Paths for Agents", r"Windows \ Paths for Agents"),
+        ],
+    )
+    async def test_full_text_search_literal_mode_handles_natural_language_punctuation(
+        self,
+        knowledge_manager: KnowledgeManager,
+        search_engine: SearchEngine,
+        caplog: pytest.LogCaptureFixture,
+        title: str,
+        query: str,
+    ):
+        """Regression for #240: literal-mode full-text search must not parse-fail."""
+        doc = (
+            await knowledge_manager.create(
+                title=title,
+                content=f"{title}\n\nSupporting discussion of the paper title.",
+                agent="agent",
+            )
+        ).document
+        search_engine.index(KnowledgeManager.to_indexable(doc))
+
+        with caplog.at_level(logging.WARNING, logger="lithos.search"):
+            results = search_engine.full_text_search(query, query_mode="literal")
+
+        assert any(r.id == doc.id for r in results)
+        assert not any(
+            "Tantivy query parse/search failed" in record.getMessage() for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_full_text_search_author_filter_treats_author_as_literal(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ):
+        """Author filters must not depend on Tantivy query syntax parsing."""
+        target = (
+            await knowledge_manager.create(
+                title="Knowledge graph note",
+                content="Building a knowledge graph from linked notes.",
+                agent="team:alpha",
+            )
+        ).document
+        other = (
+            await knowledge_manager.create(
+                title="Knowledge graph note two",
+                content="Building a knowledge graph from linked notes.",
+                agent="team:beta",
+            )
+        ).document
+        search_engine.index(KnowledgeManager.to_indexable(target))
+        search_engine.index(KnowledgeManager.to_indexable(other))
+
+        results = search_engine.full_text_search(
+            "knowledge graph",
+            author="team:alpha",
+            query_mode="literal",
+        )
+        result_ids = {r.id for r in results}
+
+        assert target.id in result_ids
+        assert other.id not in result_ids
 
     @pytest.mark.asyncio
     async def test_search_with_tag_containing_colon(
@@ -1271,3 +1346,16 @@ class TestHybridSearch:
         # doc should appear at most once
         ids = [r.id for r in results]
         assert ids.count(doc.id) <= 1
+
+    def test_hybrid_uses_literal_mode_for_tantivy_leg(self, search_engine: SearchEngine):
+        """Hybrid search is a natural-language surface, not a raw Tantivy API."""
+        with (
+            patch.object(search_engine._tantivy, "search", return_value=[]) as tantivy_search,
+            patch.object(
+                search_engine, "ensure_semantic_backend_healthy", return_value=(False, None)
+            ),
+        ):
+            search_engine.hybrid_search("When LLMs Stop Following Steps: A Diagnostic Study")
+
+        assert tantivy_search.call_args is not None
+        assert tantivy_search.call_args.kwargs["query_mode"] == "literal"

@@ -319,6 +319,36 @@ class TestScoutLexical:
         assert candidates[0].score == 5.0
 
     @pytest.mark.asyncio
+    async def test_uses_literal_query_mode(
+        self, seeded_km: KnowledgeManager, seeded_search: SearchEngine
+    ) -> None:
+        from unittest.mock import patch
+
+        from lithos.search import SearchResult
+
+        mock_results = [
+            SearchResult(
+                id=_ID1,
+                title="When LLMs Stop Following Steps: A Diagnostic Study",
+                snippet="content",
+                score=5.0,
+                path="note-one.md",
+            ),
+        ]
+        with patch.object(
+            seeded_search, "full_text_search", return_value=mock_results
+        ) as mock_search:
+            await scout_lexical(
+                "When LLMs Stop Following Steps: A Diagnostic Study",
+                seeded_search,
+                seeded_km,
+                limit=10,
+            )
+
+        assert mock_search.call_args is not None
+        assert mock_search.call_args.kwargs["query_mode"] == "literal"
+
+    @pytest.mark.asyncio
     async def test_namespace_filter(
         self, seeded_km: KnowledgeManager, seeded_search: SearchEngine
     ) -> None:
