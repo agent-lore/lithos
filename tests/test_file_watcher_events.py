@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from lithos.events import NOTE_DELETED, NOTE_UPDATED
+from lithos.events import NOTE_DELETED, NOTE_RENAMED, NOTE_UPDATED
 from lithos.knowledge import KnowledgeManager
 from lithos.server import LithosServer
 
@@ -123,6 +123,67 @@ class TestFileWatcherEventEmission:
 
         # Should not raise even though emit fails
         await server.handle_file_change(file_path, deleted=True)
+
+    async def test_file_rename_preserves_doc_id_and_emits_renamed(
+        self, server: LithosServer
+    ) -> None:
+        """An external rename keeps the doc id and emits ``note.renamed`` (#202)."""
+        doc = (
+            await server.knowledge.create(
+                title="Renamable Doc",
+                content="Body that survives a rename.",
+                agent="test-agent",
+                path="watched",
+            )
+        ).document
+        server.search.index(KnowledgeManager.to_indexable(doc))
+        server.graph.add_document(doc)
+
+        original_id = doc.id
+        knowledge_path = server.config.storage.knowledge_path
+        src_path = knowledge_path / doc.path
+        dest_rel = doc.path.with_name("renamed-doc.md")
+        dest_path = knowledge_path / dest_rel
+        src_path.rename(dest_path)
+
+        queue = server.event_bus.subscribe(event_types=[NOTE_RENAMED])
+        await server.handle_file_rename(src_path, dest_path)
+
+        # Path mapping is now under the destination, doc id unchanged.
+        assert server.knowledge.get_id_by_path(dest_rel) == original_id
+        # The old path is no longer in the path → id mapping.
+        assert server.knowledge.get_id_by_path(doc.path) is None
+        # The renamed event fired with both paths.
+        event = queue.get_nowait()
+        assert event.type == NOTE_RENAMED
+        assert event.payload["id"] == original_id
+        assert event.payload["src_path"] == str(doc.path)
+        assert event.payload["dest_path"] == str(dest_rel)
+
+    async def test_file_rename_updates_graph_path(self, server: LithosServer) -> None:
+        """Renamed files end up in the graph under the new path lookup (#202)."""
+        doc = (
+            await server.knowledge.create(
+                title="Graph Rename Doc",
+                content="Linked from elsewhere via [[graph-rename-doc]] won't matter for path lookup.",
+                agent="test-agent",
+                path="watched",
+            )
+        ).document
+        server.search.index(KnowledgeManager.to_indexable(doc))
+        server.graph.add_document(doc)
+
+        knowledge_path = server.config.storage.knowledge_path
+        src_path = knowledge_path / doc.path
+        dest_rel = doc.path.with_name("graph-renamed.md")
+        dest_path = knowledge_path / dest_rel
+        src_path.rename(dest_path)
+
+        await server.handle_file_rename(src_path, dest_path)
+
+        # Old path lookup gone, new path lookup wired to the same node.
+        assert server.graph._path_to_node.get(str(doc.path)) is None
+        assert server.graph._path_to_node.get(str(dest_rel)) == doc.id
 
     async def test_file_change_update_rebuilds_graph_edges(self, server: LithosServer) -> None:
         """handle_file_change rebuilds graph edges when a file is modified."""

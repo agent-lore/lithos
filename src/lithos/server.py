@@ -27,6 +27,7 @@ from lithos.events import (
     FINDING_POSTED,
     NOTE_CREATED,
     NOTE_DELETED,
+    NOTE_RENAMED,
     NOTE_UPDATED,
     TASK_CANCELLED,
     TASK_CLAIMED,
@@ -879,6 +880,80 @@ class LithosServer:
         """Stop the enrichment background worker."""
         if self._enrich_worker is not None:
             await self._enrich_worker.stop()
+
+    async def handle_file_rename(self, src_path: Path, dest_path: Path) -> None:
+        """Handle a file-rename watchdog event (#202).
+
+        External renames (Obsidian rename, ``mv``, ``git checkout``) used to
+        be processed as a delete+create pair: the doc id was lost, wiki-links
+        pointing at the old path went stale, and the indices drifted until
+        the next reconcile. Now we update the path mapping under the same
+        doc id and re-index in place.
+
+        Behaviour by source/destination location:
+        - both inside knowledge_path → rename in place, emit ``note.renamed``.
+        - source inside, destination outside → treat as deletion.
+        - source outside, destination inside → treat as creation.
+        - both outside → no-op.
+        """
+        knowledge_path = self.config.storage.knowledge_path
+
+        def _relative_or_none(path: Path) -> Path | None:
+            try:
+                return path.relative_to(knowledge_path)
+            except ValueError:
+                return None
+
+        src_rel = _relative_or_none(src_path) if src_path.suffix == ".md" else None
+        dest_rel = _relative_or_none(dest_path) if dest_path.suffix == ".md" else None
+
+        if src_rel is None and dest_rel is None:
+            return
+        if src_rel is None and dest_rel is not None:
+            await self.handle_file_change(dest_path)
+            return
+        if src_rel is not None and dest_rel is None:
+            await self.handle_file_change(src_path, deleted=True)
+            return
+
+        # Genuine in-corpus rename.
+        tracer = get_tracer()
+        with tracer.start_as_current_span("lithos.file_rename") as span:
+            assert src_rel is not None
+            assert dest_rel is not None
+            span.set_attribute("lithos.src_path", str(src_rel))
+            span.set_attribute("lithos.dest_path", str(dest_rel))
+            async with self._update_lock:
+                try:
+                    doc_id = self.knowledge.get_id_by_path(src_rel)
+                    # ``sync_from_disk`` re-reads frontmatter and rebinds the
+                    # path mapping under the existing doc id. The graph and
+                    # search backends overwrite by id, so re-indexing closes
+                    # the loop without losing wiki-link targets.
+                    doc = await self.knowledge.sync_from_disk(dest_rel)
+                    indexable = KnowledgeManager.to_indexable(doc)
+                    await asyncio.to_thread(self.search.index, indexable)
+                    self.graph.add_document(doc)
+
+                    lithos_metrics.file_watcher_events.add(1, {"event_type": "renamed"})
+                    await self._emit(
+                        LithosEvent(
+                            type=NOTE_RENAMED,
+                            payload={
+                                "id": doc_id or doc.id,
+                                "src_path": str(src_rel),
+                                "dest_path": str(dest_rel),
+                            },
+                        )
+                    )
+                except FileNotFoundError:
+                    # Destination disappeared between the watchdog event and
+                    # our processing — treat as a deletion of the source.
+                    await self.handle_file_change(src_path, deleted=True)
+                except Exception as exc:
+                    logger.error(
+                        "Error handling file rename %s -> %s: %s", src_path, dest_path, exc
+                    )
 
     async def handle_file_change(self, path: Path, deleted: bool = False) -> None:
         """Handle a file change event."""
@@ -3405,10 +3480,35 @@ class _FileChangeHandler(FileSystemEventHandler):
         if not event.is_directory:
             self._schedule_update(Path(str(event.src_path)), deleted=True)
 
+    def on_moved(self, event: FileSystemEvent) -> None:
+        """Handle external file renames (#202).
+
+        Watchdog emits this on most platforms (POSIX inotify, macOS FSEvents,
+        Windows ReadDirectoryChangesW). Some network filesystems do not — in
+        that case watchdog falls back to a delete+create pair which still
+        works through the existing handlers, just less precisely.
+        """
+        if event.is_directory:
+            return
+        dest_path = getattr(event, "dest_path", None)
+        if dest_path is None:
+            return
+        self._schedule_rename(Path(str(event.src_path)), Path(str(dest_path)))
+
     def _schedule_update(self, path: Path, deleted: bool = False) -> None:
         try:
             future = asyncio.run_coroutine_threadsafe(
                 self.server.handle_file_change(path, deleted),
+                self._loop,
+            )
+            future.add_done_callback(self._log_future_exception)
+        except Exception:
+            pass
+
+    def _schedule_rename(self, src_path: Path, dest_path: Path) -> None:
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self.server.handle_file_rename(src_path, dest_path),
                 self._loop,
             )
             future.add_done_callback(self._log_future_exception)
