@@ -13,6 +13,7 @@ Tables (MVP 1):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -155,6 +156,19 @@ class StatsStore:
     def __init__(self, config: LithosConfig | None = None) -> None:
         self._config = config
         self._opened = False
+        # Persistent SQLite connection (#172). One handle per StatsStore;
+        # WAL mode enables concurrent readers, and amortising the open cost
+        # across the dozens of method calls per retrieval / drain cycle is
+        # the whole point of this lifecycle.
+        self._db: aiosqlite.Connection | None = None
+        # Serialise drain transactions on the shared connection (#172).
+        # When each method opened its own connection, BEGIN IMMEDIATE on
+        # connection B blocked until connection A committed — SQLite's
+        # write lock kept double-claim impossible. With one shared
+        # connection, two concurrent drains would interleave at the
+        # statement level and either error on a nested BEGIN or claim the
+        # same row twice. The lock restores per-drain atomicity.
+        self._drain_lock: asyncio.Lock | None = None
         self._cached_enrich_queue_depth: int = 0
         self._cached_coactivation_pairs: int = 0
         self._cached_working_memory_active_tasks: int = 0
@@ -168,10 +182,12 @@ class StatsStore:
         return self.config.storage.stats_db_path
 
     async def open(self) -> None:
-        """Ensure stats.db exists with the correct schema.
+        """Ensure stats.db exists with the correct schema and a live connection.
 
         Idempotent — safe to call multiple times.  If the file is corrupt
-        it is quarantined and a fresh database is created.
+        it is quarantined and a fresh database is created. After this returns
+        :attr:`_db` is a persistent ``aiosqlite.Connection`` in WAL mode that
+        every method reuses (#172).
         """
         if self._opened:
             return
@@ -182,18 +198,48 @@ class StatsStore:
             if not healthy:
                 self._quarantine(self.db_path)
 
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.executescript(SCHEMA)
-            await self._migrate_add_cited_count(db)
-            await self._migrate_add_last_decay_applied_at(db)
-            await self._migrate_add_enrich_queue_attempts(db)
-            await db.commit()
+        db = await aiosqlite.connect(self.db_path)
+        # Row access by name everywhere — sets default for the lifetime of
+        # this connection. Methods that index by position keep working too.
+        db.row_factory = aiosqlite.Row
+        # WAL gives us concurrent readers and bounded fsync cost. Foreign-key
+        # enforcement matches the constraints declared in SCHEMA.
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.executescript(SCHEMA)
+        await self._migrate_add_cited_count(db)
+        await self._migrate_add_last_decay_applied_at(db)
+        await self._migrate_add_enrich_queue_attempts(db)
+        await db.commit()
+        self._db = db
         self._opened = True
+
+    async def close(self) -> None:
+        """Close the persistent connection. Idempotent."""
+        if self._db is not None:
+            await self._db.close()
+            self._db = None
+        self._opened = False
 
     async def _ensure_open(self) -> None:
         """Lazily create the database on first use."""
         if not self._opened:
             await self.open()
+
+    def _conn(self) -> aiosqlite.Connection:
+        """Return the live connection. ``open()`` must have run first."""
+        assert self._db is not None, "StatsStore.open() must be called before use"
+        return self._db
+
+    def _drain_mutex(self) -> asyncio.Lock:
+        """Return the lock that serialises drain transactions (#172).
+
+        Lazily constructed because :meth:`__init__` runs before any event
+        loop exists in some test/CLI flows.
+        """
+        if self._drain_lock is None:
+            self._drain_lock = asyncio.Lock()
+        return self._drain_lock
 
     # ------------------------------------------------------------------
     # Receipt operations
@@ -226,31 +272,31 @@ class StatsStore:
         """
         await self._ensure_open()
         ns_json = json.dumps(namespace_filter) if namespace_filter is not None else None
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO receipts
-                   (id, query, "limit", namespace_filter, scouts_fired,
-                    candidates_considered, final_nodes, conflicts_surfaced,
-                    surface_conflicts, temperature, terrace_reached,
-                    agent_id, task_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    receipt_id,
-                    query,
-                    limit,
-                    ns_json,
-                    json.dumps(scouts_fired),
-                    candidates_considered,
-                    json.dumps(final_nodes),
-                    json.dumps(conflicts_surfaced),
-                    1 if surface_conflicts else 0,
-                    temperature,
-                    terrace_reached,
-                    agent_id,
-                    task_id,
-                ),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO receipts
+               (id, query, "limit", namespace_filter, scouts_fired,
+                candidates_considered, final_nodes, conflicts_surfaced,
+                surface_conflicts, temperature, terrace_reached,
+                agent_id, task_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                receipt_id,
+                query,
+                limit,
+                ns_json,
+                json.dumps(scouts_fired),
+                candidates_considered,
+                json.dumps(final_nodes),
+                json.dumps(conflicts_surfaced),
+                1 if surface_conflicts else 0,
+                temperature,
+                terrace_reached,
+                agent_id,
+                task_id,
+            ),
+        )
+        await db.commit()
         logger.info(
             "receipt inserted: id=%s agent=%s task=%s candidates=%d final_nodes=%d scouts=%s",
             receipt_id,
@@ -288,30 +334,30 @@ class StatsStore:
         """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO working_memory
-                   (task_id, node_id, activation_count,
-                    first_seen_at, last_seen_at, last_receipt_id)
-                   VALUES (?, ?, 1, ?, ?, ?)
-                   ON CONFLICT(task_id, node_id) DO UPDATE SET
-                     activation_count = activation_count + 1,
-                     last_seen_at = excluded.last_seen_at,
-                     last_receipt_id = excluded.last_receipt_id""",
-                (task_id, node_id, now, now, receipt_id),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO working_memory
+               (task_id, node_id, activation_count,
+                first_seen_at, last_seen_at, last_receipt_id)
+               VALUES (?, ?, 1, ?, ?, ?)
+               ON CONFLICT(task_id, node_id) DO UPDATE SET
+                 activation_count = activation_count + 1,
+                 last_seen_at = excluded.last_seen_at,
+                 last_receipt_id = excluded.last_receipt_id""",
+            (task_id, node_id, now, now, receipt_id),
+        )
+        await db.commit()
 
     async def get_working_memory(self, task_id: str) -> list[dict[str, object]]:
         """Return all working_memory rows for *task_id*, ordered by activation_count descending."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM working_memory WHERE task_id = ? ORDER BY activation_count DESC",
-                (task_id,),
-            )
-            rows = await cursor.fetchall()
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM working_memory WHERE task_id = ? ORDER BY activation_count DESC",
+            (task_id,),
+        )
+        rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
     async def evict_working_memory(self, *, completed_task_ids: list[str], ttl_days: int) -> int:
@@ -323,21 +369,20 @@ class StatsStore:
         """
         await self._ensure_open()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            if completed_task_ids:
-                placeholders = ", ".join("?" for _ in completed_task_ids)
-                cursor = await db.execute(
-                    f"DELETE FROM working_memory "
-                    f"WHERE task_id IN ({placeholders}) OR last_seen_at < ?",
-                    (*completed_task_ids, cutoff),
-                )
-            else:
-                cursor = await db.execute(
-                    "DELETE FROM working_memory WHERE last_seen_at < ?",
-                    (cutoff,),
-                )
-            deleted = cursor.rowcount
-            await db.commit()
+        db = self._conn()
+        if completed_task_ids:
+            placeholders = ", ".join("?" for _ in completed_task_ids)
+            cursor = await db.execute(
+                f"DELETE FROM working_memory WHERE task_id IN ({placeholders}) OR last_seen_at < ?",
+                (*completed_task_ids, cutoff),
+            )
+        else:
+            cursor = await db.execute(
+                "DELETE FROM working_memory WHERE last_seen_at < ?",
+                (cutoff,),
+            )
+        deleted = cursor.rowcount
+        await db.commit()
         logger.info(
             "working_memory evicted: deleted=%d ttl_days=%d completed_task_count=%d",
             deleted,
@@ -366,17 +411,17 @@ class StatsStore:
         await self._ensure_open()
         a, b = (node_a, node_b) if node_a <= node_b else (node_b, node_a)
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO coactivation
-                   (node_id_a, node_id_b, namespace, count, last_at)
-                   VALUES (?, ?, ?, 1, ?)
-                   ON CONFLICT(node_id_a, node_id_b, namespace) DO UPDATE SET
-                     count = count + 1,
-                     last_at = excluded.last_at""",
-                (a, b, namespace, now),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO coactivation
+               (node_id_a, node_id_b, namespace, count, last_at)
+               VALUES (?, ?, ?, 1, ?)
+               ON CONFLICT(node_id_a, node_id_b, namespace) DO UPDATE SET
+                 count = count + 1,
+                 last_at = excluded.last_at""",
+            (a, b, namespace, now),
+        )
+        await db.commit()
 
     async def get_coactivated(
         self,
@@ -403,41 +448,41 @@ class StatsStore:
         seed_set = set(node_ids)
         totals: dict[str, int] = {}
 
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            placeholders = ", ".join("?" for _ in node_ids)
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        placeholders = ", ".join("?" for _ in node_ids)
 
-            # Rows where a seed appears as node_id_a → other is node_id_b
-            if namespace is not None:
-                query_a = (
-                    f"SELECT node_id_b AS other, count FROM coactivation "
-                    f"WHERE node_id_a IN ({placeholders}) AND namespace = ?"
-                )
-                params_a: tuple[str, ...] = (*node_ids, namespace)
-                query_b = (
-                    f"SELECT node_id_a AS other, count FROM coactivation "
-                    f"WHERE node_id_b IN ({placeholders}) AND namespace = ?"
-                )
-                params_b: tuple[str, ...] = (*node_ids, namespace)
-            else:
-                query_a = (
-                    f"SELECT node_id_b AS other, count FROM coactivation "
-                    f"WHERE node_id_a IN ({placeholders})"
-                )
-                params_a = tuple(node_ids)
-                query_b = (
-                    f"SELECT node_id_a AS other, count FROM coactivation "
-                    f"WHERE node_id_b IN ({placeholders})"
-                )
-                params_b = tuple(node_ids)
+        # Rows where a seed appears as node_id_a → other is node_id_b
+        if namespace is not None:
+            query_a = (
+                f"SELECT node_id_b AS other, count FROM coactivation "
+                f"WHERE node_id_a IN ({placeholders}) AND namespace = ?"
+            )
+            params_a: tuple[str, ...] = (*node_ids, namespace)
+            query_b = (
+                f"SELECT node_id_a AS other, count FROM coactivation "
+                f"WHERE node_id_b IN ({placeholders}) AND namespace = ?"
+            )
+            params_b: tuple[str, ...] = (*node_ids, namespace)
+        else:
+            query_a = (
+                f"SELECT node_id_b AS other, count FROM coactivation "
+                f"WHERE node_id_a IN ({placeholders})"
+            )
+            params_a = tuple(node_ids)
+            query_b = (
+                f"SELECT node_id_a AS other, count FROM coactivation "
+                f"WHERE node_id_b IN ({placeholders})"
+            )
+            params_b = tuple(node_ids)
 
-            for query, params in [(query_a, params_a), (query_b, params_b)]:
-                cursor = await db.execute(query, params)
-                for row in await cursor.fetchall():
-                    other = row["other"]
-                    if other in seed_set:
-                        continue
-                    totals[other] = totals.get(other, 0) + row["count"]
+        for query, params in [(query_a, params_a), (query_b, params_b)]:
+            cursor = await db.execute(query, params)
+            for row in await cursor.fetchall():
+                other = row["other"]
+                if other in seed_set:
+                    continue
+                totals[other] = totals.get(other, 0) + row["count"]
 
         ranked = sorted(totals.items(), key=lambda t: t[1], reverse=True)
         return ranked[:limit]
@@ -460,12 +505,12 @@ class StatsStore:
         if (node_id is None) == (task_id is None):
             raise ValueError("Exactly one of node_id or task_id must be provided")
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO enrich_queue (trigger_type, node_id, task_id) VALUES (?, ?, ?)",
-                (trigger_type, node_id, task_id),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            "INSERT INTO enrich_queue (trigger_type, node_id, task_id) VALUES (?, ?, ?)",
+            (trigger_type, node_id, task_id),
+        )
+        await db.commit()
         logger.debug(
             "enrich_queue enqueued: trigger=%s node_id=%s task_id=%s",
             trigger_type,
@@ -489,10 +534,15 @@ class StatsStore:
         """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            # BEGIN IMMEDIATE acquires a write lock before the SELECT,
-            # preventing concurrent callers from reading the same rows.
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        # Serialise drains on the shared connection (#172). BEGIN IMMEDIATE
+        # used to be enough — separate connections meant SQLite's write lock
+        # forced one to block until the other committed. With one shared
+        # connection the lock state lives on the underlying sqlite3 handle,
+        # so two concurrent drains would either error on a nested BEGIN or
+        # interleave at the statement level.
+        async with self._drain_mutex():
             await db.execute("BEGIN IMMEDIATE")
             if max_attempts is not None:
                 cursor = await db.execute(
@@ -565,10 +615,10 @@ class StatsStore:
         """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            # BEGIN IMMEDIATE acquires a write lock before the SELECT,
-            # preventing concurrent callers from reading the same rows.
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        # See drain_pending_nodes for why this needs a Python-level lock now.
+        async with self._drain_mutex():
             await db.execute("BEGIN IMMEDIATE")
             if max_attempts is not None:
                 cursor = await db.execute(
@@ -616,14 +666,14 @@ class StatsStore:
             return 0
         await self._ensure_open()
         placeholders = ", ".join("?" for _ in claimed_ids)
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "UPDATE enrich_queue SET processed_at = NULL, attempts = attempts + 1 "
-                f"WHERE id IN ({placeholders})",
-                tuple(claimed_ids),
-            )
-            count = cursor.rowcount
-            await db.commit()
+        db = self._conn()
+        cursor = await db.execute(
+            "UPDATE enrich_queue SET processed_at = NULL, attempts = attempts + 1 "
+            f"WHERE id IN ({placeholders})",
+            tuple(claimed_ids),
+        )
+        count = cursor.rowcount
+        await db.commit()
         logger.warning(
             "enrich_queue requeue_failed: requeued=%d requested=%d",
             count,
@@ -640,14 +690,14 @@ class StatsStore:
             return []
         await self._ensure_open()
         placeholders = ", ".join("?" for _ in claimed_ids)
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                f"SELECT id, node_id, task_id, attempts FROM enrich_queue "
-                f"WHERE id IN ({placeholders}) AND attempts >= ?",
-                (*claimed_ids, max_attempts),
-            )
-            rows = await cursor.fetchall()
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"SELECT id, node_id, task_id, attempts FROM enrich_queue "
+            f"WHERE id IN ({placeholders}) AND attempts >= ?",
+            (*claimed_ids, max_attempts),
+        )
+        rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
     async def get_enrich_items_by_ids(self, item_ids: list[int]) -> list[dict[str, object]]:
@@ -659,14 +709,14 @@ class StatsStore:
             return []
         await self._ensure_open()
         placeholders = ", ".join("?" for _ in item_ids)
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                f"SELECT id, triggered_at, processed_at, attempts FROM enrich_queue "
-                f"WHERE id IN ({placeholders})",
-                tuple(item_ids),
-            )
-            rows = await cursor.fetchall()
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"SELECT id, triggered_at, processed_at, attempts FROM enrich_queue "
+            f"WHERE id IN ({placeholders})",
+            tuple(item_ids),
+        )
+        rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -680,16 +730,16 @@ class StatsStore:
         """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO node_stats (node_id, retrieval_count, last_retrieved_at, salience)
-                   VALUES (?, 1, ?, 0.5)
-                   ON CONFLICT(node_id) DO UPDATE SET
-                     retrieval_count = retrieval_count + 1,
-                     last_retrieved_at = excluded.last_retrieved_at""",
-                (node_id, now),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO node_stats (node_id, retrieval_count, last_retrieved_at, salience)
+               VALUES (?, 1, ?, 0.5)
+               ON CONFLICT(node_id) DO UPDATE SET
+                 retrieval_count = retrieval_count + 1,
+                 last_retrieved_at = excluded.last_retrieved_at""",
+            (node_id, now),
+        )
+        await db.commit()
 
     async def increment_node_stats_batch(self, node_ids: list[str]) -> None:
         """Increment retrieval_count for multiple nodes in a single transaction."""
@@ -697,16 +747,16 @@ class StatsStore:
             return
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.executemany(
-                """INSERT INTO node_stats (node_id, retrieval_count, last_retrieved_at, salience)
-                   VALUES (?, 1, ?, 0.5)
-                   ON CONFLICT(node_id) DO UPDATE SET
-                     retrieval_count = retrieval_count + 1,
-                     last_retrieved_at = excluded.last_retrieved_at""",
-                [(nid, now) for nid in node_ids],
-            )
-            await db.commit()
+        db = self._conn()
+        await db.executemany(
+            """INSERT INTO node_stats (node_id, retrieval_count, last_retrieved_at, salience)
+               VALUES (?, 1, ?, 0.5)
+               ON CONFLICT(node_id) DO UPDATE SET
+                 retrieval_count = retrieval_count + 1,
+                 last_retrieved_at = excluded.last_retrieved_at""",
+            [(nid, now) for nid in node_ids],
+        )
+        await db.commit()
         logger.debug(
             "node_stats batch increment: node_count=%d",
             len(node_ids),
@@ -725,24 +775,24 @@ class StatsStore:
         now = datetime.now(timezone.utc).isoformat()
         # Canonicalize pairs so node_id_a <= node_id_b
         canonical = [(min(a, b), max(a, b)) for a, b in pairs]
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.executemany(
-                """INSERT INTO coactivation (node_id_a, node_id_b, namespace, count, last_at)
-                   VALUES (?, ?, ?, 1, ?)
-                   ON CONFLICT(node_id_a, node_id_b, namespace) DO UPDATE SET
-                     count = count + 1,
-                     last_at = excluded.last_at""",
-                [(a, b, namespace, now) for a, b in canonical],
-            )
-            await db.commit()
+        db = self._conn()
+        await db.executemany(
+            """INSERT INTO coactivation (node_id_a, node_id_b, namespace, count, last_at)
+               VALUES (?, ?, ?, 1, ?)
+               ON CONFLICT(node_id_a, node_id_b, namespace) DO UPDATE SET
+                 count = count + 1,
+                 last_at = excluded.last_at""",
+            [(a, b, namespace, now) for a, b in canonical],
+        )
+        await db.commit()
 
     async def get_node_stats(self, node_id: str) -> dict[str, object] | None:
         """Return all node_stats columns for *node_id*, or ``None`` if absent."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT * FROM node_stats WHERE node_id = ?", (node_id,))
-            row = await cursor.fetchone()
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM node_stats WHERE node_id = ?", (node_id,))
+        row = await cursor.fetchone()
         if row is None:
             return None
         return dict(row)
@@ -757,21 +807,21 @@ class StatsStore:
             return {}
         await self._ensure_open()
         placeholders = ",".join("?" for _ in node_ids)
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                f"SELECT * FROM node_stats WHERE node_id IN ({placeholders})",
-                node_ids,
-            )
-            rows = await cursor.fetchall()
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"SELECT * FROM node_stats WHERE node_id IN ({placeholders})",
+            node_ids,
+        )
+        rows = await cursor.fetchall()
         return {row["node_id"]: dict(row) for row in rows}
 
     async def list_all_node_ids(self) -> list[str]:
         """Return all node_id values from node_stats."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT node_id FROM node_stats")
-            rows = await cursor.fetchall()
+        db = self._conn()
+        cursor = await db.execute("SELECT node_id FROM node_stats")
+        rows = await cursor.fetchall()
         return [row[0] for row in rows]
 
     # ------------------------------------------------------------------
@@ -802,22 +852,22 @@ class StatsStore:
         """
         await self._ensure_open()
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            row = await (
-                await db.execute("SELECT COUNT(*) FROM enrich_queue WHERE processed_at IS NULL")
-            ).fetchone()
-            self._cached_enrich_queue_depth = int(row[0]) if row else 0
+        db = self._conn()
+        row = await (
+            await db.execute("SELECT COUNT(*) FROM enrich_queue WHERE processed_at IS NULL")
+        ).fetchone()
+        self._cached_enrich_queue_depth = int(row[0]) if row else 0
 
-            row = await (await db.execute("SELECT COUNT(*) FROM coactivation")).fetchone()
-            self._cached_coactivation_pairs = int(row[0]) if row else 0
+        row = await (await db.execute("SELECT COUNT(*) FROM coactivation")).fetchone()
+        self._cached_coactivation_pairs = int(row[0]) if row else 0
 
-            row = await (
-                await db.execute(
-                    "SELECT COUNT(DISTINCT task_id) FROM working_memory WHERE last_seen_at >= ?",
-                    (cutoff,),
-                )
-            ).fetchone()
-            self._cached_working_memory_active_tasks = int(row[0]) if row else 0
+        row = await (
+            await db.execute(
+                "SELECT COUNT(DISTINCT task_id) FROM working_memory WHERE last_seen_at >= ?",
+                (cutoff,),
+            )
+        ).fetchone()
+        self._cached_working_memory_active_tasks = int(row[0]) if row else 0
 
     async def update_salience(self, node_id: str, delta: float) -> None:
         """Atomically adjust salience by *delta*, clamping to [0.0, 1.0].
@@ -826,15 +876,15 @@ class StatsStore:
         """
         await self._ensure_open()
         initial = max(0.0, min(1.0, 0.5 + delta))
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO node_stats (node_id, salience)
-                   VALUES (?, ?)
-                   ON CONFLICT(node_id) DO UPDATE SET
-                     salience = MAX(0.0, MIN(1.0, salience + ?))""",
-                (node_id, initial, delta),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO node_stats (node_id, salience)
+               VALUES (?, ?)
+               ON CONFLICT(node_id) DO UPDATE SET
+                 salience = MAX(0.0, MIN(1.0, salience + ?))""",
+            (node_id, initial, delta),
+        )
+        await db.commit()
         if _HAS_TELEMETRY and _lithos_metrics is not None:
             _lithos_metrics.lcma_salience_updates.add(1)
         logger.debug(
@@ -847,41 +897,41 @@ class StatsStore:
     async def increment_ignored(self, node_id: str) -> None:
         """Atomically increment ignored_count; creates row if absent."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO node_stats (node_id, ignored_count)
-                   VALUES (?, 1)
-                   ON CONFLICT(node_id) DO UPDATE SET
-                     ignored_count = ignored_count + 1""",
-                (node_id,),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO node_stats (node_id, ignored_count)
+               VALUES (?, 1)
+               ON CONFLICT(node_id) DO UPDATE SET
+                 ignored_count = ignored_count + 1""",
+            (node_id,),
+        )
+        await db.commit()
 
     async def increment_cited(self, node_id: str) -> None:
         """Atomically increment cited_count; creates row if absent."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO node_stats (node_id, cited_count)
-                   VALUES (?, 1)
-                   ON CONFLICT(node_id) DO UPDATE SET
-                     cited_count = cited_count + 1""",
-                (node_id,),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO node_stats (node_id, cited_count)
+               VALUES (?, 1)
+               ON CONFLICT(node_id) DO UPDATE SET
+                 cited_count = cited_count + 1""",
+            (node_id,),
+        )
+        await db.commit()
 
     async def increment_misleading(self, node_id: str) -> None:
         """Atomically increment misleading_count; creates row if absent."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO node_stats (node_id, misleading_count)
-                   VALUES (?, 1)
-                   ON CONFLICT(node_id) DO UPDATE SET
-                     misleading_count = misleading_count + 1""",
-                (node_id,),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO node_stats (node_id, misleading_count)
+               VALUES (?, 1)
+               ON CONFLICT(node_id) DO UPDATE SET
+                 misleading_count = misleading_count + 1""",
+            (node_id,),
+        )
+        await db.commit()
 
     async def update_spaced_rep_strength(self, node_id: str, delta: float) -> None:
         """Atomically adjust spaced_rep_strength by *delta*, clamping to [0.0, 1.0].
@@ -891,26 +941,26 @@ class StatsStore:
         """
         await self._ensure_open()
         initial = max(0.0, min(1.0, delta))
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO node_stats (node_id, spaced_rep_strength)
-                   VALUES (?, ?)
-                   ON CONFLICT(node_id) DO UPDATE SET
-                     spaced_rep_strength = MAX(0.0, MIN(1.0, spaced_rep_strength + ?))""",
-                (node_id, initial, delta),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO node_stats (node_id, spaced_rep_strength)
+               VALUES (?, ?)
+               ON CONFLICT(node_id) DO UPDATE SET
+                 spaced_rep_strength = MAX(0.0, MIN(1.0, spaced_rep_strength + ?))""",
+            (node_id, initial, delta),
+        )
+        await db.commit()
 
     async def update_last_decay_applied_at(self, node_id: str) -> None:
         """Set ``last_decay_applied_at`` to now for *node_id*."""
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "UPDATE node_stats SET last_decay_applied_at = ? WHERE node_id = ?",
-                (now, node_id),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            "UPDATE node_stats SET last_decay_applied_at = ? WHERE node_id = ?",
+            (now, node_id),
+        )
+        await db.commit()
 
     async def update_last_used_at(self, node_id: str) -> None:
         """Set ``last_used_at`` to now for *node_id*.
@@ -919,15 +969,15 @@ class StatsStore:
         """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO node_stats (node_id, last_used_at)
-                   VALUES (?, ?)
-                   ON CONFLICT(node_id) DO UPDATE SET
-                     last_used_at = excluded.last_used_at""",
-                (node_id, now),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO node_stats (node_id, last_used_at)
+               VALUES (?, ?)
+               ON CONFLICT(node_id) DO UPDATE SET
+                 last_used_at = excluded.last_used_at""",
+            (node_id, now),
+        )
+        await db.commit()
 
     # ------------------------------------------------------------------
     # Consolidation tracking operations
@@ -936,64 +986,63 @@ class StatsStore:
     async def is_task_consolidated(self, task_id: str) -> bool:
         """Return ``True`` if *task_id* exists in ``task_consolidation_log``."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT 1 FROM task_consolidation_log WHERE task_id = ?",
-                (task_id,),
-            )
-            return await cursor.fetchone() is not None
+        db = self._conn()
+        cursor = await db.execute(
+            "SELECT 1 FROM task_consolidation_log WHERE task_id = ?",
+            (task_id,),
+        )
+        return await cursor.fetchone() is not None
 
     async def mark_task_consolidated(self, task_id: str) -> None:
         """Insert *task_id* into ``task_consolidation_log`` (INSERT OR IGNORE)."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO task_consolidation_log (task_id) VALUES (?)",
-                (task_id,),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            "INSERT OR IGNORE INTO task_consolidation_log (task_id) VALUES (?)",
+            (task_id,),
+        )
+        await db.commit()
 
     async def has_consolidation_edge_op(self, task_id: str, from_id: str, to_id: str) -> bool:
         """Return ``True`` if the edge op has already been recorded."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT 1 FROM consolidation_edge_ops "
-                "WHERE task_id = ? AND from_id = ? AND to_id = ?",
-                (task_id, from_id, to_id),
-            )
-            return await cursor.fetchone() is not None
+        db = self._conn()
+        cursor = await db.execute(
+            "SELECT 1 FROM consolidation_edge_ops WHERE task_id = ? AND from_id = ? AND to_id = ?",
+            (task_id, from_id, to_id),
+        )
+        return await cursor.fetchone() is not None
 
     async def record_consolidation_edge_op(self, task_id: str, from_id: str, to_id: str) -> None:
         """Record an edge consolidation op (INSERT OR IGNORE)."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO consolidation_edge_ops (task_id, from_id, to_id) "
-                "VALUES (?, ?, ?)",
-                (task_id, from_id, to_id),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            "INSERT OR IGNORE INTO consolidation_edge_ops (task_id, from_id, to_id) "
+            "VALUES (?, ?, ?)",
+            (task_id, from_id, to_id),
+        )
+        await db.commit()
 
     async def has_consolidation_salience_op(self, task_id: str, node_id: str) -> bool:
         """Return ``True`` if the salience op has already been recorded."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT 1 FROM consolidation_salience_ops WHERE task_id = ? AND node_id = ?",
-                (task_id, node_id),
-            )
-            return await cursor.fetchone() is not None
+        db = self._conn()
+        cursor = await db.execute(
+            "SELECT 1 FROM consolidation_salience_ops WHERE task_id = ? AND node_id = ?",
+            (task_id, node_id),
+        )
+        return await cursor.fetchone() is not None
 
     async def record_consolidation_salience_op(self, task_id: str, node_id: str) -> None:
         """Record a salience consolidation op (INSERT OR IGNORE)."""
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO consolidation_salience_ops (task_id, node_id) VALUES (?, ?)",
-                (task_id, node_id),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            "INSERT OR IGNORE INTO consolidation_salience_ops (task_id, node_id) VALUES (?, ?)",
+            (task_id, node_id),
+        )
+        await db.commit()
 
     async def update_salience_and_record_consolidation(
         self, *, node_id: str, delta: float, task_id: str
@@ -1005,19 +1054,19 @@ class StatsStore:
         """
         await self._ensure_open()
         initial = max(0.0, min(1.0, 0.5 + delta))
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO node_stats (node_id, salience)
-                   VALUES (?, ?)
-                   ON CONFLICT(node_id) DO UPDATE SET
-                     salience = MAX(0.0, MIN(1.0, salience + ?))""",
-                (node_id, initial, delta),
-            )
-            await db.execute(
-                "INSERT OR IGNORE INTO consolidation_salience_ops (task_id, node_id) VALUES (?, ?)",
-                (task_id, node_id),
-            )
-            await db.commit()
+        db = self._conn()
+        await db.execute(
+            """INSERT INTO node_stats (node_id, salience)
+               VALUES (?, ?)
+               ON CONFLICT(node_id) DO UPDATE SET
+                 salience = MAX(0.0, MIN(1.0, salience + ?))""",
+            (node_id, initial, delta),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO consolidation_salience_ops (task_id, node_id) VALUES (?, ?)",
+            (task_id, node_id),
+        )
+        await db.commit()
 
     # ------------------------------------------------------------------
     # Receipt lookup operations
@@ -1031,10 +1080,10 @@ class StatsStore:
         the task_id does not match.
         """
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT * FROM receipts WHERE id = ?", (receipt_id,))
-            row = await cursor.fetchone()
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM receipts WHERE id = ?", (receipt_id,))
+        row = await cursor.fetchone()
         if row is None:
             return None
         result = dict(row)
@@ -1051,14 +1100,13 @@ class StatsStore:
         ``None`` if no receipt matches.
         """
         await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM receipts WHERE task_id = ? AND agent_id = ? "
-                "ORDER BY rowid DESC LIMIT 1",
-                (task_id, agent_id),
-            )
-            row = await cursor.fetchone()
+        db = self._conn()
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM receipts WHERE task_id = ? AND agent_id = ? ORDER BY rowid DESC LIMIT 1",
+            (task_id, agent_id),
+        )
+        row = await cursor.fetchone()
         if row is None:
             return None
         result = dict(row)

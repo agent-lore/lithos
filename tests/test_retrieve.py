@@ -133,17 +133,23 @@ async def seeded_search(seeded_config: LithosConfig) -> SearchEngine:
 
 
 @pytest.fixture
-async def edge_store(seeded_config: LithosConfig) -> EdgeStore:
+async def edge_store(seeded_config: LithosConfig):
     store = EdgeStore(seeded_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 @pytest.fixture
-async def stats_store(seeded_config: LithosConfig) -> StatsStore:
+async def stats_store(seeded_config: LithosConfig):
     store = StatsStore(seeded_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 @pytest.fixture

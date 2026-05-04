@@ -12,11 +12,14 @@ from lithos.lcma.stats import StatsStore
 
 
 @pytest_asyncio.fixture
-async def stats_store(test_config: LithosConfig) -> StatsStore:
-    """Create and open a StatsStore for testing."""
+async def stats_store(test_config: LithosConfig):
+    """Create, open, and close a StatsStore around the test."""
     store = StatsStore(test_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 class TestStatsStoreCreation:

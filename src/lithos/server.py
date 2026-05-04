@@ -876,9 +876,17 @@ class LithosServer:
             self.graph.save_cache()
 
     async def stop_enrich_worker(self) -> None:
-        """Stop the enrichment background worker."""
+        """Stop the enrichment background worker and close LCMA stores.
+
+        StatsStore and EdgeStore now hold persistent connections (#172); they
+        must be closed to release the SQLite WAL handles cleanly.
+        """
         if self._enrich_worker is not None:
             await self._enrich_worker.stop()
+        if self.stats_store is not None:
+            await self.stats_store.close()
+        if self.edge_store is not None:
+            await self.edge_store.close()
 
     async def handle_file_change(self, path: Path, deleted: bool = False) -> None:
         """Handle a file change event."""

@@ -27,17 +27,23 @@ from lithos.lcma.stats import StatsStore
 
 
 @pytest_asyncio.fixture
-async def stats_store(test_config: LithosConfig) -> StatsStore:
+async def stats_store(test_config: LithosConfig):
     store = StatsStore(test_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 @pytest_asyncio.fixture
-async def edge_store(test_config: LithosConfig) -> EdgeStore:
+async def edge_store(test_config: LithosConfig):
     store = EdgeStore(test_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 @pytest.fixture

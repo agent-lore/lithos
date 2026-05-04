@@ -96,10 +96,13 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
 
 
 @pytest.fixture
-async def edge_store(seeded_config: LithosConfig) -> EdgeStore:
+async def edge_store(seeded_config: LithosConfig):
     store = EdgeStore(seeded_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 # ---------------------------------------------------------------------------
