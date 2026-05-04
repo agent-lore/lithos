@@ -236,18 +236,41 @@ class StatsStore:
         self._opened = False
 
     async def _ensure_open(self) -> None:
-        """Lazily (re-)open the database on first use or after close().
+        """Lazily (re-)open the database on first use, after close, or after a dead worker.
 
-        Recovery path: if :meth:`close` ran but the store is reused, this
-        re-runs :meth:`open` so callers do not need to track lifecycle
-        externally. Per-call connection callers used to get this for free
-        because every method opened its own connection (#172).
+        Three recovery cases are handled here:
+
+        1. Never opened — call :meth:`open`.
+        2. :meth:`close` ran but the store was reused — re-open transparently.
+        3. The aiosqlite worker thread is no longer running (the connection
+           was closed externally, the loop was torn down underneath us, etc.)
+           — drop the stale handle and re-open. Callers no longer need to
+           reason about connection lifecycle.
+
+        For self-healing on a *live* but error-throwing handle, see
+        :meth:`reconnect` — that is the explicit recovery primitive.
         """
-        if self._opened and self._db is not None:
+        if self._opened and self._db is not None and getattr(self._db, "_running", True):
             return
-        # Either never opened, or close() reset the flag — either way,
-        # re-open clears any stale state and reconnects.
+        if self._db is not None and not getattr(self._db, "_running", True):
+            logger.warning(
+                "StatsStore connection worker is no longer running; reopening %s",
+                self.db_path,
+            )
+            # Drop the dead handle so open() reconstructs from scratch.
+            self._db = None
         self._opened = False
+        await self.open()
+
+    async def reconnect(self) -> None:
+        """Force a close + re-open of the underlying connection.
+
+        Recovery primitive for callers that have detected the live handle is
+        misbehaving (operational errors, lock-stuck transactions, etc.) and
+        want to start fresh without waiting for the next garbage collection.
+        Idempotent.
+        """
+        await self.close()
         await self.open()
 
     def _conn(self) -> aiosqlite.Connection:
@@ -1099,23 +1122,34 @@ class StatsStore:
         """Atomically update salience and record the consolidation salience op.
 
         Both writes happen in a single stats.db transaction so that a crash
-        between them cannot cause double-boosting on retry.
+        between them cannot cause double-boosting on retry. With autocommit
+        mode (#172) the atomicity is enforced by an explicit BEGIN/COMMIT
+        bracket under :meth:`_write_mutex` — without it, the salience update
+        would commit before the consolidation marker is recorded and a
+        retry would re-apply the delta.
         """
         await self._ensure_open()
         initial = max(0.0, min(1.0, 0.5 + delta))
         db = self._conn()
-        await db.execute(
-            """INSERT INTO node_stats (node_id, salience)
-               VALUES (?, ?)
-               ON CONFLICT(node_id) DO UPDATE SET
-                 salience = MAX(0.0, MIN(1.0, salience + ?))""",
-            (node_id, initial, delta),
-        )
-        await db.execute(
-            "INSERT OR IGNORE INTO consolidation_salience_ops (task_id, node_id) VALUES (?, ?)",
-            (task_id, node_id),
-        )
-        await db.commit()
+        async with self._write_mutex():
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    """INSERT INTO node_stats (node_id, salience)
+                       VALUES (?, ?)
+                       ON CONFLICT(node_id) DO UPDATE SET
+                         salience = MAX(0.0, MIN(1.0, salience + ?))""",
+                    (node_id, initial, delta),
+                )
+                await db.execute(
+                    "INSERT OR IGNORE INTO consolidation_salience_ops "
+                    "(task_id, node_id) VALUES (?, ?)",
+                    (task_id, node_id),
+                )
+                await db.execute("COMMIT")
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
 
     # ------------------------------------------------------------------
     # Receipt lookup operations

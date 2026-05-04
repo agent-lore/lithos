@@ -408,9 +408,12 @@ class TestCorruptRecovery:
         store.db_path.write_bytes(b"not a sqlite database at all")
 
         await store.open()
-        assert store.db_path.exists()
-        quarantined = list(store.db_path.parent.glob("stats.db.corrupt-*"))
-        assert len(quarantined) == 1
+        try:
+            assert store.db_path.exists()
+            quarantined = list(store.db_path.parent.glob("stats.db.corrupt-*"))
+            assert len(quarantined) == 1
+        finally:
+            await store.close()
 
     async def test_quarantined_db_contains_original_bytes(self, test_config: LithosConfig) -> None:
         store = StatsStore(test_config)
@@ -419,8 +422,11 @@ class TestCorruptRecovery:
         store.db_path.write_bytes(garbage)
 
         await store.open()
-        quarantined = list(store.db_path.parent.glob("stats.db.corrupt-*"))
-        assert quarantined[0].read_bytes() == garbage
+        try:
+            quarantined = list(store.db_path.parent.glob("stats.db.corrupt-*"))
+            assert quarantined[0].read_bytes() == garbage
+        finally:
+            await store.close()
 
     async def test_recreated_db_has_all_tables(self, test_config: LithosConfig) -> None:
         store = StatsStore(test_config)
@@ -428,23 +434,26 @@ class TestCorruptRecovery:
         store.db_path.write_bytes(b"garbage")
 
         await store.open()
-        conn = sqlite3.connect(str(store.db_path))
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        )
-        tables = {row[0] for row in cursor.fetchall()}
-        conn.close()
-        assert tables == {
-            "node_stats",
-            "coactivation",
-            "enrich_queue",
-            "working_memory",
-            "receipts",
-            "task_consolidation_log",
-            "consolidation_edge_ops",
-            "consolidation_salience_ops",
-        }
+        try:
+            conn = sqlite3.connect(str(store.db_path))
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+            tables = {row[0] for row in cursor.fetchall()}
+            conn.close()
+            assert tables == {
+                "node_stats",
+                "coactivation",
+                "enrich_queue",
+                "working_memory",
+                "receipts",
+                "task_consolidation_log",
+                "consolidation_edge_ops",
+                "consolidation_salience_ops",
+            }
+        finally:
+            await store.close()
 
 
 class TestStoreLocation:
@@ -626,10 +635,12 @@ class TestCitedCountMigration:
         # Open via StatsStore — should run migration
         store = StatsStore(test_config)
         await store.open()
-
-        row = await store.get_node_stats("old_node")
-        assert row is not None
-        assert row["cited_count"] == 0
+        try:
+            row = await store.get_node_stats("old_node")
+            assert row is not None
+            assert row["cited_count"] == 0
+        finally:
+            await store.close()
 
 
 class TestGetWorkingMemory:

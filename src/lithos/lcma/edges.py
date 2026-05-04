@@ -111,13 +111,24 @@ class EdgeStore:
         self._opened = False
 
     async def _ensure_open(self) -> None:
-        """Lazily (re-)open the database on first use or after close().
+        """Lazily (re-)open the database on first use, after close, or after a dead worker.
 
-        See StatsStore._ensure_open for the recovery rationale (#172).
+        See :meth:`StatsStore._ensure_open` for the full recovery rationale (#172).
         """
-        if self._opened and self._db is not None:
+        if self._opened and self._db is not None and getattr(self._db, "_running", True):
             return
+        if self._db is not None and not getattr(self._db, "_running", True):
+            logger.warning(
+                "EdgeStore connection worker is no longer running; reopening %s",
+                self.db_path,
+            )
+            self._db = None
         self._opened = False
+        await self.open()
+
+    async def reconnect(self) -> None:
+        """Force a close + re-open of the underlying connection. Idempotent."""
+        await self.close()
         await self.open()
 
     def _conn(self) -> aiosqlite.Connection:
@@ -176,93 +187,107 @@ class EdgeStore:
         evidence: str | None = None,
         conflict_state: str | None = None,
     ) -> str:
-        """Insert or update an edge.  Returns the ``edge_id``."""
+        """Insert or update an edge.  Returns the ``edge_id``.
+
+        The SELECT-then-INSERT/UPDATE pattern needs cross-statement atomicity
+        on the shared autocommit connection (#172) — without it, two
+        concurrent upserts for the same (from_id, to_id, type, namespace)
+        would both observe "no existing row" and race to INSERT, hitting
+        the UNIQUE constraint. The write mutex + BEGIN IMMEDIATE serialise
+        the read-modify-write so either both calls observe a single row and
+        both UPDATE, or one INSERTs and the next UPDATEs.
+        """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
         db = self._conn()
-        # Check for existing edge by composite key
-        cursor = await db.execute(
-            "SELECT edge_id FROM edges "
-            "WHERE from_id = ? AND to_id = ? AND type = ? AND namespace = ?",
-            (from_id, to_id, edge_type, namespace),
-        )
-        row = await cursor.fetchone()
+        async with self._write_mutex():
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT edge_id FROM edges "
+                    "WHERE from_id = ? AND to_id = ? AND type = ? AND namespace = ?",
+                    (from_id, to_id, edge_type, namespace),
+                )
+                row = await cursor.fetchone()
 
-        if row is not None:
-            edge_id: str = row[0]
-            await db.execute(
-                "UPDATE edges SET weight = ?, updated_at = ?, "
-                "provenance_actor = ?, provenance_type = ?, "
-                "evidence = ?, conflict_state = ? "
-                "WHERE edge_id = ?",
-                (
-                    weight,
-                    now,
-                    provenance_actor,
-                    provenance_type,
-                    evidence,
-                    conflict_state,
-                    edge_id,
-                ),
-            )
-            logger.debug(
-                "edge upsert (update): edge_id=%s from=%s to=%s type=%s ns=%s weight=%.3f",
-                edge_id,
-                from_id,
-                to_id,
-                edge_type,
-                namespace,
-                weight,
-                extra={
-                    "edge_id": edge_id,
-                    "from_id": from_id,
-                    "to_id": to_id,
-                    "edge_type": edge_type,
-                    "namespace": namespace,
-                    "weight": weight,
-                },
-            )
-        else:
-            edge_id = _generate_edge_id()
-            await db.execute(
-                "INSERT INTO edges "
-                "(edge_id, from_id, to_id, type, weight, namespace, "
-                "created_at, updated_at, provenance_actor, provenance_type, "
-                "evidence, conflict_state) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    edge_id,
-                    from_id,
-                    to_id,
-                    edge_type,
-                    weight,
-                    namespace,
-                    now,
-                    now,
-                    provenance_actor,
-                    provenance_type,
-                    evidence,
-                    conflict_state,
-                ),
-            )
-            logger.info(
-                "edge upsert (insert): edge_id=%s from=%s to=%s type=%s ns=%s weight=%.3f",
-                edge_id,
-                from_id,
-                to_id,
-                edge_type,
-                namespace,
-                weight,
-                extra={
-                    "edge_id": edge_id,
-                    "from_id": from_id,
-                    "to_id": to_id,
-                    "edge_type": edge_type,
-                    "namespace": namespace,
-                    "weight": weight,
-                },
-            )
-        await db.commit()
+                if row is not None:
+                    edge_id: str = row[0]
+                    await db.execute(
+                        "UPDATE edges SET weight = ?, updated_at = ?, "
+                        "provenance_actor = ?, provenance_type = ?, "
+                        "evidence = ?, conflict_state = ? "
+                        "WHERE edge_id = ?",
+                        (
+                            weight,
+                            now,
+                            provenance_actor,
+                            provenance_type,
+                            evidence,
+                            conflict_state,
+                            edge_id,
+                        ),
+                    )
+                    logger.debug(
+                        "edge upsert (update): edge_id=%s from=%s to=%s type=%s ns=%s weight=%.3f",
+                        edge_id,
+                        from_id,
+                        to_id,
+                        edge_type,
+                        namespace,
+                        weight,
+                        extra={
+                            "edge_id": edge_id,
+                            "from_id": from_id,
+                            "to_id": to_id,
+                            "edge_type": edge_type,
+                            "namespace": namespace,
+                            "weight": weight,
+                        },
+                    )
+                else:
+                    edge_id = _generate_edge_id()
+                    await db.execute(
+                        "INSERT INTO edges "
+                        "(edge_id, from_id, to_id, type, weight, namespace, "
+                        "created_at, updated_at, provenance_actor, provenance_type, "
+                        "evidence, conflict_state) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            edge_id,
+                            from_id,
+                            to_id,
+                            edge_type,
+                            weight,
+                            namespace,
+                            now,
+                            now,
+                            provenance_actor,
+                            provenance_type,
+                            evidence,
+                            conflict_state,
+                        ),
+                    )
+                    logger.info(
+                        "edge upsert (insert): edge_id=%s from=%s to=%s type=%s ns=%s weight=%.3f",
+                        edge_id,
+                        from_id,
+                        to_id,
+                        edge_type,
+                        namespace,
+                        weight,
+                        extra={
+                            "edge_id": edge_id,
+                            "from_id": from_id,
+                            "to_id": to_id,
+                            "edge_type": edge_type,
+                            "namespace": namespace,
+                            "weight": weight,
+                        },
+                    )
+                await db.execute("COMMIT")
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
         return edge_id
 
     async def get_edge(self, edge_id: str) -> dict[str, object] | None:
@@ -402,22 +427,32 @@ class EdgeStore:
     async def adjust_weight(self, edge_id: str, delta: float) -> float | None:
         """Atomically adjust weight by *delta*, clamping to [0.0, 1.0].
 
-        Returns the new weight, or ``None`` if the edge is not found.
+        Returns the new weight, or ``None`` if the edge is not found. The
+        UPDATE+read-back pair is bracketed in BEGIN/COMMIT under the write
+        mutex so that the returned weight reflects this call's own write
+        even when another coroutine adjusts the same edge concurrently
+        (#172).
         """
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
         db = self._conn()
-        # Single atomic UPDATE with clamping in SQL — no read-modify-write race.
-        cursor = await db.execute(
-            "UPDATE edges SET weight = MAX(0.0, MIN(1.0, weight + ?)), updated_at = ? "
-            "WHERE edge_id = ?",
-            (delta, now, edge_id),
-        )
-        if cursor.rowcount == 0:
-            return None
-        await db.commit()
-        cursor = await db.execute("SELECT weight FROM edges WHERE edge_id = ?", (edge_id,))
-        row = await cursor.fetchone()
+        async with self._write_mutex():
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "UPDATE edges SET weight = MAX(0.0, MIN(1.0, weight + ?)), updated_at = ? "
+                    "WHERE edge_id = ?",
+                    (delta, now, edge_id),
+                )
+                if cursor.rowcount == 0:
+                    await db.execute("ROLLBACK")
+                    return None
+                cursor = await db.execute("SELECT weight FROM edges WHERE edge_id = ?", (edge_id,))
+                row = await cursor.fetchone()
+                await db.execute("COMMIT")
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
         assert row is not None
         return row[0]
 
