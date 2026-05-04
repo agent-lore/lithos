@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TANTIVY_RESERVED_CHAR_RE = re.compile(r'([+\-!(){}\[\]^"~*?:\\/|&])')
+_TANTIVY_RESERVED_CHAR_RE = re.compile(r'([+\-!(){}\[\]^"~*?:\\/|&\'])')
 
 
 def _literalize_tantivy_query(query: str) -> str:
