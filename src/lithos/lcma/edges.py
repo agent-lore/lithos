@@ -6,6 +6,7 @@ corrupt-DB quarantine with automatic recreation.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -63,6 +64,10 @@ class EdgeStore:
         self._opened = False
         # Persistent SQLite connection (#172). Same lifecycle as StatsStore.
         self._db: aiosqlite.Connection | None = None
+        # Same write-mutex pattern as StatsStore — see that class for the
+        # rationale. EdgeStore today has no multi-statement DML methods,
+        # but the lock is here for symmetry and future-proofing.
+        self._write_lock: asyncio.Lock | None = None
 
     @property
     def config(self) -> LithosConfig:
@@ -89,12 +94,12 @@ class EdgeStore:
             if not healthy:
                 self._quarantine(self.db_path)
 
-        db = await aiosqlite.connect(self.db_path)
+        # autocommit-per-statement on the shared connection — see StatsStore.
+        db = await aiosqlite.connect(self.db_path, isolation_level=None)
         db.row_factory = aiosqlite.Row
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA foreign_keys=ON")
         await db.executescript(SCHEMA)
-        await db.commit()
         self._db = db
         self._opened = True
 
@@ -106,14 +111,25 @@ class EdgeStore:
         self._opened = False
 
     async def _ensure_open(self) -> None:
-        """Lazily create the database on first use."""
-        if not self._opened:
-            await self.open()
+        """Lazily (re-)open the database on first use or after close().
+
+        See StatsStore._ensure_open for the recovery rationale (#172).
+        """
+        if self._opened and self._db is not None:
+            return
+        self._opened = False
+        await self.open()
 
     def _conn(self) -> aiosqlite.Connection:
         """Return the live connection. ``open()`` must have run first."""
         assert self._db is not None, "EdgeStore.open() must be called before use"
         return self._db
+
+    def _write_mutex(self) -> asyncio.Lock:
+        """Return the lock that serialises mutating methods (#172)."""
+        if self._write_lock is None:
+            self._write_lock = asyncio.Lock()
+        return self._write_lock
 
     # ------------------------------------------------------------------
     # Internal helpers

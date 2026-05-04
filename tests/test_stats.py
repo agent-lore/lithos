@@ -29,7 +29,10 @@ class TestStatsStoreCreation:
         store = StatsStore(test_config)
         assert not store.db_path.exists()
         await store.open()
-        assert store.db_path.exists()
+        try:
+            assert store.db_path.exists()
+        finally:
+            await store.close()
 
     async def test_schema_has_all_tables(self, stats_store: StatsStore) -> None:
         conn = sqlite3.connect(str(stats_store.db_path))
@@ -168,8 +171,10 @@ class TestIdempotentReopen:
     async def test_reopen_preserves_rows(self, test_config: LithosConfig) -> None:
         store = StatsStore(test_config)
         await store.open()
+        # Close the first store so its persistent WAL writer does not
+        # contend with the standalone insert below for the same DB file.
+        await store.close()
 
-        # Insert a row into node_stats
         async with __import__("aiosqlite").connect(store.db_path) as db:
             await db.execute(
                 "INSERT INTO node_stats (node_id, retrieval_count, salience) VALUES (?, ?, ?)",
@@ -177,18 +182,21 @@ class TestIdempotentReopen:
             )
             await db.commit()
 
-        # Re-open
+        # Re-open and verify rows are preserved.
         store2 = StatsStore(test_config)
         await store2.open()
-
-        async with __import__("aiosqlite").connect(store2.db_path) as db:
-            cursor = await db.execute(
-                "SELECT retrieval_count, salience FROM node_stats WHERE node_id = ?", ("n1",)
-            )
-            row = await cursor.fetchone()
-        assert row is not None
-        assert row[0] == 5
-        assert row[1] == 0.8
+        try:
+            async with __import__("aiosqlite").connect(store2.db_path) as db:
+                cursor = await db.execute(
+                    "SELECT retrieval_count, salience FROM node_stats WHERE node_id = ?",
+                    ("n1",),
+                )
+                row = await cursor.fetchone()
+            assert row is not None
+            assert row[0] == 5
+            assert row[1] == 0.8
+        finally:
+            await store2.close()
 
 
 class TestInsertSelectRoundTrip:

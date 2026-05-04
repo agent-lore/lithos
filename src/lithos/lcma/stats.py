@@ -161,14 +161,19 @@ class StatsStore:
         # across the dozens of method calls per retrieval / drain cycle is
         # the whole point of this lifecycle.
         self._db: aiosqlite.Connection | None = None
-        # Serialise drain transactions on the shared connection (#172).
-        # When each method opened its own connection, BEGIN IMMEDIATE on
-        # connection B blocked until connection A committed — SQLite's
-        # write lock kept double-claim impossible. With one shared
-        # connection, two concurrent drains would interleave at the
-        # statement level and either error on a nested BEGIN or claim the
-        # same row twice. The lock restores per-drain atomicity.
-        self._drain_lock: asyncio.Lock | None = None
+        # Serialise every mutating method on the shared connection (#172).
+        #
+        # Python's sqlite3 default ``isolation_level=""`` auto-starts an
+        # implicit transaction on the first DML statement and ends it on
+        # ``commit()``. With per-call connections the implicit tx was
+        # scoped to one coroutine because each had its own connection. With
+        # one shared connection, two coroutines can interleave at ``await``
+        # points and join each other's auto-tx — coroutine B's commit then
+        # commits coroutine A's pending writes. The write lock prevents
+        # that interleave by holding for the full body of any method that
+        # touches DML. Pure-SELECT reads do not need the lock because
+        # SELECT does not start a write tx.
+        self._write_lock: asyncio.Lock | None = None
         self._cached_enrich_queue_depth: int = 0
         self._cached_coactivation_pairs: int = 0
         self._cached_working_memory_active_tasks: int = 0
@@ -198,7 +203,17 @@ class StatsStore:
             if not healthy:
                 self._quarantine(self.db_path)
 
-        db = await aiosqlite.connect(self.db_path)
+        # ``isolation_level=None`` puts the connection in autocommit-per-
+        # statement mode. With per-call connections the default
+        # ``isolation_level=""`` was safe — each coroutine had its own
+        # implicit transaction. With one shared connection across many
+        # coroutines, the implicit-tx state is shared too: coroutine B's
+        # DML can join coroutine A's open tx, and either commit can flush
+        # the other's pending writes. Autocommit makes single-statement
+        # writes self-contained; multi-statement transactions (drains,
+        # batched executemany) are bracketed with explicit BEGIN/COMMIT
+        # under :meth:`_write_mutex`.
+        db = await aiosqlite.connect(self.db_path, isolation_level=None)
         # Row access by name everywhere — sets default for the lifetime of
         # this connection. Methods that index by position keep working too.
         db.row_factory = aiosqlite.Row
@@ -210,7 +225,6 @@ class StatsStore:
         await self._migrate_add_cited_count(db)
         await self._migrate_add_last_decay_applied_at(db)
         await self._migrate_add_enrich_queue_attempts(db)
-        await db.commit()
         self._db = db
         self._opened = True
 
@@ -222,24 +236,37 @@ class StatsStore:
         self._opened = False
 
     async def _ensure_open(self) -> None:
-        """Lazily create the database on first use."""
-        if not self._opened:
-            await self.open()
+        """Lazily (re-)open the database on first use or after close().
+
+        Recovery path: if :meth:`close` ran but the store is reused, this
+        re-runs :meth:`open` so callers do not need to track lifecycle
+        externally. Per-call connection callers used to get this for free
+        because every method opened its own connection (#172).
+        """
+        if self._opened and self._db is not None:
+            return
+        # Either never opened, or close() reset the flag — either way,
+        # re-open clears any stale state and reconnects.
+        self._opened = False
+        await self.open()
 
     def _conn(self) -> aiosqlite.Connection:
         """Return the live connection. ``open()`` must have run first."""
         assert self._db is not None, "StatsStore.open() must be called before use"
         return self._db
 
-    def _drain_mutex(self) -> asyncio.Lock:
-        """Return the lock that serialises drain transactions (#172).
+    def _write_mutex(self) -> asyncio.Lock:
+        """Return the lock that serialises mutating methods (#172).
 
         Lazily constructed because :meth:`__init__` runs before any event
-        loop exists in some test/CLI flows.
+        loop exists in some test/CLI flows. Every method that issues an
+        INSERT/UPDATE/DELETE (including the explicit-transaction drains)
+        wraps its body in ``async with self._write_mutex():`` to keep the
+        shared connection's auto-transaction state coherent.
         """
-        if self._drain_lock is None:
-            self._drain_lock = asyncio.Lock()
-        return self._drain_lock
+        if self._write_lock is None:
+            self._write_lock = asyncio.Lock()
+        return self._write_lock
 
     # ------------------------------------------------------------------
     # Receipt operations
@@ -542,7 +569,7 @@ class StatsStore:
         # connection the lock state lives on the underlying sqlite3 handle,
         # so two concurrent drains would either error on a nested BEGIN or
         # interleave at the statement level.
-        async with self._drain_mutex():
+        async with self._write_mutex():
             await db.execute("BEGIN IMMEDIATE")
             if max_attempts is not None:
                 cursor = await db.execute(
@@ -618,7 +645,7 @@ class StatsStore:
         db = self._conn()
         db.row_factory = aiosqlite.Row
         # See drain_pending_nodes for why this needs a Python-level lock now.
-        async with self._drain_mutex():
+        async with self._write_mutex():
             await db.execute("BEGIN IMMEDIATE")
             if max_attempts is not None:
                 cursor = await db.execute(
@@ -742,21 +769,32 @@ class StatsStore:
         await db.commit()
 
     async def increment_node_stats_batch(self, node_ids: list[str]) -> None:
-        """Increment retrieval_count for multiple nodes in a single transaction."""
+        """Increment retrieval_count for multiple nodes in a single transaction.
+
+        Wrapped in BEGIN/COMMIT under the write mutex so the batch is atomic
+        on the shared autocommit connection (#172).
+        """
         if not node_ids:
             return
         await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
         db = self._conn()
-        await db.executemany(
-            """INSERT INTO node_stats (node_id, retrieval_count, last_retrieved_at, salience)
-               VALUES (?, 1, ?, 0.5)
-               ON CONFLICT(node_id) DO UPDATE SET
-                 retrieval_count = retrieval_count + 1,
-                 last_retrieved_at = excluded.last_retrieved_at""",
-            [(nid, now) for nid in node_ids],
-        )
-        await db.commit()
+        async with self._write_mutex():
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.executemany(
+                    """INSERT INTO node_stats
+                       (node_id, retrieval_count, last_retrieved_at, salience)
+                       VALUES (?, 1, ?, 0.5)
+                       ON CONFLICT(node_id) DO UPDATE SET
+                         retrieval_count = retrieval_count + 1,
+                         last_retrieved_at = excluded.last_retrieved_at""",
+                    [(nid, now) for nid in node_ids],
+                )
+                await db.execute("COMMIT")
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
         logger.debug(
             "node_stats batch increment: node_count=%d",
             len(node_ids),
@@ -768,7 +806,11 @@ class StatsStore:
         pairs: list[tuple[str, str]],
         namespace: str,
     ) -> None:
-        """Increment coactivation counts for multiple pairs in a single transaction."""
+        """Increment coactivation counts for multiple pairs in a single transaction.
+
+        Wrapped in BEGIN/COMMIT under the write mutex so the batch is atomic
+        on the shared autocommit connection (#172).
+        """
         if not pairs:
             return
         await self._ensure_open()
@@ -776,15 +818,22 @@ class StatsStore:
         # Canonicalize pairs so node_id_a <= node_id_b
         canonical = [(min(a, b), max(a, b)) for a, b in pairs]
         db = self._conn()
-        await db.executemany(
-            """INSERT INTO coactivation (node_id_a, node_id_b, namespace, count, last_at)
-               VALUES (?, ?, ?, 1, ?)
-               ON CONFLICT(node_id_a, node_id_b, namespace) DO UPDATE SET
-                 count = count + 1,
-                 last_at = excluded.last_at""",
-            [(a, b, namespace, now) for a, b in canonical],
-        )
-        await db.commit()
+        async with self._write_mutex():
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.executemany(
+                    """INSERT INTO coactivation
+                       (node_id_a, node_id_b, namespace, count, last_at)
+                       VALUES (?, ?, ?, 1, ?)
+                       ON CONFLICT(node_id_a, node_id_b, namespace) DO UPDATE SET
+                         count = count + 1,
+                         last_at = excluded.last_at""",
+                    [(a, b, namespace, now) for a, b in canonical],
+                )
+                await db.execute("COMMIT")
+            except Exception:
+                await db.execute("ROLLBACK")
+                raise
 
     async def get_node_stats(self, node_id: str) -> dict[str, object] | None:
         """Return all node_stats columns for *node_id*, or ``None`` if absent."""
