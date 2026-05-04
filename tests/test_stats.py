@@ -1096,3 +1096,70 @@ class TestConsolidationTracking:
         # Idempotent
         await stats_store.record_consolidation_salience_op("t1", "node-1")
         assert await stats_store.has_consolidation_salience_op("t1", "node-1")
+
+
+class TestPersistentConnectionHardening:
+    """Shared-connection isolation and recovery regressions for #172."""
+
+    async def test_reads_wait_for_inflight_transaction(self, stats_store: StatsStore) -> None:
+        db = stats_store._conn()
+        original_execute = db.execute
+        txn_statement_applied = asyncio.Event()
+        release_transaction = asyncio.Event()
+        paused = False
+
+        async def execute(sql: str, params=()) -> object:
+            nonlocal paused
+            result = await original_execute(sql, params)
+            if not paused and "INSERT INTO node_stats (node_id, salience)" in sql:
+                paused = True
+                txn_statement_applied.set()
+                await release_transaction.wait()
+            return result
+
+        db.execute = execute  # type: ignore[method-assign]
+
+        writer = asyncio.create_task(
+            stats_store.update_salience_and_record_consolidation(
+                node_id="node-1",
+                delta=0.3,
+                task_id="task-1",
+            )
+        )
+        await asyncio.wait_for(txn_statement_applied.wait(), timeout=1)
+
+        reader = asyncio.create_task(stats_store.get_node_stats("node-1"))
+        done, pending = await asyncio.wait({reader}, timeout=0.05)
+        assert not done
+        assert pending == {reader}
+
+        release_transaction.set()
+        await writer
+
+        row = await asyncio.wait_for(reader, timeout=1)
+        assert row is not None
+        assert row["salience"] == pytest.approx(0.8)
+
+    async def test_reopens_after_connection_liveness_error(self, stats_store: StatsStore) -> None:
+        db = stats_store._conn()
+        original_execute = db.execute
+        fail_once = True
+
+        async def execute(sql: str, params=()) -> object:
+            nonlocal fail_once
+            if fail_once:
+                fail_once = False
+                raise ValueError("no active connection")
+            return await original_execute(sql, params)
+
+        db.execute = execute  # type: ignore[method-assign]
+
+        with pytest.raises(ValueError, match="no active connection"):
+            await stats_store.increment_node_stats(node_id="node-1")
+
+        assert stats_store._db is not db
+
+        await stats_store.increment_node_stats(node_id="node-1")
+        row = await stats_store.get_node_stats("node-1")
+        assert row is not None
+        assert row["retrieval_count"] == 1

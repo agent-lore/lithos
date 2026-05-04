@@ -7,8 +7,10 @@ corrupt-DB quarantine with automatic recreation.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -64,10 +66,9 @@ class EdgeStore:
         self._opened = False
         # Persistent SQLite connection (#172). Same lifecycle as StatsStore.
         self._db: aiosqlite.Connection | None = None
-        # Same write-mutex pattern as StatsStore — see that class for the
-        # rationale. EdgeStore today has no multi-statement DML methods,
-        # but the lock is here for symmetry and future-proofing.
-        self._write_lock: asyncio.Lock | None = None
+        # Serialise every operation on the shared connection — see
+        # StatsStore for the full rationale.
+        self._op_lock: asyncio.Lock | None = None
 
     @property
     def config(self) -> LithosConfig:
@@ -136,11 +137,97 @@ class EdgeStore:
         assert self._db is not None, "EdgeStore.open() must be called before use"
         return self._db
 
-    def _write_mutex(self) -> asyncio.Lock:
-        """Return the lock that serialises mutating methods (#172)."""
-        if self._write_lock is None:
-            self._write_lock = asyncio.Lock()
-        return self._write_lock
+    def _operation_mutex(self) -> asyncio.Lock:
+        """Return the lock that serialises store methods on the shared handle."""
+        if self._op_lock is None:
+            self._op_lock = asyncio.Lock()
+        return self._op_lock
+
+    @staticmethod
+    def _is_recoverable_connection_error(exc: BaseException) -> bool:
+        """Return True when *exc* indicates the persistent handle is no longer usable."""
+        if not isinstance(exc, (ValueError, RuntimeError, aiosqlite.Error)):
+            return False
+        message = str(exc).lower()
+        return any(
+            fragment in message
+            for fragment in (
+                "closed database",
+                "closed connection",
+                "event loop is closed",
+                "no active connection",
+                "cannot operate on a closed database",
+            )
+        )
+
+    async def _reconnect_after_error(self) -> None:
+        """Drop the current handle and open a fresh one after a connection-liveness failure."""
+        db = self._db
+        self._db = None
+        self._opened = False
+        if db is not None:
+            with contextlib.suppress(Exception):
+                await db.close()
+        await self.open()
+
+    @contextlib.asynccontextmanager
+    async def _session(self, *, transactional: bool = False) -> AsyncIterator[aiosqlite.Connection]:
+        """Yield exclusive access to the shared connection, optionally in a transaction."""
+        async with self._operation_mutex():
+            await self._ensure_open()
+            db = self._conn()
+
+            if not transactional:
+                try:
+                    yield db
+                except Exception as exc:
+                    if self._is_recoverable_connection_error(exc):
+                        logger.warning(
+                            "EdgeStore operation hit a dead connection; reopening %s",
+                            self.db_path,
+                            exc_info=True,
+                        )
+                        await self._reconnect_after_error()
+                    raise
+                return
+
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+            except Exception as exc:
+                if self._is_recoverable_connection_error(exc):
+                    logger.warning(
+                        "EdgeStore transaction could not begin; reopening %s",
+                        self.db_path,
+                        exc_info=True,
+                    )
+                    await self._reconnect_after_error()
+                raise
+
+            try:
+                yield db
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    await db.execute("ROLLBACK")
+                if self._is_recoverable_connection_error(exc):
+                    logger.warning(
+                        "EdgeStore transaction lost its connection; reopening %s",
+                        self.db_path,
+                        exc_info=True,
+                    )
+                    await self._reconnect_after_error()
+                raise
+
+            try:
+                await db.execute("COMMIT")
+            except Exception as exc:
+                if self._is_recoverable_connection_error(exc):
+                    logger.warning(
+                        "EdgeStore transaction could not commit; reopening %s",
+                        self.db_path,
+                        exc_info=True,
+                    )
+                    await self._reconnect_after_error()
+                raise
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -193,115 +280,106 @@ class EdgeStore:
         on the shared autocommit connection (#172) — without it, two
         concurrent upserts for the same (from_id, to_id, type, namespace)
         would both observe "no existing row" and race to INSERT, hitting
-        the UNIQUE constraint. The write mutex + BEGIN IMMEDIATE serialise
+        the UNIQUE constraint. The transactional :meth:`_session` serialises
         the read-modify-write so either both calls observe a single row and
         both UPDATE, or one INSERTs and the next UPDATEs.
         """
-        await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        db = self._conn()
-        async with self._write_mutex():
-            await db.execute("BEGIN IMMEDIATE")
-            try:
-                cursor = await db.execute(
-                    "SELECT edge_id FROM edges "
-                    "WHERE from_id = ? AND to_id = ? AND type = ? AND namespace = ?",
-                    (from_id, to_id, edge_type, namespace),
-                )
-                row = await cursor.fetchone()
+        async with self._session(transactional=True) as db:
+            cursor = await db.execute(
+                "SELECT edge_id FROM edges "
+                "WHERE from_id = ? AND to_id = ? AND type = ? AND namespace = ?",
+                (from_id, to_id, edge_type, namespace),
+            )
+            row = await cursor.fetchone()
 
-                if row is not None:
-                    edge_id: str = row[0]
-                    await db.execute(
-                        "UPDATE edges SET weight = ?, updated_at = ?, "
-                        "provenance_actor = ?, provenance_type = ?, "
-                        "evidence = ?, conflict_state = ? "
-                        "WHERE edge_id = ?",
-                        (
-                            weight,
-                            now,
-                            provenance_actor,
-                            provenance_type,
-                            evidence,
-                            conflict_state,
-                            edge_id,
-                        ),
-                    )
-                    logger.debug(
-                        "edge upsert (update): edge_id=%s from=%s to=%s type=%s ns=%s weight=%.3f",
+            if row is not None:
+                edge_id: str = row[0]
+                await db.execute(
+                    "UPDATE edges SET weight = ?, updated_at = ?, "
+                    "provenance_actor = ?, provenance_type = ?, "
+                    "evidence = ?, conflict_state = ? "
+                    "WHERE edge_id = ?",
+                    (
+                        weight,
+                        now,
+                        provenance_actor,
+                        provenance_type,
+                        evidence,
+                        conflict_state,
+                        edge_id,
+                    ),
+                )
+                logger.debug(
+                    "edge upsert (update): edge_id=%s from=%s to=%s type=%s ns=%s weight=%.3f",
+                    edge_id,
+                    from_id,
+                    to_id,
+                    edge_type,
+                    namespace,
+                    weight,
+                    extra={
+                        "edge_id": edge_id,
+                        "from_id": from_id,
+                        "to_id": to_id,
+                        "edge_type": edge_type,
+                        "namespace": namespace,
+                        "weight": weight,
+                    },
+                )
+            else:
+                edge_id = _generate_edge_id()
+                await db.execute(
+                    "INSERT INTO edges "
+                    "(edge_id, from_id, to_id, type, weight, namespace, "
+                    "created_at, updated_at, provenance_actor, provenance_type, "
+                    "evidence, conflict_state) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
                         edge_id,
                         from_id,
                         to_id,
                         edge_type,
-                        namespace,
                         weight,
-                        extra={
-                            "edge_id": edge_id,
-                            "from_id": from_id,
-                            "to_id": to_id,
-                            "edge_type": edge_type,
-                            "namespace": namespace,
-                            "weight": weight,
-                        },
-                    )
-                else:
-                    edge_id = _generate_edge_id()
-                    await db.execute(
-                        "INSERT INTO edges "
-                        "(edge_id, from_id, to_id, type, weight, namespace, "
-                        "created_at, updated_at, provenance_actor, provenance_type, "
-                        "evidence, conflict_state) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            edge_id,
-                            from_id,
-                            to_id,
-                            edge_type,
-                            weight,
-                            namespace,
-                            now,
-                            now,
-                            provenance_actor,
-                            provenance_type,
-                            evidence,
-                            conflict_state,
-                        ),
-                    )
-                    logger.info(
-                        "edge upsert (insert): edge_id=%s from=%s to=%s type=%s ns=%s weight=%.3f",
-                        edge_id,
-                        from_id,
-                        to_id,
-                        edge_type,
                         namespace,
-                        weight,
-                        extra={
-                            "edge_id": edge_id,
-                            "from_id": from_id,
-                            "to_id": to_id,
-                            "edge_type": edge_type,
-                            "namespace": namespace,
-                            "weight": weight,
-                        },
-                    )
-                await db.execute("COMMIT")
-            except Exception:
-                await db.execute("ROLLBACK")
-                raise
+                        now,
+                        now,
+                        provenance_actor,
+                        provenance_type,
+                        evidence,
+                        conflict_state,
+                    ),
+                )
+                logger.info(
+                    "edge upsert (insert): edge_id=%s from=%s to=%s type=%s ns=%s weight=%.3f",
+                    edge_id,
+                    from_id,
+                    to_id,
+                    edge_type,
+                    namespace,
+                    weight,
+                    extra={
+                        "edge_id": edge_id,
+                        "from_id": from_id,
+                        "to_id": to_id,
+                        "edge_type": edge_type,
+                        "namespace": namespace,
+                        "weight": weight,
+                    },
+                )
         return edge_id
 
     async def get_edge(self, edge_id: str) -> dict[str, object] | None:
         """Return a single edge by its ID, or ``None`` if not found."""
-        await self._ensure_open()
-        db = self._conn()
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT edge_id, from_id, to_id, type, weight, namespace, "
-            "created_at, updated_at, provenance_actor, provenance_type, "
-            "evidence, conflict_state FROM edges WHERE edge_id = ?",
-            (edge_id,),
-        )
-        row = await cursor.fetchone()
+        async with self._session() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT edge_id, from_id, to_id, type, weight, namespace, "
+                "created_at, updated_at, provenance_actor, provenance_type, "
+                "evidence, conflict_state FROM edges WHERE edge_id = ?",
+                (edge_id,),
+            )
+            row = await cursor.fetchone()
         if row is None:
             return None
         return {
@@ -330,15 +408,13 @@ class EdgeStore:
 
         Returns ``True`` if the edge was found and updated, ``False`` otherwise.
         """
-        await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        db = self._conn()
-        cursor = await db.execute(
-            "UPDATE edges SET conflict_state = ?, provenance_actor = ?, updated_at = ? "
-            "WHERE edge_id = ?",
-            (conflict_state, provenance_actor, now, edge_id),
-        )
-        await db.commit()
+        async with self._session() as db:
+            cursor = await db.execute(
+                "UPDATE edges SET conflict_state = ?, provenance_actor = ?, updated_at = ? "
+                "WHERE edge_id = ?",
+                (conflict_state, provenance_actor, now, edge_id),
+            )
         return cursor.rowcount > 0
 
     async def list_edges(
@@ -350,7 +426,6 @@ class EdgeStore:
         namespace: str | None = None,
     ) -> list[dict[str, object]]:
         """Query edges by optional filter dimensions."""
-        await self._ensure_open()
         clauses: list[str] = []
         params: list[str] = []
         if from_id is not None:
@@ -369,10 +444,10 @@ class EdgeStore:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"SELECT edge_id, from_id, to_id, type, weight, namespace, created_at, updated_at, provenance_actor, provenance_type, evidence, conflict_state FROM edges{where}"
 
-        db = self._conn()
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(sql, params)
-        rows = await cursor.fetchall()
+        async with self._session() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(sql, params)
+            rows = await cursor.fetchall()
 
         return [
             {
@@ -394,28 +469,28 @@ class EdgeStore:
 
     async def count(self, *, namespace: str | None = None) -> int:
         """Return total edge count, optionally filtered by namespace."""
-        await self._ensure_open()
         if namespace is not None:
             sql = "SELECT COUNT(*) FROM edges WHERE namespace = ?"
             params: tuple[str, ...] = (namespace,)
         else:
             sql = "SELECT COUNT(*) FROM edges"
             params = ()
-        db = self._conn()
-        cursor = await db.execute(sql, params)
-        row = await cursor.fetchone()
+        async with self._session() as db:
+            cursor = await db.execute(sql, params)
+            row = await cursor.fetchone()
         return row[0] if row else 0
 
     async def delete_edges(self, *, edge_ids: list[str]) -> int:
         """Delete edges by their IDs.  Returns the number of rows deleted."""
-        await self._ensure_open()
         if not edge_ids:
             return 0
         placeholders = ",".join("?" for _ in edge_ids)
-        db = self._conn()
-        cursor = await db.execute(f"DELETE FROM edges WHERE edge_id IN ({placeholders})", edge_ids)
-        await db.commit()
-        deleted = cursor.rowcount
+        async with self._session() as db:
+            cursor = await db.execute(
+                f"DELETE FROM edges WHERE edge_id IN ({placeholders})",
+                edge_ids,
+            )
+            deleted = cursor.rowcount
         logger.info(
             "edge delete_edges: requested=%d deleted=%d",
             len(edge_ids),
@@ -428,31 +503,22 @@ class EdgeStore:
         """Atomically adjust weight by *delta*, clamping to [0.0, 1.0].
 
         Returns the new weight, or ``None`` if the edge is not found. The
-        UPDATE+read-back pair is bracketed in BEGIN/COMMIT under the write
-        mutex so that the returned weight reflects this call's own write
-        even when another coroutine adjusts the same edge concurrently
-        (#172).
+        UPDATE+read-back pair is bracketed in BEGIN/COMMIT inside
+        :meth:`_session` so that the returned weight reflects this call's
+        own write even when another coroutine adjusts the same edge
+        concurrently (#172).
         """
-        await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        db = self._conn()
-        async with self._write_mutex():
-            await db.execute("BEGIN IMMEDIATE")
-            try:
-                cursor = await db.execute(
-                    "UPDATE edges SET weight = MAX(0.0, MIN(1.0, weight + ?)), updated_at = ? "
-                    "WHERE edge_id = ?",
-                    (delta, now, edge_id),
-                )
-                if cursor.rowcount == 0:
-                    await db.execute("ROLLBACK")
-                    return None
-                cursor = await db.execute("SELECT weight FROM edges WHERE edge_id = ?", (edge_id,))
-                row = await cursor.fetchone()
-                await db.execute("COMMIT")
-            except Exception:
-                await db.execute("ROLLBACK")
-                raise
+        async with self._session(transactional=True) as db:
+            cursor = await db.execute(
+                "UPDATE edges SET weight = MAX(0.0, MIN(1.0, weight + ?)), updated_at = ? "
+                "WHERE edge_id = ?",
+                (delta, now, edge_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            cursor = await db.execute("SELECT weight FROM edges WHERE edge_id = ?", (edge_id,))
+            row = await cursor.fetchone()
         assert row is not None
         return row[0]
 
@@ -464,7 +530,6 @@ class EdgeStore:
         namespace: str | None = None,
     ) -> list[dict[str, object]]:
         """Return all edges where both from_id and to_id are in *node_ids*."""
-        await self._ensure_open()
         if not node_ids:
             return []
         placeholders = ", ".join("?" for _ in node_ids)
@@ -480,10 +545,10 @@ class EdgeStore:
             clauses.append("namespace = ?")
             params.append(namespace)
         where = " AND ".join(clauses)
-        db = self._conn()
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(f"SELECT * FROM edges WHERE {where}", params)
-        rows = await cursor.fetchall()
+        async with self._session() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(f"SELECT * FROM edges WHERE {where}", params)
+            rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
 

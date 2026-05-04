@@ -410,3 +410,67 @@ class TestAdjustWeightConcurrency:
         # Final weight should reflect all 10 deltas
         edges = await edge_store.list_edges(from_id="a")
         assert edges[0]["weight"] == pytest.approx(0.6, abs=1e-9)
+
+
+class TestPersistentConnectionHardening:
+    """Shared-connection isolation and recovery regressions for #172."""
+
+    async def test_reads_wait_for_inflight_transaction(self, edge_store: EdgeStore) -> None:
+        edge_id = await edge_store.upsert(
+            from_id="a",
+            to_id="b",
+            edge_type="rel",
+            weight=0.5,
+            namespace="ns",
+        )
+        db = edge_store._conn()
+        original_execute = db.execute
+        txn_statement_applied = asyncio.Event()
+        release_transaction = asyncio.Event()
+        paused = False
+
+        async def execute(sql: str, params=()) -> object:
+            nonlocal paused
+            result = await original_execute(sql, params)
+            if not paused and "UPDATE edges SET weight = MAX" in sql:
+                paused = True
+                txn_statement_applied.set()
+                await release_transaction.wait()
+            return result
+
+        db.execute = execute  # type: ignore[method-assign]
+
+        writer = asyncio.create_task(edge_store.adjust_weight(edge_id, 0.2))
+        await asyncio.wait_for(txn_statement_applied.wait(), timeout=1)
+
+        reader = asyncio.create_task(edge_store.get_edge(edge_id))
+        done, pending = await asyncio.wait({reader}, timeout=0.05)
+        assert not done
+        assert pending == {reader}
+
+        release_transaction.set()
+        assert await writer == pytest.approx(0.7)
+
+        edge = await asyncio.wait_for(reader, timeout=1)
+        assert edge is not None
+        assert edge["weight"] == pytest.approx(0.7)
+
+    async def test_reopens_after_connection_liveness_error(self, edge_store: EdgeStore) -> None:
+        db = edge_store._conn()
+        original_execute = db.execute
+        fail_once = True
+
+        async def execute(sql: str, params=()) -> object:
+            nonlocal fail_once
+            if fail_once:
+                fail_once = False
+                raise ValueError("no active connection")
+            return await original_execute(sql, params)
+
+        db.execute = execute  # type: ignore[method-assign]
+
+        with pytest.raises(ValueError, match="no active connection"):
+            await edge_store.count()
+
+        assert edge_store._db is not db
+        assert await edge_store.count() == 0
