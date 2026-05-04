@@ -119,6 +119,7 @@ jobs:
 
       - name: Run integration pytest suite
         env:
+          LITHOS_DETECT_THREAD_LEAKS: "1"
           LITHOS_MCP_URL: http://localhost:8765/sse
         run: |
           uv run pytest \

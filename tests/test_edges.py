@@ -412,6 +412,33 @@ class TestAdjustWeightConcurrency:
         assert edges[0]["weight"] == pytest.approx(0.6, abs=1e-9)
 
 
+class TestUpsertConcurrency:
+    """Concurrent same-key upserts must converge on one logical edge."""
+
+    async def test_concurrent_same_key_upserts_keep_single_row(self, edge_store: EdgeStore) -> None:
+        weights = [0.1 + (i * 0.01) for i in range(25)]
+        edge_ids = await asyncio.gather(
+            *[
+                edge_store.upsert(
+                    from_id="same-from",
+                    to_id="same-to",
+                    edge_type="same-type",
+                    weight=weight,
+                    namespace="same-ns",
+                )
+                for weight in weights
+            ]
+        )
+
+        assert len(set(edge_ids)) == 1
+        assert await edge_store.count() == 1
+
+        edges = await edge_store.list_edges(from_id="same-from")
+        assert len(edges) == 1
+        assert edges[0]["edge_id"] == edge_ids[0]
+        assert any(edges[0]["weight"] == pytest.approx(weight) for weight in weights)
+
+
 class TestPersistentConnectionHardening:
     """Shared-connection isolation and recovery regressions for #172."""
 
