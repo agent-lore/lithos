@@ -888,6 +888,21 @@ class LithosServer:
         if self.edge_store is not None:
             await self.edge_store.close()
 
+    async def shutdown(self) -> None:
+        """Stop every background worker and close every persistent handle.
+
+        Idempotent. Aggregates :meth:`stop_coordination_stats_refresh`,
+        :meth:`stop_enrich_worker`, and :meth:`stop_file_watcher` so callers
+        — especially test fixtures — do not need to track which subsystems
+        own which handles. Forgetting any one of these used to leave
+        aiosqlite worker threads alive past test event-loop teardown,
+        which surfaced as ``RuntimeError: Event loop is closed``
+        warnings and (on CI) job-hanging orphan processes.
+        """
+        await self.stop_coordination_stats_refresh()
+        await self.stop_enrich_worker()
+        self.stop_file_watcher()
+
     async def handle_file_change(self, path: Path, deleted: bool = False) -> None:
         """Handle a file change event."""
         if path.suffix != ".md":

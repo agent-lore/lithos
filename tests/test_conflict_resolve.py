@@ -80,7 +80,11 @@ async def server_with_notes(test_config: LithosConfig) -> LithosServer:
     srv._related_edge_id = non_c["edge_id"]  # type: ignore[attr-defined]
 
     yield srv  # type: ignore[misc]
-    srv.stop_file_watcher()
+    # Aggregate teardown closes the persistent LCMA SQLite connections so
+    # the aiosqlite worker threads exit before the test event loop tears
+    # down (#172) — otherwise the workers emit "Event loop is closed"
+    # warnings and hang CI on orphan processes.
+    await srv.shutdown()
 
 
 class TestConflictResolveValidResolutions:
