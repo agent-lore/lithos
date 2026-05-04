@@ -346,19 +346,22 @@ class TestReconcileWireUp:
         # considers provenance_projection supported.
         store = EdgeStore(seeded_config)
         await store.open()
-        # Reference seeded_km so the fixture runs and writes notes to disk.
-        _ = seeded_km
+        try:
+            # Reference seeded_km so the fixture runs and writes notes to disk.
+            _ = seeded_km
 
-        result = await reconcile(scope="provenance_projection", config=seeded_config)
+            result = await reconcile(scope="provenance_projection", config=seeded_config)
 
-        assert result["supported"] is True
-        assert result["status"] == "ok"
-        assert result["summary"]["repaired"] >= 1
-        # Action payload carries the (created, removed) counts.
-        assert any("created" in a for a in result["actions"])
+            assert result["supported"] is True
+            assert result["status"] == "ok"
+            assert result["summary"]["repaired"] >= 1
+            # Action payload carries the (created, removed) counts.
+            assert any("created" in a for a in result["actions"])
 
-        edges = await store.list_edges(edge_type="derived_from")
-        assert len(edges) >= 1
+            edges = await store.list_edges(edge_type="derived_from")
+            assert len(edges) >= 1
+        finally:
+            await store.close()
 
     @pytest.mark.asyncio
     async def test_reconcile_dry_run_reports_plan_without_mutating(
@@ -371,19 +374,24 @@ class TestReconcileWireUp:
 
         store = EdgeStore(seeded_config)
         await store.open()
-        _ = seeded_km  # seed Alpha/Beta/Gamma; Gamma derives from Alpha
+        try:
+            _ = seeded_km  # seed Alpha/Beta/Gamma; Gamma derives from Alpha
 
-        result = await reconcile(scope="provenance_projection", dry_run=True, config=seeded_config)
-        assert result["supported"] is True
-        # Dry-run reports the planned non-zero delta — status is "ok"
-        # because there is real work the run would have done.
-        assert result["status"] == "ok"
-        assert result["summary"]["repaired"] == 1
-        assert result["actions"] == [{"created": 1, "removed": 0}]
+            result = await reconcile(
+                scope="provenance_projection", dry_run=True, config=seeded_config
+            )
+            assert result["supported"] is True
+            # Dry-run reports the planned non-zero delta — status is "ok"
+            # because there is real work the run would have done.
+            assert result["status"] == "ok"
+            assert result["summary"]["repaired"] == 1
+            assert result["actions"] == [{"created": 1, "removed": 0}]
 
-        # No edges were actually written.
-        edges = await store.list_edges(edge_type="derived_from")
-        assert len(edges) == 0
+            # No edges were actually written.
+            edges = await store.list_edges(edge_type="derived_from")
+            assert len(edges) == 0
+        finally:
+            await store.close()
 
     @pytest.mark.asyncio
     async def test_reconcile_dry_run_noop_when_already_in_sync(
@@ -396,18 +404,23 @@ class TestReconcileWireUp:
 
         store = EdgeStore(seeded_config)
         await store.open()
-        _ = seeded_km
+        try:
+            _ = seeded_km
 
-        # Apply the projection so the store is in sync.
-        await reconcile(scope="provenance_projection", config=seeded_config)
-        edges_after_real = await store.list_edges(edge_type="derived_from")
-        assert len(edges_after_real) == 1
+            # Apply the projection so the store is in sync.
+            await reconcile(scope="provenance_projection", config=seeded_config)
+            edges_after_real = await store.list_edges(edge_type="derived_from")
+            assert len(edges_after_real) == 1
 
-        # Dry-run now plans nothing.
-        result = await reconcile(scope="provenance_projection", dry_run=True, config=seeded_config)
-        assert result["status"] == "noop"
-        assert result["summary"]["repaired"] == 0
-        assert result["actions"] == [{"created": 0, "removed": 0}]
+            # Dry-run now plans nothing.
+            result = await reconcile(
+                scope="provenance_projection", dry_run=True, config=seeded_config
+            )
+            assert result["status"] == "noop"
+            assert result["summary"]["repaired"] == 0
+            assert result["actions"] == [{"created": 0, "removed": 0}]
+        finally:
+            await store.close()
 
     @pytest.mark.asyncio
     async def test_reconcile_unsupported_when_edges_db_missing(

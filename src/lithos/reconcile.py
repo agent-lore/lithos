@@ -406,6 +406,12 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
             failed=1,
             failures=[{"code": "internal_error", "detail": str(exc)}],
         )
+    finally:
+        # Close the persistent connection so the aiosqlite worker thread
+        # exits cleanly. Otherwise it survives function return, eventually
+        # touches a torn-down event loop, and emits "Event loop is closed"
+        # warnings (and on CI, hangs the whole job until timeout) (#172).
+        await edge_store.close()
 
     created = int(counts.get("created", 0))
     removed = int(counts.get("removed", 0))
