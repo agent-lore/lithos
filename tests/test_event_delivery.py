@@ -226,7 +226,7 @@ async def sse_server(temp_dir: Path) -> AsyncGenerator[LithosServer, None]:
     server = LithosServer(config)
     await server.initialize()
     yield server
-    server.stop_file_watcher()
+    await server.shutdown()
 
 
 class TestSSEReceivesEvents:
@@ -465,7 +465,7 @@ class TestMaxClients:
 
             assert response.status_code == 429
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()
 
     @pytest.mark.asyncio
     async def test_below_limit_returns_streaming_response(self, temp_dir: Path) -> None:
@@ -484,7 +484,7 @@ class TestMaxClients:
             assert isinstance(response, StreamingResponse)
             assert response.media_type == "text/event-stream"
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()
 
 
 class TestSSEDisabled:
@@ -500,7 +500,7 @@ class TestSSEDisabled:
 
             assert response.status_code == 503
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()
 
     @pytest.mark.asyncio
     async def test_sse_enabled_returns_stream(self, temp_dir: Path) -> None:
@@ -515,7 +515,7 @@ class TestSSEDisabled:
             assert response.status_code != 503
             assert isinstance(response, StreamingResponse)
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()
 
 
 class TestSSEClientCount:
@@ -535,7 +535,7 @@ class TestSSEClientCount:
             # After streaming completes the slot must be released.
             assert server._sse_active_count() == 0
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()
 
 
 class TestSSEConfig:
@@ -583,7 +583,7 @@ class TestSSERouteIntegration:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(_check(), timeout=2.0)
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()
 
     @pytest.mark.asyncio
     async def test_401_without_token_when_auth_configured(self, temp_dir: Path) -> None:
@@ -602,7 +602,7 @@ class TestSSERouteIntegration:
                 resp = await client.get("/events")
                 assert resp.status_code == 401
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()
 
     @pytest.mark.asyncio
     async def test_200_with_valid_token_when_auth_configured(self, temp_dir: Path) -> None:
@@ -633,7 +633,7 @@ class TestSSERouteIntegration:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(_check(), timeout=2.0)
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()
 
     @pytest.mark.asyncio
     async def test_open_when_no_auth(self, temp_dir: Path) -> None:
@@ -658,4 +658,4 @@ class TestSSERouteIntegration:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(_check(), timeout=2.0)
         finally:
-            server.stop_file_watcher()
+            await server.shutdown()

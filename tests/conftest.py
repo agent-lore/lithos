@@ -1,8 +1,11 @@
 """Pytest configuration and fixtures."""
 
 import logging
+import os
 import shutil
+import sys
 import tempfile
+import threading
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 
@@ -25,6 +28,51 @@ _LITHOS_ENV_VARS = (
     "LITHOS_OTEL_ENABLED",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
 )
+
+
+def _aiosqlite_worker_threads() -> list[threading.Thread]:
+    """Return all currently-alive aiosqlite worker threads.
+
+    aiosqlite's Connection class subclasses threading.Thread; its instances
+    are named after the class (``Connection``) when not given an explicit
+    name, so we filter by target-class name.
+    """
+    workers: list[threading.Thread] = []
+    for t in threading.enumerate():
+        if not t.is_alive():
+            continue
+        # aiosqlite.core.Connection sets name to class name by default
+        cls_name = type(t).__name__
+        if cls_name == "Connection" and type(t).__module__.startswith("aiosqlite"):
+            workers.append(t)
+    return workers
+
+
+@pytest.fixture(autouse=True)
+def _detect_aiosqlite_thread_leaks(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    """Fail tests that leak aiosqlite worker threads.
+
+    Aiosqlite spawns a non-daemon worker thread per Connection, joined only
+    via ``await db.close()``. A leaked connection keeps the thread alive
+    past test teardown, eventually blocking process exit on CI (#172).
+
+    Only active when LITHOS_DETECT_THREAD_LEAKS=1 to keep normal runs fast.
+    """
+    if os.environ.get("LITHOS_DETECT_THREAD_LEAKS") != "1":
+        yield
+        return
+
+    before = {t.ident for t in _aiosqlite_worker_threads()}
+    yield
+    after = _aiosqlite_worker_threads()
+    leaked = [t for t in after if t.ident not in before]
+    if leaked:
+        names = ", ".join(t.name for t in leaked)
+        print(
+            f"\n[THREAD LEAK] {request.node.nodeid} leaked {len(leaked)} aiosqlite "
+            f"worker thread(s): {names}",
+            file=sys.stderr,
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -112,9 +160,7 @@ async def server(test_config: LithosConfig) -> AsyncGenerator[LithosServer, None
     srv = LithosServer(test_config)
     await srv.initialize()
     yield srv
-    await srv.stop_coordination_stats_refresh()
-    await srv.stop_enrich_worker()
-    srv.stop_file_watcher()
+    await srv.shutdown()
 
 
 # Sample test data

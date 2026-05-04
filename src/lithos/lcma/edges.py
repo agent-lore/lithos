@@ -6,8 +6,11 @@ corrupt-DB quarantine with automatic recreation.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -61,6 +64,11 @@ class EdgeStore:
     def __init__(self, config: LithosConfig | None = None) -> None:
         self._config = config
         self._opened = False
+        # Persistent SQLite connection (#172). Same lifecycle as StatsStore.
+        self._db: aiosqlite.Connection | None = None
+        # Serialise every operation on the shared connection — see
+        # StatsStore for the full rationale.
+        self._op_lock: asyncio.Lock | None = None
 
     @property
     def config(self) -> LithosConfig:
@@ -71,10 +79,12 @@ class EdgeStore:
         return self.config.storage.edges_db_path
 
     async def open(self) -> None:
-        """Ensure edges.db exists with the correct schema.
+        """Ensure edges.db exists with the correct schema and a live connection.
 
         Idempotent — safe to call multiple times.  If the file is corrupt
-        it is quarantined and a fresh database is created.
+        it is quarantined and a fresh database is created. After this returns
+        :attr:`_db` is a persistent ``aiosqlite.Connection`` in WAL mode that
+        every method reuses (#172).
         """
         if self._opened:
             return
@@ -85,15 +95,139 @@ class EdgeStore:
             if not healthy:
                 self._quarantine(self.db_path)
 
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.executescript(SCHEMA)
-            await db.commit()
+        # autocommit-per-statement on the shared connection — see StatsStore.
+        db = await aiosqlite.connect(self.db_path, isolation_level=None)
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.executescript(SCHEMA)
+        self._db = db
         self._opened = True
 
+    async def close(self) -> None:
+        """Close the persistent connection. Idempotent."""
+        if self._db is not None:
+            await self._db.close()
+            self._db = None
+        self._opened = False
+
     async def _ensure_open(self) -> None:
-        """Lazily create the database on first use."""
-        if not self._opened:
-            await self.open()
+        """Lazily (re-)open the database on first use, after close, or after a dead worker.
+
+        See :meth:`StatsStore._ensure_open` for the full recovery rationale (#172).
+        """
+        if self._opened and self._db is not None and getattr(self._db, "_running", True):
+            return
+        if self._db is not None and not getattr(self._db, "_running", True):
+            logger.warning(
+                "EdgeStore connection worker is no longer running; reopening %s",
+                self.db_path,
+            )
+            self._db = None
+        self._opened = False
+        await self.open()
+
+    async def reconnect(self) -> None:
+        """Force a close + re-open of the underlying connection. Idempotent."""
+        await self.close()
+        await self.open()
+
+    def _conn(self) -> aiosqlite.Connection:
+        """Return the live connection. ``open()`` must have run first."""
+        assert self._db is not None, "EdgeStore.open() must be called before use"
+        return self._db
+
+    def _operation_mutex(self) -> asyncio.Lock:
+        """Return the lock that serialises store methods on the shared handle."""
+        if self._op_lock is None:
+            self._op_lock = asyncio.Lock()
+        return self._op_lock
+
+    @staticmethod
+    def _is_recoverable_connection_error(exc: BaseException) -> bool:
+        """Return True when *exc* indicates the persistent handle is no longer usable."""
+        if not isinstance(exc, (ValueError, RuntimeError, aiosqlite.Error)):
+            return False
+        message = str(exc).lower()
+        return any(
+            fragment in message
+            for fragment in (
+                "closed database",
+                "closed connection",
+                "event loop is closed",
+                "no active connection",
+                "cannot operate on a closed database",
+            )
+        )
+
+    async def _reconnect_after_error(self) -> None:
+        """Drop the current handle and open a fresh one after a connection-liveness failure."""
+        db = self._db
+        self._db = None
+        self._opened = False
+        if db is not None:
+            with contextlib.suppress(Exception):
+                await db.close()
+        await self.open()
+
+    @contextlib.asynccontextmanager
+    async def _session(self, *, transactional: bool = False) -> AsyncIterator[aiosqlite.Connection]:
+        """Yield exclusive access to the shared connection, optionally in a transaction."""
+        async with self._operation_mutex():
+            await self._ensure_open()
+            db = self._conn()
+
+            if not transactional:
+                try:
+                    yield db
+                except Exception as exc:
+                    if self._is_recoverable_connection_error(exc):
+                        logger.warning(
+                            "EdgeStore operation hit a dead connection; reopening %s",
+                            self.db_path,
+                            exc_info=True,
+                        )
+                        await self._reconnect_after_error()
+                    raise
+                return
+
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+            except Exception as exc:
+                if self._is_recoverable_connection_error(exc):
+                    logger.warning(
+                        "EdgeStore transaction could not begin; reopening %s",
+                        self.db_path,
+                        exc_info=True,
+                    )
+                    await self._reconnect_after_error()
+                raise
+
+            try:
+                yield db
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    await db.execute("ROLLBACK")
+                if self._is_recoverable_connection_error(exc):
+                    logger.warning(
+                        "EdgeStore transaction lost its connection; reopening %s",
+                        self.db_path,
+                        exc_info=True,
+                    )
+                    await self._reconnect_after_error()
+                raise
+
+            try:
+                await db.execute("COMMIT")
+            except Exception as exc:
+                if self._is_recoverable_connection_error(exc):
+                    logger.warning(
+                        "EdgeStore transaction could not commit; reopening %s",
+                        self.db_path,
+                        exc_info=True,
+                    )
+                    await self._reconnect_after_error()
+                raise
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -140,11 +274,18 @@ class EdgeStore:
         evidence: str | None = None,
         conflict_state: str | None = None,
     ) -> str:
-        """Insert or update an edge.  Returns the ``edge_id``."""
-        await self._ensure_open()
+        """Insert or update an edge.  Returns the ``edge_id``.
+
+        The SELECT-then-INSERT/UPDATE pattern needs cross-statement atomicity
+        on the shared autocommit connection (#172) — without it, two
+        concurrent upserts for the same (from_id, to_id, type, namespace)
+        would both observe "no existing row" and race to INSERT, hitting
+        the UNIQUE constraint. The transactional :meth:`_session` serialises
+        the read-modify-write so either both calls observe a single row and
+        both UPDATE, or one INSERTs and the next UPDATEs.
+        """
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            # Check for existing edge by composite key
+        async with self._session(transactional=True) as db:
             cursor = await db.execute(
                 "SELECT edge_id FROM edges "
                 "WHERE from_id = ? AND to_id = ? AND type = ? AND namespace = ?",
@@ -226,13 +367,11 @@ class EdgeStore:
                         "weight": weight,
                     },
                 )
-            await db.commit()
         return edge_id
 
     async def get_edge(self, edge_id: str) -> dict[str, object] | None:
         """Return a single edge by its ID, or ``None`` if not found."""
-        await self._ensure_open()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._session() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT edge_id, from_id, to_id, type, weight, namespace, "
@@ -269,16 +408,14 @@ class EdgeStore:
 
         Returns ``True`` if the edge was found and updated, ``False`` otherwise.
         """
-        await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._session() as db:
             cursor = await db.execute(
                 "UPDATE edges SET conflict_state = ?, provenance_actor = ?, updated_at = ? "
                 "WHERE edge_id = ?",
                 (conflict_state, provenance_actor, now, edge_id),
             )
-            await db.commit()
-            return cursor.rowcount > 0
+        return cursor.rowcount > 0
 
     async def list_edges(
         self,
@@ -289,7 +426,6 @@ class EdgeStore:
         namespace: str | None = None,
     ) -> list[dict[str, object]]:
         """Query edges by optional filter dimensions."""
-        await self._ensure_open()
         clauses: list[str] = []
         params: list[str] = []
         if from_id is not None:
@@ -308,7 +444,7 @@ class EdgeStore:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"SELECT edge_id, from_id, to_id, type, weight, namespace, created_at, updated_at, provenance_actor, provenance_type, evidence, conflict_state FROM edges{where}"
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._session() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(sql, params)
             rows = await cursor.fetchall()
@@ -333,47 +469,47 @@ class EdgeStore:
 
     async def count(self, *, namespace: str | None = None) -> int:
         """Return total edge count, optionally filtered by namespace."""
-        await self._ensure_open()
         if namespace is not None:
             sql = "SELECT COUNT(*) FROM edges WHERE namespace = ?"
             params: tuple[str, ...] = (namespace,)
         else:
             sql = "SELECT COUNT(*) FROM edges"
             params = ()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._session() as db:
             cursor = await db.execute(sql, params)
             row = await cursor.fetchone()
-            return row[0] if row else 0
+        return row[0] if row else 0
 
     async def delete_edges(self, *, edge_ids: list[str]) -> int:
         """Delete edges by their IDs.  Returns the number of rows deleted."""
-        await self._ensure_open()
         if not edge_ids:
             return 0
         placeholders = ",".join("?" for _ in edge_ids)
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._session() as db:
             cursor = await db.execute(
-                f"DELETE FROM edges WHERE edge_id IN ({placeholders})", edge_ids
+                f"DELETE FROM edges WHERE edge_id IN ({placeholders})",
+                edge_ids,
             )
-            await db.commit()
             deleted = cursor.rowcount
-            logger.info(
-                "edge delete_edges: requested=%d deleted=%d",
-                len(edge_ids),
-                deleted,
-                extra={"requested": len(edge_ids), "deleted": deleted},
-            )
-            return deleted
+        logger.info(
+            "edge delete_edges: requested=%d deleted=%d",
+            len(edge_ids),
+            deleted,
+            extra={"requested": len(edge_ids), "deleted": deleted},
+        )
+        return deleted
 
     async def adjust_weight(self, edge_id: str, delta: float) -> float | None:
         """Atomically adjust weight by *delta*, clamping to [0.0, 1.0].
 
-        Returns the new weight, or ``None`` if the edge is not found.
+        Returns the new weight, or ``None`` if the edge is not found. The
+        UPDATE+read-back pair is bracketed in BEGIN/COMMIT inside
+        :meth:`_session` so that the returned weight reflects this call's
+        own write even when another coroutine adjusts the same edge
+        concurrently (#172).
         """
-        await self._ensure_open()
         now = datetime.now(timezone.utc).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
-            # Single atomic UPDATE with clamping in SQL — no read-modify-write race.
+        async with self._session(transactional=True) as db:
             cursor = await db.execute(
                 "UPDATE edges SET weight = MAX(0.0, MIN(1.0, weight + ?)), updated_at = ? "
                 "WHERE edge_id = ?",
@@ -381,7 +517,6 @@ class EdgeStore:
             )
             if cursor.rowcount == 0:
                 return None
-            await db.commit()
             cursor = await db.execute("SELECT weight FROM edges WHERE edge_id = ?", (edge_id,))
             row = await cursor.fetchone()
         assert row is not None
@@ -395,7 +530,6 @@ class EdgeStore:
         namespace: str | None = None,
     ) -> list[dict[str, object]]:
         """Return all edges where both from_id and to_id are in *node_ids*."""
-        await self._ensure_open()
         if not node_ids:
             return []
         placeholders = ", ".join("?" for _ in node_ids)
@@ -411,7 +545,7 @@ class EdgeStore:
             clauses.append("namespace = ?")
             params.append(namespace)
         where = " AND ".join(clauses)
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._session() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(f"SELECT * FROM edges WHERE {where}", params)
             rows = await cursor.fetchall()

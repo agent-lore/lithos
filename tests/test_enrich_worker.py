@@ -27,17 +27,23 @@ from lithos.lcma.stats import StatsStore
 
 
 @pytest_asyncio.fixture
-async def stats_store(test_config: LithosConfig) -> StatsStore:
+async def stats_store(test_config: LithosConfig):
     store = StatsStore(test_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 @pytest_asyncio.fixture
-async def edge_store(test_config: LithosConfig) -> EdgeStore:
+async def edge_store(test_config: LithosConfig):
     store = EdgeStore(test_config)
     await store.open()
-    return store
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 @pytest.fixture
@@ -1351,15 +1357,17 @@ class TestAttemptsColumnMigration:
         store = StatsStore(test_config)
         store._opened = False  # force re-open
         await store.open()
-
-        # Now drain and requeue should work without errors
-        await store.enqueue(trigger_type="note.created", node_id="test-node")
-        entries = await store.drain_pending_nodes(max_attempts=3)
-        assert len(entries) == 1
-        claimed_ids = entries[0]["claimed_ids"]
-        assert isinstance(claimed_ids, list)
-        count = await store.requeue_failed(claimed_ids)
-        assert count == len(claimed_ids)
+        try:
+            # Now drain and requeue should work without errors
+            await store.enqueue(trigger_type="note.created", node_id="test-node")
+            entries = await store.drain_pending_nodes(max_attempts=3)
+            assert len(entries) == 1
+            claimed_ids = entries[0]["claimed_ids"]
+            assert isinstance(claimed_ids, list)
+            count = await store.requeue_failed(claimed_ids)
+            assert count == len(claimed_ids)
+        finally:
+            await store.close()
 
 
 class TestRetryCapWarning:
