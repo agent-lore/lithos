@@ -6,6 +6,7 @@ Unit tests for the retrieval pipeline, reranking, temperature, and receipt/WM lo
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1205,6 +1206,50 @@ class TestScoutsFiredAuditTrail:
         fired = json.loads(row["scouts_fired"])
         assert "scout_vector" not in fired  # raised
         assert "scout_lexical" in fired  # ran cleanly with []
+
+    @pytest.mark.asyncio
+    async def test_literal_safe_lexical_retrieve_handles_paper_title_punctuation(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        stats_store: StatsStore,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Regression for #240: natural-language retrieve must not parse-fail."""
+        title = "When LLMs Stop Following Steps: A Diagnostic Study"
+        doc = (
+            await seeded_km.create(
+                title=title,
+                content="A paper about why LLMs stop following multi-step instructions.",
+                agent="agent-paper",
+                tags=["paper"],
+            )
+        ).document
+        seeded_search.index(KnowledgeManager.to_indexable(doc))
+
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            caplog.at_level(logging.WARNING, logger="lithos.search"),
+        ):
+            result = await run_retrieve(
+                query=title,
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        assert any(node["id"] == doc.id for node in result["results"])
+        assert not any(
+            "Tantivy query parse/search failed" in record.getMessage() for record in caplog.records
+        )
 
 
 class TestReceiptFinalNodesShape:
