@@ -605,6 +605,7 @@ class _LithosMetrics:
         self._knowledge_write_duration: Any = None
         self._search_ops: Any = None
         self._search_duration: Any = None
+        self._fts_index_dropped: Any = None
         self._coordination_ops: Any = None
         self._event_bus_ops: Any = None
         self._event_bus_subscriber_drops: Any = None
@@ -670,6 +671,24 @@ class _LithosMetrics:
                 description="Search latency in milliseconds",
             )
         return self._search_duration
+
+    @property
+    def fts_index_dropped(self) -> Any:
+        """Counter incremented when a full-text write ultimately fails.
+
+        Contended Tantivy writer locks are retried before this counter is
+        touched, so a non-zero value means an FTS mutation was not applied.
+
+        Attributes:
+            operation: "index" | "remove"
+            reason: Exception class name.
+        """
+        if self._fts_index_dropped is None:
+            self._fts_index_dropped = get_meter().create_counter(
+                "lithos.fts_index.dropped_total",
+                description="Full-text index mutations dropped after retries",
+            )
+        return self._fts_index_dropped
 
     @property
     def coordination_ops(self) -> Any:
