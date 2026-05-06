@@ -1,6 +1,8 @@
 """Tests for search module - Tantivy and ChromaDB search."""
 
+import concurrent.futures
 import logging
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -8,7 +10,9 @@ import pytest
 from lithos.errors import IndexingError, SearchBackendError
 from lithos.knowledge import KnowledgeManager
 from lithos.search import (
+    IndexableDocument,
     SearchEngine,
+    TantivyIndex,
     chunk_text,
     reciprocal_rank_fusion,
 )
@@ -74,6 +78,19 @@ Third paragraph to complete the text."""
 
 class TestTantivyIndex:
     """Tests for Tantivy full-text search."""
+
+    def _indexable_doc(self, doc_id: str, content: str | None = None) -> IndexableDocument:
+        return IndexableDocument(
+            id=doc_id,
+            title=f"Doc {doc_id}",
+            content=content or f"Unique concurrent content for {doc_id}.",
+            path=f"{doc_id}.md",
+            author="agent",
+            tags=(),
+            source_url="",
+            updated_at="",
+            expires_at="",
+        )
 
     @pytest.mark.asyncio
     async def test_index_and_search(
@@ -380,6 +397,39 @@ class TestTantivyIndex:
         # Should no longer appear
         results = search_engine.full_text_search("Temporary")
         assert not any(r.id == doc.id for r in results)
+
+    def test_concurrent_tantivy_writes_are_serialized(self, tmp_path):
+        """Concurrent writes through one TantivyIndex do not lose documents."""
+        idx = TantivyIndex(tmp_path / "tantivy")
+        idx.open_or_create()
+
+        docs = [self._indexable_doc(f"doc-{i}") for i in range(12)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(idx.add_document, doc) for doc in docs]
+            for future in futures:
+                future.result(timeout=5)
+
+        assert idx.get_indexed_doc_ids() == {doc.id for doc in docs}
+
+    def test_tantivy_write_retries_external_lock_busy(self, tmp_path, monkeypatch):
+        """A transient external writer lock is retried instead of dropping the write."""
+        idx = TantivyIndex(tmp_path / "tantivy")
+        idx.open_or_create()
+        monkeypatch.setattr(idx, "WRITER_RETRY_ATTEMPTS", 20)
+        monkeypatch.setattr(idx, "WRITER_RETRY_BASE_SECONDS", 0.01)
+        monkeypatch.setattr(idx, "WRITER_RETRY_MAX_SECONDS", 0.02)
+
+        external_writer = idx.index.writer(heap_size=15_000_000)
+        doc = self._indexable_doc("eventual-doc", "eventual lock retry content")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(idx.add_document, doc)
+            threading.Event().wait(0.03)
+            external_writer.commit()
+            del external_writer
+            future.result(timeout=5)
+
+        assert idx.get_indexed_doc_ids() == {doc.id}
 
 
 class TestChromaIndex:

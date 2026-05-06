@@ -307,6 +307,10 @@ class TantivyIndex:
     SCHEMA_VERSION = "3"
     """Bumped when fields are added/removed. Triggers automatic rebuild."""
 
+    WRITER_RETRY_ATTEMPTS = 8
+    WRITER_RETRY_BASE_SECONDS = 0.05
+    WRITER_RETRY_MAX_SECONDS = 1.0
+
     def __init__(self, index_path: Path):
         """Initialize Tantivy index.
 
@@ -316,6 +320,7 @@ class TantivyIndex:
         self.index_path = index_path
         self._index: tantivy.Index | None = None
         self._schema: tantivy.Schema | None = None
+        self._write_lock = threading.RLock()
         self.needs_rebuild: bool = False
 
     @property
@@ -403,42 +408,33 @@ class TantivyIndex:
             self._schema = self._build_schema()
         return self._schema
 
+    def _acquire_writer(self):
+        """Acquire Tantivy's single writer with bounded LockBusy retry."""
+        delay = self.WRITER_RETRY_BASE_SECONDS
+        for attempt in range(self.WRITER_RETRY_ATTEMPTS + 1):
+            try:
+                return self.index.writer(heap_size=15_000_000)
+            except Exception as exc:
+                if "LockBusy" not in str(exc) or attempt >= self.WRITER_RETRY_ATTEMPTS:
+                    raise
+                logger.info(
+                    "Tantivy writer lock busy; retrying",
+                    extra={"attempt": attempt + 1, "delay_seconds": delay},
+                )
+                time.sleep(delay)
+                delay = min(delay * 2, self.WRITER_RETRY_MAX_SECONDS)
+
+        raise RuntimeError("unreachable: Tantivy writer retry loop exhausted")
+
     def add_document(self, doc: IndexableDocument) -> None:
         """Add or update a document in the index."""
-        writer = self.index.writer(heap_size=15_000_000)
+        with self._write_lock:
+            writer = self._acquire_writer()
 
-        # Delete existing document with same ID
-        writer.delete_documents("id", doc.id)
+            # Delete existing document with same ID
+            writer.delete_documents("id", doc.id)
 
-        # Add new document
-        writer.add_document(
-            tantivy.Document(
-                id=doc.id,
-                title=doc.title,
-                content=doc.full_content,
-                path=doc.path,
-                author=doc.author,
-                tags=" ".join(doc.tags),
-                source_url=doc.source_url,
-                updated_at=doc.updated_at,
-                expires_at=doc.expires_at,
-            )
-        )
-
-        writer.commit()
-        del writer  # Release lock
-        # Reload to see changes immediately
-        self.index.reload()
-
-    def rebuild_from_docs(self, docs: Iterable[IndexableDocument]) -> None:
-        """Clear the index and re-index *docs* in a single commit.
-
-        Prefer this over calling ``clear()`` + ``add_document()`` in a loop to
-        avoid O(n) writer acquisitions and commits.
-        """
-        writer = self.index.writer(heap_size=15_000_000)
-        writer.delete_all_documents()
-        for doc in docs:
+            # Add new document
             writer.add_document(
                 tantivy.Document(
                     id=doc.id,
@@ -452,18 +448,48 @@ class TantivyIndex:
                     expires_at=doc.expires_at,
                 )
             )
-        writer.commit()
-        del writer  # Release lock
-        self.index.reload()
+
+            writer.commit()
+            del writer  # Release lock
+            # Reload to see changes immediately
+            self.index.reload()
+
+    def rebuild_from_docs(self, docs: Iterable[IndexableDocument]) -> None:
+        """Clear the index and re-index *docs* in a single commit.
+
+        Prefer this over calling ``clear()`` + ``add_document()`` in a loop to
+        avoid O(n) writer acquisitions and commits.
+        """
+        with self._write_lock:
+            writer = self._acquire_writer()
+            writer.delete_all_documents()
+            for doc in docs:
+                writer.add_document(
+                    tantivy.Document(
+                        id=doc.id,
+                        title=doc.title,
+                        content=doc.full_content,
+                        path=doc.path,
+                        author=doc.author,
+                        tags=" ".join(doc.tags),
+                        source_url=doc.source_url,
+                        updated_at=doc.updated_at,
+                        expires_at=doc.expires_at,
+                    )
+                )
+            writer.commit()
+            del writer  # Release lock
+            self.index.reload()
 
     def remove_document(self, doc_id: str) -> None:
         """Remove a document from the index."""
-        writer = self.index.writer(heap_size=15_000_000)
-        writer.delete_documents("id", doc_id)
-        writer.commit()
-        del writer  # Release lock
-        # Reload to see changes immediately
-        self.index.reload()
+        with self._write_lock:
+            writer = self._acquire_writer()
+            writer.delete_documents("id", doc_id)
+            writer.commit()
+            del writer  # Release lock
+            # Reload to see changes immediately
+            self.index.reload()
 
     def search(
         self,
@@ -592,11 +618,12 @@ class TantivyIndex:
 
     def clear(self) -> None:
         """Clear the entire index."""
-        writer = self.index.writer(heap_size=15_000_000)
-        writer.delete_all_documents()
-        writer.commit()
-        del writer  # Release lock
-        self.index.reload()
+        with self._write_lock:
+            writer = self._acquire_writer()
+            writer.delete_all_documents()
+            writer.commit()
+            del writer  # Release lock
+            self.index.reload()
 
 
 def generate_snippet(content: str, query: str, context_chars: int = 150) -> str:
@@ -1102,6 +1129,9 @@ class SearchEngine:
             self._tantivy.add_document(doc)
         except Exception as exc:
             logger.warning("Full-text indexing failed for doc %s: %s", doc.id, exc)
+            lithos_metrics.fts_index_dropped.add(
+                1, {"operation": "index", "reason": type(exc).__name__}
+            )
             errors["tantivy"] = exc
 
         chunks = 0
@@ -1157,6 +1187,9 @@ class SearchEngine:
             self._tantivy.remove_document(doc_id)
         except Exception as exc:
             logger.warning("Full-text removal failed for doc %s: %s", doc_id, exc)
+            lithos_metrics.fts_index_dropped.add(
+                1, {"operation": "remove", "reason": type(exc).__name__}
+            )
             errors["tantivy"] = exc
 
         healthy, _ = self.ensure_semantic_backend_healthy()
