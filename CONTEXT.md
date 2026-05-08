@@ -28,11 +28,16 @@ _Avoid_: diff, repair list.
 The module owning every full-text and semantic search concern. Holds the Tantivy and Chroma indexes internally; their existence is not part of its interface. Health is one signal — agents either get a healthy engine or an unhealthy one with a reason; subsystem-level diagnostics are operator concerns.
 _Avoid_: search service, indexer.
 
+**Corpus intake**:
+The controlled entry point for **Corpus** mutations from agent tools. Ensures agent registration, runs the mutation through the corpus manager (which provides atomicity, including `expected_version` checks), synchronises derived views (Search engine, then link graph), and emits the matching `NOTE_*` event. Distinct from **Reconcile**: intake is agent-driven and updates views as a write happens; Reconcile is corpus-driven and brings views back into agreement after **Drift**.
+_Avoid_: ingestion, writer, pipeline, mutator.
+
 ## Relationships
 
 - The **Corpus** is the source of truth. The **Search engine**, the link graph, and the provenance projection are derived views.
 - A view is in **Drift** when its contents disagree with the **Corpus**.
 - A **Reconcile** consumes the **Corpus**, produces a **Reconcile plan** describing the **Drift**, then applies it to bring the view into agreement.
+- A **Corpus intake** is the inverse direction: an agent-driven mutation flows from the tool surface, through the corpus, out to every derived view, and onto the event bus.
 - The **Search engine** consumes **Indexable documents**, never `KnowledgeDocument` directly.
 
 ## Example dialogue

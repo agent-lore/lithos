@@ -38,6 +38,7 @@ from lithos.events import (
     LithosEvent,
 )
 from lithos.graph import KnowledgeGraph
+from lithos.intake import CorpusIntake, DeleteRequest
 from lithos.knowledge import (
     _UNSET,
     VALID_ACCESS_SCOPES,
@@ -95,6 +96,8 @@ class LithosServer:
         self.graph = KnowledgeGraph(self._config)
         self.coordination = CoordinationService(self._config)
         self.event_bus = EventBus(self._config.events)
+        # CorpusIntake is built in initialize() once self.search exists.
+        self.intake: CorpusIntake = None  # type: ignore[assignment]
 
         from lithos.lcma.edges import EdgeStore
         from lithos.lcma.enrich import EnrichWorker
@@ -578,6 +581,18 @@ class LithosServer:
                 # backend cost.
                 if self.search is None:
                     self.search = await SearchEngine.create(self._config)
+
+                # Build the Corpus intake now that all collaborators exist.
+                # See ADR-0003. Tests that pre-inject ``self.intake`` (e.g. with
+                # a stub) keep that injection — same idiom used for ``search``.
+                if self.intake is None:
+                    self.intake = CorpusIntake(
+                        knowledge=self.knowledge,
+                        search=self.search,
+                        graph=self.graph,
+                        coordination=self.coordination,
+                        event_bus=self.event_bus,
+                    )
 
                 # Initialize and run schema migrations
                 registry_path = (
@@ -1576,29 +1591,14 @@ class LithosServer:
                 span.set_attribute("lithos.tool", "lithos_delete")
                 span.set_attribute("lithos.id", id)
                 span.set_attribute("lithos.agent", agent)
-                await self.coordination.ensure_agent_known(agent)
 
-                success, path = await self.knowledge.delete(id)
-
-                if not success:
+                outcome = await self.intake.delete(agent, DeleteRequest(id=id))
+                if outcome.status == "not_found":
                     return {
                         "status": "error",
                         "code": "doc_not_found",
                         "message": f"Document not found: {id}",
                     }
-
-                await asyncio.to_thread(self.search.remove, id)
-                # graph.remove_document() debounces its own flush (#203)
-                self.graph.remove_document(id)
-
-                await self._emit(
-                    LithosEvent(
-                        type=NOTE_DELETED,
-                        agent=agent,
-                        payload={"id": id, "path": path},
-                    )
-                )
-
                 return {"success": True}
 
         @self.mcp.tool()
