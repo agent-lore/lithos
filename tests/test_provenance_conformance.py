@@ -194,8 +194,7 @@ class TestUpdateConformance:
                 "derived_from_ids": [doc_id],
             },
         )
-        assert result["status"] == "error"
-        assert result["code"] == "invalid_input"
+        assert result["status"] == "invalid_input"
 
 
 # ---------------------------------------------------------------------------
@@ -218,8 +217,7 @@ class TestValidationConformance:
                 "derived_from_ids": ["not-a-uuid"],
             },
         )
-        assert result["status"] == "error"
-        assert result["code"] == "invalid_input"
+        assert result["status"] == "invalid_input"
 
     async def test_non_uuid_identifiers_rejected(self, server: LithosServer):
         """Non-UUID identifiers (titles, slugs, paths) rejected."""
@@ -234,8 +232,7 @@ class TestValidationConformance:
                     "derived_from_ids": [bad],
                 },
             )
-            assert result["status"] == "error", f"Expected error for {bad!r}"
-            assert result["code"] == "invalid_input", f"Expected invalid_input for {bad!r}"
+            assert result["status"] == "invalid_input", f"Expected invalid_input for {bad!r}"
 
     async def test_unresolved_produces_warnings_not_errors(self, server: LithosServer):
         """Unresolved source IDs produce warnings, not errors."""
