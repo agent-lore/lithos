@@ -1225,6 +1225,21 @@ class KnowledgeManager:
             lithos_metrics.knowledge_ops.add(1, {"op": "update"})
             doc, _ = await self.read(id=id)
 
+            # Validate task-scope invariant under the write lock so the
+            # source-existence check is atomic with the write. See
+            # ADR-0003: pre-reading the document at the handler layer is a
+            # TOCTOU window — another writer could rename the source between
+            # the read and the update.
+            if access_scope == "task":
+                effective_source: str | None | _UnsetType = (
+                    doc.metadata.source if isinstance(source, _UnsetType) else source
+                )
+                if not effective_source:
+                    return WriteResult(
+                        status="invalid_input",
+                        message="access_scope='task' requires source_task",
+                    )
+
             if expected_version is not None and doc.metadata.version != expected_version:
                 logger.warning(
                     "Version conflict: doc_id=%s expected_version=%d actual_version=%d",
