@@ -21,7 +21,7 @@ from watchdog.observers import Observer
 
 from lithos.config import LithosConfig, get_config, set_config
 from lithos.coordination import CoordinationService
-from lithos.errors import SearchBackendError, SlugCollisionError
+from lithos.errors import SearchBackendError
 from lithos.events import (
     AGENT_REGISTERED,
     FINDING_POSTED,
@@ -38,7 +38,7 @@ from lithos.events import (
     LithosEvent,
 )
 from lithos.graph import KnowledgeGraph
-from lithos.intake import CorpusIntake, DeleteRequest
+from lithos.intake import CorpusIntake, DeleteRequest, WriteRequest
 from lithos.knowledge import (
     _UNSET,
     VALID_ACCESS_SCOPES,
@@ -1160,17 +1160,6 @@ class LithosServer:
                 span.set_attribute("lithos.agent", agent)
                 span.set_attribute("lithos.is_update", id is not None)
 
-                await self.coordination.ensure_agent_known(agent)
-
-                if len(content.encode("utf-8")) > self._config.storage.max_content_size_bytes:
-                    return {
-                        "status": "content_too_large",
-                        "message": f"Content exceeds maximum size of {self._config.storage.max_content_size_bytes} bytes",
-                        "warnings": [],
-                    }
-
-                warnings: list[str] = []
-
                 # Validate ttl_hours / expires_at mutual exclusion
                 if ttl_hours is not None and expires_at is not None:
                     return {
@@ -1242,29 +1231,16 @@ class LithosServer:
                                 "warnings": [],
                             }
 
-                # Validate task-scope invariant
-                if access_scope == "task":
-                    if id is None:
-                        # Create: require source_task
-                        if not source_task:
-                            return {
-                                "status": "invalid_input",
-                                "message": "access_scope='task' requires source_task",
-                                "warnings": [],
-                            }
-                    else:
-                        # Update: require source_task or existing metadata.source
-                        if not source_task:
-                            try:
-                                existing_doc, _ = await self.knowledge.read(id=id)
-                                if not existing_doc.metadata.source:
-                                    return {
-                                        "status": "invalid_input",
-                                        "message": "access_scope='task' requires source_task",
-                                        "warnings": [],
-                                    }
-                            except FileNotFoundError:
-                                pass  # Will be caught in update()
+                # Validate task-scope create-time invariant. The update-time
+                # case is enforced under ``_write_lock`` inside
+                # ``KnowledgeManager.update`` to avoid the TOCTOU window
+                # described in ADR-0003.
+                if access_scope == "task" and id is None and not source_task:
+                    return {
+                        "status": "invalid_input",
+                        "message": "access_scope='task' requires source_task",
+                        "warnings": [],
+                    }
 
                 # Emit freshness span attributes
                 if ttl_hours is not None:
@@ -1314,115 +1290,84 @@ class LithosServer:
                                 "warnings": [],
                             }
 
-                try:
-                    if id:
-                        # Update existing — map MCP boundary to manager semantics:
-                        # source_url: None (omitted) → _UNSET (preserve), "" → None (clear),
-                        #             str → pass through
-                        url_arg: str | None | _UnsetType
-                        if source_url is None:
-                            url_arg = _UNSET
-                        elif source_url == "":
-                            url_arg = None
-                        else:
-                            url_arg = source_url
-
-                        # derived_from_ids: None (omitted) → _UNSET (preserve),
-                        #                   [] → [] (clear), non-empty → pass through
-                        prov_arg: list[str] | None | _UnsetType = (
-                            _UNSET if derived_from_ids is None else derived_from_ids
-                        )
-
-                        # tags: None (omitted) → _UNSET (preserve), [] → clear, list → set
-                        tags_arg: list[str] | _UnsetType = _UNSET if tags is None else tags
-
-                        # confidence: None (omitted) → _UNSET (preserve), float → set
-                        conf_arg: float | _UnsetType = _UNSET if confidence is None else confidence
-
-                        # source_task: None (omitted) → _UNSET (preserve), str → set
-                        source_arg: str | None | _UnsetType = (
-                            _UNSET if source_task is None else source_task
-                        )
-
-                        # LCMA fields: None (omitted) → _UNSET (preserve)
-                        sv_arg: int | _UnsetType = (
-                            _UNSET if schema_version is None else schema_version
-                        )
-                        ns_arg: str | None | _UnsetType = _UNSET if namespace is None else namespace
-                        as_arg: str | None | _UnsetType = (
-                            _UNSET if access_scope is None else access_scope
-                        )
-                        nt_arg: str | None | _UnsetType = _UNSET if note_type is None else note_type
-                        st_arg: str | None | _UnsetType = _UNSET if status is None else status
-                        sum_arg: dict | None | _UnsetType = (
-                            _UNSET if summaries is None else summaries
-                        )
-
-                        result = await self.knowledge.update(
-                            id=id,
-                            agent=agent,
-                            title=title,
-                            content=content,
-                            tags=tags_arg,
-                            confidence=conf_arg,
-                            source_url=url_arg,
-                            derived_from_ids=prov_arg,
-                            expires_at=expires_at_dt,
-                            expected_version=expected_version,
-                            source=source_arg,
-                            schema_version=sv_arg,
-                            namespace=ns_arg,
-                            access_scope=as_arg,
-                            note_type=nt_arg,
-                            lcma_status=st_arg,
-                            summaries=sum_arg,
-                        )
+                # Translate MCP wire shape into intake field semantics:
+                #   None  (omitted) → _UNSET (preserve)
+                #   ""               → None (clear)
+                #   value            → set
+                # ``expires_at_dt`` already encodes this for the freshness
+                # field above; we mirror the same rule for the rest here.
+                if id is not None:
+                    url_arg: str | None | _UnsetType
+                    if source_url is None:
+                        url_arg = _UNSET
+                    elif source_url == "":
+                        url_arg = None
                     else:
-                        # Create new — default confidence to 1.0 when not specified
-                        result = await self.knowledge.create(
-                            title=title,
-                            content=content,
-                            agent=agent,
-                            tags=tags,
-                            confidence=confidence if confidence is not None else 1.0,
-                            path=path,
-                            source=source_task,
-                            source_url=source_url or None,
-                            derived_from_ids=derived_from_ids,
-                            expires_at=expires_at_dt,  # type: ignore[arg-type]
-                            schema_version=schema_version,
-                            namespace=namespace,
-                            access_scope=access_scope,
-                            note_type=note_type,
-                            lcma_status=status,
-                            summaries=summaries,
-                        )
-                except SlugCollisionError as exc:
-                    # Log the collision so the squatting doc is visible from
-                    # ``docker logs lithos-*`` — clients are free to discard
-                    # ``existing_id`` from the response envelope, and without
-                    # this WARNING the only signal of the collision is the
-                    # response body.  Discovered in the 2026-05-02 staging
-                    # incident.
-                    logger.warning(
-                        "lithos_write slug_collision: agent=%s title=%.120s slug=%s existing_id=%s",
-                        agent,
-                        title,
-                        exc.slug,
-                        exc.existing_id,
+                        url_arg = source_url
+                    prov_arg: list[str] | None | _UnsetType = (
+                        _UNSET if derived_from_ids is None else derived_from_ids
                     )
+                    tags_arg: list[str] | _UnsetType = _UNSET if tags is None else tags
+                    conf_arg: float | _UnsetType = _UNSET if confidence is None else confidence
+                    source_arg: str | None | _UnsetType = (
+                        _UNSET if source_task is None else source_task
+                    )
+                    sv_arg: int | _UnsetType = _UNSET if schema_version is None else schema_version
+                    ns_arg: str | None | _UnsetType = _UNSET if namespace is None else namespace
+                    as_arg: str | None | _UnsetType = (
+                        _UNSET if access_scope is None else access_scope
+                    )
+                    nt_arg: str | None | _UnsetType = _UNSET if note_type is None else note_type
+                    st_arg: str | None | _UnsetType = _UNSET if status is None else status
+                    sum_arg: dict | None | _UnsetType = _UNSET if summaries is None else summaries
+                else:
+                    # Create path forwards raw values; KnowledgeManager.create
+                    # applies its own defaults.
+                    url_arg = source_url or None
+                    prov_arg = derived_from_ids
+                    tags_arg = tags  # type: ignore[assignment]
+                    conf_arg = confidence  # type: ignore[assignment]
+                    source_arg = source_task
+                    sv_arg = schema_version  # type: ignore[assignment]
+                    ns_arg = namespace
+                    as_arg = access_scope
+                    nt_arg = note_type
+                    st_arg = status
+                    sum_arg = summaries
+
+                request = WriteRequest(
+                    title=title,
+                    content=content,
+                    id=id,
+                    tags=tags_arg,
+                    confidence=conf_arg,
+                    path=path,
+                    source_task=source_arg,
+                    source_url=url_arg,
+                    derived_from_ids=prov_arg,
+                    expires_at=expires_at_dt,
+                    expected_version=expected_version,
+                    schema_version=sv_arg,
+                    namespace=ns_arg,
+                    access_scope=as_arg,
+                    note_type=nt_arg,
+                    lcma_status=st_arg,
+                    summaries=sum_arg,
+                )
+
+                outcome = await self.intake.write(agent, request)
+
+                if outcome.status == "slug_collision":
                     span.set_attribute("lithos.write_status", "slug_collision")
                     return {
                         "status": "slug_collision",
-                        "message": str(exc),
-                        "existing_id": exc.existing_id,
+                        "message": outcome.message,
+                        "existing_id": outcome.slug_collision_existing_id,
                         "warnings": [],
                     }
-
-                # Handle non-success results via WriteResult fields
-                if result.status == "duplicate":
+                if outcome.status == "duplicate":
                     span.set_attribute("lithos.write_status", "duplicate")
-                    dup = result.duplicate_of
+                    dup = outcome.duplicate_of
                     return {
                         "status": "duplicate",
                         "duplicate_of": {
@@ -1432,72 +1377,42 @@ class LithosServer:
                         }
                         if dup
                         else None,
-                        "message": result.message,
-                        "warnings": warnings + result.warnings,
+                        "message": outcome.message,
+                        "warnings": list(outcome.warnings),
                     }
-                elif result.status in (
+                if outcome.status in (
                     "invalid_input",
                     "version_conflict",
                     "content_too_large",
                     "error",
                 ):
-                    # WriteResult.status now carries the canonical error
-                    # code as the top-level status (e.g. "invalid_input"),
-                    # so we propagate it directly rather than wrapping it
-                    # in {status: "error", code: <X>}.  Plain "error" is
-                    # retained as a generic fallback.
-                    span.set_attribute("lithos.write_status", result.status)
+                    span.set_attribute("lithos.write_status", outcome.status)
                     error_response: dict[str, Any] = {
-                        "status": result.status,
-                        "message": result.message,
-                        "warnings": warnings + result.warnings,
+                        "status": outcome.status,
+                        "message": outcome.message,
+                        "warnings": list(outcome.warnings),
                     }
-                    if result.current_version is not None:
-                        error_response["current_version"] = result.current_version
+                    if outcome.current_version is not None:
+                        error_response["current_version"] = outcome.current_version
                     return error_response
 
-                doc = result.document
+                doc = outcome.document
                 assert doc is not None
-                warnings.extend(result.warnings)
-
-                # Update indices. ``search.index`` is wrapped in
-                # ``asyncio.to_thread`` so Tantivy commits and ChromaDB
-                # embedding don't block the event loop during concurrent
-                # reads — see #199.
-                indexable = KnowledgeManager.to_indexable(doc)
-                await asyncio.to_thread(self.search.index, indexable)
-                # graph.add_document() debounces its own flush (#203)
-                self.graph.add_document(doc)
-
                 span.set_attribute("lithos.doc_id", doc.id)
-                span.set_attribute("lithos.write_status", result.status)
+                span.set_attribute("lithos.write_status", outcome.status)
                 span.set_attribute(
                     "lithos.provenance.source_count",
                     len(doc.metadata.derived_from_ids),
                 )
-                if result.warnings:
-                    span.set_attribute("lithos.provenance.warning_count", len(result.warnings))
-                logger.info("lithos_write completed doc_id=%s status=%s", doc.id, result.status)
-
-                await self._emit(
-                    LithosEvent(
-                        type=NOTE_UPDATED if id else NOTE_CREATED,
-                        agent=agent,
-                        payload={"id": doc.id, "title": doc.title, "path": str(doc.path)},
-                        tags=doc.metadata.tags,
-                    )
-                )
-
-                # Design note: knowledge.update() acquires _write_lock *before* reading
-                # the doc, checking expected_version, and writing. The read, version
-                # check, and write all happen inside the same lock acquisition, so
-                # there is no TOCTOU window — concurrent writers are fully serialised.
+                if outcome.warnings:
+                    span.set_attribute("lithos.provenance.warning_count", len(outcome.warnings))
+                logger.info("lithos_write completed doc_id=%s status=%s", doc.id, outcome.status)
                 return {
-                    "status": result.status,
+                    "status": outcome.status,
                     "id": doc.id,
                     "path": str(doc.path),
                     "version": doc.metadata.version,
-                    "warnings": warnings,
+                    "warnings": list(outcome.warnings),
                 }
 
         @self.mcp.tool()
