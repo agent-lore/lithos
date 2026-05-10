@@ -436,3 +436,211 @@ class TestReconcileWireUp:
         result = await reconcile(scope="provenance_projection", config=seeded_config)
         assert result["supported"] is False
         assert result["status"] == "noop"
+
+
+# ---------------------------------------------------------------------------
+# ProvenanceProjection Module facade (issue #251 / ADR-0004)
+#
+# These tests exercise the public read surface and lifecycle of the
+# ``ProvenanceProjection`` Module. Mutation is performed against the
+# internal store because the projection's public surface in this slice is
+# read-only — plan/apply land in #254 per ADR-0001 step 3.
+# ---------------------------------------------------------------------------
+
+
+import pytest_asyncio  # noqa: E402
+
+from lithos.provenance import ProvenanceProjection  # noqa: E402
+
+
+@pytest_asyncio.fixture
+async def projection(test_config: LithosConfig):
+    """Open a ProvenanceProjection for the test and close it on teardown."""
+    proj = await ProvenanceProjection.create(test_config)
+    try:
+        yield proj
+    finally:
+        await proj.close()
+
+
+class TestProvenanceProjectionCreate:
+    """Eager-init factory opens the underlying store before returning."""
+
+    async def test_create_opens_store(self, test_config: LithosConfig) -> None:
+        proj = await ProvenanceProjection.create(test_config)
+        try:
+            # If create did not open the store, the first read would
+            # hit the assert in EdgeStore._conn().
+            assert await proj.count() == 0
+        finally:
+            await proj.close()
+
+    async def test_create_uses_supplied_config(self, test_config: LithosConfig) -> None:
+        """Edges written through the projection land at the configured path."""
+        proj = await ProvenanceProjection.create(test_config)
+        try:
+            await proj._edge_store.upsert(
+                from_id="a",
+                to_id="b",
+                edge_type="rel",
+                weight=1.0,
+                namespace="ns",
+            )
+            assert proj._edge_store.db_path == test_config.storage.edges_db_path
+            assert proj._edge_store.db_path.exists()
+        finally:
+            await proj.close()
+
+
+class TestProvenanceProjectionLifecycle:
+    """close is idempotent and a fresh create reopens the store."""
+
+    async def test_close_is_idempotent(self, test_config: LithosConfig) -> None:
+        proj = await ProvenanceProjection.create(test_config)
+        await proj.close()
+        # A second close must not raise (matches EdgeStore.close contract).
+        await proj.close()
+
+    async def test_reuse_after_close_via_create(self, test_config: LithosConfig) -> None:
+        first = await ProvenanceProjection.create(test_config)
+        await first._edge_store.upsert(
+            from_id="a",
+            to_id="b",
+            edge_type="rel",
+            weight=0.5,
+            namespace="ns",
+        )
+        await first.close()
+
+        second = await ProvenanceProjection.create(test_config)
+        try:
+            edges = await second.list_edges(from_id="a")
+            assert len(edges) == 1
+            assert edges[0]["weight"] == 0.5
+        finally:
+            await second.close()
+
+
+class TestProvenanceProjectionListEdges:
+    """list_edges filters by from_id, to_id, edge_type, and namespace."""
+
+    async def test_no_edges_returns_empty(self, projection: ProvenanceProjection) -> None:
+        assert await projection.list_edges() == []
+
+    async def test_filter_by_from_id(self, projection: ProvenanceProjection) -> None:
+        await projection._edge_store.upsert(
+            from_id="a", to_id="b", edge_type="rel", weight=1.0, namespace="ns"
+        )
+        await projection._edge_store.upsert(
+            from_id="x", to_id="y", edge_type="rel", weight=1.0, namespace="ns"
+        )
+        rows = await projection.list_edges(from_id="a")
+        assert len(rows) == 1
+        assert rows[0]["from_id"] == "a"
+        assert rows[0]["to_id"] == "b"
+
+    async def test_filter_by_to_id(self, projection: ProvenanceProjection) -> None:
+        await projection._edge_store.upsert(
+            from_id="a", to_id="b", edge_type="rel", weight=1.0, namespace="ns"
+        )
+        await projection._edge_store.upsert(
+            from_id="x", to_id="y", edge_type="rel", weight=1.0, namespace="ns"
+        )
+        rows = await projection.list_edges(to_id="b")
+        assert len(rows) == 1
+        assert rows[0]["to_id"] == "b"
+
+    async def test_filter_by_edge_type(self, projection: ProvenanceProjection) -> None:
+        await projection._edge_store.upsert(
+            from_id="a", to_id="b", edge_type="t1", weight=1.0, namespace="ns"
+        )
+        await projection._edge_store.upsert(
+            from_id="a", to_id="c", edge_type="t2", weight=1.0, namespace="ns"
+        )
+        rows = await projection.list_edges(edge_type="t2")
+        assert len(rows) == 1
+        assert rows[0]["type"] == "t2"
+
+    async def test_filter_by_namespace(self, projection: ProvenanceProjection) -> None:
+        await projection._edge_store.upsert(
+            from_id="a", to_id="b", edge_type="rel", weight=1.0, namespace="ns1"
+        )
+        await projection._edge_store.upsert(
+            from_id="a", to_id="c", edge_type="rel", weight=1.0, namespace="ns2"
+        )
+        rows = await projection.list_edges(namespace="ns1")
+        assert len(rows) == 1
+        assert rows[0]["namespace"] == "ns1"
+
+
+class TestProvenanceProjectionGetEdge:
+    """get_edge returns the edge dict or None."""
+
+    async def test_returns_dict_for_existing_edge(self, projection: ProvenanceProjection) -> None:
+        eid = await projection._edge_store.upsert(
+            from_id="a",
+            to_id="b",
+            edge_type="rel",
+            weight=0.7,
+            namespace="ns",
+        )
+        edge = await projection.get_edge(eid)
+        assert edge is not None
+        assert edge["edge_id"] == eid
+        assert edge["from_id"] == "a"
+        assert edge["to_id"] == "b"
+        assert edge["weight"] == pytest.approx(0.7)
+
+    async def test_returns_none_for_unknown_edge(self, projection: ProvenanceProjection) -> None:
+        assert await projection.get_edge("edge_does_not_exist") is None
+
+
+class TestProvenanceProjectionCount:
+    """count returns total rows or per-namespace rows."""
+
+    async def test_count_total(self, projection: ProvenanceProjection) -> None:
+        assert await projection.count() == 0
+        await projection._edge_store.upsert(
+            from_id="a", to_id="b", edge_type="rel", weight=1.0, namespace="ns"
+        )
+        assert await projection.count() == 1
+
+    async def test_count_per_namespace(self, projection: ProvenanceProjection) -> None:
+        await projection._edge_store.upsert(
+            from_id="a", to_id="b", edge_type="rel", weight=1.0, namespace="ns1"
+        )
+        await projection._edge_store.upsert(
+            from_id="x", to_id="y", edge_type="rel", weight=1.0, namespace="ns2"
+        )
+        assert await projection.count(namespace="ns1") == 1
+        assert await projection.count(namespace="ns2") == 1
+        assert await projection.count(namespace="absent") == 0
+
+
+class TestProvenanceProjectionListEdgesBetween:
+    """list_edges_between restricts to edges with both endpoints in the supplied set."""
+
+    async def test_only_returns_edges_between_supplied_nodes(
+        self, projection: ProvenanceProjection
+    ) -> None:
+        await projection._edge_store.upsert(
+            from_id="a", to_id="b", edge_type="rel", weight=1.0, namespace="ns"
+        )
+        # b -> c has only one endpoint (b) in the set, so it must be excluded.
+        await projection._edge_store.upsert(
+            from_id="b", to_id="c", edge_type="rel", weight=1.0, namespace="ns"
+        )
+        rows = await projection.list_edges_between(["a", "b"])
+        assert len(rows) == 1
+        assert {rows[0]["from_id"], rows[0]["to_id"]} == {"a", "b"}
+
+    async def test_filter_by_edge_type(self, projection: ProvenanceProjection) -> None:
+        await projection._edge_store.upsert(
+            from_id="a", to_id="b", edge_type="t1", weight=1.0, namespace="ns"
+        )
+        await projection._edge_store.upsert(
+            from_id="a", to_id="b", edge_type="t2", weight=1.0, namespace="ns"
+        )
+        rows = await projection.list_edges_between(["a", "b"], edge_type="t1")
+        assert len(rows) == 1
+        assert rows[0]["type"] == "t1"
