@@ -47,7 +47,15 @@ if TYPE_CHECKING:
     from lithos.coordination import CoordinationService
     from lithos.graph import KnowledgeGraph
     from lithos.knowledge import KnowledgeManager
-    from lithos.lcma.edges import EdgeStore
+
+    # ``EdgeStore`` is used here as a type annotation only — for the
+    # ``compute_temperature`` parameter, which the MVP1 stub does not
+    # actually read. We import via ``lithos.provenance`` (the legitimate
+    # gatekeeper per ADR-0004 / issue #251) so the rule "no edges-module
+    # import outside provenance.py" holds. ``compute_temperature``
+    # migrates to projection-owned APIs alongside the LCMA scaffolding
+    # work in #255.
+    from lithos.provenance import EdgeStore, ProvenanceProjection
     from lithos.search import SearchEngine
     from lithos.telemetry import _LithosMetrics
 
@@ -296,6 +304,7 @@ async def run_retrieve(
     graph: KnowledgeGraph,
     coordination: CoordinationService,
     edge_store: EdgeStore,
+    projection: ProvenanceProjection,
     stats_store: StatsStore,
     lcma_config: LcmaConfig,
     limit: int = 10,
@@ -455,7 +464,7 @@ async def run_retrieve(
             try:
                 _t = time.perf_counter()
                 graph_candidates = await scout_graph(
-                    seed_ids, graph, edge_store, knowledge, limit=limit, **scout_kw
+                    seed_ids, graph, projection, knowledge, limit=limit, **scout_kw
                 )
                 executed_scouts.add("scout_graph")
                 all_candidates.extend(graph_candidates)
@@ -533,7 +542,7 @@ async def run_retrieve(
             try:
                 conflicts_found = await scout_contradictions(
                     seed_ids,
-                    edge_store,
+                    projection,
                     knowledge,
                     namespace_filter=namespace_filter,
                     agent_id=agent_id,

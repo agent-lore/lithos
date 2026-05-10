@@ -11,7 +11,7 @@ import math
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastmcp import FastMCP
 from starlette.requests import Request
@@ -49,6 +49,7 @@ from lithos.knowledge import (
     _UnsetType,
 )
 from lithos.lcma.migrations import MigrationRegistry, run_migrations
+from lithos.provenance import ProvenanceProjection
 from lithos.search import Healthy, SearchEngine
 from lithos.telemetry import (
     StatusCode,
@@ -60,6 +61,18 @@ from lithos.telemetry import (
     register_sse_active_clients_observer,
     tool_metrics,
 )
+
+if TYPE_CHECKING:
+    # ``EdgeStore`` is used as a type annotation only — runtime construction
+    # is owned by ``ProvenanceProjection`` (ADR-0004, issue #251). We import
+    # via ``lithos.provenance`` (the legitimate gatekeeper) rather than
+    # ``lithos.lcma.edges`` directly so the rule "no edges-module import
+    # outside provenance.py" holds for the source tree. The remaining
+    # direct ``self.edge_store.<mutation>`` call sites
+    # (``lithos_edge_upsert``, ``update_conflict_resolution``, the enrich
+    # worker, reinforcement helpers) move to projection-owned APIs in the
+    # follow-up slices (#254/#255/#258/#263).
+    from lithos.provenance import EdgeStore
 
 logger = logging.getLogger(__name__)
 
@@ -99,23 +112,27 @@ class LithosServer:
         # CorpusIntake is built in initialize() once self.search exists.
         self.intake: CorpusIntake = None  # type: ignore[assignment]
 
-        from lithos.lcma.edges import EdgeStore
+        # ``projection`` (and the EdgeStore it owns) is created
+        # asynchronously in :meth:`initialize` via
+        # ``ProvenanceProjection.create`` so the SQLite handle is opened
+        # eagerly. ``self.edge_store`` is then aliased to the projection's
+        # internal store so the un-migrated mutation handlers
+        # (``lithos_edge_upsert``, the enrich worker, reinforcement) keep
+        # working without change in this slice (issue #251). They migrate
+        # to the projection's API in #254/#255/#258/#263.
+        self.projection: ProvenanceProjection = None  # type: ignore[assignment]
+        self.edge_store: EdgeStore = None  # type: ignore[assignment]
+
         from lithos.lcma.enrich import EnrichWorker
         from lithos.lcma.stats import StatsStore
 
-        self.edge_store = EdgeStore(self._config)
         self.stats_store = StatsStore(self._config)
 
+        # ``EnrichWorker`` needs the EdgeStore, which is owned by the
+        # projection — built in :meth:`initialize` after the projection is
+        # created. We retain the type hint here so ``mypy``/``pyright``
+        # know the eventual shape.
         self._enrich_worker: EnrichWorker | None = None
-        if self._config.lcma.enabled:
-            self._enrich_worker = EnrichWorker(
-                config=self._config.lcma,
-                event_bus=self.event_bus,
-                stats_store=self.stats_store,
-                edge_store=self.edge_store,
-                knowledge=self.knowledge,
-                coordination=self.coordination,
-            )
 
         # Cached count fields for synchronous OTEL observable gauge callbacks.
         # Primed at startup by _refresh_coordination_stats_cache() and kept fresh
@@ -582,6 +599,31 @@ class LithosServer:
                 if self.search is None:
                     self.search = await SearchEngine.create(self._config)
 
+                # Build the provenance projection eagerly so the underlying
+                # edge store is open before any request arrives (ADR-0004,
+                # mirrors ``SearchEngine.create``). Tests may pre-inject a
+                # ``projection`` instance to avoid touching real SQLite.
+                # ``self.edge_store`` aliases the projection's internal
+                # store — see the constructor for the rationale.
+                if self.projection is None:
+                    self.projection = await ProvenanceProjection.create(self._config)
+                if self.edge_store is None:
+                    self.edge_store = self.projection._edge_store
+
+                # EnrichWorker depends on the EdgeStore that the projection
+                # owns, so we build it here rather than in ``__init__``.
+                if self._enrich_worker is None and self._config.lcma.enabled:
+                    from lithos.lcma.enrich import EnrichWorker
+
+                    self._enrich_worker = EnrichWorker(
+                        config=self._config.lcma,
+                        event_bus=self.event_bus,
+                        stats_store=self.stats_store,
+                        edge_store=self.edge_store,
+                        knowledge=self.knowledge,
+                        coordination=self.coordination,
+                    )
+
                 # Build the Corpus intake now that all collaborators exist.
                 # See ADR-0003. Tests that pre-inject ``self.intake`` (e.g. with
                 # a stub) keep that injection — same idiom used for ``search``.
@@ -658,10 +700,8 @@ class LithosServer:
                     if not self.graph.load_cache():
                         await self._rebuild_indices()
 
-                # Ensure edge store is open before the enrich worker
-                # starts — projection helpers no-op when edges.db is absent.
-                if self._config.lcma.enabled:
-                    await self.edge_store.open()
+                # The edge store is already open — ``ProvenanceProjection.create``
+                # opens it eagerly above. No explicit ``open()`` needed here.
 
                 # Register LCMA observable gauges when LCMA is enabled
                 if self._config.lcma.enabled and self.stats_store is not None:
@@ -922,14 +962,17 @@ class LithosServer:
         """Stop the enrichment background worker and close LCMA stores.
 
         StatsStore and EdgeStore now hold persistent connections (#172); they
-        must be closed to release the SQLite WAL handles cleanly.
+        must be closed to release the SQLite WAL handles cleanly. The
+        projection owns the EdgeStore lifecycle (ADR-0004), so we close
+        it via the projection — ``self.edge_store`` aliases the same
+        underlying handle.
         """
         if self._enrich_worker is not None:
             await self._enrich_worker.stop()
         if self.stats_store is not None:
             await self.stats_store.close()
-        if self.edge_store is not None:
-            await self.edge_store.close()
+        if self.projection is not None:
+            await self.projection.close()
 
     async def shutdown(self) -> None:
         """Stop every background worker and close every persistent handle.
@@ -1743,6 +1786,7 @@ class LithosServer:
                     graph=self.graph,
                     coordination=self.coordination,
                     edge_store=self.edge_store,
+                    projection=self.projection,
                     stats_store=self.stats_store,
                     lcma_config=lcma_config,
                     limit=limit,
@@ -1882,7 +1926,7 @@ class LithosServer:
             with tracer.start_as_current_span("lithos.tool.edge_list") as span:
                 span.set_attribute("lithos.tool", "lithos_edge_list")
 
-                edges = await self.edge_store.list_edges(
+                edges = await self.projection.list_edges(
                     from_id=from_id,
                     to_id=to_id,
                     edge_type=type,
@@ -1933,7 +1977,7 @@ class LithosServer:
                         ),
                     }
 
-                edge = await self.edge_store.get_edge(edge_id)
+                edge = await self.projection.get_edge(edge_id)
                 if edge is None:
                     return {
                         "status": "error",
@@ -2460,10 +2504,10 @@ class LithosServer:
                 if "edges" in selected:
                     if self._config.lcma.enabled:
                         # Fan out both directions; caller rarely wants just one.
-                        outgoing_edges = await self.edge_store.list_edges(
+                        outgoing_edges = await self.projection.list_edges(
                             from_id=id, namespace=namespace
                         )
-                        incoming_edges = await self.edge_store.list_edges(
+                        incoming_edges = await self.projection.list_edges(
                             to_id=id, namespace=namespace
                         )
                     else:

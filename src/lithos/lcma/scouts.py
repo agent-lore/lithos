@@ -26,8 +26,8 @@ if TYPE_CHECKING:
     from lithos.coordination import CoordinationService
     from lithos.graph import KnowledgeGraph
     from lithos.knowledge import KnowledgeManager
-    from lithos.lcma.edges import EdgeStore
     from lithos.lcma.stats import StatsStore
+    from lithos.provenance import ProvenanceProjection
     from lithos.search import SearchEngine
 
 logger = logging.getLogger(__name__)
@@ -573,7 +573,7 @@ async def scout_task_context(
 async def scout_graph(
     seed_ids: list[str],
     graph: KnowledgeGraph,
-    edge_store: EdgeStore,
+    projection: ProvenanceProjection,
     knowledge: KnowledgeManager,
     *,
     limit: int = 10,
@@ -605,14 +605,14 @@ async def scout_graph(
 
     # 2. Typed edge graph (edges.db)
     for seed_id in seed_ids:
-        outgoing = await edge_store.list_edges(from_id=seed_id)
+        outgoing = await projection.list_edges(from_id=seed_id)
         for edge in outgoing:
             nid = str(edge["to_id"])
             if nid not in seed_set:
                 raw_w = edge["weight"]
                 w = float(raw_w) if isinstance(raw_w, (int, float)) else 1.0
                 _track(nid, w, f"{edge['type']} edge from {seed_id[:8]}")
-        incoming = await edge_store.list_edges(to_id=seed_id)
+        incoming = await projection.list_edges(to_id=seed_id)
         for edge in incoming:
             nid = str(edge["from_id"])
             if nid not in seed_set:
@@ -830,7 +830,7 @@ async def scout_source_url(
 
 async def scout_contradictions(
     seed_ids: list[str],
-    edge_store: EdgeStore,
+    projection: ProvenanceProjection,
     knowledge: KnowledgeManager,
     *,
     namespace_filter: list[str] | None = None,
@@ -847,8 +847,8 @@ async def scout_contradictions(
     results: list[dict[str, object]] = []
 
     for node_id in seed_ids:
-        outgoing = await edge_store.list_edges(from_id=node_id, edge_type="contradicts")
-        incoming = await edge_store.list_edges(to_id=node_id, edge_type="contradicts")
+        outgoing = await projection.list_edges(from_id=node_id, edge_type="contradicts")
+        incoming = await projection.list_edges(to_id=node_id, edge_type="contradicts")
 
         for edge in [*outgoing, *incoming]:
             eid = str(edge["edge_id"])

@@ -15,7 +15,6 @@ import pytest_asyncio
 from lithos.config import LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.edges import EdgeStore
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
     SCOUT_COACTIVATION,
@@ -41,6 +40,7 @@ from lithos.lcma.scouts import (
     scout_vector,
 )
 from lithos.lcma.stats import StatsStore
+from lithos.provenance import EdgeStore, ProvenanceProjection
 from lithos.search import SearchEngine
 
 
@@ -740,15 +740,29 @@ async def seeded_edge_store(seeded_config: LithosConfig):
         await store.close()
 
 
+@pytest.fixture
+async def seeded_projection(seeded_edge_store: EdgeStore) -> ProvenanceProjection:
+    """ProvenanceProjection wrapping the seeded edge store.
+
+    The store's lifecycle is owned by ``seeded_edge_store``; we wrap it
+    rather than calling ``ProvenanceProjection.create`` so the projection
+    and the fixture-level mutations through ``seeded_edge_store`` share
+    the exact same underlying connection.
+    """
+    projection = ProvenanceProjection(seeded_edge_store.config)
+    projection._edge_store = seeded_edge_store
+    return projection
+
+
 class TestScoutGraph:
     async def test_wiki_link_neighbors(
         self,
         graph_with_links: KnowledgeGraph,
-        seeded_edge_store: EdgeStore,
+        seeded_projection: ProvenanceProjection,
         seeded_km: KnowledgeManager,
     ) -> None:
         """Wiki-link from note-1 to note-2 should surface note-2."""
-        candidates = await scout_graph([_ID1], graph_with_links, seeded_edge_store, seeded_km)
+        candidates = await scout_graph([_ID1], graph_with_links, seeded_projection, seeded_km)
         node_ids = {c.node_id for c in candidates}
         assert _ID2 in node_ids
         assert all(c.scouts == [SCOUT_GRAPH] for c in candidates)
@@ -756,11 +770,11 @@ class TestScoutGraph:
     async def test_typed_edge_neighbors(
         self,
         seeded_graph: KnowledgeGraph,
-        seeded_edge_store: EdgeStore,
+        seeded_projection: ProvenanceProjection,
         seeded_km: KnowledgeManager,
     ) -> None:
         """Typed edge from note-1 to note-5 should surface note-5."""
-        candidates = await scout_graph([_ID1], seeded_graph, seeded_edge_store, seeded_km)
+        candidates = await scout_graph([_ID1], seeded_graph, seeded_projection, seeded_km)
         node_ids = {c.node_id for c in candidates}
         assert _ID5 in node_ids
 
@@ -768,10 +782,13 @@ class TestScoutGraph:
         self,
         graph_with_links: KnowledgeGraph,
         seeded_edge_store: EdgeStore,
+        seeded_projection: ProvenanceProjection,
         seeded_km: KnowledgeManager,
     ) -> None:
         """Same neighbor via wiki-link and typed edge should appear once."""
-        # Add edge _ID1 -> _ID2 (already wiki-linked)
+        # Add edge _ID1 -> _ID2 (already wiki-linked) — seeded_projection
+        # shares the same underlying store as seeded_edge_store so this
+        # mutation is visible through the projection.
         await seeded_edge_store.upsert(
             from_id=_ID1,
             to_id=_ID2,
@@ -779,7 +796,7 @@ class TestScoutGraph:
             weight=0.9,
             namespace="default",
         )
-        candidates = await scout_graph([_ID1], graph_with_links, seeded_edge_store, seeded_km)
+        candidates = await scout_graph([_ID1], graph_with_links, seeded_projection, seeded_km)
         id_counts = [c.node_id for c in candidates].count(_ID2)
         assert id_counts == 1
         # Edge weight (0.9) should win over wiki-link (0.5)
@@ -789,13 +806,13 @@ class TestScoutGraph:
     async def test_namespace_filter(
         self,
         seeded_graph: KnowledgeGraph,
-        seeded_edge_store: EdgeStore,
+        seeded_projection: ProvenanceProjection,
         seeded_km: KnowledgeManager,
     ) -> None:
         candidates = await scout_graph(
             [_ID1],
             seeded_graph,
-            seeded_edge_store,
+            seeded_projection,
             seeded_km,
             namespace_filter=["nonexistent"],
         )
@@ -804,11 +821,11 @@ class TestScoutGraph:
     async def test_edge_score_uses_weight(
         self,
         seeded_graph: KnowledgeGraph,
-        seeded_edge_store: EdgeStore,
+        seeded_projection: ProvenanceProjection,
         seeded_km: KnowledgeManager,
     ) -> None:
         """Typed edge neighbor should use the edge weight as score."""
-        candidates = await scout_graph([_ID1], seeded_graph, seeded_edge_store, seeded_km)
+        candidates = await scout_graph([_ID1], seeded_graph, seeded_projection, seeded_km)
         c5 = next((c for c in candidates if c.node_id == _ID5), None)
         assert c5 is not None
         assert c5.score == 0.8
@@ -816,11 +833,11 @@ class TestScoutGraph:
     async def test_excludes_seeds(
         self,
         graph_with_links: KnowledgeGraph,
-        seeded_edge_store: EdgeStore,
+        seeded_projection: ProvenanceProjection,
         seeded_km: KnowledgeManager,
     ) -> None:
         """Seed nodes should not appear in results."""
-        candidates = await scout_graph([_ID1, _ID2], graph_with_links, seeded_edge_store, seeded_km)
+        candidates = await scout_graph([_ID1, _ID2], graph_with_links, seeded_projection, seeded_km)
         node_ids = {c.node_id for c in candidates}
         assert _ID1 not in node_ids
         assert _ID2 not in node_ids
@@ -828,13 +845,13 @@ class TestScoutGraph:
     async def test_tags_filter(
         self,
         seeded_graph: KnowledgeGraph,
-        seeded_edge_store: EdgeStore,
+        seeded_projection: ProvenanceProjection,
         seeded_km: KnowledgeManager,
     ) -> None:
         candidates = await scout_graph(
             [_ID1],
             seeded_graph,
-            seeded_edge_store,
+            seeded_projection,
             seeded_km,
             tags=["nonexistent-tag"],
         )
@@ -1069,6 +1086,18 @@ class TestScoutSourceUrl:
 # ---------------------------------------------------------------------------
 
 
+def _wrap_in_projection(edge_store: EdgeStore) -> ProvenanceProjection:
+    """Wrap an already-open EdgeStore in a ProvenanceProjection for tests.
+
+    Sharing the underlying store (rather than calling
+    ``ProvenanceProjection.create``) keeps the contradiction tests' inline
+    seeding visible through the projection's read API on the same handle.
+    """
+    projection = ProvenanceProjection(edge_store.config)
+    projection._edge_store = edge_store
+    return projection
+
+
 class TestScoutContradictions:
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_edges(
@@ -1078,7 +1107,8 @@ class TestScoutContradictions:
         edge_store = EdgeStore(seeded_config)
         await edge_store.open()
         try:
-            result = await scout_contradictions([_ID1], edge_store, seeded_km)
+            projection = _wrap_in_projection(edge_store)
+            result = await scout_contradictions([_ID1], projection, seeded_km)
             assert result == []
         finally:
             await edge_store.close()
@@ -1098,7 +1128,8 @@ class TestScoutContradictions:
                 weight=1.0,
                 namespace="default",
             )
-            result = await scout_contradictions([_ID1], edge_store, seeded_km)
+            projection = _wrap_in_projection(edge_store)
+            result = await scout_contradictions([_ID1], projection, seeded_km)
             assert len(result) == 1
             assert result[0]["edge_id"] == eid
             assert result[0]["from_id"] == _ID1
@@ -1124,7 +1155,8 @@ class TestScoutContradictions:
                     namespace=f"ns-{state}",
                     conflict_state=state,
                 )
-            result = await scout_contradictions([_ID1], edge_store, seeded_km)
+            projection = _wrap_in_projection(edge_store)
+            result = await scout_contradictions([_ID1], projection, seeded_km)
             assert result == []
         finally:
             await edge_store.close()
@@ -1146,8 +1178,9 @@ class TestScoutContradictions:
                 namespace="default",
             )
             # Filter to only "default" — _ID2 is in "projects" so should be excluded
+            projection = _wrap_in_projection(edge_store)
             result = await scout_contradictions(
-                [_ID1], edge_store, seeded_km, namespace_filter=["default"]
+                [_ID1], projection, seeded_km, namespace_filter=["default"]
             )
             assert result == []
         finally:
@@ -1185,7 +1218,8 @@ class TestScoutContradictions:
                 weight=1.0,
                 namespace="default",
             )
-            result = await scout_contradictions([_ID1], edge_store, seeded_km)
+            projection = _wrap_in_projection(edge_store)
+            result = await scout_contradictions([_ID1], projection, seeded_km)
             assert result == []
         finally:
             await edge_store.close()

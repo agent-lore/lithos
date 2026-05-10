@@ -18,7 +18,6 @@ import pytest_asyncio
 from lithos.config import LcmaConfig, LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.edges import EdgeStore
 from lithos.lcma.retrieve import (
     _rerank_fast,
     compute_temperature,
@@ -26,6 +25,7 @@ from lithos.lcma.retrieve import (
 )
 from lithos.lcma.stats import StatsStore
 from lithos.lcma.utils import Candidate
+from lithos.provenance import EdgeStore, ProvenanceProjection
 from lithos.search import SearchEngine
 from lithos.search import generate_snippet as _generate_snippet
 
@@ -141,6 +141,18 @@ async def edge_store(seeded_config: LithosConfig):
         yield store
     finally:
         await store.close()
+
+
+@pytest.fixture
+def projection(edge_store: EdgeStore) -> ProvenanceProjection:
+    """ProvenanceProjection wrapping the test edge store.
+
+    Shares the underlying SQLite handle with ``edge_store`` so that
+    fixture-level upserts are visible through the projection's read API.
+    """
+    proj = ProvenanceProjection(edge_store.config)
+    proj._edge_store = edge_store
+    return proj
 
 
 @pytest.fixture
@@ -310,6 +322,7 @@ class TestStoredSalienceAffectsRetrieval:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Persist different salience values in StatsStore and verify they
@@ -342,6 +355,7 @@ class TestStoredSalienceAffectsRetrieval:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -362,6 +376,7 @@ class TestStoredSalienceAffectsRetrieval:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """The `salience` field in results must come from StatsStore, not
@@ -390,6 +405,7 @@ class TestStoredSalienceAffectsRetrieval:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -410,6 +426,7 @@ class TestStoredSalienceAffectsRetrieval:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Nodes with no stored stats get the 0.5 default, not c.score."""
@@ -431,6 +448,7 @@ class TestStoredSalienceAffectsRetrieval:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -455,6 +473,7 @@ class TestRetrieveSnippetParity:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         kp = seeded_config.storage.knowledge_path
@@ -495,6 +514,7 @@ class TestRetrieveSnippetParity:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -580,6 +600,7 @@ class TestComputeTemperature:
     async def test_cold_start_counter_threshold_parametrized(
         self,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         temperature_value: float,
         should_fire: bool,
     ) -> None:
@@ -679,6 +700,7 @@ class TestRunRetrievePhaseA:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Phase A scouts run in parallel and produce results."""
@@ -695,6 +717,7 @@ class TestRunRetrievePhaseA:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -713,6 +736,7 @@ class TestRunRetrievePhaseA:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """scout_task_context is included when task_id is provided."""
@@ -727,6 +751,7 @@ class TestRunRetrievePhaseA:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -749,6 +774,7 @@ class TestRunRetrievePhaseB:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Provenance scout runs after Phase A, seeded from top candidates."""
@@ -764,6 +790,7 @@ class TestRunRetrievePhaseB:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -788,6 +815,7 @@ class TestNormalization:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Result scores are in [0, 1]."""
@@ -802,6 +830,7 @@ class TestNormalization:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
@@ -823,6 +852,7 @@ class TestReceiptWriting:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Every call writes a receipt row."""
@@ -837,6 +867,7 @@ class TestReceiptWriting:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
@@ -862,6 +893,7 @@ class TestReceiptWriting:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Receipt is written even when scouts raise exceptions."""
@@ -877,6 +909,7 @@ class TestReceiptWriting:
             graph=seeded_graph,
             coordination=mock_coordination,
             edge_store=edge_store,
+            projection=projection,
             stats_store=stats_store,
             lcma_config=LcmaConfig(),
         )
@@ -899,6 +932,7 @@ class TestReceiptWriting:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Receipt row has all required fields."""
@@ -913,6 +947,7 @@ class TestReceiptWriting:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=5,
@@ -954,6 +989,7 @@ class TestWorkingMemory:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Working memory rows upserted when task_id provided."""
@@ -968,6 +1004,7 @@ class TestWorkingMemory:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 task_id="task-wm",
@@ -994,6 +1031,7 @@ class TestWorkingMemory:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """No working memory rows when task_id is None."""
@@ -1008,6 +1046,7 @@ class TestWorkingMemory:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
@@ -1035,6 +1074,7 @@ class TestMaxContextNodes:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """max_context_nodes defaults to limit when omitted."""
@@ -1051,6 +1091,7 @@ class TestMaxContextNodes:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=5,
@@ -1133,6 +1174,7 @@ class TestScoutsFiredAuditTrail:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """When every scout returns [], scouts_fired must still list them."""
@@ -1147,6 +1189,7 @@ class TestScoutsFiredAuditTrail:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1180,6 +1223,7 @@ class TestScoutsFiredAuditTrail:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """A scout that raises must NOT appear in scouts_fired."""
@@ -1194,6 +1238,7 @@ class TestScoutsFiredAuditTrail:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1221,6 +1266,7 @@ class TestScoutsFiredAuditTrail:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -1247,6 +1293,7 @@ class TestScoutsFiredAuditTrail:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1272,6 +1319,7 @@ class TestReceiptFinalNodesShape:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         from lithos.search import SearchResult
@@ -1290,6 +1338,7 @@ class TestReceiptFinalNodesShape:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1327,6 +1376,7 @@ class TestReceiptFields:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """candidates_considered in the receipt matches len(merged_pool)."""
@@ -1347,6 +1397,7 @@ class TestReceiptFields:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1383,6 +1434,7 @@ class TestContradictionSurfacing:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """A contradiction edge between two notes surfaces in result['conflicts']."""
@@ -1411,6 +1463,7 @@ class TestContradictionSurfacing:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1445,6 +1498,7 @@ class TestContradictionSurfacing:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """When surface_conflicts=False (default), no conflicts key in result."""
@@ -1472,6 +1526,7 @@ class TestContradictionSurfacing:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1497,6 +1552,7 @@ class TestNewScoutsWiredInPhaseB:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """When edges.db has edges between notes, scout_graph fires and
@@ -1527,6 +1583,7 @@ class TestNewScoutsWiredInPhaseB:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1557,6 +1614,7 @@ class TestNewScoutsWiredInPhaseB:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """scout_coactivation fires in Phase B when coactivation data exists."""
@@ -1580,6 +1638,7 @@ class TestNewScoutsWiredInPhaseB:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1610,6 +1669,7 @@ class TestNewScoutsWiredInPhaseB:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """scout_source_url fires in Phase B when seed notes share domains."""
@@ -1663,6 +1723,7 @@ class TestNewScoutsWiredInPhaseB:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1693,6 +1754,7 @@ class TestNewScoutsWiredInPhaseB:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """A failing Phase B scout must not abort the pipeline."""
@@ -1713,6 +1775,7 @@ class TestNewScoutsWiredInPhaseB:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
                 limit=10,
@@ -1747,6 +1810,7 @@ class TestFinallyBlockRobustness:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """If merge_and_normalize raises before temperature is assigned,
@@ -1768,6 +1832,7 @@ class TestFinallyBlockRobustness:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )

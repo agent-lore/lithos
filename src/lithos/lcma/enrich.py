@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from lithos.coordination import CoordinationService
     from lithos.events import EventBus
     from lithos.knowledge import KnowledgeManager
-    from lithos.lcma.edges import EdgeStore
     from lithos.lcma.stats import StatsStore
+    from lithos.provenance import EdgeStore
     from lithos.telemetry import _LithosMetrics
 
 _lithos_metrics: _LithosMetrics | None = None
@@ -592,7 +592,7 @@ class EnrichWorker:
         Entity extraction runs only when trigger_types contains ``note.created``
         or ``note.updated``.
         """
-        from lithos.lcma.edges import _project_node_provenance
+        from lithos.provenance import _project_node_provenance
 
         logger.debug(
             "EnrichWorker: enriching node",
@@ -720,7 +720,7 @@ class EnrichWorker:
 
     async def full_sweep(self) -> None:
         """Run a full sweep: decay all nodes, evict stale WM, reconcile provenance."""
-        from lithos.lcma.edges import _project_provenance_to_edges
+        from lithos.provenance import _project_provenance_to_edges
 
         # --- Decay all nodes ---
         node_ids = await self._stats_store.list_all_node_ids()

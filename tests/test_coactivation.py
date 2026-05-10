@@ -20,9 +20,9 @@ import pytest_asyncio
 from lithos.config import LcmaConfig, LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.edges import EdgeStore
 from lithos.lcma.retrieve import _dominant_namespace, run_retrieve
 from lithos.lcma.stats import StatsStore
+from lithos.provenance import EdgeStore, ProvenanceProjection
 from lithos.search import SearchEngine
 from lithos.server import LithosServer
 
@@ -139,6 +139,18 @@ async def edge_store(seeded_config: LithosConfig):
 
 
 @pytest.fixture
+def projection(edge_store: EdgeStore) -> ProvenanceProjection:
+    """ProvenanceProjection wrapping the test edge store.
+
+    Shares the underlying SQLite handle with ``edge_store`` so fixture-level
+    upserts are visible through the projection's read API.
+    """
+    proj = ProvenanceProjection(edge_store.config)
+    proj._edge_store = edge_store
+    return proj
+
+
+@pytest.fixture
 async def stats_store(seeded_config: LithosConfig):
     store = StatsStore(seeded_config)
     await store.open()
@@ -195,6 +207,7 @@ class TestCoactivationSingleCall:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """node_stats.retrieval_count incremented for each node in final_nodes."""
@@ -209,6 +222,7 @@ class TestCoactivationSingleCall:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
@@ -235,6 +249,7 @@ class TestCoactivationSingleCall:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Coactivation rows created for unordered pairs in final_nodes."""
@@ -249,6 +264,7 @@ class TestCoactivationSingleCall:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
@@ -269,6 +285,7 @@ class TestCoactivationSingleCall:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """node_stats inserted with salience=0.5 on first touch."""
@@ -283,6 +300,7 @@ class TestCoactivationSingleCall:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
@@ -308,6 +326,7 @@ class TestCoactivationMultiCall:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Two calls with same results increment retrieval_count to 2."""
@@ -323,6 +342,7 @@ class TestCoactivationMultiCall:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
@@ -334,6 +354,7 @@ class TestCoactivationMultiCall:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
@@ -354,6 +375,7 @@ class TestCoactivationMultiCall:
         seeded_graph: KnowledgeGraph,
         mock_coordination: AsyncMock,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         stats_store: StatsStore,
     ) -> None:
         """Two calls increment coactivation count."""
@@ -368,6 +390,7 @@ class TestCoactivationMultiCall:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
@@ -378,6 +401,7 @@ class TestCoactivationMultiCall:
                 graph=seeded_graph,
                 coordination=mock_coordination,
                 edge_store=edge_store,
+                projection=projection,
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )

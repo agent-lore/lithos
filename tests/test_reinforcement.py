@@ -5,7 +5,6 @@ import pytest_asyncio
 
 from lithos.config import LithosConfig
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.edges import EdgeStore
 from lithos.lcma.reinforcement import (
     penalize_ignored,
     penalize_misleading,
@@ -14,6 +13,7 @@ from lithos.lcma.reinforcement import (
     weaken_edges_for_bad_context,
 )
 from lithos.lcma.stats import StatsStore
+from lithos.provenance import EdgeStore
 
 
 @pytest_asyncio.fixture
