@@ -14,7 +14,22 @@ step 3; this file intentionally does not expose them yet.
 from __future__ import annotations
 
 from lithos.config import LithosConfig
-from lithos.lcma.edges import EdgeStore  # only legitimate import site
+
+# This module is the single legitimate import site for the package-internal
+# edge store and the corpus-to-edges projection function (ADR-0004,
+# issue #251). Re-export them here so callers that still need a direct
+# reference (type annotations, transitional tests, the package-internal
+# helpers in lcma/ that #254 / #255 have not yet migrated) import them
+# via ``lithos.provenance`` instead of reaching into ``lithos.lcma.edges``
+# directly. The import-graph guard in #262 will enforce this rule
+# mechanically.
+from lithos.lcma.edges import EdgeStore, _project_provenance_to_edges
+
+__all__ = [
+    "EdgeStore",
+    "ProvenanceProjection",
+    "_project_provenance_to_edges",
+]
 
 
 class ProvenanceProjection:

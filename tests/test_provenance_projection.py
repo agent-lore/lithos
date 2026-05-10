@@ -14,7 +14,7 @@ import pytest
 
 from lithos.config import LithosConfig, StorageConfig
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.edges import EdgeStore, _project_provenance_to_edges
+from lithos.provenance import EdgeStore, _project_provenance_to_edges
 
 # ---------------------------------------------------------------------------
 # Fixtures

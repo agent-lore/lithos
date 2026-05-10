@@ -18,7 +18,6 @@ import pytest_asyncio
 from lithos.config import LcmaConfig, LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.edges import EdgeStore
 from lithos.lcma.retrieve import (
     _rerank_fast,
     compute_temperature,
@@ -26,7 +25,7 @@ from lithos.lcma.retrieve import (
 )
 from lithos.lcma.stats import StatsStore
 from lithos.lcma.utils import Candidate
-from lithos.provenance import ProvenanceProjection
+from lithos.provenance import EdgeStore, ProvenanceProjection
 from lithos.search import SearchEngine
 from lithos.search import generate_snippet as _generate_snippet
 

@@ -20,10 +20,9 @@ import pytest_asyncio
 from lithos.config import LcmaConfig, LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.edges import EdgeStore
 from lithos.lcma.retrieve import _dominant_namespace, run_retrieve
 from lithos.lcma.stats import StatsStore
-from lithos.provenance import ProvenanceProjection
+from lithos.provenance import EdgeStore, ProvenanceProjection
 from lithos.search import SearchEngine
 from lithos.server import LithosServer
 

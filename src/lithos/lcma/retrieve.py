@@ -47,8 +47,15 @@ if TYPE_CHECKING:
     from lithos.coordination import CoordinationService
     from lithos.graph import KnowledgeGraph
     from lithos.knowledge import KnowledgeManager
-    from lithos.lcma.edges import EdgeStore
-    from lithos.provenance import ProvenanceProjection
+
+    # ``EdgeStore`` is used here as a type annotation only — for the
+    # ``compute_temperature`` parameter, which the MVP1 stub does not
+    # actually read. We import via ``lithos.provenance`` (the legitimate
+    # gatekeeper per ADR-0004 / issue #251) so the rule "no edges-module
+    # import outside provenance.py" holds. ``compute_temperature``
+    # migrates to projection-owned APIs alongside the LCMA scaffolding
+    # work in #255.
+    from lithos.provenance import EdgeStore, ProvenanceProjection
     from lithos.search import SearchEngine
     from lithos.telemetry import _LithosMetrics
 

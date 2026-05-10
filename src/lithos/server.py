@@ -64,12 +64,15 @@ from lithos.telemetry import (
 
 if TYPE_CHECKING:
     # ``EdgeStore`` is used as a type annotation only — runtime construction
-    # is owned by ``ProvenanceProjection`` (ADR-0004, issue #251). The
-    # remaining direct ``self.edge_store.<mutation>`` call sites
+    # is owned by ``ProvenanceProjection`` (ADR-0004, issue #251). We import
+    # via ``lithos.provenance`` (the legitimate gatekeeper) rather than
+    # ``lithos.lcma.edges`` directly so the rule "no edges-module import
+    # outside provenance.py" holds for the source tree. The remaining
+    # direct ``self.edge_store.<mutation>`` call sites
     # (``lithos_edge_upsert``, ``update_conflict_resolution``, the enrich
     # worker, reinforcement helpers) move to projection-owned APIs in the
     # follow-up slices (#254/#255/#258/#263).
-    from lithos.lcma.edges import EdgeStore
+    from lithos.provenance import EdgeStore
 
 logger = logging.getLogger(__name__)
 

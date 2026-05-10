@@ -15,7 +15,6 @@ import pytest_asyncio
 from lithos.config import LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.edges import EdgeStore
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
     SCOUT_COACTIVATION,
@@ -41,7 +40,7 @@ from lithos.lcma.scouts import (
     scout_vector,
 )
 from lithos.lcma.stats import StatsStore
-from lithos.provenance import ProvenanceProjection
+from lithos.provenance import EdgeStore, ProvenanceProjection
 from lithos.search import SearchEngine
 
 
