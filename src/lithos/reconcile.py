@@ -19,8 +19,8 @@ import logging
 from typing import Any, Literal
 
 from lithos.config import LithosConfig, get_config
-from lithos.graph import KnowledgeGraph
-from lithos.knowledge import KnowledgeDocument, KnowledgeManager, parse_wiki_links
+from lithos.graph import GraphReconcileAction, KnowledgeGraph
+from lithos.knowledge import KnowledgeManager
 from lithos.search import SearchEngine
 from lithos.telemetry import get_tracer, lithos_metrics
 
@@ -62,17 +62,6 @@ def _make_result(
         "actions": actions or [],
         "failures": failures or [],
     }
-
-
-async def _scan_corpus(config: LithosConfig) -> list[KnowledgeDocument]:
-    """Backwards-compatibility shim around :meth:`KnowledgeManager._scan_corpus`.
-
-    The corpus scan itself moved onto :class:`KnowledgeManager` in #226 because
-    the corpus is its source of truth. This shim still feeds the
-    ``_reconcile_graph`` and ``_reconcile_provenance_projection`` paths; both
-    fold onto KM in later ADR-0001 phases, at which point this shim is deleted.
-    """
-    return await KnowledgeManager(config=config)._scan_corpus()
 
 
 def _aggregate_status(statuses: list[ReconcileStatus]) -> ReconcileStatus:
@@ -127,12 +116,14 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
             failures=[{"code": "internal_error", "detail": str(exc)}],
         )
 
+    assert plan.search is not None  # search engine was passed → slice is populated
+    search_plan = plan.search
     actions = [
-        {"backend": a.backend, "action": a.action, "reason": a.reason} for a in plan.search.actions
+        {"backend": a.backend, "action": a.action, "reason": a.reason} for a in search_plan.actions
     ]
-    scanned = plan.search.scanned
+    scanned = search_plan.scanned
 
-    if plan.search.is_noop:
+    if search_plan.is_noop:
         return _make_result("indices", dry_run, status="noop", scanned=scanned)
 
     if dry_run:
@@ -149,10 +140,12 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
         apply_span.set_attribute("lithos.reconcile.scope", "indices")
         result = await knowledge.apply_reconcile(plan, search)
 
-    repaired = result.search.repaired
+    assert result.search is not None
+    search_result = result.search
+    repaired = search_result.repaired
     failures = [
         {"code": "index_rebuild_failed", "backend": f.backend, "detail": f.detail}
-        for f in result.search.failed
+        for f in search_result.failed
     ]
     n_failed = len(failures)
 
@@ -192,121 +185,82 @@ async def _reconcile_indices(config: LithosConfig, dry_run: bool) -> dict[str, A
     )
 
 
-async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any]:
-    """Reconcile the wiki-link graph cache against the markdown corpus.
+def _action_to_dict(action: GraphReconcileAction) -> dict[str, Any]:
+    """Translate a structured graph action into the legacy dict shape."""
+    payload: dict[str, Any] = {
+        "target": action.target,
+        "action": action.action,
+        "reason": action.reason,
+    }
+    if action.source_id is not None:
+        payload["source_id"] = action.source_id
+    if action.source_title is not None:
+        payload["source_title"] = action.source_title
+    if action.link_target is not None:
+        payload["link_target"] = action.link_target
+    if action.corpus_count is not None:
+        payload["corpus_count"] = action.corpus_count
+    if action.cached_count is not None:
+        payload["cached_count"] = action.cached_count
+    return payload
 
-    When the cache is already consistent (no node/edge drift), a second pass
-    scans for stale wiki-links (targets that don't resolve to any document)
-    and reports them as ``stale_link`` actions.  Stale-link detection is
-    skipped when the cache itself needs a rebuild; the caller must reconcile
-    again after repair to surface stale links.
+
+async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any]:
+    """Reconcile the wiki-link graph cache via :class:`KnowledgeManager`.
+
+    KM owns the corpus scan and dispatches the graph slice; this function is
+    a thin adapter that translates the structured
+    :class:`~lithos.knowledge.ReconcilePlan` /
+    :class:`~lithos.knowledge.ReconcileResult` back into the legacy dict shape
+    the public :func:`reconcile` aggregator returns.
+
+    When the cache is already consistent (no node/edge drift), the planner
+    surfaces stale wiki-links as report-only ``stale_link`` actions. Stale-link
+    detection is skipped when the cache itself needs a rebuild; the caller
+    must reconcile again after repair to surface stale links.
     """
     tracer = get_tracer()
-    actions: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-
-    with tracer.start_as_current_span("lithos.reconcile.scan") as scan_span:
-        scan_span.set_attribute("lithos.reconcile.scope", "graph")
-        try:
-            corpus_docs = await _scan_corpus(config)
-        except Exception as exc:
-            logger.error("Failed to scan corpus for graph reconcile: %s", exc)
-            return _make_result(
-                "graph",
-                dry_run,
-                status="failed",
-                failed=1,
-                failures=[{"code": "internal_error", "detail": str(exc)}],
-            )
 
     logger.info(
-        "reconcile graph started: dry_run=%s corpus_count=%d",
+        "reconcile graph started: dry_run=%s",
         dry_run,
-        len(corpus_docs),
-        extra={"scope": "graph", "dry_run": dry_run, "corpus_count": len(corpus_docs)},
+        extra={"scope": "graph", "dry_run": dry_run},
     )
+
+    knowledge = KnowledgeManager(config=config)
     graph = KnowledgeGraph(config)
-    with tracer.start_as_current_span("lithos.reconcile.diff") as diff_span:
-        diff_span.set_attribute("lithos.reconcile.scope", "graph")
-        corpus_ids = {doc.id for doc in corpus_docs}
-        cache_path = graph.graph_cache_path
+    try:
+        with tracer.start_as_current_span("lithos.reconcile.scan") as scan_span:
+            scan_span.set_attribute("lithos.reconcile.scope", "graph")
+            with tracer.start_as_current_span("lithos.reconcile.diff") as diff_span:
+                diff_span.set_attribute("lithos.reconcile.scope", "graph")
+                plan = await knowledge.plan_reconcile(graph=graph)
+    except Exception as exc:
+        logger.error("Failed to plan graph reconcile: %s", exc)
+        return _make_result(
+            "graph",
+            dry_run,
+            status="failed",
+            failed=1,
+            failures=[{"code": "internal_error", "detail": str(exc)}],
+        )
 
-        if not cache_path.exists():
-            actions.append(
-                {"target": "graph_cache", "action": "full_rebuild", "reason": "cache_missing"}
-            )
-        else:
-            loaded = graph.load_cache()
-            if not loaded:
-                actions.append(
-                    {
-                        "target": "graph_cache",
-                        "action": "full_rebuild",
-                        "reason": "cache_unreadable",
-                    }
-                )
-            else:
-                cached_ids = graph.get_doc_ids()
-                if cached_ids != corpus_ids:
-                    actions.append(
-                        {
-                            "target": "graph_cache",
-                            "action": "full_rebuild",
-                            "reason": "node_set_mismatch",
-                            "corpus_count": len(corpus_ids),
-                            "cached_count": len(cached_ids),
-                        }
-                    )
-                else:
-                    # Node set matches — check for edge/link-set drift.
-                    # Compare raw (source_id, link_target_text) pairs so we
-                    # don't need to re-resolve links through the lookup tables.
-                    corpus_links: set[tuple[str, str]] = set()
-                    for doc in corpus_docs:
-                        for link in parse_wiki_links(doc.content):
-                            corpus_links.add((doc.id, link.target))
+    assert plan.graph is not None  # graph engine was passed → slice is populated
+    graph_plan = plan.graph
+    actions = [_action_to_dict(a) for a in graph_plan.actions]
+    scanned = graph_plan.scanned
 
-                    cached_links: set[tuple[str, str]] = set()
-                    for source, _target, data in graph.graph.edges(data=True):
-                        link_text = data.get("link_text", "")
-                        if link_text:
-                            cached_links.add((source, link_text))
+    if graph_plan.is_noop:
+        return _make_result("graph", dry_run, status="noop", scanned=scanned)
 
-                    if corpus_links != cached_links:
-                        actions.append(
-                            {
-                                "target": "graph_cache",
-                                "action": "full_rebuild",
-                                "reason": "edge_set_mismatch",
-                            }
-                        )
-
-    if not actions:
-        # Cache is consistent — scan for stale wiki-links (report-only, do NOT modify note content)
-        broken = graph.get_broken_links()
-        stale_actions: list[dict[str, Any]] = []
-        for source_id, source_title, link_target in broken:
-            stale_actions.append(
-                {
-                    "target": "wiki_link",
-                    "action": "stale_link",
-                    "source_id": source_id,
-                    "source_title": source_title,
-                    "link_target": link_target,
-                    "reason": "target_slug_not_found",
-                }
-            )
-
-        if not stale_actions:
-            return _make_result("graph", dry_run, status="noop", scanned=len(corpus_docs))
-
-        # Stale links detected — report them (no writes in either dry_run or real run)
+    if not graph_plan.needs_rebuild:
+        # Stale links only — report them (no writes in either dry_run or real run).
         return _make_result(
             "graph",
             dry_run,
             status="ok",
-            scanned=len(corpus_docs),
-            actions=stale_actions,
+            scanned=scanned,
+            actions=actions,
         )
 
     if dry_run:
@@ -314,27 +268,20 @@ async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any
             "graph",
             dry_run,
             status="ok",
-            scanned=len(corpus_docs),
+            scanned=scanned,
             repaired=len(actions),
             actions=actions,
         )
 
-    # Apply repairs: full rebuild (always prefer full rebuild for graph)
-    repaired = 0
     with tracer.start_as_current_span("lithos.reconcile.apply") as apply_span:
         apply_span.set_attribute("lithos.reconcile.scope", "graph")
         apply_span.set_attribute("lithos.reconcile.backend", "graph")
-        try:
-            fresh_graph = KnowledgeGraph(config)
-            fresh_graph.clear()
-            for doc in corpus_docs:
-                fresh_graph.add_document(doc)
-            fresh_graph.save_cache()
-            repaired = 1
-        except Exception as exc:
-            logger.error("Failed to rebuild graph cache: %s", exc)
-            failures.append({"code": "graph_rebuild_failed", "detail": str(exc)})
+        result = await knowledge.apply_reconcile(plan, graph=graph)
 
+    assert result.graph is not None
+    graph_result = result.graph
+    repaired = graph_result.repaired
+    failures = [{"code": "graph_rebuild_failed", "detail": f.detail} for f in graph_result.failed]
     n_failed = len(failures)
     status: ReconcileStatus = "failed" if n_failed > 0 else "ok"
 
@@ -342,14 +289,14 @@ async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any
     logger.info(
         "reconcile graph complete: status=%s scanned=%d repaired=%d failed=%d dry_run=%s",
         status,
-        len(corpus_docs),
+        scanned,
         repaired,
         n_failed,
         dry_run,
         extra={
             "scope": "graph",
             "status": status,
-            "scanned": len(corpus_docs),
+            "scanned": scanned,
             "repaired": repaired,
             "failed": n_failed,
             "dry_run": dry_run,
@@ -359,7 +306,7 @@ async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any
         "graph",
         dry_run,
         status=status,
-        scanned=len(corpus_docs),
+        scanned=scanned,
         repaired=repaired,
         failed=n_failed,
         actions=actions,

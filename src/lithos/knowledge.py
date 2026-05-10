@@ -21,6 +21,11 @@ from lithos.errors import SlugCollisionError
 from lithos.telemetry import lithos_metrics, timed_write, traced
 
 if TYPE_CHECKING:
+    from lithos.graph import (
+        GraphReconcilePlan,
+        GraphReconcileResult,
+        KnowledgeGraph,
+    )
     from lithos.search import (
         IndexableDocument,
         SearchEngine,
@@ -625,18 +630,22 @@ _UNSET = _UnsetType()
 class ReconcilePlan:
     """Aggregate reconcile plan owned by :class:`KnowledgeManager`.
 
-    Carries one slice per derived view. Today only the search slice exists;
-    ``graph=`` and ``provenance=`` fields land in later ADR-0001 phases.
+    Carries one slice per derived view. ``search`` and ``graph`` are populated
+    when the corresponding engine is passed to
+    :meth:`KnowledgeManager.plan_reconcile`. The ``provenance`` slice lands in
+    a later ADR-0001 phase.
     """
 
-    search: "SearchReconcilePlan"
+    search: "SearchReconcilePlan | None" = None
+    graph: "GraphReconcilePlan | None" = None
 
 
 @dataclass(frozen=True)
 class ReconcileResult:
     """Outcome of applying a :class:`ReconcilePlan`."""
 
-    search: "SearchReconcileResult"
+    search: "SearchReconcileResult | None" = None
+    graph: "GraphReconcileResult | None" = None
 
 
 class KnowledgeManager:
@@ -677,19 +686,45 @@ class KnowledgeManager:
         docs, _ = await self.list_all(limit=total)
         return docs
 
-    async def plan_reconcile(self, search: "SearchEngine") -> ReconcilePlan:
+    async def plan_reconcile(
+        self,
+        search: "SearchEngine | None" = None,
+        graph: "KnowledgeGraph | None" = None,
+    ) -> ReconcilePlan:
         """Plan a reconcile of every derived view against the corpus.
 
-        Today only the search slice is populated. The ``graph`` and
-        ``provenance`` fields land in later ADR-0001 phases.
+        Slices are populated for the engines that are passed in. The
+        ``provenance`` slice lands in a later ADR-0001 phase.
         """
         corpus = await self._scan_corpus()
-        indexables = [self.to_indexable(d) for d in corpus]
-        return ReconcilePlan(search=search.plan_reconcile_to(indexables))
+        search_plan: SearchReconcilePlan | None = None
+        graph_plan: GraphReconcilePlan | None = None
+        if search is not None:
+            indexables = [self.to_indexable(d) for d in corpus]
+            search_plan = search.plan_reconcile_to(indexables)
+        if graph is not None:
+            graph_plan = graph._plan_reconcile_to(corpus)
+        return ReconcilePlan(search=search_plan, graph=graph_plan)
 
-    async def apply_reconcile(self, plan: ReconcilePlan, search: "SearchEngine") -> ReconcileResult:
-        """Apply *plan* — bringing each derived view back into agreement."""
-        return ReconcileResult(search=search.apply_reconcile(plan.search))
+    async def apply_reconcile(
+        self,
+        plan: ReconcilePlan,
+        search: "SearchEngine | None" = None,
+        graph: "KnowledgeGraph | None" = None,
+    ) -> ReconcileResult:
+        """Apply *plan* — bringing each derived view back into agreement.
+
+        Each slice is applied via the corresponding engine when both the slice
+        and engine are present; missing pairs are skipped silently so callers
+        can reconcile a single view without constructing the others.
+        """
+        search_result: SearchReconcileResult | None = None
+        graph_result: GraphReconcileResult | None = None
+        if plan.search is not None and search is not None:
+            search_result = search.apply_reconcile(plan.search)
+        if plan.graph is not None and graph is not None:
+            graph_result = graph._apply_reconcile(plan.graph)
+        return ReconcileResult(search=search_result, graph=graph_result)
 
     def __init__(self, config: LithosConfig):
         """Initialize knowledge manager.

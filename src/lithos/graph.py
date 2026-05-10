@@ -6,6 +6,7 @@ import logging
 import os
 import tempfile
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -13,7 +14,7 @@ from typing import Literal
 import networkx as nx
 
 from lithos.config import LithosConfig, get_config
-from lithos.knowledge import KnowledgeDocument
+from lithos.knowledge import KnowledgeDocument, parse_wiki_links
 from lithos.telemetry import StatusCode, get_tracer, traced
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,66 @@ class LinkInfo:
 
     outgoing: list[LinkedDocument]
     incoming: list[LinkedDocument]
+
+
+@dataclass(frozen=True)
+class GraphReconcileAction:
+    """A single action in a :class:`GraphReconcilePlan`.
+
+    ``target='graph_cache'`` with ``action='full_rebuild'`` means the cache
+    must be rebuilt from the corpus. ``target='wiki_link'`` with
+    ``action='stale_link'`` is report-only — the dangling target is surfaced
+    so the agent can fix or remove it, but the cache itself is fine.
+    """
+
+    target: Literal["graph_cache", "wiki_link"]
+    action: Literal["full_rebuild", "stale_link"]
+    reason: str
+    source_id: str | None = None
+    source_title: str | None = None
+    link_target: str | None = None
+    corpus_count: int | None = None
+    cached_count: int | None = None
+
+
+@dataclass(frozen=True)
+class GraphReconcileFailure:
+    """A graph rebuild that errored while applying a plan."""
+
+    detail: str
+
+
+@dataclass(frozen=True)
+class GraphReconcilePlan:
+    """The dry-run output of :meth:`KnowledgeGraph._plan_reconcile_to`.
+
+    Carries the corpus snapshot used to build the plan so applying it is
+    mechanical.
+    """
+
+    actions: tuple[GraphReconcileAction, ...]
+    docs: tuple[KnowledgeDocument, ...]
+    scanned: int
+
+    @property
+    def is_noop(self) -> bool:
+        """True when no drift was detected and no stale links exist."""
+        return not self.actions
+
+    @property
+    def needs_rebuild(self) -> bool:
+        """True when the plan includes a cache rebuild action."""
+        return any(a.action == "full_rebuild" for a in self.actions)
+
+
+@dataclass(frozen=True)
+class GraphReconcileResult:
+    """The outcome of applying a :class:`GraphReconcilePlan`."""
+
+    actions: tuple[GraphReconcileAction, ...]
+    repaired: int
+    failed: tuple[GraphReconcileFailure, ...]
+    scanned: int
 
 
 class KnowledgeGraph:
@@ -771,3 +832,123 @@ class KnowledgeGraph:
                     unresolved.append((node, link_text))
 
         return unresolved
+
+    def _plan_reconcile_to(self, docs: Iterable[KnowledgeDocument]) -> GraphReconcilePlan:
+        """Compute a :class:`GraphReconcilePlan` describing drift against *docs*.
+
+        Internal to :class:`~lithos.knowledge.KnowledgeManager` — agents call
+        ``KnowledgeManager.plan_reconcile``, which delegates here. Stores the
+        snapshot of *docs* on the plan so :meth:`_apply_reconcile` is mechanical.
+
+        Loads the on-disk cache as a side effect when present, so the same
+        instance can be passed to :meth:`_apply_reconcile`.
+        """
+        snapshot = tuple(docs)
+        actions: list[GraphReconcileAction] = []
+
+        cache_path = self.graph_cache_path
+        rebuild_needed = False
+
+        if not cache_path.exists():
+            actions.append(
+                GraphReconcileAction(
+                    target="graph_cache",
+                    action="full_rebuild",
+                    reason="cache_missing",
+                )
+            )
+            rebuild_needed = True
+        elif not self.load_cache():
+            actions.append(
+                GraphReconcileAction(
+                    target="graph_cache",
+                    action="full_rebuild",
+                    reason="cache_unreadable",
+                )
+            )
+            rebuild_needed = True
+        else:
+            corpus_ids = {doc.id for doc in snapshot}
+            cached_ids = self.get_doc_ids()
+            if cached_ids != corpus_ids:
+                actions.append(
+                    GraphReconcileAction(
+                        target="graph_cache",
+                        action="full_rebuild",
+                        reason="node_set_mismatch",
+                        corpus_count=len(corpus_ids),
+                        cached_count=len(cached_ids),
+                    )
+                )
+                rebuild_needed = True
+            else:
+                # Node set matches — check for edge/link-set drift.
+                # Compare raw (source_id, link_target_text) pairs so we don't
+                # need to re-resolve links through the lookup tables.
+                corpus_links: set[tuple[str, str]] = set()
+                for doc in snapshot:
+                    for link in parse_wiki_links(doc.content):
+                        corpus_links.add((doc.id, link.target))
+
+                cached_links: set[tuple[str, str]] = set()
+                for source, _target, data in self.graph.edges(data=True):
+                    link_text = data.get("link_text", "")
+                    if link_text:
+                        cached_links.add((source, link_text))
+
+                if corpus_links != cached_links:
+                    actions.append(
+                        GraphReconcileAction(
+                            target="graph_cache",
+                            action="full_rebuild",
+                            reason="edge_set_mismatch",
+                        )
+                    )
+                    rebuild_needed = True
+
+        if not rebuild_needed:
+            # Cache is consistent — scan for stale wiki-links (report-only).
+            for source_id, source_title, link_target in self.get_broken_links():
+                actions.append(
+                    GraphReconcileAction(
+                        target="wiki_link",
+                        action="stale_link",
+                        reason="target_slug_not_found",
+                        source_id=source_id,
+                        source_title=source_title,
+                        link_target=link_target,
+                    )
+                )
+
+        return GraphReconcilePlan(
+            actions=tuple(actions),
+            docs=snapshot,
+            scanned=len(snapshot),
+        )
+
+    def _apply_reconcile(self, plan: GraphReconcilePlan) -> GraphReconcileResult:
+        """Execute *plan* against the graph cache.
+
+        Idempotent — applying twice produces the same cache state. Stale-link
+        actions are report-only and require no work to apply.
+        """
+        repaired = 0
+        failures: list[GraphReconcileFailure] = []
+
+        if plan.needs_rebuild:
+            try:
+                self.clear()
+                for doc in plan.docs:
+                    self.add_document(doc)
+                self.save_cache()
+                repaired = 1
+            except Exception as exc:
+                logger.error("Failed to rebuild graph cache: %s", exc)
+                failures.append(GraphReconcileFailure(detail=str(exc)))
+
+        return GraphReconcileResult(
+            actions=plan.actions,
+            repaired=repaired,
+            failed=tuple(failures),
+            scanned=plan.scanned,
+        )
