@@ -5,7 +5,7 @@ Local, privacy-first MCP server providing a shared knowledge base for AI agents.
 ## Language
 
 **Corpus**:
-The set of Markdown notes on disk under the configured data directory. Treated as the single source of truth.
+The set of Markdown notes on disk under the configured data directory, **and** the agent-asserted edges in `data/.lithos/edges.db`. Both are agent-authored persistent state and the joint source of truth. Derived views (Search engine, link graph, Provenance projection) are derivable from the notes tier; asserted edges have no derived view. The projection-vs-asserted split inside `edges.db` is enforced by `provenance_type` predicate-scoping (see ADR-0004 and ADR-0006).
 _Avoid_: store, dataset, library.
 
 **Indexable document**:
@@ -13,11 +13,11 @@ The slice of a note the search seam consumes — id, title, content, tags, creat
 _Avoid_: search doc, indexed doc.
 
 **Drift**:
-The condition where a derived view (search indexes, link graph, provenance projection) disagrees with the corpus. Not a bug in any one component — an integrity property between corpus and views.
+The condition where a derived view (search indexes, link graph, provenance projection) disagrees with the **notes-tier** corpus. Not a bug in any one component — an integrity property between the notes-tier corpus and its views. The asserted-edge tier has no parallel store and so has no drift condition.
 _Avoid_: stale index, sync gap, inconsistency.
 
 **Reconcile**:
-The operation that detects drift and brings a derived view back into agreement with the corpus. Always corpus-driven: the corpus is never modified by a reconcile. May be planned (compute drift, return a description) and applied (execute the plan) as separate phases.
+The operation that detects drift and brings a derived view back into agreement with the corpus. Always corpus-driven: the corpus is never modified by a reconcile. May be planned (compute drift, return a description) and applied (execute the plan) as separate phases. Asserted-edge rows in `edges.db` are not touched by reconcile; the projection-vs-asserted predicate (ADR-0004) ensures plan/apply only writes projection-typed rows. Reconcile remains corpus-driven and never modifies the corpus, in both tiers.
 _Avoid_: rebuild, resync, repair.
 
 **Reconcile plan**:
