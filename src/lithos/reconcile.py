@@ -325,7 +325,7 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
     Markdown/frontmatter is the source of truth — this function only
     mutates the derived edge projection.
     """
-    from lithos.lcma.edges import EdgeStore, _project_provenance_to_edges
+    from lithos.provenance import EdgeStore, _project_provenance_to_edges
 
     edges_db = config.storage.data_dir / ".lithos" / "edges.db"
     if not edges_db.exists():

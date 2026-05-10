@@ -28,7 +28,11 @@ from lithos.config import LithosConfig
 # ``lcma/`` and ``reconcile.py``) should treat them as private until
 # their dedicated follow-ups land (#254 / #255 / #258 / #263). The
 # import-graph guard in #262 will enforce the rule mechanically.
-from lithos.lcma.edges import EdgeStore, _project_provenance_to_edges
+from lithos.lcma.edges import (
+    EdgeStore,
+    _project_node_provenance,  # noqa: F401  re-exported for transitional callers
+    _project_provenance_to_edges,
+)
 
 if TYPE_CHECKING:
     from lithos.knowledge import KnowledgeManager

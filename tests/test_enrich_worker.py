@@ -21,9 +21,9 @@ from lithos.events import (
     LithosEvent,
 )
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.edges import EdgeStore, _project_node_provenance
 from lithos.lcma.enrich import EnrichWorker, _extract_entities_from_text, _resolve_node_id
 from lithos.lcma.stats import StatsStore
+from lithos.provenance import EdgeStore, _project_node_provenance
 
 
 @pytest_asyncio.fixture

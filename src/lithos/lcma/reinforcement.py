@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from lithos.knowledge import KnowledgeManager
-    from lithos.lcma.edges import EdgeStore
     from lithos.lcma.stats import StatsStore
+    from lithos.provenance import EdgeStore
 
 logger = logging.getLogger(__name__)
 
