@@ -26,6 +26,11 @@ if TYPE_CHECKING:
         GraphReconcileResult,
         KnowledgeGraph,
     )
+    from lithos.provenance import (
+        ProvenancePlan,
+        ProvenanceProjection,
+        ProvenanceResult,
+    )
     from lithos.search import (
         IndexableDocument,
         SearchEngine,
@@ -630,14 +635,13 @@ _UNSET = _UnsetType()
 class ReconcilePlan:
     """Aggregate reconcile plan owned by :class:`KnowledgeManager`.
 
-    Carries one slice per derived view. ``search`` and ``graph`` are populated
-    when the corresponding engine is passed to
-    :meth:`KnowledgeManager.plan_reconcile`. The ``provenance`` slice lands in
-    a later ADR-0001 phase.
+    Carries one slice per derived view. Each slice is populated when the
+    corresponding engine is passed to :meth:`KnowledgeManager.plan_reconcile`.
     """
 
     search: "SearchReconcilePlan | None" = None
     graph: "GraphReconcilePlan | None" = None
+    provenance: "ProvenancePlan | None" = None
 
 
 @dataclass(frozen=True)
@@ -646,6 +650,7 @@ class ReconcileResult:
 
     search: "SearchReconcileResult | None" = None
     graph: "GraphReconcileResult | None" = None
+    provenance: "ProvenanceResult | None" = None
 
 
 class KnowledgeManager:
@@ -690,27 +695,31 @@ class KnowledgeManager:
         self,
         search: "SearchEngine | None" = None,
         graph: "KnowledgeGraph | None" = None,
+        projection: "ProvenanceProjection | None" = None,
     ) -> ReconcilePlan:
         """Plan a reconcile of every derived view against the corpus.
 
-        Slices are populated for the engines that are passed in. The
-        ``provenance`` slice lands in a later ADR-0001 phase.
+        Slices are populated for the engines that are passed in.
         """
         corpus = await self._scan_corpus()
         search_plan: SearchReconcilePlan | None = None
         graph_plan: GraphReconcilePlan | None = None
+        provenance_plan: ProvenancePlan | None = None
         if search is not None:
             indexables = [self.to_indexable(d) for d in corpus]
             search_plan = search.plan_reconcile_to(indexables)
         if graph is not None:
             graph_plan = graph._plan_reconcile_to(corpus)
-        return ReconcilePlan(search=search_plan, graph=graph_plan)
+        if projection is not None:
+            provenance_plan = await projection._plan_reconcile_to(corpus)
+        return ReconcilePlan(search=search_plan, graph=graph_plan, provenance=provenance_plan)
 
     async def apply_reconcile(
         self,
         plan: ReconcilePlan,
         search: "SearchEngine | None" = None,
         graph: "KnowledgeGraph | None" = None,
+        projection: "ProvenanceProjection | None" = None,
     ) -> ReconcileResult:
         """Apply *plan* — bringing each derived view back into agreement.
 
@@ -720,11 +729,18 @@ class KnowledgeManager:
         """
         search_result: SearchReconcileResult | None = None
         graph_result: GraphReconcileResult | None = None
+        provenance_result: ProvenanceResult | None = None
         if plan.search is not None and search is not None:
             search_result = search.apply_reconcile(plan.search)
         if plan.graph is not None and graph is not None:
             graph_result = graph._apply_reconcile(plan.graph)
-        return ReconcileResult(search=search_result, graph=graph_result)
+        if plan.provenance is not None and projection is not None:
+            provenance_result = await projection._apply_reconcile(plan.provenance)
+        return ReconcileResult(
+            search=search_result,
+            graph=graph_result,
+            provenance=provenance_result,
+        )
 
     def __init__(self, config: LithosConfig):
         """Initialize knowledge manager.
