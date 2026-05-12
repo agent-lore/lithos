@@ -19,6 +19,7 @@ from starlette.responses import Response, StreamingResponse
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig, get_config, set_config
 from lithos.coordination import CoordinationService
 from lithos.errors import SearchBackendError
@@ -72,6 +73,8 @@ if TYPE_CHECKING:
     # (``lithos_edge_upsert``, ``update_conflict_resolution``, the enrich
     # worker, reinforcement helpers) move to projection-owned APIs in the
     # follow-up slices (#254/#255/#258/#263).
+    from lithos.lcma.enrich import EnrichWorker
+    from lithos.lcma.stats import StatsStore
     from lithos.provenance import EdgeStore
 
 logger = logging.getLogger(__name__)
@@ -123,15 +126,15 @@ class LithosServer:
         self.projection: ProvenanceProjection = None  # type: ignore[assignment]
         self.edge_store: EdgeStore = None  # type: ignore[assignment]
 
-        from lithos.lcma.enrich import EnrichWorker
-        from lithos.lcma.stats import StatsStore
-
-        self.stats_store = StatsStore(self._config)
-
-        # ``EnrichWorker`` needs the EdgeStore, which is owned by the
-        # projection — built in :meth:`initialize` after the projection is
-        # created. We retain the type hint here so ``mypy``/``pyright``
-        # know the eventual shape.
+        # ``CognitiveMemory`` (ADR-0005, issue #255) owns the ``StatsStore``
+        # and the ``EnrichWorker``. It is constructed asynchronously in
+        # :meth:`initialize` after the projection is ready; the two
+        # attributes below are aliased from the Module post-create so
+        # un-migrated tool handlers continue to call LCMA internals
+        # directly via ``self.stats_store`` / ``self._enrich_worker``.
+        # Method migration is in #257-#260.
+        self.memory: CognitiveMemory = None  # type: ignore[assignment]
+        self.stats_store: StatsStore = None  # type: ignore[assignment]
         self._enrich_worker: EnrichWorker | None = None
 
         # Cached count fields for synchronous OTEL observable gauge callbacks.
@@ -610,19 +613,23 @@ class LithosServer:
                 if self.edge_store is None:
                     self.edge_store = self.projection._edge_store
 
-                # EnrichWorker depends on the EdgeStore that the projection
-                # owns, so we build it here rather than in ``__init__``.
-                if self._enrich_worker is None and self._config.lcma.enabled:
-                    from lithos.lcma.enrich import EnrichWorker
-
-                    self._enrich_worker = EnrichWorker(
-                        config=self._config.lcma,
-                        event_bus=self.event_bus,
-                        stats_store=self.stats_store,
-                        edge_store=self.edge_store,
+                # Build the CognitiveMemory Module eagerly (ADR-0005, issue
+                # #255). It owns the StatsStore and the EnrichWorker.
+                # Un-migrated tool handlers continue to access
+                # ``self.stats_store`` / ``self._enrich_worker`` via the
+                # aliases set below; method migration is in #257-#260.
+                if self.memory is None:
+                    self.memory = await CognitiveMemory.create(
+                        config=self._config,
                         knowledge=self.knowledge,
+                        search=self.search,
+                        graph=self.graph,
+                        projection=self.projection,
+                        event_bus=self.event_bus,
                         coordination=self.coordination,
                     )
+                if self.stats_store is None:
+                    self.stats_store = self.memory._stats_store
 
                 # Build the Corpus intake now that all collaborators exist.
                 # See ADR-0003. Tests that pre-inject ``self.intake`` (e.g. with
@@ -724,9 +731,13 @@ class LithosServer:
                         get_working_memory_active_tasks=self.stats_store.get_cached_working_memory_active_tasks,
                     )
 
-                # Start enrichment worker when LCMA is enabled
-                if self._enrich_worker is not None:
-                    await self._enrich_worker.start()
+                # Start the CognitiveMemory Module — opens the StatsStore
+                # and (when ``config.lcma.enabled``) starts the
+                # EnrichWorker. Alias the worker out for un-migrated
+                # handlers that still reference ``self._enrich_worker``
+                # directly.
+                await self.memory.start()
+                self._enrich_worker = self.memory._enrich_worker
 
             except Exception as exc:
                 span.record_exception(exc)
@@ -959,18 +970,18 @@ class LithosServer:
             self.graph.save_cache()
 
     async def stop_enrich_worker(self) -> None:
-        """Stop the enrichment background worker and close LCMA stores.
+        """Stop the CognitiveMemory Module and close the projection.
 
-        StatsStore and EdgeStore now hold persistent connections (#172); they
-        must be closed to release the SQLite WAL handles cleanly. The
-        projection owns the EdgeStore lifecycle (ADR-0004), so we close
-        it via the projection — ``self.edge_store`` aliases the same
-        underlying handle.
+        ADR-0005 (issue #255): the Module owns the EnrichWorker and the
+        StatsStore lifecycle and must be stopped first; the projection
+        owns the EdgeStore (ADR-0004) and is closed after the Module
+        has released its worker. StatsStore and EdgeStore hold
+        persistent SQLite connections (#172) — both must be closed to
+        release WAL handles cleanly.
         """
-        if self._enrich_worker is not None:
-            await self._enrich_worker.stop()
-        if self.stats_store is not None:
-            await self.stats_store.close()
+        if self.memory is not None:
+            await self.memory.stop()
+        self._enrich_worker = None
         if self.projection is not None:
             await self.projection.close()
 
