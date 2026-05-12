@@ -45,15 +45,23 @@ __all__ = [
 
 @dataclass(frozen=True)
 class ProvenanceReconcileAction:
-    """A single create or remove planned against the projection.
+    """A single create, remove, or resync planned against the projection.
 
-    ``target='projection_edge'`` is the only target today. ``edge_id`` is
-    populated for ``remove`` actions (so apply can target the row by id)
-    and is ``None`` for ``create`` actions (the row does not exist yet).
+    ``target='projection_edge'`` is the only target today.
+
+    - ``action='create'``: the (from_id, to_id, namespace) key is desired by
+      frontmatter but absent from the projection. ``edge_id`` is ``None``.
+    - ``action='remove'``: the key exists in the projection with the
+      frontmatter predicate but is no longer desired. ``edge_id`` carries the
+      row id so apply can target it directly.
+    - ``action='resync'``: the key exists and is desired, but its non-key
+      columns drifted from canonical values (the ADR-0004 row-ownership
+      invariant). Apply re-canonicalises via ``EdgeStore.upsert``. ``edge_id``
+      carries the row id for log diagnostics.
     """
 
     target: Literal["projection_edge"]
-    action: Literal["create", "remove"]
+    action: Literal["create", "remove", "resync"]
     from_id: str
     to_id: str
     namespace: str
@@ -93,6 +101,7 @@ class ProvenanceResult:
     actions: tuple[ProvenanceReconcileAction, ...]
     created: int
     removed: int
+    resynced: int
     failed: tuple[ProvenanceReconcileFailure, ...]
     scanned: int
     supported: bool = True
@@ -113,6 +122,14 @@ class ProvenanceProjection:
     # NEVER exposed to callers — they see the value type, not the predicate.
     _CORPUS_DERIVED_PROVENANCE_TYPE: str = "frontmatter"
     _CORPUS_DERIVED_EDGE_TYPE: str = "derived_from"
+
+    # Canonical column values for a frontmatter-provenanced row. The
+    # projection owns these columns (ADR-0004 row-ownership invariant);
+    # any deviation is drift that ``_apply_reconcile`` re-canonicalises.
+    _CANONICAL_WEIGHT: float = 1.0
+    _CANONICAL_PROVENANCE_ACTOR: str | None = None
+    _CANONICAL_EVIDENCE: str | None = None
+    _CANONICAL_CONFLICT_STATE: str | None = None
 
     def __init__(self, config: LithosConfig | None = None) -> None:
         self._config = config
@@ -157,15 +174,23 @@ class ProvenanceProjection:
 
         raw = await self._edge_store.list_edges(edge_type=self._CORPUS_DERIVED_EDGE_TYPE)
         existing_map: dict[tuple[str, str, str], str] = {}
+        # Track stale-column rows so apply can re-canonicalise them
+        # (ADR-0004 row-ownership invariant).
+        drifted_keys: set[tuple[str, str, str]] = set()
         for e in raw:
             if e["provenance_type"] != self._CORPUS_DERIVED_PROVENANCE_TYPE:
                 continue
             key = (str(e["from_id"]), str(e["to_id"]), str(e["namespace"]))
             existing_map[key] = str(e["edge_id"])
+            if self._has_column_drift(e):
+                drifted_keys.add(key)
 
         existing_keys = set(existing_map.keys())
         to_create = desired - existing_keys
         to_remove = existing_keys - desired
+        # Only resync rows that are both desired and drifted; orphans are
+        # removed, not resynced.
+        to_resync = (desired & existing_keys) & drifted_keys
 
         actions: list[ProvenanceReconcileAction] = []
         for from_id, to_id, ns in sorted(to_create):
@@ -176,6 +201,18 @@ class ProvenanceProjection:
                     from_id=from_id,
                     to_id=to_id,
                     namespace=ns,
+                )
+            )
+        for key in sorted(to_resync):
+            from_id, to_id, ns = key
+            actions.append(
+                ProvenanceReconcileAction(
+                    target="projection_edge",
+                    action="resync",
+                    from_id=from_id,
+                    to_id=to_id,
+                    namespace=ns,
+                    edge_id=existing_map[key],
                 )
             )
         for key in sorted(to_remove):
@@ -193,13 +230,36 @@ class ProvenanceProjection:
 
         return ProvenancePlan(actions=tuple(actions), scanned=len(snapshot), supported=True)
 
+    def _has_column_drift(self, row: dict[str, object]) -> bool:
+        """True when *row* deviates from canonical column values.
+
+        Compares the non-key columns the projection owns
+        (``weight``, ``provenance_actor``, ``evidence``, ``conflict_state``)
+        against their canonical values for a frontmatter-provenanced edge.
+        """
+        return (
+            row.get("weight") != self._CANONICAL_WEIGHT
+            or row.get("provenance_actor") != self._CANONICAL_PROVENANCE_ACTOR
+            or row.get("evidence") != self._CANONICAL_EVIDENCE
+            or row.get("conflict_state") != self._CANONICAL_CONFLICT_STATE
+        )
+
     async def _apply_reconcile(self, plan: ProvenancePlan) -> ProvenanceResult:
-        """Execute *plan* against the projection store. Idempotent."""
+        """Execute *plan* against the projection store. Idempotent.
+
+        ``create`` and ``resync`` actions both route through
+        :meth:`EdgeStore.upsert` with canonical column values — the same
+        SQL path handles insert and full-column rewrite, so applying a
+        ``resync`` re-canonicalises ``weight``, ``provenance_actor``,
+        ``evidence``, and ``conflict_state`` for rows that drifted from
+        the ADR-0004 invariant.
+        """
         if not plan.supported:
             return ProvenanceResult(
                 actions=(),
                 created=0,
                 removed=0,
+                resynced=0,
                 failed=(),
                 scanned=plan.scanned,
                 supported=False,
@@ -207,21 +267,28 @@ class ProvenanceProjection:
 
         created = 0
         removed = 0
+        resynced = 0
         failures: list[ProvenanceReconcileFailure] = []
         remove_edge_ids: list[str] = []
 
         for act in plan.actions:
-            if act.action == "create":
+            if act.action in ("create", "resync"):
                 try:
                     await self._edge_store.upsert(
                         from_id=act.from_id,
                         to_id=act.to_id,
                         edge_type=self._CORPUS_DERIVED_EDGE_TYPE,
-                        weight=1.0,
+                        weight=self._CANONICAL_WEIGHT,
                         namespace=act.namespace,
+                        provenance_actor=self._CANONICAL_PROVENANCE_ACTOR,
                         provenance_type=self._CORPUS_DERIVED_PROVENANCE_TYPE,
+                        evidence=self._CANONICAL_EVIDENCE,
+                        conflict_state=self._CANONICAL_CONFLICT_STATE,
                     )
-                    created += 1
+                    if act.action == "create":
+                        created += 1
+                    else:
+                        resynced += 1
                 except Exception as exc:
                     failures.append(ProvenanceReconcileFailure(detail=str(exc)))
             elif act.action == "remove":
@@ -239,6 +306,7 @@ class ProvenanceProjection:
             actions=plan.actions,
             created=created,
             removed=removed,
+            resynced=resynced,
             failed=tuple(failures),
             scanned=plan.scanned,
             supported=True,

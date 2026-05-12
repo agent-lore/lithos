@@ -861,3 +861,71 @@ class TestProvenancePlanApply:
 
         result = await seeded_km.apply_reconcile(plan)
         assert result.provenance is None
+
+    @pytest.mark.asyncio
+    async def test_plan_emits_resync_for_stale_column_drift(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """ADR-0004 row-ownership invariant: when a frontmatter-provenanced
+        row's owned columns (weight / provenance_actor / evidence /
+        conflict_state) drift from canonical values, plan emits a ``resync``
+        action and apply re-canonicalises the row in place.
+        """
+        # Seed an in-corpus frontmatter row directly with drifted columns —
+        # this is the reviewer's repro: a row that the key-set diff alone
+        # would treat as in-sync.
+        drifted_edge_id = await projection._edge_store.upsert(
+            from_id=_ID3,
+            to_id=_ID1,
+            edge_type="derived_from",
+            weight=0.3,
+            namespace="projects",
+            provenance_type="frontmatter",
+            evidence="stale",
+            conflict_state="conflicted",
+        )
+
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        resyncs = [a for a in plan.provenance.actions if a.action == "resync"]
+        assert len(resyncs) == 1
+        assert resyncs[0].from_id == _ID3
+        assert resyncs[0].to_id == _ID1
+        assert resyncs[0].namespace == "projects"
+        assert resyncs[0].edge_id == drifted_edge_id
+
+        result = await seeded_km.apply_reconcile(plan, projection=projection)
+        assert result.provenance is not None
+        assert result.provenance.resynced == 1
+        assert result.provenance.created == 0
+        assert result.provenance.removed == 0
+
+        # Same row, now canonical.
+        repaired = await projection.get_edge(drifted_edge_id)
+        assert repaired is not None
+        assert repaired["weight"] == 1.0
+        assert repaired["provenance_actor"] is None
+        assert repaired["evidence"] is None
+        assert repaired["conflict_state"] is None
+        assert repaired["provenance_type"] == "frontmatter"
+
+        # And re-planning is now noop.
+        plan2 = await seeded_km.plan_reconcile(projection=projection)
+        assert plan2.provenance is not None
+        assert plan2.provenance.is_noop
+
+    @pytest.mark.asyncio
+    async def test_plan_skips_resync_when_columns_already_canonical(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """A canonical row in sync with frontmatter emits no action.
+
+        Guards against an "always-emit-resync" implementation that would
+        churn the store on every reconcile.
+        """
+        await _reconcile_via_km(seeded_km, projection)
+
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        assert plan.provenance.is_noop
+        assert plan.provenance.actions == ()

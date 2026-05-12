@@ -396,6 +396,16 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
 
         created_planned = sum(1 for a in prov_plan.actions if a.action == "create")
         removed_planned = sum(1 for a in prov_plan.actions if a.action == "remove")
+        resynced_planned = sum(1 for a in prov_plan.actions if a.action == "resync")
+
+        def _action_dict(created: int, removed: int, resynced: int) -> dict[str, int]:
+            """Legacy dict shape; `resynced` is only present when non-zero
+            so existing CLI consumers and tests asserting `{created, removed}`
+            equality keep working when no column drift was repaired."""
+            payload = {"created": created, "removed": removed}
+            if resynced:
+                payload["resynced"] = resynced
+            return payload
 
         if prov_plan.is_noop:
             lithos_metrics.reconcile_ops.add(
@@ -407,7 +417,7 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
                 supported=True,
                 status="noop",
                 repaired=0,
-                actions=[{"created": 0, "removed": 0}],
+                actions=[_action_dict(0, 0, 0)],
             )
 
         if dry_run:
@@ -417,8 +427,8 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
                 dry_run,
                 supported=True,
                 status="ok",
-                repaired=created_planned + removed_planned,
-                actions=[{"created": created_planned, "removed": removed_planned}],
+                repaired=created_planned + removed_planned + resynced_planned,
+                actions=[_action_dict(created_planned, removed_planned, resynced_planned)],
             )
 
         try:
@@ -444,6 +454,7 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
         prov_result = result.provenance
         created = prov_result.created
         removed = prov_result.removed
+        resynced = prov_result.resynced
         failures = [
             {"code": "projection_apply_failed", "detail": f.detail} for f in prov_result.failed
         ]
@@ -452,10 +463,11 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
         lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": status})
         logger.info(
             "reconcile provenance_projection complete: status=%s created=%d "
-            "removed=%d failed=%d dry_run=%s",
+            "removed=%d resynced=%d failed=%d dry_run=%s",
             status,
             created,
             removed,
+            resynced,
             n_failed,
             dry_run,
             extra={
@@ -463,6 +475,7 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
                 "status": status,
                 "edges_created": created,
                 "edges_removed": removed,
+                "edges_resynced": resynced,
                 "failed": n_failed,
                 "dry_run": dry_run,
             },
@@ -472,9 +485,9 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
             dry_run,
             supported=True,
             status=status,
-            repaired=created + removed,
+            repaired=created + removed + resynced,
             failed=n_failed,
-            actions=[{"created": created, "removed": removed}],
+            actions=[_action_dict(created, removed, resynced)],
             failures=failures,
         )
     finally:
