@@ -111,6 +111,13 @@ class SearchConfig(BaseModel):
     max_results: int = 50
     chunk_size: int = 500
     chunk_max: int = 1000
+    # Device for the SentenceTransformer embedder. ``"auto"`` (the default)
+    # lets sentence-transformers pick — CUDA when available, else CPU —
+    # matching the historical behaviour. Explicit values (``"cpu"``,
+    # ``"cuda"``, ``"cuda:0"``, …) are passed straight through. Tests force
+    # ``"cpu"`` to avoid the GPU-memory accumulation that piles up across
+    # function-scoped fixture rebuilds; see issue #272.
+    device: str = "auto"
 
 
 class CoordinationConfig(BaseModel):

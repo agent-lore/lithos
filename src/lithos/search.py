@@ -659,15 +659,26 @@ def generate_snippet(content: str, query: str, context_chars: int = 150) -> str:
 class ChromaIndex:
     """ChromaDB semantic search index."""
 
-    def __init__(self, chroma_path: Path, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(
+        self,
+        chroma_path: Path,
+        model_name: str = "all-MiniLM-L6-v2",
+        device: str = "auto",
+    ):
         """Initialize ChromaDB index.
 
         Args:
             chroma_path: Path to store ChromaDB data
             model_name: Sentence transformer model name
+            device: Device passed to SentenceTransformer. ``"auto"`` lets
+                sentence-transformers pick (CUDA if available, else CPU);
+                any other value (``"cpu"``, ``"cuda"``, ``"cuda:0"``, …) is
+                forwarded verbatim. Tests force ``"cpu"`` to keep the GPU
+                idle across function-scoped fixture rebuilds (issue #272).
         """
         self.chroma_path = chroma_path
         self.model_name = model_name
+        self.device = device
         self._client: ClientAPI | None = None
         self._collection: chromadb.Collection | None = None
         self._model: SentenceTransformer | None = None
@@ -678,7 +689,14 @@ class ChromaIndex:
         """Load the embedding model exactly once across sync and async callers."""
         with self._sync_model_lock:
             if self._model is None:
-                self._model = SentenceTransformer(self.model_name)
+                # ``"auto"`` preserves the historical behaviour (let
+                # sentence-transformers pick CUDA when available, else CPU).
+                # Any explicit value is forwarded verbatim — including
+                # ``"cpu"`` for tests, per issue #272.
+                if self.device == "auto":
+                    self._model = SentenceTransformer(self.model_name)
+                else:
+                    self._model = SentenceTransformer(self.model_name, device=self.device)
             return self._model
 
     @property
@@ -1077,6 +1095,7 @@ class SearchEngine:
             self._chroma_idx = ChromaIndex(
                 self.config.storage.chroma_path,
                 self.config.search.embedding_model,
+                device=self.config.search.device,
             )
         return self._chroma_idx
 

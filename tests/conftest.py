@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from lithos.config import LithosConfig, StorageConfig, _reset_config, set_config
+from lithos.config import LithosConfig, SearchConfig, StorageConfig, _reset_config, set_config
 from lithos.coordination import CoordinationService
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
@@ -122,8 +122,15 @@ def test_config(
     """
     for var in _LITHOS_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+    # Pin the embedder to CPU for tests. The function-scoped ``server``
+    # fixture rebuilds the SentenceTransformer per test; on CUDA hosts
+    # PyTorch's caching allocator and ChromaDB workspaces accumulate
+    # ~20 GB of VRAM across a full integration run (issue #272). Tests
+    # don't need a GPU — MiniLM-L6 on CPU embeds the few short docs
+    # each test produces in well under a second.
     config = LithosConfig(
         storage=StorageConfig(data_dir=temp_dir),
+        search=SearchConfig(device="cpu"),
     )
     config.ensure_directories()
     set_config(config)
