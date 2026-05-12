@@ -929,3 +929,53 @@ class TestProvenancePlanApply:
         assert plan.provenance is not None
         assert plan.provenance.is_noop
         assert plan.provenance.actions == ()
+
+    @pytest.mark.asyncio
+    async def test_asserted_edge_blocks_create_at_same_natural_key(
+        self,
+        seeded_km: KnowledgeManager,
+        projection: ProvenanceProjection,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The predicate-scoping invariant must hold even when an asserted
+        edge shares the natural key with a frontmatter-desired edge.
+
+        edges.db is UNIQUE on (from_id, to_id, type, namespace), so a naive
+        ``create`` via ``EdgeStore.upsert`` would update the asserted row
+        in place — clobbering its provenance_type, weight, and evidence.
+        Plan must detect this and emit no action; the asserted edge
+        survives apply untouched. The frontmatter intent is logged as
+        blocked.
+        """
+        # Pre-seat an asserted edge at the exact natural key the seeded
+        # corpus wants (_ID3 derives from _ID1, namespace "projects").
+        asserted_edge_id = await projection._edge_store.upsert(
+            from_id=_ID3,
+            to_id=_ID1,
+            edge_type="derived_from",
+            weight=0.5,
+            namespace="projects",
+            provenance_type="asserted",
+            evidence="agent claim",
+        )
+
+        with caplog.at_level("WARNING", logger="lithos.provenance"):
+            plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        assert plan.provenance.is_noop, (
+            f"expected no actions (asserted row blocks create), got {plan.provenance.actions!r}"
+        )
+        assert any("blocked by asserted rows" in r.message for r in caplog.records)
+
+        result = await seeded_km.apply_reconcile(plan, projection=projection)
+        assert result.provenance is not None
+        assert result.provenance.created == 0
+        assert result.provenance.resynced == 0
+        assert result.provenance.removed == 0
+
+        # Asserted edge survives byte-for-byte.
+        survivor = await projection.get_edge(asserted_edge_id)
+        assert survivor is not None
+        assert survivor["provenance_type"] == "asserted"
+        assert survivor["weight"] == pytest.approx(0.5)
+        assert survivor["evidence"] == "agent claim"

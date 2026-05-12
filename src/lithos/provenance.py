@@ -11,6 +11,7 @@ implementation details and must not be imported from outside this module.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
@@ -32,6 +33,8 @@ from lithos.lcma.edges import (
     _project_node_provenance,  # noqa: F401  re-exported for transitional callers
     _project_provenance_to_edges,  # noqa: F401  consumed by lcma/enrich.py full_sweep
 )
+
+logger = logging.getLogger(__name__)
 
 # Public module API — only the façade and its plan/apply value types.
 __all__ = [
@@ -177,16 +180,37 @@ class ProvenanceProjection:
         # Track stale-column rows so apply can re-canonicalise them
         # (ADR-0004 row-ownership invariant).
         drifted_keys: set[tuple[str, str, str]] = set()
+        # Asserted rows (outside the predicate) that share a natural key
+        # with the projection. The schema is UNIQUE on (from_id, to_id,
+        # type, namespace) so two rows cannot coexist; the asserted row
+        # blocks the projection from materialising. Such rows survive
+        # reconcile untouched (ADR-0004 predicate-scoping invariant).
+        asserted_keys: set[tuple[str, str, str]] = set()
         for e in raw:
-            if e["provenance_type"] != self._CORPUS_DERIVED_PROVENANCE_TYPE:
-                continue
             key = (str(e["from_id"]), str(e["to_id"]), str(e["namespace"]))
-            existing_map[key] = str(e["edge_id"])
-            if self._has_column_drift(e):
-                drifted_keys.add(key)
+            if e["provenance_type"] == self._CORPUS_DERIVED_PROVENANCE_TYPE:
+                existing_map[key] = str(e["edge_id"])
+                if self._has_column_drift(e):
+                    drifted_keys.add(key)
+            else:
+                asserted_keys.add(key)
 
         existing_keys = set(existing_map.keys())
-        to_create = desired - existing_keys
+        # Genuinely new desired keys — those with no row at all. Desired
+        # keys whose slot is held by an asserted row are EXCLUDED here:
+        # creating one would silently clobber the asserted row through
+        # the UNIQUE-key upsert path. We log it and let the asserted row
+        # stand.
+        to_create = desired - existing_keys - asserted_keys
+        blocked = desired & asserted_keys
+        if blocked:
+            logger.warning(
+                "ProvenanceProjection: %d frontmatter-declared edge(s) blocked "
+                "by asserted rows at the same natural key; asserted edges "
+                "survive untouched per ADR-0004",
+                len(blocked),
+                extra={"blocked_keys": sorted(blocked)},
+            )
         to_remove = existing_keys - desired
         # Only resync rows that are both desired and drifted; orphans are
         # removed, not resynced.
