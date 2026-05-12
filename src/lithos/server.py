@@ -614,10 +614,14 @@ class LithosServer:
                     self.edge_store = self.projection._edge_store
 
                 # Build the CognitiveMemory Module eagerly (ADR-0005, issue
-                # #255). It owns the StatsStore and the EnrichWorker.
-                # Un-migrated tool handlers continue to access
-                # ``self.stats_store`` / ``self._enrich_worker`` via the
-                # aliases set below; method migration is in #257-#260.
+                # #255). Six-argument seam per the ADR / issue; the
+                # transitional ``attach_coordination`` setter supplies the
+                # CoordinationService that ``EnrichWorker`` requires until
+                # coordination consolidates into the Module per ADR-0005's
+                # "Anticipated evolution" section. Un-migrated tool
+                # handlers continue to access ``self.stats_store`` /
+                # ``self._enrich_worker`` via the aliases set below;
+                # method migration is in #257-#260.
                 if self.memory is None:
                     self.memory = await CognitiveMemory.create(
                         config=self._config,
@@ -626,8 +630,8 @@ class LithosServer:
                         graph=self.graph,
                         projection=self.projection,
                         event_bus=self.event_bus,
-                        coordination=self.coordination,
                     )
+                    self.memory.attach_coordination(self.coordination)
                 if self.stats_store is None:
                     self.stats_store = self.memory._stats_store
 
@@ -710,6 +714,17 @@ class LithosServer:
                 # The edge store is already open — ``ProvenanceProjection.create``
                 # opens it eagerly above. No explicit ``open()`` needed here.
 
+                # Start the CognitiveMemory Module FIRST — opens the
+                # StatsStore and (when ``config.lcma.enabled``) starts the
+                # EnrichWorker. This is the explicit lifecycle invariant
+                # from issue #255: ``start()`` is the call that opens the
+                # store, so the LCMA stats-cache priming and gauge
+                # registration below must run after it. Alias the worker
+                # out for un-migrated handlers that still reference
+                # ``self._enrich_worker`` directly.
+                await self.memory.start()
+                self._enrich_worker = self.memory._enrich_worker
+
                 # Register LCMA observable gauges when LCMA is enabled
                 if self._config.lcma.enabled and self.stats_store is not None:
                     # Prime the LCMA stats cache BEFORE OTEL gauge registration
@@ -730,14 +745,6 @@ class LithosServer:
                         get_coactivation_pairs=self.stats_store.get_cached_coactivation_pairs,
                         get_working_memory_active_tasks=self.stats_store.get_cached_working_memory_active_tasks,
                     )
-
-                # Start the CognitiveMemory Module — opens the StatsStore
-                # and (when ``config.lcma.enabled``) starts the
-                # EnrichWorker. Alias the worker out for un-migrated
-                # handlers that still reference ``self._enrich_worker``
-                # directly.
-                await self.memory.start()
-                self._enrich_worker = self.memory._enrich_worker
 
             except Exception as exc:
                 span.record_exception(exc)

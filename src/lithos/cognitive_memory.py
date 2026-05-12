@@ -36,14 +36,18 @@ __all__ = ["CognitiveMemory"]
 class CognitiveMemory:
     """Module facade over LCMA's agent-facing surface (ADR-0005).
 
-    Owns the ``StatsStore`` lifecycle and the ``EnrichWorker``. Public
-    retrieve / edge / reinforcement methods are migrated in subsequent
-    slices; this slice exposes only the lifecycle.
+    The public seam is the six-argument ``create(config, knowledge, search,
+    graph, projection, event_bus)`` factory, exactly as ADR-0005 and issue
+    #255 specify. The Module owns the ``StatsStore`` lifecycle and the
+    ``EnrichWorker``. Public retrieve / edge / reinforcement methods are
+    migrated in subsequent slices; this slice exposes only the lifecycle.
 
-    Construction follows ADR-0002's eager-init pattern: prefer
-    :meth:`create` over calling ``__init__`` directly. ``coordination``
-    is required because ``EnrichWorker`` depends on it; ADR-0005 lists
-    six logical deps but the worker's operational dep is the seventh.
+    ``EnrichWorker`` requires a ``CoordinationService`` that is not part of
+    the Module's logical dependency set. The transitional
+    :meth:`attach_coordination` setter accepts it for the worker
+    construction step inside :meth:`start`. When ``coordination`` becomes a
+    Module concern (per ADR-0005's "Anticipated evolution" section) the
+    setter goes away.
     """
 
     def __init__(
@@ -54,7 +58,6 @@ class CognitiveMemory:
         graph: KnowledgeGraph,
         projection: ProvenanceProjection,
         event_bus: EventBus,
-        coordination: CoordinationService,
     ) -> None:
         self._config = config
         self._knowledge = knowledge
@@ -62,7 +65,9 @@ class CognitiveMemory:
         self._graph = graph
         self._projection = projection
         self._event_bus = event_bus
-        self._coordination = coordination
+
+        # Transitional: see class docstring.
+        self._coordination: CoordinationService | None = None
 
         # Module-internal stores. ``StatsStore`` is constructed eagerly but
         # opened in :meth:`start` per issue #255 ("start() opens the
@@ -80,14 +85,14 @@ class CognitiveMemory:
         graph: KnowledgeGraph,
         projection: ProvenanceProjection,
         event_bus: EventBus,
-        coordination: CoordinationService,
     ) -> CognitiveMemory:
         """Construct the Module eagerly.
 
         StatsStore open and EnrichWorker start are deferred to
-        :meth:`start`. Returning from ``create`` guarantees the Module
-        is fully wired but not yet running — callers must invoke
-        :meth:`start` before issuing work.
+        :meth:`start`. Returning from ``create`` guarantees the Module is
+        fully wired but not yet running — callers must invoke
+        :meth:`start` before issuing work, and (when LCMA is enabled)
+        must call :meth:`attach_coordination` before :meth:`start`.
         """
         return cls(
             config=config,
@@ -96,22 +101,38 @@ class CognitiveMemory:
             graph=graph,
             projection=projection,
             event_bus=event_bus,
-            coordination=coordination,
         )
+
+    def attach_coordination(self, coordination: CoordinationService) -> None:
+        """Attach the CoordinationService required to build EnrichWorker.
+
+        Transitional: ADR-0005's six-arg ``create`` does not include
+        ``coordination``, but ``EnrichWorker.__init__`` requires it. The
+        server calls this between :meth:`create` and :meth:`start`.
+        Removed when coordination consolidates into the Module per
+        ADR-0005's "Anticipated evolution" section.
+        """
+        self._coordination = coordination
 
     async def start(self) -> None:
         """Open the StatsStore and start the EnrichWorker.
 
         Raises ``RuntimeError`` if called twice without an intervening
-        :meth:`stop`. When ``config.lcma.enabled`` is ``False`` the
-        StatsStore is still opened (its receipts/working-memory tables
+        :meth:`stop`, or if LCMA is enabled but :meth:`attach_coordination`
+        was not called. When ``config.lcma.enabled`` is ``False`` the
+        StatsStore is still opened (its receipts / working-memory tables
         are read by un-migrated handlers) but no ``EnrichWorker`` is
-        constructed — mirroring the conditional at server.py today.
+        constructed.
         """
         if self._started:
             raise RuntimeError("CognitiveMemory.start() called twice")
         await self._stats_store.open()
         if self._config.lcma.enabled:
+            if self._coordination is None:
+                raise RuntimeError(
+                    "CognitiveMemory.start(): coordination not attached. "
+                    "Call attach_coordination(...) before start() when LCMA is enabled."
+                )
             self._enrich_worker = EnrichWorker(
                 config=self._config.lcma,
                 event_bus=self._event_bus,
