@@ -30,9 +30,7 @@ class TestFileWatcherEventEmission:
         queue = server.event_bus.subscribe(event_types=[NOTE_CREATED])
 
         new_file = server.config.storage.knowledge_path / "brand-new-watcher.md"
-        new_file.write_text(
-            "---\ntitle: Brand New Watcher Doc\nagent: external\n---\nHello.\n"
-        )
+        new_file.write_text("---\ntitle: Brand New Watcher Doc\nagent: external\n---\nHello.\n")
 
         await server.watch_intake.upsert_from_disk(new_file)
 
