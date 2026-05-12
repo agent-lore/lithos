@@ -1080,10 +1080,10 @@ class TestFileWatcherEventsCounter:
         lithos_metrics.file_watcher_events.add(1, {"event_type": "updated"})
         lithos_metrics.file_watcher_events.add(1, {"event_type": "deleted"})
 
-    async def test_handle_file_change_increments_deleted_counter(
+    async def test_delete_from_disk_increments_deleted_counter(
         self, server: "LithosServer"
     ) -> None:
-        """handle_file_change(deleted=True) increments the counter with event_type=deleted."""
+        """WatchIntake.delete_from_disk increments the counter with event_type=deleted."""
         from unittest.mock import patch
 
         from lithos.telemetry import lithos_metrics
@@ -1105,13 +1105,13 @@ class TestFileWatcherEventsCounter:
         file_path.unlink()
 
         with patch.object(counter, "add") as mock_add:
-            await server.handle_file_change(file_path, deleted=True)
+            await server.watch_intake.delete_from_disk(file_path)
             mock_add.assert_called_once_with(1, {"event_type": "deleted"})
 
-    async def test_handle_file_change_increments_updated_counter(
+    async def test_upsert_from_disk_increments_updated_counter(
         self, server: "LithosServer"
     ) -> None:
-        """handle_file_change(deleted=False) on existing file increments updated counter."""
+        """WatchIntake.upsert_from_disk on existing file increments updated counter."""
         from unittest.mock import patch
 
         from lithos.telemetry import lithos_metrics
@@ -1132,13 +1132,13 @@ class TestFileWatcherEventsCounter:
         file_path = server.config.storage.knowledge_path / doc.path
 
         with patch.object(counter, "add") as mock_add:
-            await server.handle_file_change(file_path, deleted=False)
+            await server.watch_intake.upsert_from_disk(file_path)
             mock_add.assert_called_once_with(1, {"event_type": "updated"})
 
-    async def test_handle_file_change_increments_created_counter(
+    async def test_upsert_from_disk_increments_created_counter(
         self, server: "LithosServer"
     ) -> None:
-        """handle_file_change(deleted=False) on a NEW file increments the counter with event_type=created."""
+        """WatchIntake.upsert_from_disk on a NEW file increments the counter with event_type=created."""
         from unittest.mock import patch
 
         from lithos.telemetry import lithos_metrics
@@ -1151,7 +1151,7 @@ class TestFileWatcherEventsCounter:
         new_file.write_text("---\ntitle: Brand New Doc\nagent: test-agent\n---\nHello.\n")
 
         with patch.object(counter, "add") as mock_add:
-            await server.handle_file_change(new_file, deleted=False)
+            await server.watch_intake.upsert_from_disk(new_file)
             mock_add.assert_called_once_with(1, {"event_type": "created"})
 
 
