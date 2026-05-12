@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from lithos.events import NOTE_DELETED, NOTE_RENAMED, NOTE_UPDATED
+from lithos.events import NOTE_CREATED, NOTE_DELETED, NOTE_RENAMED, NOTE_UPDATED
 from lithos.knowledge import KnowledgeManager
 from lithos.server import LithosServer
 from lithos.watch_intake import WATCHER_AGENT
@@ -16,6 +16,30 @@ pytestmark = pytest.mark.integration
 class TestFileWatcherEventEmission:
     """Test that WatchIntake emits events for file operations with the
     ``agent="watcher"`` sentinel (ADR-0007)."""
+
+    async def test_file_create_emits_note_created(self, server: LithosServer) -> None:
+        """A brand-new .md file appearing on disk triggers note.created with agent=\"watcher\".
+
+        Pins the create-side attribution: an externally-written file that
+        is not yet in ``KnowledgeManager._id_to_path`` produces
+        ``NOTE_CREATED`` (not ``NOTE_UPDATED``), and the event carries the
+        watcher sentinel. The branch is otherwise only exercised by the
+        telemetry counter test (``TestFileWatcherEventsCounter``), which
+        does not subscribe to the event.
+        """
+        queue = server.event_bus.subscribe(event_types=[NOTE_CREATED])
+
+        new_file = server.config.storage.knowledge_path / "brand-new-watcher.md"
+        new_file.write_text(
+            "---\ntitle: Brand New Watcher Doc\nagent: external\n---\nHello.\n"
+        )
+
+        await server.watch_intake.upsert_from_disk(new_file)
+
+        event = queue.get_nowait()
+        assert event.type == NOTE_CREATED
+        assert event.agent == WATCHER_AGENT
+        assert event.payload["path"] == "brand-new-watcher.md"
 
     async def test_file_modify_emits_note_updated(self, server: LithosServer) -> None:
         """A file create/modify triggers note.updated event with agent="watcher"."""
