@@ -1,7 +1,12 @@
 """Tests for US-012: Internal provenance-to-edges projection.
 
 Unit tests cover: forward projection, stale edge removal, idempotent
-repeat runs, and no-op when edges.db absent.
+repeat runs, predicate scoping (issue #254), and no-op when edges.db
+absent.
+
+Mutation flows through the package-private plan/apply pair on
+``ProvenanceProjection`` (ADR-0004), dispatched via
+``KnowledgeManager.plan_reconcile`` / ``apply_reconcile``.
 """
 
 from __future__ import annotations
@@ -14,7 +19,23 @@ import pytest
 
 from lithos.config import LithosConfig, StorageConfig
 from lithos.knowledge import KnowledgeManager
-from lithos.provenance import ProvenanceProjection
+from lithos.provenance import ProvenancePlan, ProvenanceProjection, ProvenanceResult
+
+
+async def _reconcile_via_km(
+    km: KnowledgeManager, projection: ProvenanceProjection
+) -> ProvenanceResult:
+    """Plan and apply a provenance reconcile through the public KM seam.
+
+    Used by tests that previously called the transitional
+    ``projection._project(km)`` hook (removed in #254).
+    """
+    plan = await km.plan_reconcile(projection=projection)
+    assert plan.provenance is not None
+    result = await km.apply_reconcile(plan, projection=projection)
+    assert result.provenance is not None
+    return result.provenance
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -99,13 +120,11 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
 async def projection(seeded_config: LithosConfig):
     """Open a ProvenanceProjection (and its underlying edge store) for the test.
 
-    Tests below drive the package-internal projection helper through the
-    façade's transitional ``_project`` method (see
-    ``ProvenanceProjection._project``) and read back via the public
-    ``list_edges`` API. Mutations that have no public surface yet
-    (e.g. ``upsert`` for the ``test_does_not_remove_non_derived_from_edges``
-    setup) reach in via ``projection._edge_store`` until the plan/apply
-    pair lands in #254.
+    Tests drive plan/apply through :func:`_reconcile_via_km` and read back
+    via the public ``list_edges`` API. Edges that have no equivalent on
+    the public surface (e.g. agent-asserted edges with
+    ``provenance_type != 'frontmatter'`` used in predicate-scoping tests)
+    are inserted via ``projection._edge_store`` directly.
     """
     proj = await ProvenanceProjection.create(seeded_config)
     try:
@@ -125,10 +144,10 @@ class TestForwardProjection:
         self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
     ) -> None:
         """Projection creates derived_from edge for Gamma -> Alpha."""
-        result = await projection._project(seeded_km)
+        result = await _reconcile_via_km(seeded_km, projection)
 
-        assert result["created"] == 1
-        assert result["removed"] == 0
+        assert result.created == 1
+        assert result.removed == 0
 
         edges = await projection.list_edges(edge_type="derived_from")
         assert len(edges) == 1
@@ -155,9 +174,9 @@ class TestForwardProjection:
         )
         km = KnowledgeManager(seeded_config)
 
-        result = await projection._project(km)
+        result = await _reconcile_via_km(km, projection)
 
-        assert result["created"] == 2
+        assert result.created == 2
         edges = await projection.list_edges(edge_type="derived_from")
         assert len(edges) == 2
         to_ids = {str(e["to_id"]) for e in edges}
@@ -169,7 +188,7 @@ class TestForwardProjection:
     ) -> None:
         """Edge namespace is derived from the document's relative path
         when no explicit override is set in frontmatter."""
-        await projection._project(seeded_km)
+        await _reconcile_via_km(seeded_km, projection)
         edges = await projection.list_edges(edge_type="derived_from")
         # Gamma is in projects/ subdir → namespace = "projects"
         assert len(edges) == 1
@@ -206,8 +225,8 @@ class TestForwardProjection:
 
         km = KnowledgeManager(seeded_config)
 
-        result = await projection._project(km)
-        assert result["created"] == 1
+        result = await _reconcile_via_km(km, projection)
+        assert result.created == 1
 
         edges = await projection.list_edges(edge_type="derived_from")
         assert len(edges) == 1
@@ -237,17 +256,17 @@ class TestStaleEdgeRemoval:
         km = KnowledgeManager(seeded_config)
 
         # First projection: creates 1 edge
-        r1 = await projection._project(km)
-        assert r1["created"] == 1
+        r1 = await _reconcile_via_km(km, projection)
+        assert r1.created == 1
 
         # Now rewrite Child without derived_from_ids
         _write_note(kp, doc_id=_ID2, title="Child", content="Child content updated")
         km2 = KnowledgeManager(seeded_config)
 
         # Second projection: should remove the orphan
-        r2 = await projection._project(km2)
-        assert r2["removed"] == 1
-        assert r2["created"] == 0
+        r2 = await _reconcile_via_km(km2, projection)
+        assert r2.removed == 1
+        assert r2.created == 0
 
         edges = await projection.list_edges(edge_type="derived_from")
         assert len(edges) == 0
@@ -270,9 +289,9 @@ class TestStaleEdgeRemoval:
             namespace="default",
         )
 
-        result = await projection._project(km)
-        assert result["created"] == 0
-        assert result["removed"] == 0
+        result = await _reconcile_via_km(km, projection)
+        assert result.created == 0
+        assert result.removed == 0
 
         # The related_to edge must still exist
         other_edges = await projection.list_edges(edge_type="related_to")
@@ -290,12 +309,12 @@ class TestIdempotent:
         self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
     ) -> None:
         """Running projection twice with same data creates nothing on second run."""
-        r1 = await projection._project(seeded_km)
-        assert r1["created"] == 1
+        r1 = await _reconcile_via_km(seeded_km, projection)
+        assert r1.created == 1
 
-        r2 = await projection._project(seeded_km)
-        assert r2["created"] == 0
-        assert r2["removed"] == 0
+        r2 = await _reconcile_via_km(seeded_km, projection)
+        assert r2.created == 0
+        assert r2.removed == 0
 
         edges = await projection.list_edges(edge_type="derived_from")
         assert len(edges) == 1
@@ -305,11 +324,11 @@ class TestIdempotent:
         self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
     ) -> None:
         """The edge_id from first projection is preserved on subsequent runs."""
-        await projection._project(seeded_km)
+        await _reconcile_via_km(seeded_km, projection)
         edges_before = await projection.list_edges(edge_type="derived_from")
         edge_id_before = edges_before[0]["edge_id"]
 
-        await projection._project(seeded_km)
+        await _reconcile_via_km(seeded_km, projection)
         edges_after = await projection.list_edges(edge_type="derived_from")
         assert edges_after[0]["edge_id"] == edge_id_before
 
@@ -324,14 +343,17 @@ class TestNoOpWhenAbsent:
     async def test_noop_when_edges_db_missing(
         self, seeded_config: LithosConfig, seeded_km: KnowledgeManager
     ) -> None:
-        """Returns zeros and does nothing when edges.db does not exist."""
+        """plan/apply reports supported=False when edges.db does not exist."""
         # Construct the projection without ``create()`` so the underlying
         # store is *not* opened — edges.db must not exist for this test.
         proj = ProvenanceProjection(seeded_config)
         assert not proj._edge_store.db_path.exists()
 
-        result = await proj._project(seeded_km)
-        assert result == {"created": 0, "removed": 0}
+        result = await _reconcile_via_km(seeded_km, proj)
+        assert result.supported is False
+        assert result.created == 0
+        assert result.removed == 0
+        assert result.actions == ()
         assert not proj._edge_store.db_path.exists()
 
 
@@ -636,3 +658,324 @@ class TestProvenanceProjectionListEdgesBetween:
         rows = await projection.list_edges_between(["a", "b"], edge_type="t1")
         assert len(rows) == 1
         assert rows[0]["type"] == "t1"
+
+
+# ---------------------------------------------------------------------------
+# Plan/apply pair + KnowledgeManager dispatch (issue #254 / ADR-0001 step 3)
+# ---------------------------------------------------------------------------
+
+
+class TestProvenancePlanApply:
+    """Package-private plan/apply pair on :class:`ProvenanceProjection`.
+
+    Covers: plan shape, predicate scoping (the central ADR-0004B
+    invariant), round-trip idempotence, and dispatch via
+    :class:`KnowledgeManager`.
+    """
+
+    @pytest.mark.asyncio
+    async def test_plan_reports_supported_false_when_edges_db_missing(
+        self, seeded_config: LithosConfig, seeded_km: KnowledgeManager
+    ) -> None:
+        """plan.supported is False (and noop) when edges.db is absent."""
+        proj = ProvenanceProjection(seeded_config)
+        assert not proj._edge_store.db_path.exists()
+
+        plan = await seeded_km.plan_reconcile(projection=proj)
+        assert plan.provenance is not None
+        assert plan.provenance.supported is False
+        assert plan.provenance.actions == ()
+        assert plan.provenance.is_noop is True
+
+    @pytest.mark.asyncio
+    async def test_plan_is_noop_when_projection_matches_corpus(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """After applying once, re-planning produces an empty plan."""
+        await _reconcile_via_km(seeded_km, projection)
+
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        assert plan.provenance.supported is True
+        assert plan.provenance.is_noop is True
+        assert plan.provenance.actions == ()
+
+    @pytest.mark.asyncio
+    async def test_plan_creates_action_for_new_frontmatter_link(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """A doc with ``derived_from_ids`` yields a create action."""
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        creates = [a for a in plan.provenance.actions if a.action == "create"]
+        assert len(creates) == 1
+        action = creates[0]
+        assert action.target == "projection_edge"
+        assert action.from_id == _ID3
+        assert action.to_id == _ID1
+        assert action.namespace == "projects"
+        assert action.edge_id is None  # not assigned until apply
+
+    @pytest.mark.asyncio
+    async def test_plan_removes_orphan_corpus_derived_edge(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """A frontmatter-provenanced edge with no frontmatter backing it
+        is planned for removal and carries its edge_id."""
+        # Insert a stale frontmatter-provenanced edge (no doc derives from _ID4).
+        orphan_edge_id = await projection._edge_store.upsert(
+            from_id=_ID4,
+            to_id=_ID1,
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+            provenance_type="frontmatter",
+        )
+
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        removes = [a for a in plan.provenance.actions if a.action == "remove"]
+        assert len(removes) == 1
+        assert removes[0].from_id == _ID4
+        assert removes[0].to_id == _ID1
+        assert removes[0].edge_id == orphan_edge_id
+
+    @pytest.mark.asyncio
+    async def test_plan_skips_agent_asserted_edge(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """The predicate-scoping invariant (ADR-0004B):
+
+        An asserted edge with ``provenance_type != 'frontmatter'`` survives
+        reconcile, while a stale frontmatter-provenanced edge is deleted.
+        """
+        # Stale frontmatter-provenanced edge (should be removed).
+        await projection._edge_store.upsert(
+            from_id=_ID4,
+            to_id=_ID2,
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+            provenance_type="frontmatter",
+        )
+        # Agent-asserted derived_from edge with NON-frontmatter provenance
+        # (must survive reconcile — outside the predicate's scope).
+        asserted_edge_id = await projection._edge_store.upsert(
+            from_id=_ID2,
+            to_id=_ID1,
+            edge_type="derived_from",
+            weight=0.5,
+            namespace="default",
+            provenance_type="asserted",
+        )
+
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        # The only remove action targets the frontmatter-provenanced edge.
+        removes = [a for a in plan.provenance.actions if a.action == "remove"]
+        assert len(removes) == 1
+        assert removes[0].from_id == _ID4
+
+        result = await seeded_km.apply_reconcile(plan, projection=projection)
+        assert result.provenance is not None
+        assert result.provenance.removed == 1
+        # The agent-asserted edge survives untouched.
+        survivor = await projection.get_edge(asserted_edge_id)
+        assert survivor is not None
+        assert survivor["provenance_type"] == "asserted"
+
+    @pytest.mark.asyncio
+    async def test_apply_round_trip_is_idempotent(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """plan → apply → re-plan produces an empty plan; edge ids stable."""
+        first = await _reconcile_via_km(seeded_km, projection)
+        assert first.created == 1
+        edges_before = await projection.list_edges(edge_type="derived_from")
+        assert len(edges_before) == 1
+        eid_before = edges_before[0]["edge_id"]
+
+        # Second cycle: plan is noop, apply is noop, edge id unchanged.
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        assert plan.provenance.is_noop
+        result = await seeded_km.apply_reconcile(plan, projection=projection)
+        assert result.provenance is not None
+        assert result.provenance.created == 0
+        assert result.provenance.removed == 0
+
+        edges_after = await projection.list_edges(edge_type="derived_from")
+        assert len(edges_after) == 1
+        assert edges_after[0]["edge_id"] == eid_before
+
+    @pytest.mark.asyncio
+    async def test_apply_records_failure_when_upsert_raises(
+        self,
+        seeded_km: KnowledgeManager,
+        projection: ProvenanceProjection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failing upsert is captured in result.failed, not raised."""
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        assert len(plan.provenance.actions) == 1
+
+        async def _boom(**_kwargs: object) -> str:
+            raise RuntimeError("simulated upsert failure")
+
+        monkeypatch.setattr(projection._edge_store, "upsert", _boom)
+        result = await projection._apply_reconcile(plan.provenance)
+        assert result.created == 0
+        assert len(result.failed) == 1
+        assert "simulated upsert failure" in result.failed[0].detail
+
+    @pytest.mark.asyncio
+    async def test_km_plan_reconcile_populates_provenance_slice(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """plan.provenance is set when projection is passed."""
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        assert isinstance(plan.provenance, ProvenancePlan)
+
+    @pytest.mark.asyncio
+    async def test_km_apply_reconcile_dispatches_provenance(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """KM.apply_reconcile materialises planned edges via the projection."""
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        result = await seeded_km.apply_reconcile(plan, projection=projection)
+        assert result.provenance is not None
+        assert isinstance(result.provenance, ProvenanceResult)
+        assert result.provenance.created == 1
+        edges = await projection.list_edges(edge_type="derived_from")
+        assert len(edges) == 1
+
+    @pytest.mark.asyncio
+    async def test_km_skips_provenance_when_projection_not_passed(
+        self, seeded_km: KnowledgeManager
+    ) -> None:
+        """plan.provenance is None when no projection argument is supplied."""
+        plan = await seeded_km.plan_reconcile()
+        assert plan.provenance is None
+
+        result = await seeded_km.apply_reconcile(plan)
+        assert result.provenance is None
+
+    @pytest.mark.asyncio
+    async def test_plan_emits_resync_for_stale_column_drift(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """ADR-0004 row-ownership invariant: when a frontmatter-provenanced
+        row's owned columns (weight / provenance_actor / evidence /
+        conflict_state) drift from canonical values, plan emits a ``resync``
+        action and apply re-canonicalises the row in place.
+        """
+        # Seed an in-corpus frontmatter row directly with drifted columns —
+        # this is the reviewer's repro: a row that the key-set diff alone
+        # would treat as in-sync.
+        drifted_edge_id = await projection._edge_store.upsert(
+            from_id=_ID3,
+            to_id=_ID1,
+            edge_type="derived_from",
+            weight=0.3,
+            namespace="projects",
+            provenance_type="frontmatter",
+            evidence="stale",
+            conflict_state="conflicted",
+        )
+
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        resyncs = [a for a in plan.provenance.actions if a.action == "resync"]
+        assert len(resyncs) == 1
+        assert resyncs[0].from_id == _ID3
+        assert resyncs[0].to_id == _ID1
+        assert resyncs[0].namespace == "projects"
+        assert resyncs[0].edge_id == drifted_edge_id
+
+        result = await seeded_km.apply_reconcile(plan, projection=projection)
+        assert result.provenance is not None
+        assert result.provenance.resynced == 1
+        assert result.provenance.created == 0
+        assert result.provenance.removed == 0
+
+        # Same row, now canonical.
+        repaired = await projection.get_edge(drifted_edge_id)
+        assert repaired is not None
+        assert repaired["weight"] == 1.0
+        assert repaired["provenance_actor"] is None
+        assert repaired["evidence"] is None
+        assert repaired["conflict_state"] is None
+        assert repaired["provenance_type"] == "frontmatter"
+
+        # And re-planning is now noop.
+        plan2 = await seeded_km.plan_reconcile(projection=projection)
+        assert plan2.provenance is not None
+        assert plan2.provenance.is_noop
+
+    @pytest.mark.asyncio
+    async def test_plan_skips_resync_when_columns_already_canonical(
+        self, seeded_km: KnowledgeManager, projection: ProvenanceProjection
+    ) -> None:
+        """A canonical row in sync with frontmatter emits no action.
+
+        Guards against an "always-emit-resync" implementation that would
+        churn the store on every reconcile.
+        """
+        await _reconcile_via_km(seeded_km, projection)
+
+        plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        assert plan.provenance.is_noop
+        assert plan.provenance.actions == ()
+
+    @pytest.mark.asyncio
+    async def test_asserted_edge_blocks_create_at_same_natural_key(
+        self,
+        seeded_km: KnowledgeManager,
+        projection: ProvenanceProjection,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The predicate-scoping invariant must hold even when an asserted
+        edge shares the natural key with a frontmatter-desired edge.
+
+        edges.db is UNIQUE on (from_id, to_id, type, namespace), so a naive
+        ``create`` via ``EdgeStore.upsert`` would update the asserted row
+        in place — clobbering its provenance_type, weight, and evidence.
+        Plan must detect this and emit no action; the asserted edge
+        survives apply untouched. The frontmatter intent is logged as
+        blocked.
+        """
+        # Pre-seat an asserted edge at the exact natural key the seeded
+        # corpus wants (_ID3 derives from _ID1, namespace "projects").
+        asserted_edge_id = await projection._edge_store.upsert(
+            from_id=_ID3,
+            to_id=_ID1,
+            edge_type="derived_from",
+            weight=0.5,
+            namespace="projects",
+            provenance_type="asserted",
+            evidence="agent claim",
+        )
+
+        with caplog.at_level("WARNING", logger="lithos.provenance"):
+            plan = await seeded_km.plan_reconcile(projection=projection)
+        assert plan.provenance is not None
+        assert plan.provenance.is_noop, (
+            f"expected no actions (asserted row blocks create), got {plan.provenance.actions!r}"
+        )
+        assert any("blocked by asserted rows" in r.message for r in caplog.records)
+
+        result = await seeded_km.apply_reconcile(plan, projection=projection)
+        assert result.provenance is not None
+        assert result.provenance.created == 0
+        assert result.provenance.resynced == 0
+        assert result.provenance.removed == 0
+
+        # Asserted edge survives byte-for-byte.
+        survivor = await projection.get_edge(asserted_edge_id)
+        assert survivor is not None
+        assert survivor["provenance_type"] == "asserted"
+        assert survivor["weight"] == pytest.approx(0.5)
+        assert survivor["evidence"] == "agent claim"

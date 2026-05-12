@@ -315,20 +315,42 @@ async def _reconcile_graph(config: LithosConfig, dry_run: bool) -> dict[str, Any
 
 
 async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) -> dict[str, Any]:
-    """Reconcile projected LCMA ``derived_from`` edges in ``edges.db``.
+    """Reconcile projected LCMA ``derived_from`` edges via :class:`KnowledgeManager`.
 
-    Walks every note's frontmatter ``derived_from_ids`` and ensures
-    ``edges.db`` has a matching ``type='derived_from'`` edge, creating
-    missing edges and removing orphan projections. Returns
-    ``supported=False`` when ``edges.db`` does not exist (LCMA disabled).
+    KM owns the corpus scan and dispatches the provenance slice through
+    :class:`~lithos.provenance.ProvenanceProjection` (ADR-0001 step 3 /
+    ADR-0004). This function is a thin adapter that translates the
+    structured :class:`~lithos.knowledge.ReconcilePlan` /
+    :class:`~lithos.knowledge.ReconcileResult` back into the legacy dict
+    shape the public :func:`reconcile` aggregator returns.
+
+    Returns ``supported=False`` when ``edges.db`` does not exist
+    (LCMA storage not initialised) — the projection's plan/apply pair
+    reports this via ``plan.provenance.supported``.
 
     Markdown/frontmatter is the source of truth — this function only
     mutates the derived edge projection.
     """
-    from lithos.provenance import EdgeStore, _project_provenance_to_edges
+    from lithos.provenance import ProvenanceProjection
 
+    tracer = get_tracer()
+
+    logger.info(
+        "reconcile provenance_projection started: dry_run=%s",
+        dry_run,
+        extra={"scope": "provenance_projection", "dry_run": dry_run},
+    )
+
+    # Short-circuit before opening the projection: ``ProvenanceProjection.create``
+    # eagerly opens the edge store, which creates ``edges.db`` if absent. The
+    # CLI/operator surface keeps treating a missing ``edges.db`` as "LCMA not
+    # enabled" (``supported=False``) rather than implicitly initialising
+    # storage. The projection's own plan/apply also reports
+    # ``plan.supported=False`` in this case, but checking here avoids the
+    # side-effect of creating the file just to ask the question.
     edges_db = config.storage.data_dir / ".lithos" / "edges.db"
     if not edges_db.exists():
+        lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": "noop"})
         return _make_result(
             "provenance_projection",
             dry_run,
@@ -337,42 +359,143 @@ async def _reconcile_provenance_projection(config: LithosConfig, dry_run: bool) 
             actions=[{"reason": "not_enabled"}],
         )
 
-    edge_store = EdgeStore(config=config)
     knowledge = KnowledgeManager(config=config)
-
+    projection = await ProvenanceProjection.create(config)
     try:
-        counts = await _project_provenance_to_edges(edge_store, knowledge, dry_run=dry_run)
-    except Exception as exc:
-        logger.error("provenance_projection reconcile failed: %s", exc)
-        lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": "failed"})
+        try:
+            with tracer.start_as_current_span("lithos.reconcile.scan") as scan_span:
+                scan_span.set_attribute("lithos.reconcile.scope", "provenance_projection")
+                with tracer.start_as_current_span("lithos.reconcile.diff") as diff_span:
+                    diff_span.set_attribute("lithos.reconcile.scope", "provenance_projection")
+                    plan = await knowledge.plan_reconcile(projection=projection)
+        except Exception as exc:
+            logger.error("provenance_projection reconcile plan failed: %s", exc)
+            lithos_metrics.reconcile_ops.add(
+                1, {"scope": "provenance_projection", "status": "failed"}
+            )
+            return _make_result(
+                "provenance_projection",
+                dry_run,
+                supported=True,
+                status="failed",
+                failed=1,
+                failures=[{"code": "internal_error", "detail": str(exc)}],
+            )
+
+        assert plan.provenance is not None  # projection was passed → slice present
+        prov_plan = plan.provenance
+
+        if not prov_plan.supported:
+            return _make_result(
+                "provenance_projection",
+                dry_run,
+                supported=False,
+                status="noop",
+                actions=[{"reason": "not_enabled"}],
+            )
+
+        created_planned = sum(1 for a in prov_plan.actions if a.action == "create")
+        removed_planned = sum(1 for a in prov_plan.actions if a.action == "remove")
+        resynced_planned = sum(1 for a in prov_plan.actions if a.action == "resync")
+
+        def _action_dict(created: int, removed: int, resynced: int) -> dict[str, int]:
+            """Legacy dict shape; `resynced` is only present when non-zero
+            so existing CLI consumers and tests asserting `{created, removed}`
+            equality keep working when no column drift was repaired."""
+            payload = {"created": created, "removed": removed}
+            if resynced:
+                payload["resynced"] = resynced
+            return payload
+
+        if prov_plan.is_noop:
+            lithos_metrics.reconcile_ops.add(
+                1, {"scope": "provenance_projection", "status": "noop"}
+            )
+            return _make_result(
+                "provenance_projection",
+                dry_run,
+                supported=True,
+                status="noop",
+                repaired=0,
+                actions=[_action_dict(0, 0, 0)],
+            )
+
+        if dry_run:
+            lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": "ok"})
+            return _make_result(
+                "provenance_projection",
+                dry_run,
+                supported=True,
+                status="ok",
+                repaired=created_planned + removed_planned + resynced_planned,
+                actions=[_action_dict(created_planned, removed_planned, resynced_planned)],
+            )
+
+        try:
+            with tracer.start_as_current_span("lithos.reconcile.apply") as apply_span:
+                apply_span.set_attribute("lithos.reconcile.scope", "provenance_projection")
+                apply_span.set_attribute("lithos.reconcile.backend", "provenance_projection")
+                result = await knowledge.apply_reconcile(plan, projection=projection)
+        except Exception as exc:
+            logger.error("provenance_projection reconcile apply failed: %s", exc)
+            lithos_metrics.reconcile_ops.add(
+                1, {"scope": "provenance_projection", "status": "failed"}
+            )
+            return _make_result(
+                "provenance_projection",
+                dry_run,
+                supported=True,
+                status="failed",
+                failed=1,
+                failures=[{"code": "internal_error", "detail": str(exc)}],
+            )
+
+        assert result.provenance is not None
+        prov_result = result.provenance
+        created = prov_result.created
+        removed = prov_result.removed
+        resynced = prov_result.resynced
+        failures = [
+            {"code": "projection_apply_failed", "detail": f.detail} for f in prov_result.failed
+        ]
+        n_failed = len(failures)
+        status: ReconcileStatus = "failed" if n_failed > 0 else "ok"
+        lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": status})
+        logger.info(
+            "reconcile provenance_projection complete: status=%s created=%d "
+            "removed=%d resynced=%d failed=%d dry_run=%s",
+            status,
+            created,
+            removed,
+            resynced,
+            n_failed,
+            dry_run,
+            extra={
+                "scope": "provenance_projection",
+                "status": status,
+                "edges_created": created,
+                "edges_removed": removed,
+                "edges_resynced": resynced,
+                "failed": n_failed,
+                "dry_run": dry_run,
+            },
+        )
         return _make_result(
             "provenance_projection",
             dry_run,
             supported=True,
-            status="failed",
-            failed=1,
-            failures=[{"code": "internal_error", "detail": str(exc)}],
+            status=status,
+            repaired=created + removed + resynced,
+            failed=n_failed,
+            actions=[_action_dict(created, removed, resynced)],
+            failures=failures,
         )
     finally:
         # Close the persistent connection so the aiosqlite worker thread
         # exits cleanly. Otherwise it survives function return, eventually
         # touches a torn-down event loop, and emits "Event loop is closed"
         # warnings (and on CI, hangs the whole job until timeout) (#172).
-        await edge_store.close()
-
-    created = int(counts.get("created", 0))
-    removed = int(counts.get("removed", 0))
-    repaired = created + removed
-    status: ReconcileStatus = "ok" if repaired > 0 else "noop"
-    lithos_metrics.reconcile_ops.add(1, {"scope": "provenance_projection", "status": status})
-    return _make_result(
-        "provenance_projection",
-        dry_run,
-        supported=True,
-        status=status,
-        repaired=repaired,
-        actions=[{"created": created, "removed": removed}],
-    )
+        await projection.close()
 
 
 # ---------------------------------------------------------------------------
