@@ -2,7 +2,6 @@
 
 import asyncio
 import collections
-import concurrent.futures
 import contextlib
 import hashlib
 import json
@@ -16,8 +15,6 @@ from typing import TYPE_CHECKING, Any
 from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
-from watchdog.events import FileSystemEvent, FileSystemEventHandler
-from watchdog.observers import Observer
 
 from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig, get_config, set_config
@@ -26,10 +23,6 @@ from lithos.errors import SearchBackendError
 from lithos.events import (
     AGENT_REGISTERED,
     FINDING_POSTED,
-    NOTE_CREATED,
-    NOTE_DELETED,
-    NOTE_RENAMED,
-    NOTE_UPDATED,
     TASK_CANCELLED,
     TASK_CLAIMED,
     TASK_COMPLETED,
@@ -62,6 +55,7 @@ from lithos.telemetry import (
     register_sse_active_clients_observer,
     tool_metrics,
 )
+from lithos.watch_intake import WatchIntake
 
 if TYPE_CHECKING:
     # ``EdgeStore`` is used as a type annotation only — runtime construction
@@ -114,6 +108,11 @@ class LithosServer:
         self.event_bus = EventBus(self._config.events)
         # CorpusIntake is built in initialize() once self.search exists.
         self.intake: CorpusIntake = None  # type: ignore[assignment]
+        # WatchIntake (ADR-0007) is built in initialize() alongside CorpusIntake,
+        # after the late-bound SearchEngine is ready. Watcher events have no
+        # agent and never register one, so the Module takes the four view-layer
+        # collaborators only.
+        self.watch_intake: WatchIntake = None  # type: ignore[assignment]
 
         # ``projection`` (and the EdgeStore it owns) is created
         # asynchronously in :meth:`initialize` via
@@ -153,12 +152,6 @@ class LithosServer:
 
         # Background tasks (kept to prevent garbage collection)
         self._background_tasks: set[asyncio.Task[None]] = set()
-
-        # File watcher
-        self._observer: Observer | None = None  # type: ignore[reportInvalidTypeForm]
-        self._watch_loop: asyncio.AbstractEventLoop | None = None
-        self._pending_updates: set[Path] = set()
-        self._update_lock = asyncio.Lock()
 
         # Create FastMCP app
         self.mcp = FastMCP(
@@ -647,6 +640,18 @@ class LithosServer:
                         event_bus=self.event_bus,
                     )
 
+                # Build the watcher intake — peer of CorpusIntake (ADR-0007).
+                # Same late-binding idiom: tests that pre-inject
+                # ``self.watch_intake`` keep their injection.
+                if self.watch_intake is None:
+                    self.watch_intake = WatchIntake(
+                        knowledge=self.knowledge,
+                        search=self.search,
+                        graph=self.graph,
+                        event_bus=self.event_bus,
+                        watch_path=self.config.storage.knowledge_path,
+                    )
+
                 # Initialize and run schema migrations
                 registry_path = (
                     self.config.storage.lithos_store_path / "migrations" / "registry.json"
@@ -945,37 +950,6 @@ class LithosServer:
             key=lambda n: n["id"],
         )
 
-    def start_file_watcher(self) -> None:
-        """Start watching for file changes."""
-        if self._observer:
-            return
-
-        try:
-            self._watch_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            raise RuntimeError("File watcher requires a running asyncio event loop") from None
-
-        handler = _FileChangeHandler(self, self._watch_loop)
-        observer = Observer()
-        observer.schedule(
-            handler,
-            str(self.config.storage.knowledge_path),
-            recursive=True,
-        )
-        observer.start()
-        self._observer = observer
-
-    def stop_file_watcher(self) -> None:
-        """Stop file watcher and flush any debounced graph-cache writes."""
-        if self._observer:
-            self._observer.stop()
-            self._observer.join()
-            self._observer = None
-        # Force-flush the graph cache so pending mutations land on disk before
-        # the process exits (#203).
-        if self.graph._dirty_ops > 0:
-            self.graph.save_cache()
-
     async def stop_enrich_worker(self) -> None:
         """Stop the CognitiveMemory Module and close the projection.
 
@@ -996,141 +970,24 @@ class LithosServer:
         """Stop every background worker and close every persistent handle.
 
         Idempotent. Aggregates :meth:`stop_coordination_stats_refresh`,
-        :meth:`stop_enrich_worker`, and :meth:`stop_file_watcher` so callers
-        — especially test fixtures — do not need to track which subsystems
-        own which handles. Forgetting any one of these used to leave
-        aiosqlite worker threads alive past test event-loop teardown,
-        which surfaced as ``RuntimeError: Event loop is closed``
-        warnings and (on CI) job-hanging orphan processes.
+        :meth:`stop_enrich_worker`, the :class:`WatchIntake` observer, and
+        the graph-cache flush so callers — especially test fixtures — do
+        not need to track which subsystems own which handles. Forgetting
+        any one of these used to leave aiosqlite worker threads alive past
+        test event-loop teardown, which surfaced as
+        ``RuntimeError: Event loop is closed`` warnings and (on CI)
+        job-hanging orphan processes.
         """
         await self.stop_coordination_stats_refresh()
         await self.stop_enrich_worker()
-        self.stop_file_watcher()
-
-    async def handle_file_rename(self, src_path: Path, dest_path: Path) -> None:
-        """Handle a file-rename watchdog event (#202).
-
-        External renames (Obsidian rename, ``mv``, ``git checkout``) used to
-        be processed as a delete+create pair: the doc id was lost, wiki-links
-        pointing at the old path went stale, and the indices drifted until
-        the next reconcile. Now we update the path mapping under the same
-        doc id and re-index in place.
-
-        Behaviour by source/destination location:
-        - both inside knowledge_path → rename in place, emit ``note.renamed``.
-        - source inside, destination outside → treat as deletion.
-        - source outside, destination inside → treat as creation.
-        - both outside → no-op.
-        """
-        knowledge_path = self.config.storage.knowledge_path
-
-        def _relative_or_none(path: Path) -> Path | None:
-            try:
-                return path.relative_to(knowledge_path)
-            except ValueError:
-                return None
-
-        src_rel = _relative_or_none(src_path) if src_path.suffix == ".md" else None
-        dest_rel = _relative_or_none(dest_path) if dest_path.suffix == ".md" else None
-
-        if src_rel is None and dest_rel is None:
-            return
-        if src_rel is None and dest_rel is not None:
-            await self.handle_file_change(dest_path)
-            return
-        if src_rel is not None and dest_rel is None:
-            await self.handle_file_change(src_path, deleted=True)
-            return
-
-        # Genuine in-corpus rename.
-        tracer = get_tracer()
-        with tracer.start_as_current_span("lithos.file_rename") as span:
-            assert src_rel is not None
-            assert dest_rel is not None
-            span.set_attribute("lithos.src_path", str(src_rel))
-            span.set_attribute("lithos.dest_path", str(dest_rel))
-            async with self._update_lock:
-                try:
-                    doc_id = self.knowledge.get_id_by_path(src_rel)
-                    # ``sync_from_disk`` re-reads frontmatter and rebinds the
-                    # path mapping under the existing doc id. The graph and
-                    # search backends overwrite by id, so re-indexing closes
-                    # the loop without losing wiki-link targets.
-                    doc = await self.knowledge.sync_from_disk(dest_rel)
-                    indexable = KnowledgeManager.to_indexable(doc)
-                    await asyncio.to_thread(self.search.index, indexable)
-                    self.graph.add_document(doc)
-
-                    lithos_metrics.file_watcher_events.add(1, {"event_type": "renamed"})
-                    await self._emit(
-                        LithosEvent(
-                            type=NOTE_RENAMED,
-                            payload={
-                                "id": doc_id or doc.id,
-                                "src_path": str(src_rel),
-                                "dest_path": str(dest_rel),
-                            },
-                        )
-                    )
-                except FileNotFoundError:
-                    # Destination disappeared between the watchdog event and
-                    # our processing — treat as a deletion of the source.
-                    await self.handle_file_change(src_path, deleted=True)
-                except Exception as exc:
-                    logger.error(
-                        "Error handling file rename %s -> %s: %s", src_path, dest_path, exc
-                    )
-
-    async def handle_file_change(self, path: Path, deleted: bool = False) -> None:
-        """Handle a file change event."""
-        if path.suffix != ".md":
-            return
-
-        tracer = get_tracer()
-        with tracer.start_as_current_span("lithos.file_change") as span:
-            span.set_attribute("lithos.deleted", deleted)
-            async with self._update_lock:
-                try:
-                    knowledge_path = self.config.storage.knowledge_path
-                    try:
-                        relative_path = path.relative_to(knowledge_path)
-                    except ValueError:
-                        return
-
-                    if deleted:
-                        doc_id = self.knowledge.get_id_by_path(relative_path)
-                        if doc_id:
-                            # Emit event with doc id before delete evicts _meta_cache
-                            lithos_metrics.file_watcher_events.add(1, {"event_type": "deleted"})
-                            await self._emit(
-                                LithosEvent(
-                                    type=NOTE_DELETED,
-                                    payload={"id": doc_id, "path": str(relative_path)},
-                                )
-                            )
-
-                            await self.knowledge.delete(doc_id)
-                            await asyncio.to_thread(self.search.remove, doc_id)
-                            # graph.remove_document() debounces its own flush (#203)
-                            self.graph.remove_document(doc_id)
-                    else:
-                        is_new = not self.knowledge.get_id_by_path(relative_path)
-                        doc = await self.knowledge.sync_from_disk(relative_path)
-                        indexable = KnowledgeManager.to_indexable(doc)
-                        await asyncio.to_thread(self.search.index, indexable)
-                        # graph.add_document() debounces its own flush (#203)
-                        self.graph.add_document(doc)
-
-                        event_type = "created" if is_new else "updated"
-                        lithos_metrics.file_watcher_events.add(1, {"event_type": event_type})
-                        await self._emit(
-                            LithosEvent(
-                                type=NOTE_CREATED if is_new else NOTE_UPDATED,
-                                payload={"path": str(relative_path)},
-                            )
-                        )
-                except Exception as e:
-                    logger.error("Error handling file change %s: %s", path, e)
+        if self.watch_intake is not None:
+            await self.watch_intake.stop()
+        # Force-flush the graph cache so pending mutations land on disk
+        # before the process exits (#203). Owned by shutdown rather than
+        # WatchIntake.stop because it's a graph-cache concern, not a
+        # watcher concern (ADR-0007).
+        if self.graph._dirty_ops > 0:
+            self.graph.save_cache()
 
     def _register_tools(self) -> None:
         """Register all MCP tools."""
@@ -3486,70 +3343,6 @@ def _format_sse(event: LithosEvent) -> str:
     }
     data = json.dumps(payload, default=str)
     return f"id: {event.id}\nevent: {event.type}\ndata: {data}\n\n"
-
-
-class _FileChangeHandler(FileSystemEventHandler):
-    """Handle file system events for index updates."""
-
-    def __init__(self, server: LithosServer, loop: asyncio.AbstractEventLoop):
-        self.server = server
-        self._loop = loop
-
-    def on_created(self, event: FileSystemEvent) -> None:
-        if not event.is_directory:
-            self._schedule_update(Path(str(event.src_path)))
-
-    def on_modified(self, event: FileSystemEvent) -> None:
-        if not event.is_directory:
-            self._schedule_update(Path(str(event.src_path)))
-
-    def on_deleted(self, event: FileSystemEvent) -> None:
-        if not event.is_directory:
-            self._schedule_update(Path(str(event.src_path)), deleted=True)
-
-    def on_moved(self, event: FileSystemEvent) -> None:
-        """Handle external file renames (#202).
-
-        Watchdog emits this on most platforms (POSIX inotify, macOS FSEvents,
-        Windows ReadDirectoryChangesW). Some network filesystems do not — in
-        that case watchdog falls back to a delete+create pair which still
-        works through the existing handlers, just less precisely.
-        """
-        if event.is_directory:
-            return
-        dest_path = getattr(event, "dest_path", None)
-        if dest_path is None:
-            return
-        self._schedule_rename(Path(str(event.src_path)), Path(str(dest_path)))
-
-    def _schedule_update(self, path: Path, deleted: bool = False) -> None:
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                self.server.handle_file_change(path, deleted),
-                self._loop,
-            )
-            future.add_done_callback(self._log_future_exception)
-        except Exception:
-            pass
-
-    def _schedule_rename(self, src_path: Path, dest_path: Path) -> None:
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                self.server.handle_file_rename(src_path, dest_path),
-                self._loop,
-            )
-            future.add_done_callback(self._log_future_exception)
-        except Exception:
-            pass
-
-    @staticmethod
-    def _log_future_exception(future: "concurrent.futures.Future[None]") -> None:
-        try:
-            exception = future.exception()
-            if exception:
-                logger.error("Error processing file update: %s", exception)
-        except Exception:
-            pass
 
 
 # Global server instance

@@ -120,10 +120,10 @@ def serve(
         await server.initialize()
         logger.info("lithos server initialized: data_dir=%s", config.storage.data_dir)
 
-        # Start file watcher if enabled
+        # Start file watcher if enabled (ADR-0007).
         if watch:
             click.echo("Starting file watcher...")
-            server.start_file_watcher()
+            await server.watch_intake.start(asyncio.get_running_loop())
             logger.info("file watcher started: knowledge_path=%s", config.storage.knowledge_path)
 
         click.echo(f"Starting MCP server ({transport} transport)...")
@@ -167,9 +167,10 @@ def serve(
     except KeyboardInterrupt:
         click.echo("\nShutting down...")
         logger.info("lithos server shutting down (KeyboardInterrupt)")
-        server.stop_file_watcher()
-        asyncio.run(server.stop_coordination_stats_refresh())
-        asyncio.run(server.stop_enrich_worker())
+        # shutdown() aggregates stop_coordination_stats_refresh,
+        # stop_enrich_worker, watch_intake.stop, and the graph cache flush
+        # (ADR-0007) — one call, no risk of forgetting a subsystem.
+        asyncio.run(server.shutdown())
         logger.info("lithos server stopped")
     finally:
         shutdown_telemetry()

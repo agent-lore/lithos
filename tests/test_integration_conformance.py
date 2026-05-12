@@ -12,7 +12,8 @@ from fastmcp.exceptions import ToolError
 
 from lithos.config import LithosConfig
 from lithos.knowledge import KnowledgeManager
-from lithos.server import LithosServer, _FileChangeHandler
+from lithos.server import LithosServer
+from lithos.watch_intake import WatchIntake
 
 pytestmark = pytest.mark.integration
 
@@ -407,7 +408,7 @@ class TestFileWatcherRace:
         server.graph.add_document(doc)
 
         file_path = server.config.storage.knowledge_path / doc.path
-        handler = _FileChangeHandler(server, asyncio.get_running_loop())
+        handler = WatchIntake._FileChangeHandler(server.watch_intake, asyncio.get_running_loop())
 
         for i in range(10):
             await server.knowledge.update(id=doc.id, agent="race-agent", content=f"v{i}")
@@ -2421,8 +2422,8 @@ class TestSyncFromDisk:
         file_path = knowledge_path / "external-derived.md"
         file_path.write_text(frontmatter.dumps(post))
 
-        # Call handle_file_change to simulate watcher
-        await server.handle_file_change(file_path, deleted=False)
+        # Call WatchIntake.upsert_from_disk to simulate watcher
+        await server.watch_intake.upsert_from_disk(file_path)
 
         # Verify provenance indexes are updated
         assert doc_id in server.knowledge._doc_to_sources
@@ -2469,7 +2470,7 @@ class TestSyncFromDisk:
         file_path.write_text(frontmatter.dumps(post))
 
         # Simulate watcher event
-        await server.handle_file_change(file_path, deleted=False)
+        await server.watch_intake.upsert_from_disk(file_path)
 
         # Verify indexes updated: s1 removed, s2 added
         assert server.knowledge._doc_to_sources[derived_id] == [s2["id"]]
@@ -2502,7 +2503,7 @@ class TestSyncFromDisk:
         post.content = "# Changed Title\n\nContent."
         file_path.write_text(frontmatter.dumps(post))
 
-        await server.handle_file_change(file_path, deleted=False)
+        await server.watch_intake.upsert_from_disk(file_path)
 
         assert server.knowledge._id_to_title[doc_id] == "Changed Title"
 
@@ -2538,7 +2539,7 @@ class TestSyncFromDisk:
         src_file = knowledge_path / src_path_str
         src_file.unlink()
 
-        await server.handle_file_change(src_file, deleted=True)
+        await server.watch_intake.delete_from_disk(src_file)
 
         # Source should be removed from indexes
         assert src_id not in server.knowledge._id_to_path
@@ -2589,7 +2590,7 @@ class TestSyncFromDisk:
         file_path = knowledge_path / "future-source.md"
         file_path.write_text(frontmatter.dumps(post))
 
-        await server.handle_file_change(file_path, deleted=False)
+        await server.watch_intake.upsert_from_disk(file_path)
 
         # Unresolved should now be resolved
         assert future_source_id not in server.knowledge._unresolved_provenance
@@ -2605,7 +2606,7 @@ class TestSyncFromDisk:
         bad_file.write_bytes(b"\x00\x01\x02\xff\xfe")
 
         # Should not raise
-        await server.handle_file_change(bad_file, deleted=False)
+        await server.watch_intake.upsert_from_disk(bad_file)
 
         # Verify server is still functional
         result = await _call_tool(

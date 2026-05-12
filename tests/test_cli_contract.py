@@ -266,17 +266,22 @@ class TestCLIContracts:
                 assert kwargs["path"] == "/sse"
                 calls["sse"] += 1
 
+        class _DummyWatchIntake:
+            async def start(self, _loop):
+                calls["watch_started"] += 1
+
+            async def stop(self):
+                calls["watch_stopped"] += 1
+
         class _DummyServer:
             def __init__(self):
                 self.mcp = _DummyMCP()
+                self.watch_intake = _DummyWatchIntake()
 
             async def initialize(self):
                 return None
 
-            def start_file_watcher(self):
-                calls["watch_started"] += 1
-
-            def stop_file_watcher(self):
+            async def shutdown(self):
                 calls["watch_stopped"] += 1
 
         monkeypatch.setattr("lithos.server.create_server", lambda _cfg: _DummyServer())
@@ -323,23 +328,22 @@ class TestCLIContracts:
             async def run_stdio_async(self, show_banner=False):
                 return None
 
+        class _DummyWatchIntake:
+            async def start(self, _loop):
+                return None
+
+            async def stop(self):
+                return None
+
         class _DummyServer:
             def __init__(self):
                 self.mcp = _DummyMCP()
+                self.watch_intake = _DummyWatchIntake()
 
             async def initialize(self):
                 return None
 
-            def start_file_watcher(self):
-                return None
-
-            def stop_file_watcher(self):
-                return None
-
-            async def stop_enrich_worker(self):
-                return None
-
-            async def stop_coordination_stats_refresh(self):
+            async def shutdown(self):
                 return None
 
         monkeypatch.setattr("lithos.server.create_server", lambda _cfg: _DummyServer())
@@ -373,33 +377,47 @@ class TestCLIContracts:
 
         calls = {"stop": 0}
 
+        class _DummyWatchIntake:
+            async def start(self, _loop):
+                return None
+
+            async def stop(self):
+                return None
+
         class _DummyServer:
             mcp = SimpleNamespace()
+            watch_intake = _DummyWatchIntake()
 
             async def initialize(self):
                 return None
 
-            def start_file_watcher(self):
-                return None
-
-            def stop_file_watcher(self):
+            async def shutdown(self):
                 calls["stop"] += 1
-
-            async def stop_enrich_worker(self):
-                return None
-
-            async def stop_coordination_stats_refresh(self):
-                return None
 
         monkeypatch.setattr("lithos.server.create_server", lambda _cfg: _DummyServer())
 
         _first_call = {"value": True}
 
         def _raise_keyboard_interrupt(coro):
-            coro.close()
+            # Track which coroutine asyncio.run was handed: the main
+            # run_server() raises KeyboardInterrupt, and the subsequent
+            # shutdown() coroutine is awaited so its body runs and bumps
+            # calls["stop"]. Closing it (as the old test did) would skip
+            # the cleanup assertion entirely.
+            name = getattr(coro, "__name__", "")
             if _first_call["value"]:
                 _first_call["value"] = False
+                coro.close()
                 raise KeyboardInterrupt
+            if name == "shutdown":
+                # Drive the shutdown coroutine to completion using a fresh
+                # event loop — matches the behaviour of the real
+                # asyncio.run().
+                import asyncio as _asyncio
+
+                _asyncio.new_event_loop().run_until_complete(coro)
+                return None
+            coro.close()
 
         monkeypatch.setattr("lithos.cli.asyncio.run", _raise_keyboard_interrupt)
 

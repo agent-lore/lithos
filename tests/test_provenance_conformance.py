@@ -554,7 +554,7 @@ class TestReadPathNormalization:
             supersedes=None,
         )
         (knowledge_path / "derived-ext.md").write_text(fm.dumps(post))
-        await server.handle_file_change(knowledge_path / "derived-ext.md", deleted=False)
+        await server.watch_intake.upsert_from_disk(knowledge_path / "derived-ext.md")
 
         # lithos_read should return normalized (lowercase) UUID
         result = await _call_tool(server, "lithos_read", {"id": derived_id})
@@ -590,7 +590,7 @@ class TestReadPathNormalization:
             supersedes=None,
         )
         (knowledge_path / "list-derived.md").write_text(fm.dumps(post))
-        await server.handle_file_change(knowledge_path / "list-derived.md", deleted=False)
+        await server.watch_intake.upsert_from_disk(knowledge_path / "list-derived.md")
 
         # lithos_list should return normalized UUIDs
         result = await _call_tool(server, "lithos_list", {})

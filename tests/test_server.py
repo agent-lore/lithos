@@ -13,7 +13,8 @@ import pytest
 from lithos.config import LithosConfig
 from lithos.knowledge import KnowledgeManager
 from lithos.search import SearchEngine
-from lithos.server import LithosServer, _FileChangeHandler, create_server, get_server
+from lithos.server import LithosServer, create_server, get_server
+from lithos.watch_intake import WatchIntake
 
 pytestmark = pytest.mark.integration
 
@@ -94,15 +95,18 @@ class TestServerInitialization:
     async def test_file_change_handler_schedules_on_loop(self):
         """File change handler schedules work on provided event loop."""
 
-        class DummyServer:
+        class DummyIntake:
             def __init__(self):
                 self.calls: list[tuple[str, bool]] = []
 
-            async def handle_file_change(self, path, deleted=False):
-                self.calls.append((str(path), deleted))
+            async def upsert_from_disk(self, path):
+                self.calls.append((str(path), False))
 
-        dummy = DummyServer()
-        handler = _FileChangeHandler(dummy, asyncio.get_running_loop())
+            async def delete_from_disk(self, path):
+                self.calls.append((str(path), True))
+
+        dummy = DummyIntake()
+        handler = WatchIntake._FileChangeHandler(dummy, asyncio.get_running_loop())
 
         handler._schedule_update(path=Path("/tmp/handler-test.md"), deleted=True)
         await asyncio.sleep(0.05)
@@ -169,45 +173,40 @@ class TestServerInitialization:
         finally:
             await server.shutdown()
 
-    def test_start_file_watcher_requires_running_loop(self, test_config):
-        """Watcher startup without a running loop raises a clear RuntimeError."""
-        server = LithosServer(test_config)
-        with pytest.raises(RuntimeError, match="running asyncio event loop"):
-            server.start_file_watcher()
-
     @pytest.mark.asyncio
-    async def test_start_and_stop_file_watcher_is_idempotent(self, server: LithosServer):
+    async def test_start_and_stop_watch_intake_is_idempotent(self, server: LithosServer):
         """Starting twice and stopping twice should not raise."""
-        server.start_file_watcher()
-        first_observer = server._observer
+        loop = asyncio.get_running_loop()
+        await server.watch_intake.start(loop)
+        first_observer = server.watch_intake._observer
         assert first_observer is not None
 
         # No-op when already started.
-        server.start_file_watcher()
-        assert server._observer is first_observer
+        await server.watch_intake.start(loop)
+        assert server.watch_intake._observer is first_observer
 
-        server.stop_file_watcher()
-        assert server._observer is None
+        await server.watch_intake.stop()
+        assert server.watch_intake._observer is None
 
         # No-op when already stopped.
-        server.stop_file_watcher()
+        await server.watch_intake.stop()
 
     @pytest.mark.asyncio
-    async def test_handle_file_change_ignores_non_markdown_and_outside_root(
+    async def test_upsert_from_disk_ignores_non_markdown_and_outside_root(
         self, server: LithosServer
     ):
         """Non-markdown and out-of-root file events are ignored safely."""
         original_nodes = server.graph.node_count()
 
-        await server.handle_file_change(
-            server.config.storage.knowledge_path / "ignored.txt", deleted=False
+        await server.watch_intake.upsert_from_disk(
+            server.config.storage.knowledge_path / "ignored.txt"
         )
-        await server.handle_file_change(Path("/tmp/outside.md"), deleted=False)
+        await server.watch_intake.upsert_from_disk(Path("/tmp/outside.md"))
 
         assert server.graph.node_count() == original_nodes
 
     @pytest.mark.asyncio
-    async def test_handle_file_change_modified_markdown_reindexes(self, server: LithosServer):
+    async def test_upsert_from_disk_modified_markdown_reindexes(self, server: LithosServer):
         """A markdown modification event reindexes search and graph projections."""
         doc = (
             await server.knowledge.create(
@@ -239,14 +238,14 @@ Updated watcher content with unique phrase.
 """
         )
 
-        await server.handle_file_change(file_path, deleted=False)
+        await server.watch_intake.upsert_from_disk(file_path)
 
         results = server.search.full_text_search("unique phrase", limit=10)
         assert any(r.id == doc.id for r in results)
         assert server.graph.has_node(doc.id)
 
     @pytest.mark.asyncio
-    async def test_handle_file_change_update_rebuilds_outgoing_links(self, server: LithosServer):
+    async def test_upsert_from_disk_update_rebuilds_outgoing_links(self, server: LithosServer):
         """Updating a document via file change rebuilds its outgoing wiki-links in the graph."""
         # Create target document
         target = (
@@ -290,7 +289,7 @@ Now linking to [[watcher-target]].
 """
         )
 
-        await server.handle_file_change(file_path, deleted=False)
+        await server.watch_intake.upsert_from_disk(file_path)
 
         assert server.graph.has_edge(source.id, target.id)
 
@@ -298,11 +297,14 @@ Now linking to [[watcher-target]].
     async def test_file_change_handler_event_methods_route_events(self):
         """Event callbacks dispatch to schedule method with expected deleted flag."""
 
-        class DummyServer:
-            async def handle_file_change(self, path, deleted=False):
+        class DummyIntake:
+            async def upsert_from_disk(self, path):
                 return None
 
-        handler = _FileChangeHandler(DummyServer(), asyncio.get_running_loop())
+            async def delete_from_disk(self, path):
+                return None
+
+        handler = WatchIntake._FileChangeHandler(DummyIntake(), asyncio.get_running_loop())
         calls: list[tuple[str, bool]] = []
 
         def _capture(path: Path, deleted: bool = False):
@@ -325,17 +327,20 @@ Now linking to [[watcher-target]].
     async def test_file_change_handler_schedule_exception_is_swallowed(self, monkeypatch):
         """Scheduling failures should be swallowed rather than crash file watcher thread."""
 
-        class DummyServer:
-            async def handle_file_change(self, path, deleted=False):
+        class DummyIntake:
+            async def upsert_from_disk(self, path):
                 return None
 
-        handler = _FileChangeHandler(DummyServer(), asyncio.get_running_loop())
+            async def delete_from_disk(self, path):
+                return None
+
+        handler = WatchIntake._FileChangeHandler(DummyIntake(), asyncio.get_running_loop())
 
         def _boom(coro, *_args, **_kwargs):
             coro.close()
             raise RuntimeError("schedule boom")
 
-        monkeypatch.setattr("lithos.server.asyncio.run_coroutine_threadsafe", _boom)
+        monkeypatch.setattr("lithos.watch_intake.asyncio.run_coroutine_threadsafe", _boom)
         handler._schedule_update(Path("/tmp/fail.md"), deleted=False)
 
     def test_file_change_handler_logs_future_exception(self):
@@ -349,8 +354,8 @@ Now linking to [[watcher-target]].
             def exception(self):
                 raise RuntimeError("cannot fetch exception")
 
-        _FileChangeHandler._log_future_exception(_FutureWithException())
-        _FileChangeHandler._log_future_exception(_FutureExceptionRaises())
+        WatchIntake._FileChangeHandler._log_future_exception(_FutureWithException())
+        WatchIntake._FileChangeHandler._log_future_exception(_FutureExceptionRaises())
 
     def test_global_server_singleton_helpers(self, test_config):
         """create_server installs global instance and get_server returns same object."""
@@ -795,7 +800,7 @@ class TestKnowledgeToolWorkflow:
         file_path = server.config.storage.knowledge_path / doc.path
         file_path.unlink()
 
-        await server.handle_file_change(file_path, deleted=True)
+        await server.watch_intake.delete_from_disk(file_path)
 
         with pytest.raises(FileNotFoundError):
             await server.knowledge.read(id=doc.id)
