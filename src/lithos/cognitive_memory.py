@@ -4,10 +4,13 @@ See docs/adr/0005-cognitive-memory-module.md.
 
 Issue #255 landed the seam and lifecycle ordering. Issue #257 migrated
 ``retrieve`` into the Module; the ``lithos_retrieve`` MCP handler in
-``LithosServer`` is now a one-line envelope wrapper. The remaining write
-methods (edge_*, reinforce_*, etc.) migrate in subsequent slices
-(#258-#260); their MCP handlers continue to call LCMA internals directly
-through server-level aliases until then.
+``LithosServer`` is now a one-line envelope wrapper. Issue #258 lands
+:meth:`node_stats` and :meth:`edge_upsert` / :meth:`edge_list` /
+:meth:`edge_delete`; the corresponding MCP handlers are now one-line
+wrappers. The remaining methods (``reinforce_*``, ``cache_lookup``,
+``conflict_resolve``) migrate in subsequent slices (#259-#260); their
+MCP handlers continue to call LCMA internals directly through
+server-level aliases until then.
 
 Method ordering convention: lifecycle methods first (``create``,
 ``attach_coordination``, ``start``, ``stop``), then public agent-facing
@@ -17,8 +20,10 @@ methods grouped by domain (retrieve / edges / reinforcement / stats).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
+from lithos.events import EDGE_UPSERTED, LithosEvent
 from lithos.lcma.enrich import EnrichWorker
 from lithos.lcma.stats import StatsStore
 
@@ -33,7 +38,65 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CognitiveMemory"]
+__all__ = ["CognitiveMemory", "NodeStats"]
+
+
+# Default values for ``node_stats`` columns. Used both when a node is
+# known to the corpus but has no row in ``node_stats`` yet, and as the
+# column-default backstop when shaping a row pulled from the table.
+# Keeping the canonical defaults next to the dataclass guarantees the
+# wire shape returned by :meth:`CognitiveMemory.node_stats` matches the
+# legacy MCP handler exactly.
+_NODE_STATS_DEFAULTS: dict[str, Any] = {
+    "salience": 0.5,
+    "retrieval_count": 0,
+    "cited_count": 0,
+    "last_retrieved_at": None,
+    "last_used_at": None,
+    "ignored_count": 0,
+    "misleading_count": 0,
+    "decay_rate": 0.0,
+    "spaced_rep_strength": 0.0,
+    "last_decay_applied_at": None,
+}
+
+
+@dataclass(frozen=True)
+class NodeStats:
+    """Per-node retrieval / salience stats returned by :meth:`CognitiveMemory.node_stats`."""
+
+    node_id: str
+    salience: float
+    retrieval_count: int
+    cited_count: int
+    last_retrieved_at: str | None
+    last_used_at: str | None
+    ignored_count: int
+    misleading_count: int
+    decay_rate: float
+    spaced_rep_strength: float
+    last_decay_applied_at: str | None
+
+
+def _as_int(value: object, default: int) -> int:
+    """Coerce a raw ``object`` cell from ``StatsStore.get_node_stats`` to ``int``."""
+    if value is None:
+        return default
+    return int(value)  # type: ignore[arg-type]
+
+
+def _as_float(value: object, default: float) -> float:
+    """Coerce a raw ``object`` cell from ``StatsStore.get_node_stats`` to ``float``."""
+    if value is None:
+        return default
+    return float(value)  # type: ignore[arg-type]
+
+
+def _as_optional_str(value: object) -> str | None:
+    """Coerce a raw ``object`` cell to ``str`` or ``None`` (nullable timestamp)."""
+    if value is None:
+        return None
+    return str(value)
 
 
 class CognitiveMemory:
@@ -227,3 +290,134 @@ class CognitiveMemory:
             tags=tags,
             path_prefix=path_prefix,
         )
+
+    # ------------------------------------------------------------------
+    # Edges + node stats (issue #258)
+    # ------------------------------------------------------------------
+
+    async def node_stats(self, node_id: str) -> NodeStats | dict[str, Any]:
+        """Return per-node retrieval stats.
+
+        Returns the legacy error envelope ``{"status": "error",
+        "code": "doc_not_found", "message": ...}`` when *node_id* is not
+        known to the corpus, matching the wire shape today's
+        ``lithos_node_stats`` MCP handler returns. Otherwise returns a
+        :class:`NodeStats` dataclass — empty/default-valued when the
+        ``node_stats`` table has no row for the node, populated from the
+        row when it does.
+        """
+        if self._knowledge.get_cached_meta(node_id) is None:
+            return {
+                "status": "error",
+                "code": "doc_not_found",
+                "message": f"Node '{node_id}' not found in knowledge base.",
+            }
+
+        row = await self._stats_store.get_node_stats(node_id)
+        if row is None:
+            return NodeStats(node_id=node_id, **_NODE_STATS_DEFAULTS)
+        # ``get_node_stats`` returns ``dict[str, object]`` (raw aiosqlite
+        # row); coerce per-field so the dataclass shape stays honest.
+        return NodeStats(
+            node_id=node_id,
+            salience=_as_float(row.get("salience"), 0.5),
+            retrieval_count=_as_int(row.get("retrieval_count"), 0),
+            cited_count=_as_int(row.get("cited_count"), 0),
+            last_retrieved_at=_as_optional_str(row.get("last_retrieved_at")),
+            last_used_at=_as_optional_str(row.get("last_used_at")),
+            ignored_count=_as_int(row.get("ignored_count"), 0),
+            misleading_count=_as_int(row.get("misleading_count"), 0),
+            decay_rate=_as_float(row.get("decay_rate"), 0.0),
+            spaced_rep_strength=_as_float(row.get("spaced_rep_strength"), 0.0),
+            last_decay_applied_at=_as_optional_str(row.get("last_decay_applied_at")),
+        )
+
+    async def edge_upsert(
+        self,
+        *,
+        from_id: str,
+        to_id: str,
+        edge_type: str,
+        weight: float,
+        namespace: str,
+        provenance_actor: str | None = None,
+        provenance_type: str | None = None,
+        evidence: str | None = None,
+        conflict_state: str | None = None,
+    ) -> str:
+        """Upsert an edge and emit :data:`EDGE_UPSERTED`. Returns the edge id.
+
+        Interim shape per ADR-0005: writes call the projection's internal
+        ``EdgeStore`` directly. ADR-0006 / issue #263 relocates this to
+        ``CorpusIntake.assert_edge`` — keeping the body small (a single
+        upsert + the emit) makes that move a one-method swap.
+        """
+        # Interim: ADR-0005 / #263 will replace this direct edge-store call
+        # with ``self._intake.assert_edge(...)`` once CorpusIntake owns
+        # assertion. Not a layering bug today.
+        edge_id = await self._projection._edge_store.upsert(
+            from_id=from_id,
+            to_id=to_id,
+            edge_type=edge_type,
+            weight=weight,
+            namespace=namespace,
+            provenance_actor=provenance_actor,
+            provenance_type=provenance_type,
+            evidence=evidence,
+            conflict_state=conflict_state,
+        )
+        try:
+            await self._event_bus.emit(
+                LithosEvent(
+                    type=EDGE_UPSERTED,
+                    payload={
+                        "edge_id": edge_id,
+                        "from_id": from_id,
+                        "to_id": to_id,
+                        "type": edge_type,
+                        "namespace": namespace,
+                    },
+                )
+            )
+        except Exception:
+            logger.exception("Failed to emit %s event", EDGE_UPSERTED)
+        return edge_id
+
+    async def edge_list(
+        self,
+        *,
+        from_id: str | None = None,
+        to_id: str | None = None,
+        edge_type: str | None = None,
+        namespace: str | None = None,
+    ) -> list[dict[str, object]]:
+        """List edges through the projection's public read API (ADR-0004).
+
+        Reads go through ``ProvenanceProjection.list_edges`` so the
+        asserted-vs-derived predicate that lives in the projection
+        applies uniformly. ADR-0004 designates the projection as the
+        public read surface; only writes still reach through to the
+        edge store (ADR-0005, see :meth:`edge_upsert` /
+        :meth:`edge_delete`).
+        """
+        return await self._projection.list_edges(
+            from_id=from_id,
+            to_id=to_id,
+            edge_type=edge_type,
+            namespace=namespace,
+        )
+
+    async def edge_delete(self, *, edge_ids: list[str]) -> int:
+        """Delete edges by id. Returns the number of rows deleted.
+
+        No MCP surface today — provided for the four-method shape ADR-0005
+        describes and for future asserted-edge retraction work (e.g.
+        agent-driven contradictions). Mirrors the interim
+        ``self._projection._edge_store.delete_edges`` reach-through that
+        the enrich worker still uses; ADR-0005 / future #263 will route
+        this through a projection-owned write API once it exists.
+        """
+        # Interim: direct edge-store call mirrors today's use sites and
+        # collapses to a public projection write in ADR-0005's successor
+        # issue (#263).
+        return await self._projection._edge_store.delete_edges(edge_ids=edge_ids)
