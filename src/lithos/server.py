@@ -867,28 +867,34 @@ class LithosServer:
         """Rebuild all search indices from files."""
         tracer = get_tracer()
         with tracer.start_as_current_span("lithos.index.rebuild") as span:
+            # Hard reset so plan_reconcile sees an empty world and re-emits
+            # an `add` per doc — preserves today's full-rebuild semantics.
             self.search.clear_all()
             self.graph.clear()
             self.knowledge.rescan()
 
-            knowledge_path = self.config.storage.knowledge_path
-            file_count = 0
-            error_count = 0
-            for file_path in knowledge_path.rglob("*.md"):
-                try:
-                    relative_path = file_path.relative_to(knowledge_path)
-                    doc, _ = await self.knowledge.read(path=str(relative_path))
-                    indexable = KnowledgeManager.to_indexable(doc)
-                    await asyncio.to_thread(self.search.index, indexable)
-                    self.graph.add_document(doc)
-                    file_count += 1
-                except Exception as e:
-                    error_count += 1
-                    logger.error("Error indexing %s: %s", file_path, e)
+            plan = await self.knowledge.plan_reconcile(
+                search=self.search,
+                graph=self.graph,
+                projection=self.projection,
+            )
+            result = await self.knowledge.apply_reconcile(
+                plan,
+                search=self.search,
+                graph=self.graph,
+                projection=self.projection,
+            )
+
+            file_count = result.search.scanned if result.search else 0
+            error_count = len(result.search.failed) if result.search else 0
+            if result.search:
+                for failure in result.search.failed:
+                    logger.error("Error indexing %s backend: %s", failure.backend, failure.detail)
 
             span.set_attribute("lithos.file_count", file_count)
             span.set_attribute("lithos.error_count", error_count)
-            self.graph.save_cache()
+            # KnowledgeGraph._apply_reconcile flushes the cache itself
+            # (graph.py:929-948); explicit save_cache() is redundant.
 
     def _bfs_provenance(self, start_id: str, direction: str, depth: int) -> list[dict[str, str]]:
         """BFS traversal over provenance indexes.

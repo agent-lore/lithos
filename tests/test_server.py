@@ -174,6 +174,56 @@ class TestServerInitialization:
             await server.shutdown()
 
     @pytest.mark.asyncio
+    async def test_rebuild_indices_routes_through_knowledge_manager(self, server: LithosServer):
+        """_rebuild_indices uses KnowledgeManager.plan_reconcile/apply_reconcile.
+
+        Integration-level guard for issue #256: the manual per-doc loop is
+        gone, so _rebuild_indices must produce the same final state via the
+        unified plan/apply seam.
+        """
+        await server.knowledge.create(
+            title="Rebuild Note A",
+            content="Body A mentions ReindexTerm and links to [[Rebuild Note B]].",
+            agent="rebuild-test",
+            path="rebuild-a",
+        )
+        await server.knowledge.create(
+            title="Rebuild Note B",
+            content="Body B also mentions ReindexTerm.",
+            agent="rebuild-test",
+            path="rebuild-b",
+        )
+
+        await server._rebuild_indices()
+
+        assert server.search.count_documents() == 2
+        assert server.graph.node_count() >= 2
+
+    @pytest.mark.asyncio
+    async def test_rebuild_indices_passes_projection(self, server: LithosServer):
+        """_rebuild_indices wires the server's projection through the seam.
+
+        Pins the wiring so a future caller cannot accidentally reconcile
+        search+graph without also reconciling the provenance projection.
+        """
+        captured: dict[str, object] = {}
+        original_plan = server.knowledge.plan_reconcile
+
+        async def _capture_plan(**kwargs):
+            captured.update(kwargs)
+            return await original_plan(**kwargs)
+
+        server.knowledge.plan_reconcile = _capture_plan  # type: ignore[method-assign]
+        try:
+            await server._rebuild_indices()
+        finally:
+            server.knowledge.plan_reconcile = original_plan  # type: ignore[method-assign]
+
+        assert captured.get("search") is server.search
+        assert captured.get("graph") is server.graph
+        assert captured.get("projection") is server.projection
+
+    @pytest.mark.asyncio
     async def test_start_and_stop_watch_intake_is_idempotent(self, server: LithosServer):
         """Starting twice and stopping twice should not raise."""
         loop = asyncio.get_running_loop()
