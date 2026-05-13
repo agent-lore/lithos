@@ -2,13 +2,16 @@
 
 See docs/adr/0005-cognitive-memory-module.md.
 
-This slice (issue #255) lands the seam and lifecycle ordering only.
-``CognitiveMemory`` owns the ``StatsStore`` and the ``EnrichWorker``;
-``LithosServer.initialize()`` constructs the Module after the projection
-is ready and ``LithosServer.shutdown()`` stops it first. Public read /
-write methods (retrieve, edge_*, reinforce_*, etc.) migrate in
-subsequent slices (#257-#260); existing MCP tool handlers continue to
-call LCMA internals directly through server-level aliases.
+Issue #255 landed the seam and lifecycle ordering. Issue #257 migrated
+``retrieve`` into the Module; the ``lithos_retrieve`` MCP handler in
+``LithosServer`` is now a one-line envelope wrapper. The remaining write
+methods (edge_*, reinforce_*, etc.) migrate in subsequent slices
+(#258-#260); their MCP handlers continue to call LCMA internals directly
+through server-level aliases until then.
+
+Method ordering convention: lifecycle methods first (``create``,
+``attach_coordination``, ``start``, ``stop``), then public agent-facing
+methods grouped by domain (retrieve / edges / reinforcement / stats).
 """
 
 from __future__ import annotations
@@ -151,3 +154,76 @@ class CognitiveMemory:
             self._enrich_worker = None
         await self._stats_store.close()
         self._started = False
+
+    # ------------------------------------------------------------------
+    # Retrieve (issue #257)
+    # ------------------------------------------------------------------
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        namespace_filter: list[str] | None = None,
+        agent_id: str | None = None,
+        task_id: str | None = None,
+        surface_conflicts: bool = False,
+        max_context_nodes: int | None = None,
+        tags: list[str] | None = None,
+        path_prefix: str | None = None,
+    ) -> dict[str, object]:
+        """Run the parallel-terraced-scan retrieve pipeline.
+
+        See ``docs/adr/0005-cognitive-memory-module.md`` and
+        ``src/lithos/lcma/retrieve.py`` for the algorithm. This method is the
+        public seam — the ``lithos_retrieve`` MCP handler is a thin envelope
+        around it.
+
+        Errors:
+            - ``ScoutFailure`` is raised inside the orchestrator when a single
+              scout's backend fails, then **caught and logged** at one
+              documented boundary inside this method. Callers do not see it.
+            - ``CognitiveMemoryError`` (other subtypes — e.g. RetrieveTimeout)
+              **propagates** to the caller. The MCP envelope translates it to
+              an error response.
+            - ``RuntimeError`` is raised if called before :meth:`start`.
+            - Any other exception (e.g. StatsStore I/O failure on receipt
+              write) propagates; they are not part of the retrieve contract.
+
+        Precondition:
+            ``config.lcma.enabled`` is True. The ``lcma_disabled``
+            short-circuit lives in the MCP handler envelope; this method
+            asserts ``self._coordination is not None`` (which ``start()``
+            enforces when LCMA is enabled).
+        """
+        if not self._started:
+            raise RuntimeError("CognitiveMemory.retrieve called before start()")
+        assert self._coordination is not None, (
+            "CognitiveMemory.retrieve requires coordination; the MCP handler's "
+            "lcma_disabled short-circuit must run before reaching this method."
+        )
+
+        # Local import keeps the orchestrator implementation a leaf module;
+        # importing it at module load would create an import cycle through
+        # lithos.lcma.scouts → lithos.search/knowledge.
+        from lithos.lcma.retrieve import _run_retrieve_impl
+
+        return await _run_retrieve_impl(
+            query=query,
+            search=self._search,
+            knowledge=self._knowledge,
+            graph=self._graph,
+            coordination=self._coordination,
+            edge_store=self._projection._edge_store,
+            projection=self._projection,
+            stats_store=self._stats_store,
+            lcma_config=self._config.lcma,
+            limit=limit,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            surface_conflicts=surface_conflicts,
+            max_context_nodes=max_context_nodes,
+            tags=tags,
+            path_prefix=path_prefix,
+        )

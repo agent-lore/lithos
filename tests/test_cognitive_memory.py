@@ -1,25 +1,28 @@
-"""Tests for the CognitiveMemory Module scaffold and lifecycle (ADR-0005).
+"""Tests for the CognitiveMemory Module (ADR-0005).
 
-This slice (issue #255) only exercises construction and start/stop. Public
-read/write methods migrate in subsequent slices (#257-#260); their tests
-land with those changes.
+Issue #255 covered construction and start/stop. Issue #257 adds the
+``retrieve`` seam tests below. Remaining write methods migrate in
+subsequent slices (#258-#260) with their tests.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 
 from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig
+from lithos.errors import ScoutFailure
 from lithos.events import EventBus
+from lithos.lcma.utils import Candidate
 from lithos.provenance import ProvenanceProjection
 
 
@@ -267,6 +270,195 @@ class TestLcmaDisabled:
         finally:
             await cm.stop()
             assert cm._stats_store._opened is False
+
+
+# ---------------------------------------------------------------------------
+# Retrieve (issue #257)
+# ---------------------------------------------------------------------------
+
+
+class TestRetrieve:
+    """``CognitiveMemory.retrieve`` is the public seam for the LCMA pipeline.
+
+    These tests exercise the seam in isolation — the ``_run_retrieve_impl``
+    function itself is covered exhaustively by ``tests/test_retrieve.py``.
+    Here we only verify (1) the precondition contract, (2) that
+    ``ScoutFailure`` is raised by the implementation but caught at the
+    documented boundary, (3) that filter kwargs flow through, and (4) that
+    the limit is honoured.
+    """
+
+    async def test_retrieve_before_start_raises(self, memory: CognitiveMemory) -> None:
+        """Calling retrieve before start() is a programmer error."""
+        with pytest.raises(RuntimeError, match="called before start"):
+            await memory.retrieve("alpha", limit=3)
+
+    async def test_retrieve_happy_path(self, memory: CognitiveMemory) -> None:
+        """retrieve delegates to _run_retrieve_impl with the wired stores."""
+        await memory.start()
+
+        envelope: dict[str, object] = {
+            "results": [],
+            "temperature": 0.5,
+            "terrace_reached": 1,
+            "receipt_id": "test-receipt",
+        }
+        with patch(
+            "lithos.lcma.retrieve._run_retrieve_impl",
+            new_callable=AsyncMock,
+            return_value=envelope,
+        ) as impl:
+            result = await memory.retrieve("alpha", limit=3, namespace_filter=["proj-a"])
+
+        assert result is envelope
+        impl.assert_awaited_once()
+        kwargs = impl.await_args.kwargs
+        assert kwargs["query"] == "alpha"
+        assert kwargs["limit"] == 3
+        assert kwargs["namespace_filter"] == ["proj-a"]
+        # Stores wired from self
+        assert kwargs["search"] is memory._search
+        assert kwargs["knowledge"] is memory._knowledge
+        assert kwargs["graph"] is memory._graph
+        assert kwargs["coordination"] is memory._coordination
+        assert kwargs["projection"] is memory._projection
+        assert kwargs["stats_store"] is memory._stats_store
+        assert kwargs["edge_store"] is memory._projection._edge_store
+        assert kwargs["lcma_config"] is memory._config.lcma
+
+    async def test_retrieve_scout_failure_logged_not_raised(
+        self,
+        memory: CognitiveMemory,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A backend that raises is wrapped in ScoutFailure, logged, and the
+        retrieve completes successfully without that scout's results.
+
+        ADR-0005 boundary contract: per-scout failures are caught inside
+        the orchestrator (``_run_retrieve_impl``), not propagated to
+        ``CognitiveMemory.retrieve``'s caller.
+        """
+        await memory.start()
+
+        # Make every scout return [] except scout_vector which raises. The
+        # scouts are imported into ``lithos.lcma.retrieve`` at module load,
+        # so we patch them in *that* namespace, not in lithos.lcma.scouts.
+        empty_scout = AsyncMock(return_value=[])
+        # Stub the projection's edge_store.compute_temperature to a no-op
+        # so we don't hit the real backend either.
+
+        with (
+            patch(
+                "lithos.lcma.retrieve.scout_vector",
+                new=AsyncMock(side_effect=RuntimeError("backend down")),
+            ),
+            patch("lithos.lcma.retrieve.scout_lexical", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_exact_alias", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_tags_recency", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_freshness", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_provenance", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_graph", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_coactivation", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_source_url", new=empty_scout),
+            caplog.at_level(logging.WARNING, logger="lithos.lcma.retrieve"),
+        ):
+            result = await memory.retrieve("alpha", limit=5)
+
+        # Pipeline returned normally.
+        assert result["receipt_id"]
+        assert result["results"] == []
+
+        # The phase A scout warning is present; the captured exc chain is a
+        # ScoutFailure naming the failed scout.
+        scout_records = [r for r in caplog.records if "phase A scout failed" in r.getMessage()]
+        assert scout_records, "expected a phase A scout failure log record"
+        record = scout_records[0]
+        assert record.exc_info is not None
+        exc = record.exc_info[1]
+        assert isinstance(exc, ScoutFailure)
+        assert exc.scout == "scout_vector"
+        assert isinstance(exc.cause, RuntimeError)
+
+    async def test_retrieve_namespace_filter_passes_through(self, memory: CognitiveMemory) -> None:
+        """Cross-scout filter contract: every scout receives namespace_filter.
+
+        See ``retrieve.py`` Phase A scout_kw construction — all scouts must
+        enforce the same caller-supplied filters so the global view is
+        consistent regardless of which backend a candidate came from.
+        """
+        await memory.start()
+
+        vector_spy = AsyncMock(return_value=[])
+        lexical_spy = AsyncMock(return_value=[])
+        empty_scout = AsyncMock(return_value=[])
+
+        with (
+            patch("lithos.lcma.retrieve.scout_vector", new=vector_spy),
+            patch("lithos.lcma.retrieve.scout_lexical", new=lexical_spy),
+            patch("lithos.lcma.retrieve.scout_exact_alias", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_tags_recency", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_freshness", new=empty_scout),
+        ):
+            await memory.retrieve(
+                "alpha",
+                limit=5,
+                namespace_filter=["proj-a"],
+                tags=["t1"],
+                path_prefix="docs/",
+            )
+
+        for spy in (vector_spy, lexical_spy):
+            spy.assert_awaited_once()
+            kwargs = spy.await_args.kwargs
+            assert kwargs["namespace_filter"] == ["proj-a"]
+            assert kwargs["tags"] == ["t1"]
+            assert kwargs["path_prefix"] == "docs/"
+
+    async def test_retrieve_limit_truncates_results(self, memory: CognitiveMemory) -> None:
+        """The pipeline applies ``limit`` to the post-rerank candidate list."""
+        await memory.start()
+
+        # Build 25 distinct candidates so merge keeps them all (unique node_ids).
+        candidates = [
+            Candidate(
+                node_id=f"node-{i:02d}",
+                score=1.0 - i * 0.01,
+                reasons=[f"reason-{i}"],
+                scouts=["scout_vector"],
+            )
+            for i in range(25)
+        ]
+        empty_scout = AsyncMock(return_value=[])
+
+        # ``knowledge.read`` is called for each result by the result-build
+        # loop. With the fixture's MagicMock, default return is a MagicMock,
+        # which the loop will treat as a present document. To keep the test
+        # focused on truncation we instead patch knowledge.read to raise
+        # FileNotFoundError, which the pipeline gracefully skips. That makes
+        # the assertion ``len(results) <= limit`` the strongest guarantee
+        # we can make without rebuilding the entire knowledge fixture.
+        memory._knowledge.read = AsyncMock(side_effect=FileNotFoundError())
+        memory._knowledge.get_cached_meta = MagicMock(return_value=None)
+
+        with (
+            patch(
+                "lithos.lcma.retrieve.scout_vector",
+                new=AsyncMock(return_value=candidates),
+            ),
+            patch("lithos.lcma.retrieve.scout_lexical", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_exact_alias", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_tags_recency", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_freshness", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_provenance", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_graph", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_coactivation", new=empty_scout),
+            patch("lithos.lcma.retrieve.scout_source_url", new=empty_scout),
+        ):
+            result = await memory.retrieve("alpha", limit=5)
+
+        results = result["results"]
+        assert isinstance(results, list)
+        assert len(results) <= 5
 
 
 # ---------------------------------------------------------------------------

@@ -1648,9 +1648,11 @@ class LithosServer:
                 span.set_attribute("lithos.query.length", len(query))
                 span.set_attribute("lithos.limit", limit)
 
-                # Check LCMA enabled
-                lcma_config = self._config.lcma
-                if not lcma_config.enabled:
+                # Envelope-shaping short-circuit: when LCMA is disabled the
+                # CognitiveMemory.retrieve precondition would fail, so we
+                # surface a typed error response instead. The Module method
+                # itself stays free of envelope concerns.
+                if not self._config.lcma.enabled:
                     logger.warning("lithos_retrieve: LCMA is disabled")
                     return {
                         "status": "error",
@@ -1658,18 +1660,8 @@ class LithosServer:
                         "message": "LCMA is disabled via configuration",
                     }
 
-                from lithos.lcma.retrieve import run_retrieve
-
-                result = await run_retrieve(
+                result = await self.memory.retrieve(
                     query=query,
-                    search=self.search,
-                    knowledge=self.knowledge,
-                    graph=self.graph,
-                    coordination=self.coordination,
-                    edge_store=self.edge_store,
-                    projection=self.projection,
-                    stats_store=self.stats_store,
-                    lcma_config=lcma_config,
                     limit=limit,
                     namespace_filter=namespace_filter,
                     agent_id=agent_id,

@@ -24,6 +24,7 @@ import re
 import time
 from typing import TYPE_CHECKING
 
+from lithos.errors import ScoutFailure
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
     scout_coactivation,
@@ -296,7 +297,7 @@ async def compute_temperature(
     return temperature
 
 
-async def run_retrieve(
+async def _run_retrieve_impl(
     *,
     query: str,
     search: SearchEngine,
@@ -316,10 +317,23 @@ async def run_retrieve(
     tags: list[str] | None = None,
     path_prefix: str | None = None,
 ) -> dict[str, object]:
-    """Execute the full LCMA retrieval pipeline.
+    """Execute the full LCMA retrieval pipeline (module-private).
+
+    The public seam is :meth:`lithos.cognitive_memory.CognitiveMemory.retrieve`,
+    which wires the six store dependencies from its own state and forwards the
+    request here. Direct callers (tests, future internal pipelines) may import
+    this implementation function under its private name.
 
     Returns the response envelope with results, temperature, terrace_reached,
     and receipt_id.
+
+    Errors:
+        - Per-scout backend failures are wrapped in :class:`ScoutFailure` and
+          caught at one documented boundary inside this function (so a single
+          misbehaving backend cannot kill the whole retrieve). The audit trail
+          (``scouts_fired``) reflects which scouts ran cleanly.
+        - All other exceptions (e.g. ``StatsStore`` I/O failures) propagate
+          to the caller; they are not wrapped in ``ScoutFailure``.
     """
     if max_context_nodes is None:
         max_context_nodes = limit
@@ -395,10 +409,18 @@ async def run_retrieve(
         all_candidates: list[Candidate] = []
         for name, result in zip(phase_a_names, phase_a_results, strict=True):
             if isinstance(result, BaseException):
-                logger.warning(
-                    "run_retrieve: phase A scout failed",
-                    extra={"scout": name, "error": str(result)},
-                )
+                # ADR-0005 contract: per-scout failures are caught here so a
+                # single misbehaving backend cannot kill the whole retrieve.
+                # Anything escaping is a CognitiveMemoryError and propagates
+                # to the caller.
+                try:
+                    raise ScoutFailure(scout=name, cause=result) from result
+                except ScoutFailure as scout_err:
+                    logger.warning(
+                        "run_retrieve: phase A scout failed",
+                        extra={"scout": name, "error": str(scout_err.cause)},
+                        exc_info=True,
+                    )
                 continue
             executed_scouts.add(name)
             all_candidates.extend(result)
@@ -454,12 +476,19 @@ async def run_retrieve(
                     "run_retrieve: phase B scout completed",
                     extra={"scout": "scout_provenance", "candidates": len(prov_candidates)},
                 )
-            except Exception:
-                logger.warning(
-                    "run_retrieve: phase B scout failed",
-                    extra={"scout": "scout_provenance"},
-                    exc_info=True,
-                )
+            except Exception as exc:
+                # ADR-0005 contract: per-scout failures are caught here so a
+                # single misbehaving backend cannot kill the whole retrieve.
+                # Anything escaping is a CognitiveMemoryError and propagates
+                # to the caller.
+                try:
+                    raise ScoutFailure(scout="scout_provenance", cause=exc) from exc
+                except ScoutFailure:
+                    logger.warning(
+                        "run_retrieve: phase B scout failed",
+                        extra={"scout": "scout_provenance"},
+                        exc_info=True,
+                    )
 
             try:
                 _t = time.perf_counter()
@@ -479,12 +508,16 @@ async def run_retrieve(
                     "run_retrieve: phase B scout completed",
                     extra={"scout": "scout_graph", "candidates": len(graph_candidates)},
                 )
-            except Exception:
-                logger.warning(
-                    "run_retrieve: phase B scout failed",
-                    extra={"scout": "scout_graph"},
-                    exc_info=True,
-                )
+            except Exception as exc:
+                # ADR-0005 contract: per-scout failures are caught here.
+                try:
+                    raise ScoutFailure(scout="scout_graph", cause=exc) from exc
+                except ScoutFailure:
+                    logger.warning(
+                        "run_retrieve: phase B scout failed",
+                        extra={"scout": "scout_graph"},
+                        exc_info=True,
+                    )
 
             try:
                 _t = time.perf_counter()
@@ -504,12 +537,16 @@ async def run_retrieve(
                     "run_retrieve: phase B scout completed",
                     extra={"scout": "scout_coactivation", "candidates": len(coact_candidates)},
                 )
-            except Exception:
-                logger.warning(
-                    "run_retrieve: phase B scout failed",
-                    extra={"scout": "scout_coactivation"},
-                    exc_info=True,
-                )
+            except Exception as exc:
+                # ADR-0005 contract: per-scout failures are caught here.
+                try:
+                    raise ScoutFailure(scout="scout_coactivation", cause=exc) from exc
+                except ScoutFailure:
+                    logger.warning(
+                        "run_retrieve: phase B scout failed",
+                        extra={"scout": "scout_coactivation"},
+                        exc_info=True,
+                    )
 
             try:
                 _t = time.perf_counter()
@@ -529,12 +566,16 @@ async def run_retrieve(
                     "run_retrieve: phase B scout completed",
                     extra={"scout": "scout_source_url", "candidates": len(src_url_candidates)},
                 )
-            except Exception:
-                logger.warning(
-                    "run_retrieve: phase B scout failed",
-                    extra={"scout": "scout_source_url"},
-                    exc_info=True,
-                )
+            except Exception as exc:
+                # ADR-0005 contract: per-scout failures are caught here.
+                try:
+                    raise ScoutFailure(scout="scout_source_url", cause=exc) from exc
+                except ScoutFailure:
+                    logger.warning(
+                        "run_retrieve: phase B scout failed",
+                        extra={"scout": "scout_source_url"},
+                        exc_info=True,
+                    )
 
         # Contradictions — only fire when surface_conflicts is True
         conflicts_found: list[dict[str, object]] = []
@@ -552,12 +593,16 @@ async def run_retrieve(
                     "run_retrieve: contradictions surfaced",
                     extra={"conflict_count": len(conflicts_found)},
                 )
-            except Exception:
-                logger.warning(
-                    "run_retrieve: phase B scout failed",
-                    extra={"scout": "scout_contradictions"},
-                    exc_info=True,
-                )
+            except Exception as exc:
+                # ADR-0005 contract: per-scout failures are caught here.
+                try:
+                    raise ScoutFailure(scout="scout_contradictions", cause=exc) from exc
+                except ScoutFailure:
+                    logger.warning(
+                        "run_retrieve: phase B scout failed",
+                        extra={"scout": "scout_contradictions"},
+                        exc_info=True,
+                    )
 
         # Record scouts_fired using canonical names in order. A scout
         # appears here iff it executed without raising — empty result
