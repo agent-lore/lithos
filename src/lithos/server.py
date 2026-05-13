@@ -3,6 +3,7 @@
 import asyncio
 import collections
 import contextlib
+import dataclasses
 import hashlib
 import json
 import logging
@@ -1740,7 +1741,7 @@ class LithosServer:
 
                 evidence_str = json.dumps(evidence) if evidence is not None else None
 
-                edge_id = await self.edge_store.upsert(
+                edge_id = await self.memory.edge_upsert(
                     from_id=from_id,
                     to_id=to_id,
                     edge_type=type,
@@ -1750,22 +1751,6 @@ class LithosServer:
                     provenance_type=provenance_type,
                     evidence=evidence_str,
                     conflict_state=conflict_state,
-                )
-
-                # Publish edge.upserted event
-                from lithos.events import EDGE_UPSERTED
-
-                await self._emit(
-                    LithosEvent(
-                        type=EDGE_UPSERTED,
-                        payload={
-                            "edge_id": edge_id,
-                            "from_id": from_id,
-                            "to_id": to_id,
-                            "type": type,
-                            "namespace": namespace,
-                        },
-                    )
                 )
 
                 return {
@@ -1799,7 +1784,7 @@ class LithosServer:
             with tracer.start_as_current_span("lithos.tool.edge_list") as span:
                 span.set_attribute("lithos.tool", "lithos_edge_list")
 
-                edges = await self.projection.list_edges(
+                edges = await self.memory.edge_list(
                     from_id=from_id,
                     to_id=to_id,
                     edge_type=type,
@@ -2989,44 +2974,8 @@ class LithosServer:
                 span.set_attribute("lithos.tool", "lithos_node_stats")
                 span.set_attribute("lithos.node_id", node_id)
 
-                # Verify node exists in knowledge manager
-                if self.knowledge.get_cached_meta(node_id) is None:
-                    return {
-                        "status": "error",
-                        "code": "doc_not_found",
-                        "message": f"Node '{node_id}' not found in knowledge base.",
-                    }
-
-                stats = await self.stats_store.get_node_stats(node_id)
-                if stats is None:
-                    # Node exists but has no stats row — return defaults
-                    return {
-                        "node_id": node_id,
-                        "salience": 0.5,
-                        "retrieval_count": 0,
-                        "cited_count": 0,
-                        "last_retrieved_at": None,
-                        "last_used_at": None,
-                        "ignored_count": 0,
-                        "misleading_count": 0,
-                        "decay_rate": 0.0,
-                        "spaced_rep_strength": 0.0,
-                        "last_decay_applied_at": None,
-                    }
-
-                return {
-                    "node_id": node_id,
-                    "salience": stats.get("salience", 0.5),
-                    "retrieval_count": stats.get("retrieval_count", 0),
-                    "cited_count": stats.get("cited_count", 0),
-                    "last_retrieved_at": stats.get("last_retrieved_at"),
-                    "last_used_at": stats.get("last_used_at"),
-                    "ignored_count": stats.get("ignored_count", 0),
-                    "misleading_count": stats.get("misleading_count", 0),
-                    "decay_rate": stats.get("decay_rate", 0.0),
-                    "spaced_rep_strength": stats.get("spaced_rep_strength", 0.0),
-                    "last_decay_applied_at": stats.get("last_decay_applied_at"),
-                }
+                result = await self.memory.node_stats(node_id)
+                return result if isinstance(result, dict) else dataclasses.asdict(result)
 
         @self.mcp.tool()
         @tool_metrics()

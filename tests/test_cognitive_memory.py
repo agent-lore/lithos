@@ -1,12 +1,15 @@
 """Tests for the CognitiveMemory Module (ADR-0005).
 
 Issue #255 covered construction and start/stop. Issue #257 adds the
-``retrieve`` seam tests below. Remaining write methods migrate in
-subsequent slices (#258-#260) with their tests.
+``retrieve`` seam tests; issue #258 adds tests for the migrated public
+methods ``node_stats`` and ``edge_upsert / edge_list / edge_delete``.
+Remaining methods (``reinforce_*``, ``cache_lookup``, ``conflict_resolve``)
+migrate in sibling slices (#259, #260) with their tests.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -18,10 +21,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-from lithos.cognitive_memory import CognitiveMemory
+from lithos.cognitive_memory import CognitiveMemory, NodeStats
 from lithos.config import LithosConfig
 from lithos.errors import ScoutFailure
-from lithos.events import EventBus
+from lithos.events import EDGE_UPSERTED, EventBus
 from lithos.lcma.utils import Candidate
 from lithos.provenance import ProvenanceProjection
 
@@ -459,6 +462,153 @@ class TestRetrieve:
         results = result["results"]
         assert isinstance(results, list)
         assert len(results) <= 5
+
+
+# ---------------------------------------------------------------------------
+# Edges + node stats (issue #258)
+# ---------------------------------------------------------------------------
+
+
+class TestNodeStats:
+    """``CognitiveMemory.node_stats`` returns NodeStats or the legacy error envelope."""
+
+    async def test_returns_defaults_for_known_node_with_no_row(
+        self, memory: CognitiveMemory, mock_knowledge: MagicMock
+    ) -> None:
+        # ``get_cached_meta`` only needs to be non-None for the node-exists check.
+        mock_knowledge.get_cached_meta.return_value = MagicMock()
+        await memory.start()
+
+        result = await memory.node_stats("node-xyz")
+
+        assert isinstance(result, NodeStats)
+        assert result.node_id == "node-xyz"
+        assert result.salience == 0.5
+        assert result.retrieval_count == 0
+        assert result.cited_count == 0
+        assert result.last_retrieved_at is None
+        assert result.last_used_at is None
+        assert result.ignored_count == 0
+        assert result.misleading_count == 0
+        assert result.decay_rate == 0.0
+        assert result.spaced_rep_strength == 0.0
+        assert result.last_decay_applied_at is None
+
+    async def test_returns_error_envelope_for_unknown_node(
+        self, memory: CognitiveMemory, mock_knowledge: MagicMock
+    ) -> None:
+        mock_knowledge.get_cached_meta.return_value = None
+        await memory.start()
+
+        result = await memory.node_stats("missing")
+
+        assert isinstance(result, dict)
+        assert result["status"] == "error"
+        assert result["code"] == "doc_not_found"
+        assert "missing" in result["message"]
+
+    async def test_returns_persisted_row_after_increment(
+        self, memory: CognitiveMemory, mock_knowledge: MagicMock
+    ) -> None:
+        mock_knowledge.get_cached_meta.return_value = MagicMock()
+        await memory.start()
+
+        await memory._stats_store.increment_node_stats(node_id="node-1")
+        result = await memory.node_stats("node-1")
+
+        assert isinstance(result, NodeStats)
+        assert result.node_id == "node-1"
+        assert result.retrieval_count == 1
+        # ``increment_node_stats`` initialises salience at 0.5 on first touch.
+        assert result.salience == 0.5
+        assert result.last_retrieved_at is not None
+
+
+class TestEdgeMethods:
+    """``CognitiveMemory.edge_upsert / edge_list / edge_delete`` round-trips."""
+
+    async def test_edge_upsert_then_list_round_trip(self, memory: CognitiveMemory) -> None:
+        await memory.start()
+
+        edge_id = await memory.edge_upsert(
+            from_id="a",
+            to_id="b",
+            edge_type="related_to",
+            weight=0.7,
+            namespace="default",
+        )
+        assert edge_id.startswith("edge_")
+
+        edges = await memory.edge_list(from_id="a")
+        assert len(edges) == 1
+        assert edges[0]["edge_id"] == edge_id
+        assert edges[0]["to_id"] == "b"
+        assert edges[0]["type"] == "related_to"
+        assert edges[0]["weight"] == 0.7
+
+    async def test_edge_list_reads_through_projection(
+        self, memory: CognitiveMemory, projection: ProvenanceProjection
+    ) -> None:
+        """edge_list MUST hit ProvenanceProjection.list_edges, not EdgeStore directly.
+
+        Seed via the projection's internal edge store (the same path
+        ``edge_upsert`` uses today) and assert ``edge_list`` surfaces the
+        row — proving the read goes through the projection's API.
+        """
+        await memory.start()
+        await projection._edge_store.upsert(
+            from_id="x",
+            to_id="y",
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+            provenance_type="frontmatter",
+        )
+
+        edges = await memory.edge_list(edge_type="derived_from")
+
+        assert any(e["from_id"] == "x" and e["to_id"] == "y" for e in edges)
+
+    async def test_edge_delete_removes_edge(self, memory: CognitiveMemory) -> None:
+        await memory.start()
+        edge_id = await memory.edge_upsert(
+            from_id="a",
+            to_id="b",
+            edge_type="related_to",
+            weight=0.5,
+            namespace="default",
+        )
+
+        deleted = await memory.edge_delete(edge_ids=[edge_id])
+
+        assert deleted == 1
+        assert await memory.edge_list(from_id="a") == []
+
+    async def test_edge_delete_with_empty_list_is_noop(self, memory: CognitiveMemory) -> None:
+        await memory.start()
+        assert await memory.edge_delete(edge_ids=[]) == 0
+
+    async def test_edge_upsert_emits_edge_upserted_event(
+        self, memory: CognitiveMemory, event_bus: EventBus
+    ) -> None:
+        queue = event_bus.subscribe(event_types=[EDGE_UPSERTED])
+        await memory.start()
+
+        edge_id = await memory.edge_upsert(
+            from_id="a",
+            to_id="b",
+            edge_type="related_to",
+            weight=0.5,
+            namespace="default",
+        )
+
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event.type == EDGE_UPSERTED
+        assert event.payload["edge_id"] == edge_id
+        assert event.payload["from_id"] == "a"
+        assert event.payload["to_id"] == "b"
+        assert event.payload["type"] == "related_to"
+        assert event.payload["namespace"] == "default"
 
 
 # ---------------------------------------------------------------------------
