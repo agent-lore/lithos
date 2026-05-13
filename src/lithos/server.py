@@ -283,14 +283,6 @@ class LithosServer:
 
     async def _apply_task_feedback(self, validated: dict[str, Any]) -> None:
         """Apply reinforcement side-effects using pre-validated data."""
-        from lithos.lcma.reinforcement import (
-            penalize_ignored,
-            penalize_misleading,
-            reinforce_cited_nodes,
-            reinforce_edges_between,
-            weaken_edges_for_bad_context,
-        )
-
         if validated.get("skip"):
             return
 
@@ -298,16 +290,15 @@ class LithosServer:
         misleading = validated["misleading"]
         ignored = validated["ignored"]
 
-        if cited is not None and cited:
-            await reinforce_cited_nodes(cited, self.edge_store, self.stats_store, self.knowledge)
-            await reinforce_edges_between(cited, self.edge_store, self.knowledge)
+        if cited:
+            await self.memory.reinforce_cited(cited)
+            await self.memory.reinforce_between(cited)
 
-        if misleading is not None and misleading:
-            await penalize_misleading(misleading, self.stats_store, self.knowledge)
-            await weaken_edges_for_bad_context(misleading, self.edge_store)
+        if misleading:
+            await self.memory.reinforce_misleading(misleading)
 
         if ignored:
-            await penalize_ignored(ignored, self.stats_store)
+            await self.memory.reinforce_ignored(ignored)
 
     async def _get_health(self) -> dict[str, Any]:
         """Run health checks and return a status dict (shared by HTTP and any callers)."""

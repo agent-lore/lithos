@@ -19,6 +19,7 @@ methods grouped by domain (retrieve / edges / reinforcement / stats).
 
 from __future__ import annotations
 
+import itertools
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -421,3 +422,224 @@ class CognitiveMemory:
         # collapses to a public projection write in ADR-0005's successor
         # issue (#263).
         return await self._projection._edge_store.delete_edges(edge_ids=edge_ids)
+
+    # ------------------------------------------------------------------
+    # Reinforcement (issue #259, ADR-0005)
+    # ------------------------------------------------------------------
+    #
+    # All reinforcement state writes flow through the Module: the agent
+    # passes *what it knows* (cited / ignored / misleading node ids) and
+    # the Module applies the consequences against its owned StatsStore
+    # and the projection's EdgeStore. Callers no longer thread stores by
+    # hand. ``self._projection._edge_store`` is a private-attribute read
+    # matching the precedent set in :meth:`start`; a follow-up issue will
+    # promote it to a public ``ProvenanceProjection.edge_store`` property.
+
+    async def reinforce_cited(self, cited_ids: list[str]) -> None:
+        """Boost stats for every cited node.
+
+        For each *cited_id*:
+
+        - ``cited_count += 1``
+        - ``salience += 0.02``
+        - ``spaced_rep_strength += 0.05``
+        - ``last_used_at`` is refreshed.
+        """
+        logger.info(
+            "CognitiveMemory.reinforce_cited: reinforcing",
+            extra={"node_count": len(cited_ids)},
+        )
+        for node_id in cited_ids:
+            await self._stats_store.increment_cited(node_id)
+            await self._stats_store.update_salience(node_id, 0.02)
+            await self._stats_store.update_spaced_rep_strength(node_id, 0.05)
+            await self._stats_store.update_last_used_at(node_id)
+            logger.debug(
+                "CognitiveMemory.reinforce_cited: node reinforced",
+                extra={"node_id": node_id, "salience_delta": 0.02, "spaced_rep_delta": 0.05},
+            )
+
+    async def reinforce_ignored(self, ignored_ids: list[str]) -> None:
+        """Decay salience for chronically ignored nodes.
+
+        For each *node_id*:
+
+        - ``ignored_count += 1``
+        - If ``ignored_count > 5`` **and** ``ignored_count > cited_count``,
+          apply ``salience -= 0.02``.
+        """
+        logger.info(
+            "CognitiveMemory.reinforce_ignored: applying ignored penalties",
+            extra={"node_count": len(ignored_ids)},
+        )
+        for node_id in ignored_ids:
+            await self._stats_store.increment_ignored(node_id)
+            stats = await self._stats_store.get_node_stats(node_id)
+            if stats is not None:
+                ignored = stats["ignored_count"]
+                cited = stats["cited_count"]
+                assert isinstance(ignored, int)
+                assert isinstance(cited, int)
+                if ignored > 5 and ignored > cited:
+                    await self._stats_store.update_salience(node_id, -0.02)
+                    logger.debug(
+                        "CognitiveMemory.reinforce_ignored: decayed salience",
+                        extra={
+                            "node_id": node_id,
+                            "ignored_count": ignored,
+                            "cited_count": cited,
+                            "salience_delta": -0.02,
+                        },
+                    )
+            logger.debug(
+                "CognitiveMemory.reinforce_ignored: incremented ignored count",
+                extra={"node_id": node_id},
+            )
+
+    async def reinforce_between(self, cited_ids: list[str]) -> None:
+        """Strengthen ``related_to`` edges between every pair of cited nodes.
+
+        For each unique same-namespace pair, the existing ``related_to``
+        edge is strengthened by +0.03; if no edge exists, one is created
+        with weight 0.5 and ``provenance_type="reinforcement"``. Pairs are
+        canonicalised so ``from_id <= to_id`` lexicographically — a single
+        edge record per undirected relationship. Cross-namespace pairs
+        are silently skipped.
+        """
+        logger.info(
+            "CognitiveMemory.reinforce_between: strengthening edges",
+            extra={"cited_count": len(cited_ids)},
+        )
+        edge_store = self._projection._edge_store
+
+        # Resolve namespace per node from the meta cache.
+        ns_map: dict[str, str] = {}
+        for nid in cited_ids:
+            cached = self._knowledge.get_cached_meta(nid)
+            if cached is not None:
+                ns_map[nid] = cached.namespace
+            else:
+                logger.debug(
+                    "CognitiveMemory.reinforce_between: node has no cached meta, skipping",
+                    extra={"node_id": nid},
+                )
+
+        for a, b in itertools.combinations(cited_ids, 2):
+            ns_a = ns_map.get(a)
+            ns_b = ns_map.get(b)
+            if ns_a is None or ns_b is None:
+                continue
+            if ns_a != ns_b:
+                logger.debug(
+                    "Skipping cross-namespace pair (%s, %s): %s != %s",
+                    a,
+                    b,
+                    ns_a,
+                    ns_b,
+                )
+                continue
+
+            from_id, to_id = (a, b) if a <= b else (b, a)
+            namespace = ns_a
+
+            existing = await edge_store.list_edges(
+                from_id=from_id,
+                to_id=to_id,
+                edge_type="related_to",
+                namespace=namespace,
+            )
+
+            if existing:
+                edge_id = str(existing[0]["edge_id"])
+                await edge_store.adjust_weight(edge_id, 0.03)
+                logger.debug(
+                    "CognitiveMemory.reinforce_between: strengthened existing edge",
+                    extra={
+                        "edge_id": edge_id,
+                        "from_id": from_id,
+                        "to_id": to_id,
+                        "weight_delta": 0.03,
+                    },
+                )
+            else:
+                eid = await edge_store.upsert(
+                    from_id=from_id,
+                    to_id=to_id,
+                    edge_type="related_to",
+                    weight=0.5,
+                    namespace=namespace,
+                    provenance_type="reinforcement",
+                )
+                logger.debug(
+                    "CognitiveMemory.reinforce_between: created new related_to edge",
+                    extra={
+                        "edge_id": eid,
+                        "from_id": from_id,
+                        "to_id": to_id,
+                        "namespace": namespace,
+                    },
+                )
+
+    async def reinforce_misleading(self, misleading_ids: list[str]) -> None:
+        """Penalise misleading nodes and weaken their adjacent edges.
+
+        Folds the two helpers that always fired together against the same
+        node set in :meth:`LithosServer._apply_task_feedback`
+        (``penalize_misleading`` + ``weaken_edges_for_bad_context``).
+
+        For each *node_id*:
+
+        - ``misleading_count += 1``
+        - ``salience -= 0.05``
+        - If ``misleading_count >= 3``, set ``status = 'quarantined'``
+          via :meth:`KnowledgeManager.update`.
+
+        After per-node penalties, every edge incident to *any* of the
+        misleading nodes is weakened by ``-0.05`` exactly once (a shared
+        edge between two misleading nodes is not double-counted).
+        """
+        logger.info(
+            "CognitiveMemory.reinforce_misleading: applying misleading penalties",
+            extra={"node_count": len(misleading_ids)},
+        )
+        for node_id in misleading_ids:
+            await self._stats_store.increment_misleading(node_id)
+            await self._stats_store.update_salience(node_id, -0.05)
+            stats = await self._stats_store.get_node_stats(node_id)
+            if stats is not None:
+                misleading = stats["misleading_count"]
+                assert isinstance(misleading, int)
+                if misleading >= 3:
+                    await self._knowledge.update(
+                        id=node_id,
+                        lcma_status="quarantined",
+                        agent="lithos-enrich",
+                    )
+                    logger.info(
+                        "CognitiveMemory.reinforce_misleading: node quarantined",
+                        extra={"node_id": node_id, "misleading_count": misleading},
+                    )
+            logger.debug(
+                "CognitiveMemory.reinforce_misleading: node penalized",
+                extra={"node_id": node_id, "salience_delta": -0.05},
+            )
+
+        edge_store = self._projection._edge_store
+        seen: set[str] = set()
+        for node_id in misleading_ids:
+            edges_from = await edge_store.list_edges(from_id=node_id)
+            edges_to = await edge_store.list_edges(to_id=node_id)
+            for edge in [*edges_from, *edges_to]:
+                eid = str(edge["edge_id"])
+                if eid in seen:
+                    continue
+                seen.add(eid)
+                await edge_store.adjust_weight(eid, -0.05)
+                logger.debug(
+                    "CognitiveMemory.reinforce_misleading: weakened edge",
+                    extra={"edge_id": eid, "node_id": node_id, "weight_delta": -0.05},
+                )
+        logger.info(
+            "CognitiveMemory.reinforce_misleading: edges weakened",
+            extra={"node_count": len(misleading_ids), "edges_weakened": len(seen)},
+        )
