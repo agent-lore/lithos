@@ -23,11 +23,12 @@ import pytest_asyncio
 
 from lithos.cognitive_memory import CognitiveMemory, NodeStats
 from lithos.config import LithosConfig
-from lithos.errors import ScoutFailure
+from lithos.errors import ScoutFailure, SearchBackendError
 from lithos.events import EDGE_UPSERTED, EventBus
 from lithos.knowledge import KnowledgeManager
 from lithos.lcma.utils import Candidate
 from lithos.provenance import ProvenanceProjection
+from lithos.search import SearchEngine
 
 
 @pytest_asyncio.fixture
@@ -992,3 +993,200 @@ class TestReinforceMisleading:
         )
         assert len(edges) == 1
         assert edges[0]["weight"] == pytest.approx(0.45)
+
+
+# ---------------------------------------------------------------------------
+# Cache + conflict resolve (issue #260)
+# ---------------------------------------------------------------------------
+
+
+class TestCacheLookup:
+    """Validation paths and search-backend errors of ``cache_lookup``.
+
+    Hit-path / staleness coverage stays in ``tests/test_server.py::TestCacheLookup``,
+    which exercises the same code through the MCP wrapper.
+    """
+
+    async def test_clean_miss_returns_empty_envelope(self, memory: CognitiveMemory) -> None:
+        memory._search.semantic_search = MagicMock(return_value=[])
+        result = await memory.cache_lookup(query="nothing matches")
+        assert result == {
+            "hit": False,
+            "document": None,
+            "stale_exists": False,
+            "stale_id": None,
+        }
+
+    async def test_invalid_max_age_hours_returns_error_envelope(
+        self, memory: CognitiveMemory
+    ) -> None:
+        result = await memory.cache_lookup(query="x", max_age_hours=-1)
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+        assert "max_age_hours" in result["message"]
+
+    async def test_invalid_limit_returns_error_envelope(self, memory: CognitiveMemory) -> None:
+        result = await memory.cache_lookup(query="x", limit=0)
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+
+    async def test_invalid_min_confidence_returns_error_envelope(
+        self, memory: CognitiveMemory
+    ) -> None:
+        result = await memory.cache_lookup(query="x", min_confidence=1.5)
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+
+    async def test_search_backend_error_returns_error_envelope(
+        self, memory: CognitiveMemory
+    ) -> None:
+        err = SearchBackendError("chroma down", {"chroma": RuntimeError("boom")})
+        memory._search.semantic_search = MagicMock(side_effect=err)
+        result = await memory.cache_lookup(query="x")
+        assert result["status"] == "error"
+        assert result["code"] == "search_backend_error"
+        assert "chroma" in result["message"]
+
+
+class TestCacheLookupHitPath:
+    """Hit-path coverage that exercises real KnowledgeManager + SearchEngine.
+
+    Uses a dedicated fixture instead of the ``memory`` fixture (which mocks
+    the knowledge / search collaborators) so the document round-trip is
+    real and the ``meta.is_stale`` / ``confidence`` filters fire on actual
+    frontmatter rather than mock returns.
+    """
+
+    @pytest_asyncio.fixture
+    async def real_memory(
+        self,
+        test_config: LithosConfig,
+        projection: ProvenanceProjection,
+        event_bus: EventBus,
+        mock_coordination: AsyncMock,
+    ):
+        knowledge = KnowledgeManager(test_config)
+        search = await SearchEngine.create(test_config)
+        cm = await CognitiveMemory.create(
+            config=test_config,
+            knowledge=knowledge,
+            search=search,
+            graph=MagicMock(),
+            projection=projection,
+            event_bus=event_bus,
+        )
+        cm.attach_coordination(mock_coordination)
+        try:
+            yield cm
+        finally:
+            await cm.stop()
+
+    async def test_hit_returns_document_envelope(self, real_memory: CognitiveMemory) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        doc = (
+            await real_memory._knowledge.create(
+                title="Quantum Computing Notes",
+                content="Information about quantum computing.",
+                agent="agent",
+                tags=["research"],
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            )
+        ).document
+        real_memory._search.index(KnowledgeManager.to_indexable(doc))
+
+        result = await real_memory.cache_lookup(query="quantum computing", tags=["research"])
+        assert result["hit"] is True
+        assert result["document"]["id"] == doc.id
+
+
+class TestConflictResolve:
+    """Routing and persistence checks for the migrated ``conflict_resolve``."""
+
+    async def _make_contradiction_edge(
+        self, memory: CognitiveMemory, *, from_id: str = "note-a", to_id: str = "note-b"
+    ) -> str:
+        return await memory._projection._edge_store.upsert(
+            from_id=from_id,
+            to_id=to_id,
+            edge_type="contradicts",
+            weight=1.0,
+            namespace="default",
+        )
+
+    async def test_happy_path_persists_and_returns_ok(self, memory: CognitiveMemory) -> None:
+        edge_id = await self._make_contradiction_edge(memory)
+
+        result = await memory.conflict_resolve(
+            edge_id=edge_id,
+            resolution="accepted_dual",
+            resolver="agent-x",
+        )
+        assert result == {
+            "status": "ok",
+            "edge_id": edge_id,
+            "conflict_state": "accepted_dual",
+        }
+
+        roundtrip = await memory._projection.get_edge(edge_id)
+        assert roundtrip is not None
+        assert roundtrip["conflict_state"] == "accepted_dual"
+        assert roundtrip["provenance_actor"] == "agent-x"
+
+    async def test_invalid_resolution_rejected(self, memory: CognitiveMemory) -> None:
+        edge_id = await self._make_contradiction_edge(memory)
+        result = await memory.conflict_resolve(
+            edge_id=edge_id,
+            resolution="bogus",
+            resolver="agent-x",
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+
+    async def test_unknown_edge_returns_not_found(self, memory: CognitiveMemory) -> None:
+        result = await memory.conflict_resolve(
+            edge_id="00000000-0000-0000-0000-000000000000",
+            resolution="accepted_dual",
+            resolver="agent-x",
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "not_found"
+
+    async def test_non_contradicts_edge_rejected(self, memory: CognitiveMemory) -> None:
+        edge_id = await memory._projection._edge_store.upsert(
+            from_id="note-a",
+            to_id="note-b",
+            edge_type="related_to",
+            weight=0.5,
+            namespace="default",
+        )
+        result = await memory.conflict_resolve(
+            edge_id=edge_id,
+            resolution="accepted_dual",
+            resolver="agent-x",
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+        assert "not 'contradicts'" in result["message"]
+
+    async def test_superseded_requires_winner_id(self, memory: CognitiveMemory) -> None:
+        edge_id = await self._make_contradiction_edge(memory)
+        result = await memory.conflict_resolve(
+            edge_id=edge_id,
+            resolution="superseded",
+            resolver="agent-x",
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+        assert "winner_id" in result["message"]
+
+    async def test_superseded_winner_must_be_endpoint(self, memory: CognitiveMemory) -> None:
+        edge_id = await self._make_contradiction_edge(memory)
+        result = await memory.conflict_resolve(
+            edge_id=edge_id,
+            resolution="superseded",
+            resolver="agent-x",
+            winner_id="note-c",
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"

@@ -65,9 +65,10 @@ if TYPE_CHECKING:
     # ``lithos.lcma.edges`` directly so the rule "no edges-module import
     # outside provenance.py" holds for the source tree. The remaining
     # direct ``self.edge_store.<mutation>`` call sites
-    # (``lithos_edge_upsert``, ``update_conflict_resolution``, the enrich
-    # worker, reinforcement helpers) move to projection-owned APIs in the
-    # follow-up slices (#254/#255/#258/#263).
+    # (``lithos_edge_upsert``, the enrich worker, reinforcement helpers)
+    # move to projection-owned APIs in the follow-up slices
+    # (#254/#255/#258/#263). ``update_conflict_resolution`` now lives
+    # behind ``CognitiveMemory`` (issue #260).
     from lithos.lcma.enrich import EnrichWorker
     from lithos.lcma.stats import StatsStore
     from lithos.provenance import EdgeStore
@@ -1805,106 +1806,12 @@ class LithosServer:
                 winner_id: Required when resolution is 'superseded'; must be
                     either from_id or to_id of the edge
             """
-            logger.info(
-                "lithos_conflict_resolve edge_id=%s resolution=%s resolver=%s",
-                edge_id,
-                resolution,
-                resolver,
+            return await self.memory.conflict_resolve(
+                edge_id=edge_id,
+                resolution=resolution,
+                resolver=resolver,
+                winner_id=winner_id,
             )
-            tracer = get_tracer()
-            with tracer.start_as_current_span("lithos.tool.conflict_resolve") as span:
-                span.set_attribute("lithos.tool", "lithos_conflict_resolve")
-
-                valid_resolutions = {"accepted_dual", "superseded", "refuted", "merged"}
-                if resolution not in valid_resolutions:
-                    return {
-                        "status": "error",
-                        "code": "invalid_input",
-                        "message": (
-                            f"Invalid resolution '{resolution}'. "
-                            f"Must be one of: {', '.join(sorted(valid_resolutions))}"
-                        ),
-                    }
-
-                edge = await self.projection.get_edge(edge_id)
-                if edge is None:
-                    return {
-                        "status": "error",
-                        "code": "not_found",
-                        "message": f"Edge '{edge_id}' not found",
-                    }
-
-                if edge["type"] != "contradicts":
-                    return {
-                        "status": "error",
-                        "code": "invalid_input",
-                        "message": (
-                            f"Edge '{edge_id}' is type '{edge['type']}', not 'contradicts'"
-                        ),
-                    }
-
-                from_id = str(edge["from_id"])
-                to_id = str(edge["to_id"])
-
-                loser_id: str | None = None
-                if resolution == "superseded":
-                    if winner_id is None:
-                        return {
-                            "status": "error",
-                            "code": "invalid_input",
-                            "message": "winner_id is required when resolution is 'superseded'",
-                        }
-                    if winner_id not in (from_id, to_id):
-                        return {
-                            "status": "error",
-                            "code": "invalid_input",
-                            "message": (
-                                f"winner_id '{winner_id}' must be either "
-                                f"from_id '{from_id}' or to_id '{to_id}'"
-                            ),
-                        }
-                    loser_id = to_id if winner_id == from_id else from_id
-
-                updated = await self.edge_store.update_conflict_resolution(
-                    edge_id,
-                    conflict_state=resolution,
-                    provenance_actor=resolver,
-                )
-
-                if not updated:
-                    return {
-                        "status": "error",
-                        "code": "update_failed",
-                        "message": f"Edge '{edge_id}' could not be updated",
-                    }
-
-                if resolution == "superseded" and winner_id is not None:
-                    await self.knowledge.update(
-                        id=winner_id,
-                        agent=resolver,
-                        supersedes=loser_id,
-                    )
-
-                from lithos.events import EDGE_UPSERTED
-
-                await self._emit(
-                    LithosEvent(
-                        type=EDGE_UPSERTED,
-                        payload={
-                            "edge_id": edge_id,
-                            "from_id": from_id,
-                            "to_id": to_id,
-                            "type": "contradicts",
-                            "conflict_state": resolution,
-                        },
-                    )
-                )
-
-                return {
-                    "status": "ok",
-                    "edge_id": edge_id,
-                    "conflict_state": resolution,
-                }
 
         @self.mcp.tool()
         @tool_metrics()
@@ -1935,161 +1842,14 @@ class LithosServer:
             Returns:
                 Dict with hit, document, stale_exists, stale_id
             """
-            logger.info("lithos_cache_lookup query_len=%d source_url=%s", len(query), source_url)
-
-            # Input validation
-            if max_age_hours is not None and max_age_hours <= 0:
-                return {
-                    "status": "error",
-                    "code": "invalid_input",
-                    "message": "max_age_hours must be positive.",
-                }
-            if limit < 1:
-                return {
-                    "status": "error",
-                    "code": "invalid_input",
-                    "message": "limit must be >= 1.",
-                }
-            if not (0.0 <= min_confidence <= 1.0):
-                return {
-                    "status": "error",
-                    "code": "invalid_input",
-                    "message": "min_confidence must be between 0.0 and 1.0.",
-                }
-
-            _lookup_start = time.perf_counter()
-            tracer = get_tracer()
-            with tracer.start_as_current_span("lithos.cache_lookup") as span:
-                span.set_attribute("lithos.tool", "lithos_cache_lookup")
-                span.set_attribute("cache.source_url_used", source_url is not None)
-
-                candidates: list[str] = []
-                candidates_evaluated = 0
-
-                # Fast path: source_url exact lookup
-                if source_url is not None:
-                    fast_doc = await self.knowledge.find_by_source_url(source_url)
-                    if fast_doc is not None:
-                        # Tag filtering on fast path
-                        if tags:
-                            doc_tags = fast_doc.metadata.tags
-                            if all(t in doc_tags for t in tags):
-                                candidates = [fast_doc.id]
-                            # else: tag filter failed, fall through to semantic
-                        else:
-                            candidates = [fast_doc.id]
-
-                # Fallback: semantic search
-                if not candidates:
-                    try:
-                        sem_results = await asyncio.to_thread(
-                            self.search.semantic_search,
-                            query=query,
-                            limit=limit,
-                            threshold=0.0,
-                            tags=tags,
-                        )
-                        candidates = [r.id for r in sem_results[:limit]]
-                    except SearchBackendError as exc:
-                        span.set_attribute("cache.search_error", True)
-                        elapsed_ms = (time.perf_counter() - _lookup_start) * 1000
-                        lithos_metrics.cache_lookup_duration.record(elapsed_ms)
-                        lithos_metrics.cache_lookups.add(1, {"outcome": "error_search_backend"})
-                        return {
-                            "status": "error",
-                            "code": "search_backend_error",
-                            "message": f"Semantic search backend failed: {exc}",
-                        }
-
-                # Evaluate candidates
-                best_hit = None
-                first_stale_id: str | None = None
-                now = datetime.now(timezone.utc)
-                passing_docs: list[Any] = []
-
-                for doc_id in candidates:
-                    try:
-                        doc, _ = await self.knowledge.read(id=doc_id)
-                    except (FileNotFoundError, ValueError):
-                        continue
-
-                    candidates_evaluated += 1
-                    meta = doc.metadata
-
-                    # Skip if below confidence threshold
-                    if meta.confidence < min_confidence:
-                        continue
-
-                    # Check staleness (explicit expiry)
-                    if meta.is_stale:
-                        if first_stale_id is None:
-                            first_stale_id = doc_id
-                        continue
-
-                    # Check max_age_hours
-                    if max_age_hours is not None:
-                        from lithos.knowledge import _normalize_datetime
-
-                        updated = _normalize_datetime(meta.updated_at)
-                        cutoff = now - timedelta(hours=max_age_hours)
-                        if updated < cutoff:
-                            if first_stale_id is None:
-                                first_stale_id = doc_id
-                            continue
-
-                    passing_docs.append(doc)
-
-                if passing_docs:
-                    best_hit = max(passing_docs, key=lambda d: d.metadata.confidence)
-
-                span.set_attribute("cache.candidates_evaluated", candidates_evaluated)
-
-                elapsed_ms = (time.perf_counter() - _lookup_start) * 1000
-                lithos_metrics.cache_lookup_duration.record(elapsed_ms)
-
-                if best_hit is not None:
-                    span.set_attribute("cache.hit", True)
-                    span.set_attribute("cache.stale_exists", False)
-                    lithos_metrics.cache_lookups.add(1, {"outcome": "hit"})
-                    return {
-                        "hit": True,
-                        "document": {
-                            "id": best_hit.id,
-                            "title": best_hit.title,
-                            "content": best_hit.content,
-                            "confidence": best_hit.metadata.confidence,
-                            "updated_at": best_hit.metadata.updated_at.isoformat(),
-                            "expires_at": (
-                                best_hit.metadata.expires_at.isoformat()
-                                if best_hit.metadata.expires_at
-                                else None
-                            ),
-                            "tags": best_hit.metadata.tags,
-                            "source_url": best_hit.metadata.source_url,
-                        },
-                        "stale_exists": False,
-                        "stale_id": None,
-                    }
-                elif first_stale_id is not None:
-                    span.set_attribute("cache.hit", False)
-                    span.set_attribute("cache.stale_exists", True)
-                    lithos_metrics.cache_lookups.add(1, {"outcome": "miss_stale"})
-                    return {
-                        "hit": False,
-                        "document": None,
-                        "stale_exists": True,
-                        "stale_id": first_stale_id,
-                    }
-                else:
-                    span.set_attribute("cache.hit", False)
-                    span.set_attribute("cache.stale_exists", False)
-                    lithos_metrics.cache_lookups.add(1, {"outcome": "miss_clean"})
-                    return {
-                        "hit": False,
-                        "document": None,
-                        "stale_exists": False,
-                        "stale_id": None,
-                    }
+            return await self.memory.cache_lookup(
+                query=query,
+                source_url=source_url,
+                max_age_hours=max_age_hours,
+                min_confidence=min_confidence,
+                limit=limit,
+                tags=tags,
+            )
 
         @self.mcp.tool()
         @tool_metrics()

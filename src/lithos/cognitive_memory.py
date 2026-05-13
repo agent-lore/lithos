@@ -3,30 +3,34 @@
 See docs/adr/0005-cognitive-memory-module.md.
 
 Issue #255 landed the seam and lifecycle ordering. Issue #257 migrated
-``retrieve`` into the Module; the ``lithos_retrieve`` MCP handler in
-``LithosServer`` is now a one-line envelope wrapper. Issue #258 lands
-:meth:`node_stats` and :meth:`edge_upsert` / :meth:`edge_list` /
-:meth:`edge_delete`; the corresponding MCP handlers are now one-line
-wrappers. The remaining methods (``reinforce_*``, ``cache_lookup``,
-``conflict_resolve``) migrate in subsequent slices (#259-#260); their
-MCP handlers continue to call LCMA internals directly through
-server-level aliases until then.
+``retrieve`` into the Module; #258 added ``node_stats`` and the
+``edge_*`` methods; #259 added ``reinforce_*``; #260 adds
+``cache_lookup`` and ``conflict_resolve``. The corresponding MCP
+handlers in ``LithosServer`` are all one-line envelope wrappers
+around these methods.
 
 Method ordering convention: lifecycle methods first (``create``,
 ``attach_coordination``, ``start``, ``stop``), then public agent-facing
-methods grouped by domain (retrieve / edges / reinforcement / stats).
+methods grouped by domain (retrieve / edges / reinforcement /
+cache + conflict resolve).
 """
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import logging
+import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from lithos.errors import SearchBackendError
 from lithos.events import EDGE_UPSERTED, LithosEvent
+from lithos.knowledge import _normalize_datetime
 from lithos.lcma.enrich import EnrichWorker
 from lithos.lcma.stats import StatsStore
+from lithos.telemetry import get_tracer, lithos_metrics
 
 if TYPE_CHECKING:
     from lithos.config import LithosConfig
@@ -643,3 +647,292 @@ class CognitiveMemory:
             "CognitiveMemory.reinforce_misleading: edges weakened",
             extra={"node_count": len(misleading_ids), "edges_weakened": len(seen)},
         )
+
+    # ------------------------------------------------------------------
+    # Cache + conflict resolve (issue #260)
+    # ------------------------------------------------------------------
+
+    async def _emit(self, event: LithosEvent) -> None:
+        """Emit an event, logging any failure without propagating."""
+        try:
+            await self._event_bus.emit(event)
+        except Exception:
+            logger.exception("Failed to emit %s event", event.type)
+
+    async def cache_lookup(
+        self,
+        query: str,
+        *,
+        source_url: str | None = None,
+        max_age_hours: float | None = None,
+        min_confidence: float = 0.5,
+        limit: int = 3,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Check if fresh cached knowledge exists before doing expensive research.
+
+        Returns a hit envelope, a stale-reference envelope, or a clean miss.
+        Validation errors return ``{"status": "error", "code": ..., "message": ...}``.
+        """
+        logger.info("lithos_cache_lookup query_len=%d source_url=%s", len(query), source_url)
+
+        # Input validation
+        if max_age_hours is not None and max_age_hours <= 0:
+            return {
+                "status": "error",
+                "code": "invalid_input",
+                "message": "max_age_hours must be positive.",
+            }
+        if limit < 1:
+            return {
+                "status": "error",
+                "code": "invalid_input",
+                "message": "limit must be >= 1.",
+            }
+        if not (0.0 <= min_confidence <= 1.0):
+            return {
+                "status": "error",
+                "code": "invalid_input",
+                "message": "min_confidence must be between 0.0 and 1.0.",
+            }
+
+        _lookup_start = time.perf_counter()
+        tracer = get_tracer()
+        with tracer.start_as_current_span("lithos.cache_lookup") as span:
+            span.set_attribute("lithos.tool", "lithos_cache_lookup")
+            span.set_attribute("cache.source_url_used", source_url is not None)
+
+            candidates: list[str] = []
+            candidates_evaluated = 0
+
+            # Fast path: source_url exact lookup
+            if source_url is not None:
+                fast_doc = await self._knowledge.find_by_source_url(source_url)
+                if fast_doc is not None:
+                    # Tag filtering on fast path
+                    if tags:
+                        doc_tags = fast_doc.metadata.tags
+                        if all(t in doc_tags for t in tags):
+                            candidates = [fast_doc.id]
+                        # else: tag filter failed, fall through to semantic
+                    else:
+                        candidates = [fast_doc.id]
+
+            # Fallback: semantic search
+            if not candidates:
+                try:
+                    sem_results = await asyncio.to_thread(
+                        self._search.semantic_search,
+                        query=query,
+                        limit=limit,
+                        threshold=0.0,
+                        tags=tags,
+                    )
+                    candidates = [r.id for r in sem_results[:limit]]
+                except SearchBackendError as exc:
+                    span.set_attribute("cache.search_error", True)
+                    elapsed_ms = (time.perf_counter() - _lookup_start) * 1000
+                    lithos_metrics.cache_lookup_duration.record(elapsed_ms)
+                    lithos_metrics.cache_lookups.add(1, {"outcome": "error_search_backend"})
+                    return {
+                        "status": "error",
+                        "code": "search_backend_error",
+                        "message": f"Semantic search backend failed: {exc}",
+                    }
+
+            # Evaluate candidates
+            best_hit = None
+            first_stale_id: str | None = None
+            now = datetime.now(timezone.utc)
+            passing_docs: list[Any] = []
+
+            for doc_id in candidates:
+                try:
+                    doc, _ = await self._knowledge.read(id=doc_id)
+                except (FileNotFoundError, ValueError):
+                    continue
+
+                candidates_evaluated += 1
+                meta = doc.metadata
+
+                # Skip if below confidence threshold
+                if meta.confidence < min_confidence:
+                    continue
+
+                # Check staleness (explicit expiry)
+                if meta.is_stale:
+                    if first_stale_id is None:
+                        first_stale_id = doc_id
+                    continue
+
+                # Check max_age_hours
+                if max_age_hours is not None:
+                    updated = _normalize_datetime(meta.updated_at)
+                    cutoff = now - timedelta(hours=max_age_hours)
+                    if updated < cutoff:
+                        if first_stale_id is None:
+                            first_stale_id = doc_id
+                        continue
+
+                passing_docs.append(doc)
+
+            if passing_docs:
+                best_hit = max(passing_docs, key=lambda d: d.metadata.confidence)
+
+            span.set_attribute("cache.candidates_evaluated", candidates_evaluated)
+
+            elapsed_ms = (time.perf_counter() - _lookup_start) * 1000
+            lithos_metrics.cache_lookup_duration.record(elapsed_ms)
+
+            if best_hit is not None:
+                span.set_attribute("cache.hit", True)
+                span.set_attribute("cache.stale_exists", False)
+                lithos_metrics.cache_lookups.add(1, {"outcome": "hit"})
+                return {
+                    "hit": True,
+                    "document": {
+                        "id": best_hit.id,
+                        "title": best_hit.title,
+                        "content": best_hit.content,
+                        "confidence": best_hit.metadata.confidence,
+                        "updated_at": best_hit.metadata.updated_at.isoformat(),
+                        "expires_at": (
+                            best_hit.metadata.expires_at.isoformat()
+                            if best_hit.metadata.expires_at
+                            else None
+                        ),
+                        "tags": best_hit.metadata.tags,
+                        "source_url": best_hit.metadata.source_url,
+                    },
+                    "stale_exists": False,
+                    "stale_id": None,
+                }
+            elif first_stale_id is not None:
+                span.set_attribute("cache.hit", False)
+                span.set_attribute("cache.stale_exists", True)
+                lithos_metrics.cache_lookups.add(1, {"outcome": "miss_stale"})
+                return {
+                    "hit": False,
+                    "document": None,
+                    "stale_exists": True,
+                    "stale_id": first_stale_id,
+                }
+            else:
+                span.set_attribute("cache.hit", False)
+                span.set_attribute("cache.stale_exists", False)
+                lithos_metrics.cache_lookups.add(1, {"outcome": "miss_clean"})
+                return {
+                    "hit": False,
+                    "document": None,
+                    "stale_exists": False,
+                    "stale_id": None,
+                }
+
+    async def conflict_resolve(
+        self,
+        edge_id: str,
+        resolution: str,
+        resolver: str,
+        winner_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a contradiction between two notes.
+
+        Sets ``conflict_state`` on a ``contradicts`` edge and, when superseded,
+        records the supersedes link via ``KnowledgeManager.update``.
+        """
+        logger.info(
+            "lithos_conflict_resolve edge_id=%s resolution=%s resolver=%s",
+            edge_id,
+            resolution,
+            resolver,
+        )
+        tracer = get_tracer()
+        with tracer.start_as_current_span("lithos.tool.conflict_resolve") as span:
+            span.set_attribute("lithos.tool", "lithos_conflict_resolve")
+
+            valid_resolutions = {"accepted_dual", "superseded", "refuted", "merged"}
+            if resolution not in valid_resolutions:
+                return {
+                    "status": "error",
+                    "code": "invalid_input",
+                    "message": (
+                        f"Invalid resolution '{resolution}'. "
+                        f"Must be one of: {', '.join(sorted(valid_resolutions))}"
+                    ),
+                }
+
+            edge = await self._projection.get_edge(edge_id)
+            if edge is None:
+                return {
+                    "status": "error",
+                    "code": "not_found",
+                    "message": f"Edge '{edge_id}' not found",
+                }
+
+            if edge["type"] != "contradicts":
+                return {
+                    "status": "error",
+                    "code": "invalid_input",
+                    "message": (f"Edge '{edge_id}' is type '{edge['type']}', not 'contradicts'"),
+                }
+
+            from_id = str(edge["from_id"])
+            to_id = str(edge["to_id"])
+
+            loser_id: str | None = None
+            if resolution == "superseded":
+                if winner_id is None:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": "winner_id is required when resolution is 'superseded'",
+                    }
+                if winner_id not in (from_id, to_id):
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": (
+                            f"winner_id '{winner_id}' must be either "
+                            f"from_id '{from_id}' or to_id '{to_id}'"
+                        ),
+                    }
+                loser_id = to_id if winner_id == from_id else from_id
+
+            updated = await self._projection._edge_store.update_conflict_resolution(
+                edge_id,
+                conflict_state=resolution,
+                provenance_actor=resolver,
+            )
+
+            if not updated:
+                return {
+                    "status": "error",
+                    "code": "update_failed",
+                    "message": f"Edge '{edge_id}' could not be updated",
+                }
+
+            if resolution == "superseded" and winner_id is not None:
+                await self._knowledge.update(
+                    id=winner_id,
+                    agent=resolver,
+                    supersedes=loser_id,
+                )
+
+            await self._emit(
+                LithosEvent(
+                    type=EDGE_UPSERTED,
+                    payload={
+                        "edge_id": edge_id,
+                        "from_id": from_id,
+                        "to_id": to_id,
+                        "type": "contradicts",
+                        "conflict_state": resolution,
+                    },
+                )
+            )
+
+            return {
+                "status": "ok",
+                "edge_id": edge_id,
+                "conflict_state": resolution,
+            }
