@@ -25,6 +25,7 @@ from lithos.cognitive_memory import CognitiveMemory, NodeStats
 from lithos.config import LithosConfig
 from lithos.errors import ScoutFailure
 from lithos.events import EDGE_UPSERTED, EventBus
+from lithos.knowledge import KnowledgeManager
 from lithos.lcma.utils import Candidate
 from lithos.provenance import ProvenanceProjection
 
@@ -698,3 +699,296 @@ class TestProcessLifecycleValidation:
 
         assert result.returncode == 0, result.stderr
         assert "cm-lifecycle-ok" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Reinforcement (issue #259)
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def memory_with_knowledge(
+    test_config: LithosConfig,
+    knowledge_manager: KnowledgeManager,
+    mock_search: MagicMock,
+    mock_graph: MagicMock,
+    projection: ProvenanceProjection,
+    event_bus: EventBus,
+    mock_coordination: AsyncMock,
+):
+    """CognitiveMemory wired with the real KnowledgeManager.
+
+    The reinforcement methods read ``knowledge.get_cached_meta`` and call
+    ``knowledge.update`` (for quarantine), so they need a real
+    ``KnowledgeManager`` rather than the ``MagicMock`` used by the
+    lifecycle tests above. ``start()`` is invoked here so the StatsStore
+    is open for each test.
+    """
+    cm = await CognitiveMemory.create(
+        config=test_config,
+        knowledge=knowledge_manager,
+        search=mock_search,
+        graph=mock_graph,
+        projection=projection,
+        event_bus=event_bus,
+    )
+    cm.attach_coordination(mock_coordination)
+    await cm.start()
+    try:
+        yield cm
+    finally:
+        await cm.stop()
+
+
+async def _create_note(
+    km: KnowledgeManager,
+    title: str,
+    *,
+    namespace: str | None = None,
+) -> str:
+    """Helper: create a note via the real KnowledgeManager and return its id."""
+    result = await km.create(
+        title=title,
+        content=f"Content for {title}",
+        agent="test-agent",
+        namespace=namespace,
+    )
+    assert result.document is not None
+    return result.document.id
+
+
+class TestReinforceCited:
+    """``reinforce_cited`` updates per-node stats in the owned StatsStore."""
+
+    async def test_increments_cited_count(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        nid = await _create_note(knowledge_manager, "Note A")
+
+        await memory_with_knowledge.reinforce_cited([nid])
+
+        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["cited_count"] == 1
+
+    async def test_bumps_salience_by_0_02(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        nid = await _create_note(knowledge_manager, "Note B")
+
+        await memory_with_knowledge.reinforce_cited([nid])
+
+        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
+        assert stats is not None
+        # Default salience 0.5 + 0.02
+        assert stats["salience"] == pytest.approx(0.52)
+
+    async def test_bumps_spaced_rep_strength_by_0_05(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        nid = await _create_note(knowledge_manager, "Note C")
+
+        await memory_with_knowledge.reinforce_cited([nid])
+
+        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["spaced_rep_strength"] == pytest.approx(0.05)
+
+    async def test_accumulates_across_calls(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        nid = await _create_note(knowledge_manager, "Note D")
+
+        await memory_with_knowledge.reinforce_cited([nid])
+        await memory_with_knowledge.reinforce_cited([nid])
+
+        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["cited_count"] == 2
+        assert stats["salience"] == pytest.approx(0.54)
+        assert stats["spaced_rep_strength"] == pytest.approx(0.10)
+
+
+class TestReinforceIgnored:
+    """``reinforce_ignored`` increments count and only decays past threshold."""
+
+    async def test_increments_ignored_count(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        nid = await _create_note(knowledge_manager, "Note Ign-A")
+
+        await memory_with_knowledge.reinforce_ignored([nid])
+
+        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["ignored_count"] == 1
+
+    async def test_does_not_decay_salience_under_threshold(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        """ignored_count <= 5 leaves salience at the default 0.5."""
+        nid = await _create_note(knowledge_manager, "Note Ign-B")
+
+        for _ in range(5):
+            await memory_with_knowledge.reinforce_ignored([nid])
+
+        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["ignored_count"] == 5
+        assert stats["salience"] == pytest.approx(0.5)
+
+    async def test_decays_salience_when_chronic(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        """6th call (ignored=6, cited=0) triggers a -0.02 salience hit."""
+        nid = await _create_note(knowledge_manager, "Note Ign-C")
+
+        for _ in range(6):
+            await memory_with_knowledge.reinforce_ignored([nid])
+
+        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["ignored_count"] == 6
+        assert stats["salience"] == pytest.approx(0.5 - 0.02)
+
+
+class TestReinforceBetween:
+    """``reinforce_between`` writes related_to edges via the projection store."""
+
+    async def test_creates_edge_for_new_pair(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        n1 = await _create_note(knowledge_manager, "Note Pair-A1")
+        n2 = await _create_note(knowledge_manager, "Note Pair-A2")
+
+        await memory_with_knowledge.reinforce_between([n1, n2])
+
+        from_id, to_id = sorted([n1, n2])
+        edges = await memory_with_knowledge._projection._edge_store.list_edges(
+            from_id=from_id, to_id=to_id, edge_type="related_to"
+        )
+        assert len(edges) == 1
+        assert edges[0]["weight"] == pytest.approx(0.5)
+        assert edges[0]["provenance_type"] == "reinforcement"
+
+    async def test_strengthens_existing_edge_by_0_03(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        n1 = await _create_note(knowledge_manager, "Note Pair-B1")
+        n2 = await _create_note(knowledge_manager, "Note Pair-B2")
+
+        # First call creates the edge at 0.5; second strengthens by +0.03.
+        await memory_with_knowledge.reinforce_between([n1, n2])
+        await memory_with_knowledge.reinforce_between([n1, n2])
+
+        from_id, to_id = sorted([n1, n2])
+        edges = await memory_with_knowledge._projection._edge_store.list_edges(
+            from_id=from_id, to_id=to_id, edge_type="related_to"
+        )
+        assert len(edges) == 1
+        assert edges[0]["weight"] == pytest.approx(0.53)
+
+    async def test_skips_cross_namespace_pairs(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        n1 = await _create_note(knowledge_manager, "Note Cross-1", namespace="alpha")
+        n2 = await _create_note(knowledge_manager, "Note Cross-2", namespace="beta")
+
+        await memory_with_knowledge.reinforce_between([n1, n2])
+
+        all_edges = await memory_with_knowledge._projection._edge_store.list_edges(
+            edge_type="related_to"
+        )
+        assert len(all_edges) == 0
+
+    async def test_canonicalises_pair_order(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        """Stored edges always have from_id <= to_id lexicographically."""
+        n1 = await _create_note(knowledge_manager, "Note Order-1")
+        n2 = await _create_note(knowledge_manager, "Note Order-2")
+
+        await memory_with_knowledge.reinforce_between([n1, n2])
+
+        edges = await memory_with_knowledge._projection._edge_store.list_edges(
+            edge_type="related_to"
+        )
+        assert len(edges) == 1
+        edge = edges[0]
+        assert str(edge["from_id"]) <= str(edge["to_id"])
+
+
+class TestReinforceMisleading:
+    """``reinforce_misleading`` penalises stats, weakens edges, quarantines repeats."""
+
+    async def test_increments_count_and_decays_salience(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        nid = await _create_note(knowledge_manager, "Note Mis-A")
+
+        await memory_with_knowledge.reinforce_misleading([nid])
+
+        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
+        assert stats is not None
+        assert stats["misleading_count"] == 1
+        assert stats["salience"] == pytest.approx(0.5 - 0.05)
+
+    async def test_quarantines_after_three_hits(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        nid = await _create_note(knowledge_manager, "Note Mis-B")
+
+        for _ in range(3):
+            await memory_with_knowledge.reinforce_misleading([nid])
+
+        cached = knowledge_manager.get_cached_meta(nid)
+        assert cached is not None
+        assert cached.status == "quarantined"
+
+    async def test_weakens_adjacent_edges_by_0_05(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        """Edges touching a misleading node are weakened by -0.05 exactly once."""
+        n1 = await _create_note(knowledge_manager, "Note Mis-Edge-1")
+        n2 = await _create_note(knowledge_manager, "Note Mis-Edge-2")
+
+        # Seed a related_to edge between the two nodes at weight 0.5.
+        await memory_with_knowledge.reinforce_between([n1, n2])
+
+        # Both endpoints flagged misleading — edge weakened exactly once.
+        await memory_with_knowledge.reinforce_misleading([n1, n2])
+
+        from_id, to_id = sorted([n1, n2])
+        edges = await memory_with_knowledge._projection._edge_store.list_edges(
+            from_id=from_id, to_id=to_id, edge_type="related_to"
+        )
+        assert len(edges) == 1
+        assert edges[0]["weight"] == pytest.approx(0.45)
