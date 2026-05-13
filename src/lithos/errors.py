@@ -66,3 +66,39 @@ class IndexingError(LithosError):
     def __str__(self) -> str:
         detail = ", ".join(f"{backend}: {exc}" for backend, exc in self.backend_errors.items())
         return f"{super().__str__()} [{detail}]"
+
+
+class CognitiveMemoryError(LithosError):
+    """Base error for any failure originating inside CognitiveMemory.
+
+    Catch this to handle "the cognitive memory subsystem could not satisfy
+    the request" without caring which sub-component failed.
+    """
+
+
+class ScoutFailure(CognitiveMemoryError):
+    """A single retrieval scout's backend raised.
+
+    Caught and logged inside CognitiveMemory.retrieve so one bad scout does
+    not kill the whole retrieve. Carried as an exception type (rather than a
+    log line) so future code can branch on it — e.g. degraded-mode reporting
+    in the result envelope.
+
+    Attributes:
+        scout: The canonical scout name (e.g. ``"scout_vector"``).
+        cause: The underlying exception the scout raised.
+    """
+
+    def __init__(self, scout: str, cause: BaseException) -> None:
+        super().__init__(f"scout {scout!r} failed: {cause}")
+        self.scout = scout
+        self.cause = cause
+
+
+class RetrieveTimeout(CognitiveMemoryError):
+    """Retrieve exceeded its configured wall-clock budget.
+
+    Reserved for the Phase A gather timeout (when LcmaConfig grows the knob).
+    Defined now so #258/#259/#260 — and a future timeout slice — share one
+    base hierarchy.
+    """

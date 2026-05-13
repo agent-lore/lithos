@@ -20,8 +20,8 @@ from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
 from lithos.lcma.retrieve import (
     _rerank_fast,
+    _run_retrieve_impl,
     compute_temperature,
-    run_retrieve,
 )
 from lithos.lcma.stats import StatsStore
 from lithos.lcma.utils import Candidate
@@ -348,7 +348,7 @@ class TestStoredSalienceAffectsRetrieval:
             patch.object(seeded_search, "semantic_search", return_value=equal_results),
             patch.object(seeded_search, "full_text_search", return_value=equal_results),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="testing",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -398,7 +398,7 @@ class TestStoredSalienceAffectsRetrieval:
             patch.object(seeded_search, "semantic_search", return_value=hits),
             patch.object(seeded_search, "full_text_search", return_value=hits),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="testing",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -441,7 +441,7 @@ class TestStoredSalienceAffectsRetrieval:
             patch.object(seeded_search, "semantic_search", return_value=hits),
             patch.object(seeded_search, "full_text_search", return_value=hits),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="testing",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -507,7 +507,7 @@ class TestRetrieveSnippetParity:
             patch.object(seeded_search, "semantic_search", return_value=hit),
             patch.object(seeded_search, "full_text_search", return_value=hit),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="Quantum",
                 search=seeded_search,
                 knowledge=km,
@@ -710,7 +710,7 @@ class TestRunRetrievePhaseA:
             patch.object(seeded_search, "semantic_search", return_value=mock_results),
             patch.object(seeded_search, "full_text_search", return_value=mock_results),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="testing",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -744,7 +744,7 @@ class TestRunRetrievePhaseA:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="testing",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -783,7 +783,7 @@ class TestRunRetrievePhaseB:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query=_ID1,  # exact_alias should match UUID
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -823,7 +823,7 @@ class TestNormalization:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -860,7 +860,7 @@ class TestReceiptWriting:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="test",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -902,7 +902,7 @@ class TestReceiptWriting:
         broken_search.semantic_search = MagicMock(side_effect=Exception("search failure"))
         broken_search.full_text_search = MagicMock(side_effect=Exception("search failure"))
 
-        result = await run_retrieve(
+        result = await _run_retrieve_impl(
             query="test",
             search=broken_search,
             knowledge=seeded_km,
@@ -940,7 +940,7 @@ class TestReceiptWriting:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="format check",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -997,7 +997,7 @@ class TestWorkingMemory:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1039,7 +1039,7 @@ class TestWorkingMemory:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            await run_retrieve(
+            await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1084,7 +1084,7 @@ class TestMaxContextNodes:
             patch("lithos.lcma.retrieve.scout_provenance", new_callable=AsyncMock) as mock_prov,
         ):
             mock_prov.return_value = []
-            await run_retrieve(
+            await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1182,7 +1182,7 @@ class TestScoutsFiredAuditTrail:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="zzzz_no_match_anywhere",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1231,7 +1231,7 @@ class TestScoutsFiredAuditTrail:
             patch.object(seeded_search, "semantic_search", side_effect=RuntimeError("boom")),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="anything",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1286,7 +1286,7 @@ class TestScoutsFiredAuditTrail:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             caplog.at_level(logging.WARNING, logger="lithos.search"),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query=title,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1331,7 +1331,7 @@ class TestReceiptFinalNodesShape:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="alpha",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1390,7 +1390,7 @@ class TestReceiptFields:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="alpha",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1456,7 +1456,7 @@ class TestContradictionSurfacing:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="alpha",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1519,7 +1519,7 @@ class TestContradictionSurfacing:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="alpha",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1576,7 +1576,7 @@ class TestNewScoutsWiredInPhaseB:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="alpha",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1631,7 +1631,7 @@ class TestNewScoutsWiredInPhaseB:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="alpha",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1716,7 +1716,7 @@ class TestNewScoutsWiredInPhaseB:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="source",
                 search=seeded_search,
                 knowledge=km,
@@ -1768,7 +1768,7 @@ class TestNewScoutsWiredInPhaseB:
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
             patch("lithos.lcma.retrieve.scout_graph", side_effect=RuntimeError("graph boom")),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query="alpha",
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -1825,7 +1825,7 @@ class TestFinallyBlockRobustness:
             ),
             pytest.raises(RuntimeError, match="boom"),
         ):
-            await run_retrieve(
+            await _run_retrieve_impl(
                 query="anything",
                 search=seeded_search,
                 knowledge=seeded_km,

@@ -20,7 +20,7 @@ import pytest_asyncio
 from lithos.config import LcmaConfig, LithosConfig, StorageConfig
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.retrieve import _dominant_namespace, run_retrieve
+from lithos.lcma.retrieve import _dominant_namespace, _run_retrieve_impl
 from lithos.lcma.stats import StatsStore
 from lithos.provenance import EdgeStore, ProvenanceProjection
 from lithos.search import SearchEngine
@@ -215,7 +215,7 @@ class TestCoactivationSingleCall:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -257,7 +257,7 @@ class TestCoactivationSingleCall:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            result = await run_retrieve(
+            result = await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -293,7 +293,7 @@ class TestCoactivationSingleCall:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            await run_retrieve(
+            await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -335,7 +335,7 @@ class TestCoactivationMultiCall:
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
             # First call
-            await run_retrieve(
+            await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -347,7 +347,7 @@ class TestCoactivationMultiCall:
                 lcma_config=LcmaConfig(),
             )
             # Second call
-            await run_retrieve(
+            await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -383,7 +383,7 @@ class TestCoactivationMultiCall:
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
         ):
-            await run_retrieve(
+            await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
@@ -394,7 +394,7 @@ class TestCoactivationMultiCall:
                 stats_store=stats_store,
                 lcma_config=LcmaConfig(),
             )
-            await run_retrieve(
+            await _run_retrieve_impl(
                 query=_ID1,
                 search=seeded_search,
                 knowledge=seeded_km,
