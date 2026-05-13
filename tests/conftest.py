@@ -1,8 +1,20 @@
 """Pytest configuration and fixtures."""
 
+import os
+
+# Hide the GPU from the test process before importing anything that
+# transitively imports torch (lithos.search → sentence_transformers →
+# torch). With a GPU visible, PyTorch lazily initialises a CUDA context
+# on first probe (``torch.cuda.is_available()``, sentence-transformers'
+# device-detect path) and cuDNN/cuBLAS reserve ~4 GiB on the device
+# even when every model is constructed with ``device="cpu"``. Issue
+# #272 covers the long form. ``setdefault`` keeps this overridable: a
+# developer who really wants a GPU for a debug session can set
+# ``CUDA_VISIBLE_DEVICES=0`` explicitly before running pytest.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
 import gc
 import logging
-import os
 import shutil
 import tempfile
 import threading
@@ -12,7 +24,13 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from lithos.config import LithosConfig, StorageConfig, _reset_config, set_config
+from lithos.config import (
+    LithosConfig,
+    SearchConfig,
+    StorageConfig,
+    _reset_config,
+    set_config,
+)
 from lithos.coordination import CoordinationService
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
@@ -122,8 +140,15 @@ def test_config(
     """
     for var in _LITHOS_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+    # Pin the embedder to CPU for tests. The function-scoped ``server``
+    # fixture rebuilds the SentenceTransformer per test; on CUDA hosts
+    # PyTorch's caching allocator and ChromaDB workspaces accumulate
+    # ~20 GB of VRAM across a full integration run (issue #272). Tests
+    # don't need a GPU — MiniLM-L6 on CPU embeds the few short docs
+    # each test produces in well under a second.
     config = LithosConfig(
         storage=StorageConfig(data_dir=temp_dir),
+        search=SearchConfig(device="cpu"),
     )
     config.ensure_directories()
     set_config(config)
