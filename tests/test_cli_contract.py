@@ -66,6 +66,37 @@ class TestCLIContracts:
         assert "1. CLI Contract Seed (score:" in search.output
         assert "Path:" in search.output
 
+    def test_reindex_is_idempotent_via_plan_apply(self, temp_dir):
+        """Issue #256: routing reindex through plan_reconcile/apply_reconcile
+        means a second run against the same corpus must still report the same
+        indexed-document count and exit cleanly. The manual loop never had to
+        survive a no-op-on-clean-corpus pass; the new seam does."""
+        config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
+        config.ensure_directories()
+        set_config(config)
+
+        knowledge = KnowledgeManager(config)
+
+        async def _seed() -> None:
+            await knowledge.create(
+                title="Idempotent Reindex Seed",
+                content="ReindexIdempotentTerm seeded once, indexed twice.",
+                agent="cli-test",
+            )
+
+        asyncio.run(_seed())
+
+        runner = CliRunner()
+        first = runner.invoke(cli, ["--data-dir", str(temp_dir), "reindex"])
+        assert first.exit_code == 0, first.output
+        assert "Found 1 markdown files" in first.output
+        assert "Indexed 1 documents" in first.output
+
+        second = runner.invoke(cli, ["--data-dir", str(temp_dir), "reindex"])
+        assert second.exit_code == 0, second.output
+        assert "Found 1 markdown files" in second.output
+        assert "Indexed 1 documents" in second.output
+
     def test_inspect_doc_output_shape(self, temp_dir):
         config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
         config.ensure_directories()

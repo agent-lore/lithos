@@ -187,6 +187,7 @@ def reindex(ctx: click.Context, clear: bool) -> None:
     """Rebuild search indices from knowledge files."""
     from lithos.graph import KnowledgeGraph
     from lithos.knowledge import KnowledgeManager
+    from lithos.provenance import ProvenanceProjection
     from lithos.search import SearchEngine
 
     config: LithosConfig = ctx.obj["config"]
@@ -197,47 +198,52 @@ def reindex(ctx: click.Context, clear: bool) -> None:
 
     async def do_reindex() -> None:
         search = await SearchEngine.create(config)
-        if clear:
-            click.echo("Clearing existing indices...")
-            logger.info("reindex: clearing existing indices clear=True")
-            search.clear_all()
-            graph.clear()
+        projection = await ProvenanceProjection.create(config)
+        try:
+            if clear:
+                click.echo("Clearing existing indices...")
+                logger.info("reindex: clearing existing indices clear=True")
+                search.clear_all()
+                graph.clear()
 
-        knowledge_path = config.storage.knowledge_path
-        files = list(knowledge_path.rglob("*.md"))
+            # --clear forces a full rebuild; otherwise plan_reconcile is the
+            # single source of truth for what needs touching.
+            knowledge_path = config.storage.knowledge_path
+            files = list(knowledge_path.rglob("*.md"))
 
-        click.echo(f"Found {len(files)} markdown files")
-        logger.info("reindex started: file_count=%d clear=%s", len(files), clear)
+            click.echo(f"Found {len(files)} markdown files")
+            logger.info("reindex started: file_count=%d clear=%s", len(files), clear)
 
-        indexed = 0
-        errors = 0
+            plan = await knowledge.plan_reconcile(search=search, graph=graph, projection=projection)
+            result = await knowledge.apply_reconcile(
+                plan, search=search, graph=graph, projection=projection
+            )
 
-        with click.progressbar(files, label="Indexing") as bar:
-            for file_path in bar:
-                try:
-                    relative_path = file_path.relative_to(knowledge_path)
-                    doc, _ = await knowledge.read(path=str(relative_path))
-                    search.index(KnowledgeManager.to_indexable(doc))
-                    graph.add_document(doc)
-                    indexed += 1
-                except Exception as e:
-                    errors += 1
-                    click.echo(f"\nError indexing {file_path}: {e}", err=True)
-                    logger.error("reindex error: path=%s error=%s", file_path, e)
+            indexed = result.search.scanned if result.search else 0
+            errors = len(result.search.failed) if result.search else 0
+            if result.search:
+                for failure in result.search.failed:
+                    click.echo(
+                        f"\nError indexing {failure.backend} backend: {failure.detail}", err=True
+                    )
+                    logger.error(
+                        "reindex error: backend=%s error=%s",
+                        failure.backend,
+                        failure.detail,
+                    )
 
-        # Save graph cache
-        graph.save_cache()
+            click.echo(f"\nIndexed {indexed} documents")
+            logger.info("reindex complete: indexed=%d errors=%d", indexed, errors)
+            if errors:
+                click.echo(f"Errors: {errors}", err=True)
 
-        click.echo(f"\nIndexed {indexed} documents")
-        logger.info("reindex complete: indexed=%d errors=%d", indexed, errors)
-        if errors:
-            click.echo(f"Errors: {errors}", err=True)
-
-        # Show stats
-        stats = search.get_stats()
-        click.echo(f"Total chunks: {stats.get('chroma_chunk_count', 0)}")
-        click.echo(f"Graph nodes: {graph.node_count()}")
-        click.echo(f"Graph edges: {graph.edge_count()}")
+            # Show stats
+            stats = search.get_stats()
+            click.echo(f"Total chunks: {stats.get('chroma_chunk_count', 0)}")
+            click.echo(f"Graph nodes: {graph.node_count()}")
+            click.echo(f"Graph edges: {graph.edge_count()}")
+        finally:
+            await projection.close()
 
     asyncio.run(do_reindex())
 
