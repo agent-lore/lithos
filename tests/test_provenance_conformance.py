@@ -50,7 +50,7 @@ class TestCreateConformance:
         )
         assert result["status"] == "created"
         doc_id = result["id"]
-        assert server.knowledge._doc_to_sources.get(doc_id) == []
+        assert server.knowledge.get_doc_sources(doc_id) == []
 
     async def test_create_with_valid_uuids_stores_normalized(self, server: LithosServer):
         """create with valid UUIDs stores normalized (sorted, lowered) list."""
@@ -78,7 +78,7 @@ class TestCreateConformance:
             },
         )
         assert result["status"] == "created"
-        stored = server.knowledge._doc_to_sources[result["id"]]
+        stored = server.knowledge.get_doc_sources(result["id"])
         assert stored == sorted([id1, id2])
 
     async def test_create_uppercase_normalized(self, server: LithosServer):
@@ -100,7 +100,7 @@ class TestCreateConformance:
             },
         )
         assert result["status"] == "created"
-        stored = server.knowledge._doc_to_sources[result["id"]]
+        stored = server.knowledge.get_doc_sources(result["id"])
         assert stored == [src["id"]]  # lowered
 
 
@@ -125,7 +125,7 @@ class TestUpdateConformance:
         """update with _UNSET (None at MCP) preserves existing provenance."""
         src_id = await self._create(server, "Pres Src")
         doc_id = await self._create(server, "Pres Derived", derived_from_ids=[src_id])
-        assert server.knowledge._doc_to_sources[doc_id] == [src_id]
+        assert server.knowledge.get_doc_sources(doc_id) == [src_id]
 
         # Update without derived_from_ids (None at MCP = preserve)
         result = await _call_tool(
@@ -139,7 +139,7 @@ class TestUpdateConformance:
             },
         )
         assert result["status"] == "updated"
-        assert server.knowledge._doc_to_sources[doc_id] == [src_id]
+        assert server.knowledge.get_doc_sources(doc_id) == [src_id]
 
     async def test_update_empty_list_clears(self, server: LithosServer):
         """update with [] clears provenance."""
@@ -157,7 +157,7 @@ class TestUpdateConformance:
             },
         )
         assert result["status"] == "updated"
-        assert server.knowledge._doc_to_sources[doc_id] == []
+        assert server.knowledge.get_doc_sources(doc_id) == []
 
     async def test_update_replaces(self, server: LithosServer):
         """update with new list replaces provenance."""
@@ -176,7 +176,7 @@ class TestUpdateConformance:
             },
         )
         assert result["status"] == "updated"
-        assert server.knowledge._doc_to_sources[doc_id] == [s2]
+        assert server.knowledge.get_doc_sources(doc_id) == [s2]
         # s1 no longer in reverse index for this doc
         assert doc_id not in server.knowledge._source_to_derived.get(s1, set())
 
@@ -452,7 +452,7 @@ class TestScanConformance:
         mgr = KnowledgeManager(test_config)
 
         # Forward reference resolved (A references B, B exists)
-        assert mgr._doc_to_sources[id_a] == [id_b]
+        assert mgr.get_doc_sources(id_a) == [id_b]
         assert id_a in mgr._source_to_derived.get(id_b, set())
         assert not mgr._unresolved_provenance  # no unresolved
 
@@ -475,7 +475,7 @@ class TestScanConformance:
 
         mgr = KnowledgeManager(test_config)
         snap1 = (
-            dict(mgr._doc_to_sources),
+            dict(mgr.iter_doc_sources()),
             {k: set(v) for k, v in mgr._source_to_derived.items()},
             dict(mgr._unresolved_provenance),
             dict(mgr._id_to_title),
@@ -483,7 +483,7 @@ class TestScanConformance:
 
         mgr._scan_existing()
         snap2 = (
-            dict(mgr._doc_to_sources),
+            dict(mgr.iter_doc_sources()),
             {k: set(v) for k, v in mgr._source_to_derived.items()},
             dict(mgr._unresolved_provenance),
             dict(mgr._id_to_title),

@@ -17,7 +17,7 @@ async def test_create_loads_embedding_model_eagerly(test_config: LithosConfig) -
     with patch("lithos.search.SentenceTransformer", return_value=MagicMock()) as ctor:
         engine = await SearchEngine.create(test_config)
 
-    assert engine._chroma._model is not None, "embedding model should be loaded by create()"
+    assert engine.is_semantic_model_loaded(), "embedding model should be loaded by create()"
     ctor.assert_called_once()
 
 
@@ -36,7 +36,7 @@ async def test_create_propagates_model_load_failure(test_config: LithosConfig) -
 
 
 @pytest.mark.asyncio
-async def test_create_quarantines_corrupt_chroma_store(test_config: LithosConfig) -> None:
+async def test_create_quarantines_corrupt_semantic_store(test_config: LithosConfig) -> None:
     """create() quarantines an unreadable Chroma store and proceeds with a clean one."""
     chroma_path: Path = test_config.storage.chroma_path
     chroma_path.mkdir(parents=True, exist_ok=True)
@@ -61,4 +61,4 @@ async def test_create_quarantines_corrupt_chroma_store(test_config: LithosConfig
     backup_dirs = [p for p in siblings if p.name.startswith(f"{chroma_path.name}.corrupt-")]
     assert backup_dirs, "expected a quarantined backup directory after corrupt probe"
     assert chroma_path.exists(), "fresh chroma path should exist after quarantine"
-    assert engine._chroma._model is not None
+    assert engine.is_semantic_model_loaded()

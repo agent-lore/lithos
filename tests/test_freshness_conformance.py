@@ -409,15 +409,15 @@ class TestSchemaConformance:
             version_file.write_text("0")  # Force mismatch
 
         # Recreate the TantivyIndex — it should detect mismatch and rebuild
-        new_tantivy = TantivyIndex(index_path)
-        new_tantivy.open_or_create()
-        assert new_tantivy.needs_rebuild is True
+        new_ft_index = TantivyIndex(index_path)
+        new_ft_index.open_or_create()
+        assert new_ft_index.needs_rebuild is True
 
         # Re-index the document
-        new_tantivy.add_document(KnowledgeManager.to_indexable(doc))
+        new_ft_index.add_document(KnowledgeManager.to_indexable(doc))
 
         # Search should return correct results including is_stale
-        results = new_tantivy.search("rebuild testing")
+        results = new_ft_index.search("rebuild testing")
         assert len(results) >= 1
         match = [r for r in results if r.id == doc.id]
         assert len(match) == 1

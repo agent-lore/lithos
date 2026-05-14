@@ -1849,6 +1849,22 @@ class KnowledgeManager:
         """Get the source IDs this document derives from."""
         return self._doc_to_sources.get(doc_id, [])
 
+    def iter_doc_sources(self) -> Iterable[tuple[str, list[str]]]:
+        """Iterate over ``(doc_id, source_ids)`` pairs for every known document.
+
+        Snapshots the underlying ``_doc_to_sources`` index so callers can
+        iterate safely even if the cache is mutated concurrently (rare, but
+        possible via concurrent writes / file-watcher projections). Returned
+        lists are fresh copies — mutations to them never leak back into the
+        manager.
+
+        This is the public bulk-read counterpart to :meth:`get_doc_sources`;
+        previously callers (the projection's full-sweep helper in
+        ``lcma/edges.py``) reached into ``_doc_to_sources`` directly. See
+        issue #264.
+        """
+        return [(doc_id, list(sources)) for doc_id, sources in self._doc_to_sources.items()]
+
     def get_derived_docs(self, doc_id: str) -> set[str]:
         """Get IDs of documents derived from this document."""
         return self._source_to_derived.get(doc_id, set())
