@@ -13,13 +13,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import frontmatter as fm
 import pytest
 
 from lithos.config import LithosConfig, StorageConfig
+from lithos.coordination import CoordinationService
+from lithos.events import EventBus
+from lithos.graph import KnowledgeGraph
+from lithos.intake import CorpusIntake, EdgeRequest
 from lithos.knowledge import KnowledgeManager
 from lithos.provenance import ProvenancePlan, ProvenanceProjection, ProvenanceResult
+from lithos.search import SearchEngine
 
 
 async def _reconcile_via_km(
@@ -979,3 +985,68 @@ class TestProvenancePlanApply:
         assert survivor["provenance_type"] == "asserted"
         assert survivor["weight"] == pytest.approx(0.5)
         assert survivor["evidence"] == "agent claim"
+
+    @pytest.mark.asyncio
+    async def test_projection_edge_survives_assert_edge_in_same_node_namespace_group(
+        self,
+        seeded_km: KnowledgeManager,
+        projection: ProvenanceProjection,
+    ) -> None:
+        """Symmetric counterpart to ``test_asserted_edge_blocks_create_at_same_natural_key``
+        (ADR-0006 Slice 1, issue #263).
+
+        The natural key is ``(from_id, to_id, type, namespace)`` — projection-class
+        and asserted-class edges can therefore coexist between the same node pair
+        in the same namespace as long as ``type`` differs. This test exercises the
+        joint enforcement: the projection writes a frontmatter-provenanced
+        ``derived_from`` row via plan/apply, then ``CorpusIntake.assert_edge``
+        upserts an ``asserted``-provenance ``related_to`` row at the same
+        ``(from_id, to_id, namespace)`` slice, and both rows survive
+        byte-for-byte.
+        """
+        # Apply the projection plan first — produces a frontmatter-provenanced
+        # ``derived_from`` row for (_ID3, _ID1, projects).
+        result = await _reconcile_via_km(seeded_km, projection)
+        assert result.created == 1
+        projection_edges = await projection.list_edges(edge_type="derived_from")
+        assert len(projection_edges) == 1
+        projection_edge_id = projection_edges[0]["edge_id"]
+
+        # Drive an asserted edge through the real intake at a different
+        # natural key — same nodes and namespace, different ``type``.
+        intake = CorpusIntake(
+            knowledge=seeded_km,
+            search=MagicMock(spec=SearchEngine),
+            graph=MagicMock(spec=KnowledgeGraph),
+            coordination=AsyncMock(spec=CoordinationService),
+            event_bus=AsyncMock(spec=EventBus),
+            edge_store=projection._edge_store,
+        )
+        outcome = await intake.assert_edge(
+            "agent-x",
+            EdgeRequest(
+                from_id=_ID3,
+                to_id=_ID1,
+                edge_type="related_to",
+                weight=0.4,
+                namespace="projects",
+                provenance_type="asserted",
+                evidence="manual claim",
+            ),
+        )
+        assert outcome.status == "ok"
+
+        # Projection-class row survives untouched.
+        survivor = await projection.get_edge(projection_edge_id)
+        assert survivor is not None
+        assert survivor["type"] == "derived_from"
+        assert survivor["provenance_type"] == "frontmatter"
+        assert survivor["weight"] == pytest.approx(1.0)
+
+        # Asserted-class row landed at its own natural key.
+        asserted = await projection.get_edge(outcome.edge_id)
+        assert asserted is not None
+        assert asserted["type"] == "related_to"
+        assert asserted["provenance_type"] == "asserted"
+        assert asserted["weight"] == pytest.approx(0.4)
+        assert asserted["evidence"] == "manual claim"

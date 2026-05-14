@@ -29,8 +29,10 @@ from datetime import datetime
 from typing import Literal
 
 from lithos.coordination import CoordinationService
+from lithos.edge_store import EdgeStore
 from lithos.errors import SlugCollisionError
 from lithos.events import (
+    EDGE_UPSERTED,
     NOTE_CREATED,
     NOTE_DELETED,
     NOTE_UPDATED,
@@ -103,6 +105,40 @@ class WriteRequest:
 
 
 @dataclass(frozen=True)
+class EdgeRequest:
+    """Validated input for an asserted edge upsert (ADR-0006 Slice 1).
+
+    Mirrors the keyword arguments of :meth:`EdgeStore.upsert`. The upsert
+    key is ``(from_id, to_id, edge_type, namespace)``; ``weight`` and the
+    optional provenance fields are payload columns.
+    """
+
+    from_id: str
+    to_id: str
+    edge_type: str
+    weight: float
+    namespace: str
+    provenance_actor: str | None = None
+    provenance_type: str | None = None
+    evidence: str | None = None
+    conflict_state: str | None = None
+
+
+@dataclass(frozen=True)
+class EdgeOutcome:
+    """Result of a Corpus assert_edge.
+
+    ``status`` is currently always ``"ok"`` — the room-to-grow shape
+    matches :class:`WriteOutcome`'s style so future variants (e.g.
+    namespace mismatch, predicate conflict) can land without changing
+    the call site.
+    """
+
+    edge_id: str
+    status: Literal["ok"] = "ok"
+
+
+@dataclass(frozen=True)
 class WriteOutcome:
     """Result of a Corpus write.
 
@@ -144,12 +180,14 @@ class CorpusIntake:
         graph: KnowledgeGraph,
         coordination: CoordinationService,
         event_bus: EventBus,
+        edge_store: EdgeStore,
     ) -> None:
         self._knowledge = knowledge
         self._search = search
         self._graph = graph
         self._coordination = coordination
         self._event_bus = event_bus
+        self._edge_store = edge_store
 
     async def delete(self, agent: str, request: DeleteRequest) -> DeleteOutcome:
         """Delete a note from the Corpus and synchronise derived views.
@@ -368,6 +406,68 @@ class CorpusIntake:
                 document=doc,
                 warnings=list(result.warnings),
             )
+
+    async def assert_edge(self, agent: str, request: EdgeRequest) -> EdgeOutcome:
+        """Assert an edge into the Corpus (ADR-0006 Slice 1).
+
+        Four-step pipeline modelled on :meth:`delete` / :meth:`write`:
+
+        1. ``ensure_agent_known(agent)`` — unconditional, matches the
+           other intake methods. ``lithos_edge_upsert`` previously skipped
+           registration when ``provenance_actor`` was None; this method
+           always registers so the agent set stays an honest superset of
+           every party that has touched the Corpus.
+        2. ``EdgeStore.upsert`` — atomic SELECT-then-INSERT/UPDATE on
+           the upsert key ``(from_id, to_id, edge_type, namespace)``.
+        3. **No view-sync step** — no edge-derived view exists today
+           (cf. Search index / KnowledgeGraph for documents).
+        4. Emit :data:`EDGE_UPSERTED` via :meth:`_emit` so any event-bus
+           failure is logged but never propagates back to the caller.
+
+        Returns :class:`EdgeOutcome` with the freshly-upserted ``edge_id``.
+        Concurrent edits are out of scope — the upsert is by natural key
+        and ``EdgeRequest`` carries no ``expected_version``.
+        """
+        tracer = get_tracer()
+        with tracer.start_as_current_span("lithos.intake.assert_edge") as span:
+            span.set_attribute("lithos.intake.op", "assert_edge")
+            span.set_attribute("lithos.agent", agent)
+            span.set_attribute("lithos.edge.from_id", request.from_id)
+            span.set_attribute("lithos.edge.to_id", request.to_id)
+            span.set_attribute("lithos.edge.type", request.edge_type)
+            span.set_attribute("lithos.edge.namespace", request.namespace)
+
+            await self._coordination.ensure_agent_known(agent)
+
+            edge_id = await self._edge_store.upsert(
+                from_id=request.from_id,
+                to_id=request.to_id,
+                edge_type=request.edge_type,
+                weight=request.weight,
+                namespace=request.namespace,
+                provenance_actor=request.provenance_actor,
+                provenance_type=request.provenance_type,
+                evidence=request.evidence,
+                conflict_state=request.conflict_state,
+            )
+
+            span.set_attribute("lithos.edge.edge_id", edge_id)
+
+            await self._emit(
+                LithosEvent(
+                    type=EDGE_UPSERTED,
+                    agent=agent,
+                    payload={
+                        "edge_id": edge_id,
+                        "from_id": request.from_id,
+                        "to_id": request.to_id,
+                        "type": request.edge_type,
+                        "namespace": request.namespace,
+                    },
+                )
+            )
+
+            return EdgeOutcome(edge_id=edge_id, status="ok")
 
     async def _emit(self, event: LithosEvent) -> None:
         """Emit an event, logging any failure without propagating.

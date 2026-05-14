@@ -16,13 +16,23 @@ import pytest_asyncio
 
 from lithos.config import LithosConfig
 from lithos.coordination import CoordinationService
+from lithos.edge_store import EdgeStore
 from lithos.errors import SlugCollisionError
-from lithos.events import NOTE_CREATED, NOTE_DELETED, NOTE_UPDATED, EventBus, LithosEvent
+from lithos.events import (
+    EDGE_UPSERTED,
+    NOTE_CREATED,
+    NOTE_DELETED,
+    NOTE_UPDATED,
+    EventBus,
+    LithosEvent,
+)
 from lithos.graph import KnowledgeGraph
 from lithos.intake import (
     CorpusIntake,
     DeleteOutcome,
     DeleteRequest,
+    EdgeOutcome,
+    EdgeRequest,
     WriteOutcome,
     WriteRequest,
 )
@@ -40,7 +50,7 @@ async def stub_intake(
     knowledge_graph: KnowledgeGraph,
 ) -> tuple[CorpusIntake, dict[str, Any]]:
     """A CorpusIntake wired with a real KnowledgeManager + graph but mocked
-    SearchEngine, CoordinationService, and EventBus.
+    SearchEngine, CoordinationService, EventBus, and EdgeStore.
 
     Returns ``(intake, mocks)`` where ``mocks`` is a dict of the stubs so each
     test can configure side-effects and assert call patterns.
@@ -48,6 +58,7 @@ async def stub_intake(
     search = MagicMock(spec=SearchEngine)
     coordination = AsyncMock(spec=CoordinationService)
     event_bus = AsyncMock(spec=EventBus)
+    edge_store = AsyncMock(spec=EdgeStore)
 
     intake = CorpusIntake(
         knowledge=knowledge_manager,
@@ -55,11 +66,13 @@ async def stub_intake(
         graph=knowledge_graph,
         coordination=coordination,
         event_bus=event_bus,
+        edge_store=edge_store,
     )
     return intake, {
         "search": search,
         "coordination": coordination,
         "event_bus": event_bus,
+        "edge_store": edge_store,
     }
 
 
@@ -569,3 +582,135 @@ async def test_lithos_delete_handler_returns_doc_not_found_envelope(
         "code": "doc_not_found",
         "message": "Document not found: 00000000-0000-0000-0000-000000000000",
     }
+
+
+# ---------- assert_edge tests (ADR-0006 Slice 1, issue #263) ----------
+
+
+@pytest.mark.asyncio
+async def test_assert_edge_registers_agent_unconditionally(
+    stub_intake: tuple[CorpusIntake, dict[str, Any]],
+) -> None:
+    """``ensure_agent_known`` runs for every assert_edge — matches the
+    ADR-0006 acceptance criterion that closes the loophole where
+    ``lithos_edge_upsert`` previously skipped registration when
+    ``provenance_actor`` was None."""
+    intake, mocks = stub_intake
+    mocks["edge_store"].upsert.return_value = "edge_abc123"
+
+    outcome = await intake.assert_edge(
+        "agent-1",
+        EdgeRequest(
+            from_id="a",
+            to_id="b",
+            edge_type="related_to",
+            weight=0.5,
+            namespace="default",
+        ),
+    )
+
+    assert isinstance(outcome, EdgeOutcome)
+    assert outcome.status == "ok"
+    assert outcome.edge_id == "edge_abc123"
+    mocks["coordination"].ensure_agent_known.assert_awaited_once_with("agent-1")
+
+
+@pytest.mark.asyncio
+async def test_assert_edge_upserts_with_translated_request(
+    stub_intake: tuple[CorpusIntake, dict[str, Any]],
+) -> None:
+    """``EdgeRequest`` field names map verbatim onto ``EdgeStore.upsert`` kwargs."""
+    intake, mocks = stub_intake
+    mocks["edge_store"].upsert.return_value = "edge_xyz"
+
+    request = EdgeRequest(
+        from_id="src",
+        to_id="dst",
+        edge_type="cites",
+        weight=0.9,
+        namespace="proj-a",
+        provenance_actor="actor-1",
+        provenance_type="manual",
+        evidence='{"why": "see thread"}',
+        conflict_state=None,
+    )
+    outcome = await intake.assert_edge("agent-1", request)
+
+    assert outcome.edge_id == "edge_xyz"
+    mocks["edge_store"].upsert.assert_awaited_once_with(
+        from_id="src",
+        to_id="dst",
+        edge_type="cites",
+        weight=0.9,
+        namespace="proj-a",
+        provenance_actor="actor-1",
+        provenance_type="manual",
+        evidence='{"why": "see thread"}',
+        conflict_state=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_assert_edge_emits_edge_upserted_after_upsert(
+    stub_intake: tuple[CorpusIntake, dict[str, Any]],
+) -> None:
+    """Event-after-upsert ordering matches the ``delete()`` / ``write()``
+    pattern: emit only after the mutation has returned."""
+    intake, mocks = stub_intake
+    mocks["edge_store"].upsert.return_value = "edge_evt"
+
+    order: list[str] = []
+    mocks["edge_store"].upsert.side_effect = lambda **_kw: (
+        order.append("edge_store.upsert") or "edge_evt"
+    )
+
+    async def record_emit(event: LithosEvent) -> None:
+        order.append(f"emit:{event.type}")
+
+    mocks["event_bus"].emit.side_effect = record_emit
+
+    await intake.assert_edge(
+        "agent-1",
+        EdgeRequest(
+            from_id="a",
+            to_id="b",
+            edge_type="related_to",
+            weight=0.7,
+            namespace="default",
+        ),
+    )
+
+    assert order == ["edge_store.upsert", f"emit:{EDGE_UPSERTED}"]
+    emitted_event = mocks["event_bus"].emit.await_args.args[0]
+    assert emitted_event.agent == "agent-1"
+    assert emitted_event.payload["edge_id"] == "edge_evt"
+    assert emitted_event.payload["from_id"] == "a"
+    assert emitted_event.payload["to_id"] == "b"
+    assert emitted_event.payload["type"] == "related_to"
+    assert emitted_event.payload["namespace"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_assert_edge_swallows_event_emit_failure(
+    stub_intake: tuple[CorpusIntake, dict[str, Any]],
+) -> None:
+    """A failed event delivery must never undo a successful edge upsert —
+    matches ADR-0001 / the existing ``delete`` and ``write`` semantics."""
+    intake, mocks = stub_intake
+    mocks["edge_store"].upsert.return_value = "edge_silent"
+    mocks["event_bus"].emit.side_effect = RuntimeError("bus down")
+
+    outcome = await intake.assert_edge(
+        "agent-1",
+        EdgeRequest(
+            from_id="a",
+            to_id="b",
+            edge_type="related_to",
+            weight=0.5,
+            namespace="default",
+        ),
+    )
+
+    assert outcome == EdgeOutcome(edge_id="edge_silent", status="ok")
+    mocks["edge_store"].upsert.assert_awaited_once()
+    mocks["event_bus"].emit.assert_awaited_once()

@@ -25,6 +25,7 @@ from lithos.cognitive_memory import CognitiveMemory, NodeStats
 from lithos.config import LithosConfig
 from lithos.errors import ScoutFailure, SearchBackendError
 from lithos.events import EDGE_UPSERTED, EventBus
+from lithos.intake import CorpusIntake
 from lithos.knowledge import KnowledgeManager
 from lithos.lcma.utils import Candidate
 from lithos.provenance import ProvenanceProjection
@@ -65,6 +66,31 @@ def mock_coordination() -> AsyncMock:
     return AsyncMock()
 
 
+@pytest.fixture
+def intake(
+    mock_knowledge: MagicMock,
+    mock_search: MagicMock,
+    mock_graph: MagicMock,
+    event_bus: EventBus,
+    mock_coordination: AsyncMock,
+    projection: ProvenanceProjection,
+) -> CorpusIntake:
+    """A real CorpusIntake sharing the projection's underlying EdgeStore.
+
+    ADR-0006 Slice 1 (#263) wires ``CognitiveMemory.edge_upsert`` through
+    ``intake.assert_edge``. Sharing the edge store with ``projection`` keeps
+    ``edge_list`` round-trips honest in the test.
+    """
+    return CorpusIntake(
+        knowledge=mock_knowledge,
+        search=mock_search,
+        graph=mock_graph,
+        coordination=mock_coordination,
+        event_bus=event_bus,
+        edge_store=projection._edge_store,
+    )
+
+
 @pytest_asyncio.fixture
 async def memory(
     test_config: LithosConfig,
@@ -74,6 +100,7 @@ async def memory(
     projection: ProvenanceProjection,
     event_bus: EventBus,
     mock_coordination: AsyncMock,
+    intake: CorpusIntake,
 ):
     """Construct a CognitiveMemory with coordination attached. Teardown safe."""
     cm = await CognitiveMemory.create(
@@ -83,6 +110,7 @@ async def memory(
         graph=mock_graph,
         projection=projection,
         event_bus=event_bus,
+        intake=intake,
     )
     cm.attach_coordination(mock_coordination)
     try:
@@ -106,7 +134,7 @@ class TestCreate:
         assert memory._enrich_worker is None
         assert memory._started is False
 
-    async def test_create_stores_six_dependencies(
+    async def test_create_stores_seven_dependencies(
         self,
         test_config: LithosConfig,
         mock_knowledge: MagicMock,
@@ -114,6 +142,7 @@ class TestCreate:
         mock_graph: MagicMock,
         projection: ProvenanceProjection,
         event_bus: EventBus,
+        intake: CorpusIntake,
     ) -> None:
         cm = await CognitiveMemory.create(
             config=test_config,
@@ -122,6 +151,7 @@ class TestCreate:
             graph=mock_graph,
             projection=projection,
             event_bus=event_bus,
+            intake=intake,
         )
         try:
             assert cm._config is test_config
@@ -130,6 +160,7 @@ class TestCreate:
             assert cm._graph is mock_graph
             assert cm._projection is projection
             assert cm._event_bus is event_bus
+            assert cm._intake is intake
             # Coordination is NOT a constructor dep — set later via attach.
             assert cm._coordination is None
         finally:
@@ -144,6 +175,7 @@ class TestCreate:
         projection: ProvenanceProjection,
         event_bus: EventBus,
         mock_coordination: AsyncMock,
+        intake: CorpusIntake,
     ) -> None:
         cm = await CognitiveMemory.create(
             config=test_config,
@@ -152,6 +184,7 @@ class TestCreate:
             graph=mock_graph,
             projection=projection,
             event_bus=event_bus,
+            intake=intake,
         )
         try:
             cm.attach_coordination(mock_coordination)
@@ -228,6 +261,7 @@ class TestLifecycle:
         mock_graph: MagicMock,
         projection: ProvenanceProjection,
         event_bus: EventBus,
+        intake: CorpusIntake,
     ) -> None:
         """LCMA enabled + no coordination attached → explicit error, not silent failure."""
         cm = await CognitiveMemory.create(
@@ -237,6 +271,7 @@ class TestLifecycle:
             graph=mock_graph,
             projection=projection,
             event_bus=event_bus,
+            intake=intake,
         )
         try:
             with pytest.raises(RuntimeError, match="coordination not attached"):
@@ -256,6 +291,7 @@ class TestLcmaDisabled:
         mock_graph: MagicMock,
         projection: ProvenanceProjection,
         event_bus: EventBus,
+        intake: CorpusIntake,
     ) -> None:
         """No coordination attach needed when LCMA is disabled."""
         test_config.lcma.enabled = False
@@ -266,6 +302,7 @@ class TestLcmaDisabled:
             graph=mock_graph,
             projection=projection,
             event_bus=event_bus,
+            intake=intake,
         )
         try:
             await cm.start()
@@ -533,6 +570,7 @@ class TestEdgeMethods:
         await memory.start()
 
         edge_id = await memory.edge_upsert(
+            agent="agent-1",
             from_id="a",
             to_id="b",
             edge_type="related_to",
@@ -574,6 +612,7 @@ class TestEdgeMethods:
     async def test_edge_delete_removes_edge(self, memory: CognitiveMemory) -> None:
         await memory.start()
         edge_id = await memory.edge_upsert(
+            agent="agent-1",
             from_id="a",
             to_id="b",
             edge_type="related_to",
@@ -597,6 +636,7 @@ class TestEdgeMethods:
         await memory.start()
 
         edge_id = await memory.edge_upsert(
+            agent="agent-1",
             from_id="a",
             to_id="b",
             edge_type="related_to",
@@ -606,6 +646,7 @@ class TestEdgeMethods:
 
         event = await asyncio.wait_for(queue.get(), timeout=1.0)
         assert event.type == EDGE_UPSERTED
+        assert event.agent == "agent-1"
         assert event.payload["edge_id"] == edge_id
         assert event.payload["from_id"] == "a"
         assert event.payload["to_id"] == "b"
@@ -637,6 +678,7 @@ class TestProcessLifecycleValidation:
             from lithos.cognitive_memory import CognitiveMemory
             from lithos.config import LithosConfig, StorageConfig
             from lithos.events import EventBus
+            from lithos.intake import CorpusIntake
             from lithos.provenance import ProvenanceProjection
 
 
@@ -651,6 +693,15 @@ class TestProcessLifecycleValidation:
                     projection = await ProvenanceProjection.create(config)
                     event_bus = EventBus(config.events)
 
+                    intake = CorpusIntake(
+                        knowledge=MagicMock(),
+                        search=MagicMock(),
+                        graph=MagicMock(),
+                        coordination=AsyncMock(),
+                        event_bus=event_bus,
+                        edge_store=projection._edge_store,
+                    )
+
                     memory = await CognitiveMemory.create(
                         config=config,
                         knowledge=MagicMock(),
@@ -658,6 +709,7 @@ class TestProcessLifecycleValidation:
                         graph=MagicMock(),
                         projection=projection,
                         event_bus=event_bus,
+                        intake=intake,
                     )
                     memory.attach_coordination(AsyncMock())
 
@@ -725,6 +777,14 @@ async def memory_with_knowledge(
     lifecycle tests above. ``start()`` is invoked here so the StatsStore
     is open for each test.
     """
+    real_intake = CorpusIntake(
+        knowledge=knowledge_manager,
+        search=mock_search,
+        graph=mock_graph,
+        coordination=mock_coordination,
+        event_bus=event_bus,
+        edge_store=projection._edge_store,
+    )
     cm = await CognitiveMemory.create(
         config=test_config,
         knowledge=knowledge_manager,
@@ -732,6 +792,7 @@ async def memory_with_knowledge(
         graph=mock_graph,
         projection=projection,
         event_bus=event_bus,
+        intake=real_intake,
     )
     cm.attach_coordination(mock_coordination)
     await cm.start()
@@ -1067,13 +1128,23 @@ class TestCacheLookupHitPath:
     ):
         knowledge = KnowledgeManager(test_config)
         search = await SearchEngine.create(test_config)
+        graph_stub = MagicMock()
+        real_intake = CorpusIntake(
+            knowledge=knowledge,
+            search=search,
+            graph=graph_stub,
+            coordination=mock_coordination,
+            event_bus=event_bus,
+            edge_store=projection._edge_store,
+        )
         cm = await CognitiveMemory.create(
             config=test_config,
             knowledge=knowledge,
             search=search,
-            graph=MagicMock(),
+            graph=graph_stub,
             projection=projection,
             event_bus=event_bus,
+            intake=real_intake,
         )
         cm.attach_coordination(mock_coordination)
         try:
