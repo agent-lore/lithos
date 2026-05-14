@@ -58,7 +58,7 @@ async def _insert_receipt(
 ) -> None:
     """Insert a receipt with given final node IDs."""
     final_nodes = [{"id": nid, "score": 0.9} for nid in node_ids]
-    await server.stats_store.insert_receipt(
+    await server.memory._stats_store.insert_receipt(
         receipt_id=receipt_id,
         query="test query",
         limit=10,
@@ -106,7 +106,7 @@ class TestTaskCompleteNoFeedback:
 
         # Verify no stats changes -- ignored_count should be 0
         for nid in node_ids:
-            stats = await srv.stats_store.get_node_stats(nid)
+            stats = await srv.memory._stats_store.get_node_stats(nid)
             if stats is not None:
                 assert stats["ignored_count"] == 0
                 assert stats["cited_count"] == 0
@@ -141,7 +141,7 @@ class TestReceiptValidation:
 
         # Verify no reinforcement applied
         for nid in node_ids:
-            stats = await srv.stats_store.get_node_stats(nid)
+            stats = await srv.memory._stats_store.get_node_stats(nid)
             if stats is not None:
                 assert stats["cited_count"] == 0
 
@@ -162,7 +162,7 @@ class TestReceiptValidation:
         )
         assert result == {"success": True}
 
-        stats = await srv.stats_store.get_node_stats(node_ids[0])
+        stats = await srv.memory._stats_store.get_node_stats(node_ids[0])
         assert stats is not None
         assert stats["cited_count"] == 1
 
@@ -235,12 +235,12 @@ class TestFeedbackIntersection:
         assert result == {"success": True}
 
         # node_ids[0] was cited (in receipt)
-        stats0 = await srv.stats_store.get_node_stats(node_ids[0])
+        stats0 = await srv.memory._stats_store.get_node_stats(node_ids[0])
         assert stats0 is not None
         assert stats0["cited_count"] == 1
 
         # node_ids[2] was NOT in receipt -- should not be reinforced
-        stats2 = await srv.stats_store.get_node_stats(node_ids[2])
+        stats2 = await srv.memory._stats_store.get_node_stats(node_ids[2])
         if stats2 is not None:
             assert stats2["cited_count"] == 0
 
@@ -261,12 +261,12 @@ class TestFeedbackIntersection:
         assert result == {"success": True}
 
         # node_ids[1] was penalized (in receipt)
-        stats1 = await srv.stats_store.get_node_stats(node_ids[1])
+        stats1 = await srv.memory._stats_store.get_node_stats(node_ids[1])
         assert stats1 is not None
         assert stats1["misleading_count"] == 1
 
         # node_ids[2] was NOT in receipt -- should not be penalized
-        stats2 = await srv.stats_store.get_node_stats(node_ids[2])
+        stats2 = await srv.memory._stats_store.get_node_stats(node_ids[2])
         if stats2 is not None:
             assert stats2["misleading_count"] == 0
 
@@ -290,12 +290,12 @@ class TestFeedbackIntersection:
         assert result == {"success": True}
 
         # node_ids[0] still exists -- should be cited
-        stats0 = await srv.stats_store.get_node_stats(node_ids[0])
+        stats0 = await srv.memory._stats_store.get_node_stats(node_ids[0])
         assert stats0 is not None
         assert stats0["cited_count"] == 1
 
         # node_ids[1] was deleted -- no stats change expected
-        stats1 = await srv.stats_store.get_node_stats(node_ids[1])
+        stats1 = await srv.memory._stats_store.get_node_stats(node_ids[1])
         if stats1 is not None:
             assert stats1["cited_count"] == 0
 
@@ -326,7 +326,7 @@ class TestIgnoredPenalization:
 
         # All receipt nodes should have ignored_count incremented
         for nid in node_ids:
-            stats = await srv.stats_store.get_node_stats(nid)
+            stats = await srv.memory._stats_store.get_node_stats(nid)
             assert stats is not None
             assert stats["ignored_count"] == 1
 
@@ -354,7 +354,7 @@ class TestReinforcementApplication:
         assert result == {"success": True}
 
         for nid in node_ids:
-            stats = await srv.stats_store.get_node_stats(nid)
+            stats = await srv.memory._stats_store.get_node_stats(nid)
             assert stats is not None
             assert stats["cited_count"] == 1
             salience = stats["salience"]
@@ -379,7 +379,7 @@ class TestReinforcementApplication:
         assert result == {"success": True}
 
         for nid in node_ids:
-            stats = await srv.stats_store.get_node_stats(nid)
+            stats = await srv.memory._stats_store.get_node_stats(nid)
             assert stats is not None
             assert stats["misleading_count"] == 1
             salience = stats["salience"]
@@ -484,7 +484,7 @@ class TestFullReinforcementCycle:
         assert result == {"success": True}
 
         # cited node: cited_count=1, salience ~0.52, spaced_rep_strength ~0.05
-        stats_cited = await srv.stats_store.get_node_stats(cited_id)
+        stats_cited = await srv.memory._stats_store.get_node_stats(cited_id)
         assert stats_cited is not None
         assert stats_cited["cited_count"] == 1
         sal0 = stats_cited["salience"]
@@ -496,14 +496,14 @@ class TestFullReinforcementCycle:
 
         # ignored nodes: ignored_count=1
         for nid in ignored_ids:
-            stats_ign = await srv.stats_store.get_node_stats(nid)
+            stats_ign = await srv.memory._stats_store.get_node_stats(nid)
             assert stats_ign is not None
             assert stats_ign["ignored_count"] == 1
             assert stats_ign["cited_count"] == 0
             assert stats_ign["misleading_count"] == 0
 
         # misleading node: misleading_count=1, salience ~0.45
-        stats_mis = await srv.stats_store.get_node_stats(misleading_id)
+        stats_mis = await srv.memory._stats_store.get_node_stats(misleading_id)
         assert stats_mis is not None
         assert stats_mis["misleading_count"] == 1
         sal2 = stats_mis["salience"]

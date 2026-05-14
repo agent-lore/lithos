@@ -36,10 +36,10 @@ class TestNodeStatsTool:
         assert doc is not None
 
         # Simulate some stats
-        await srv.stats_store.increment_cited(doc.id)
-        await srv.stats_store.increment_cited(doc.id)
-        await srv.stats_store.update_salience(doc.id, 0.04)
-        await srv.stats_store.increment_ignored(doc.id)
+        await srv.memory._stats_store.increment_cited(doc.id)
+        await srv.memory._stats_store.increment_cited(doc.id)
+        await srv.memory._stats_store.update_salience(doc.id, 0.04)
+        await srv.memory._stats_store.increment_ignored(doc.id)
 
         result = await _call(srv, "lithos_node_stats", node_id=doc.id)
         assert result["node_id"] == doc.id

@@ -222,6 +222,66 @@ class CognitiveMemory:
             await self._enrich_worker.start()
         self._started = True
 
+    async def run_schema_migrations(self) -> None:
+        """Run the LCMA schema migrations against the wired ``KnowledgeManager``.
+
+        The :class:`MigrationRegistry` and ``run_migrations`` helpers are
+        package-internal to ``lithos.lcma`` (issue #262). Server callers
+        invoke this method instead of importing those symbols directly,
+        keeping the lcma boundary locked.
+        """
+        # Local imports keep the lcma symbols inside this Module's compile
+        # graph; nothing outside ``cognitive_memory`` / ``provenance`` /
+        # ``lcma/*`` may import them.
+        from lithos.lcma.migrations import MigrationRegistry, run_migrations
+
+        registry_path = self._config.storage.lithos_store_path / "migrations" / "registry.json"
+        registry = MigrationRegistry(registry_path)
+        registry.initialize()
+        run_migrations(self._knowledge, registry)
+
+    async def get_receipt(self, receipt_id: str, task_id: str) -> dict[str, object] | None:
+        """Fetch an LCMA retrieve receipt by id, scoped to *task_id*.
+
+        Public wrapper over :meth:`StatsStore.get_receipt` so callers don't
+        reach into the internal store (issue #262).
+        """
+        return await self._stats_store.get_receipt(receipt_id, task_id)
+
+    async def get_latest_receipt(self, task_id: str, agent_id: str) -> dict[str, object] | None:
+        """Return the most recent retrieve receipt for *task_id* / *agent_id*.
+
+        Public wrapper over :meth:`StatsStore.get_latest_receipt` (issue #262).
+        """
+        return await self._stats_store.get_latest_receipt(task_id, agent_id)
+
+    async def refresh_cached_counts(self) -> None:
+        """Refresh the cached LCMA gauge values from the database.
+
+        Public wrapper over :meth:`StatsStore.refresh_cached_counts` so the
+        server can prime the cache before OTEL gauge registration without
+        touching the internal store (issue #262).
+        """
+        await self._stats_store.refresh_cached_counts()
+
+    def get_cached_enrich_queue_depth(self) -> int:
+        """Return the cached enrich_queue unprocessed-row count (sync, cheap).
+
+        OTEL observable-gauge callbacks must be synchronous; this method
+        forwards to the cached value populated by
+        :meth:`refresh_cached_counts` / the EnrichWorker drain loop
+        (issue #262).
+        """
+        return self._stats_store.get_cached_enrich_queue_depth()
+
+    def get_cached_coactivation_pairs(self) -> int:
+        """Return the cached coactivation-pair count (sync, cheap)."""
+        return self._stats_store.get_cached_coactivation_pairs()
+
+    def get_cached_working_memory_active_tasks(self) -> int:
+        """Return the cached active-working-memory-task count (sync, cheap)."""
+        return self._stats_store.get_cached_working_memory_active_tasks()
+
     async def stop(self) -> None:
         """Stop the EnrichWorker and close the StatsStore. Idempotent."""
         if self._enrich_worker is not None:
