@@ -11,7 +11,7 @@ import math
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastmcp import FastMCP
 from starlette.requests import Request
@@ -44,7 +44,6 @@ from lithos.knowledge import (
     _normalize_datetime,
     _UnsetType,
 )
-from lithos.lcma.migrations import MigrationRegistry, run_migrations
 from lithos.provenance import ProvenanceProjection
 from lithos.search import Healthy, SearchEngine
 from lithos.telemetry import (
@@ -58,14 +57,6 @@ from lithos.telemetry import (
     tool_metrics,
 )
 from lithos.watch_intake import WatchIntake
-
-if TYPE_CHECKING:
-    # ``EnrichWorker`` and ``StatsStore`` are used as type annotations only —
-    # ``CognitiveMemory`` owns their runtime lifecycle. Issue #262 removes
-    # these transitional imports along with the back-aliased
-    # ``self.stats_store`` / ``self._enrich_worker`` attributes.
-    from lithos.lcma.enrich import EnrichWorker
-    from lithos.lcma.stats import StatsStore
 
 logger = logging.getLogger(__name__)
 
@@ -118,15 +109,10 @@ class LithosServer:
         self.edge_store: EdgeStore = None  # type: ignore[assignment]
 
         # ``CognitiveMemory`` (ADR-0005, issue #255) owns the ``StatsStore``
-        # and the ``EnrichWorker``. It is constructed asynchronously in
-        # :meth:`initialize` after the projection is ready; the two
-        # attributes below are aliased from the Module post-create so
-        # un-migrated tool handlers continue to call LCMA internals
-        # directly via ``self.stats_store`` / ``self._enrich_worker``.
-        # Method migration is in #257-#260.
+        # and the ``EnrichWorker`` lifecycles. The server no longer holds
+        # back-aliases to either (issue #262 — the lcma boundary lock):
+        # callers route through ``self.memory.<method>`` instead.
         self.memory: CognitiveMemory = None  # type: ignore[assignment]
-        self.stats_store: StatsStore = None  # type: ignore[assignment]
-        self._enrich_worker: EnrichWorker | None = None
 
         # Cached count fields for synchronous OTEL observable gauge callbacks.
         # Primed at startup by _refresh_coordination_stats_cache() and kept fresh
@@ -203,7 +189,7 @@ class LithosServer:
         # -- Resolve receipt --
         receipt: dict[str, object] | None
         if receipt_id is not None:
-            receipt = await self.stats_store.get_receipt(receipt_id, task_id)
+            receipt = await self.memory.get_receipt(receipt_id, task_id)
             if receipt is None:
                 return (
                     {
@@ -217,7 +203,7 @@ class LithosServer:
                     None,
                 )
         else:
-            receipt = await self.stats_store.get_latest_receipt(task_id, agent)
+            receipt = await self.memory.get_latest_receipt(task_id, agent)
             if receipt is None:
                 logger.warning(
                     "No receipt found for task=%s agent=%s — dropping all feedback",
@@ -626,9 +612,6 @@ class LithosServer:
                 # supplies the CoordinationService that ``EnrichWorker``
                 # requires until coordination consolidates into the Module
                 # per ADR-0005's "Anticipated evolution" section.
-                # Un-migrated tool handlers continue to access
-                # ``self.stats_store`` / ``self._enrich_worker`` via the
-                # aliases set below; method migration is in #257-#260.
                 if self.memory is None:
                     self.memory = await CognitiveMemory.create(
                         config=self._config,
@@ -640,16 +623,10 @@ class LithosServer:
                         intake=self.intake,
                     )
                     self.memory.attach_coordination(self.coordination)
-                if self.stats_store is None:
-                    self.stats_store = self.memory._stats_store
 
-                # Initialize and run schema migrations
-                registry_path = (
-                    self.config.storage.lithos_store_path / "migrations" / "registry.json"
-                )
-                migration_registry = MigrationRegistry(registry_path)
-                migration_registry.initialize()
-                run_migrations(self.knowledge, migration_registry)
+                # Run LCMA schema migrations through the Module so the lcma
+                # boundary stays locked (issue #262).
+                await self.memory.run_schema_migrations()
 
                 # Initialize coordination database
                 await self.coordination.initialize()
@@ -715,21 +692,20 @@ class LithosServer:
                 # EnrichWorker. This is the explicit lifecycle invariant
                 # from issue #255: ``start()`` is the call that opens the
                 # store, so the LCMA stats-cache priming and gauge
-                # registration below must run after it. Alias the worker
-                # out for un-migrated handlers that still reference
-                # ``self._enrich_worker`` directly.
+                # registration below must run after it.
                 await self.memory.start()
-                self._enrich_worker = self.memory._enrich_worker
 
-                # Register LCMA observable gauges when LCMA is enabled
-                if self._config.lcma.enabled and self.stats_store is not None:
+                # Register LCMA observable gauges when LCMA is enabled.
+                # Callbacks bind to ``CognitiveMemory`` methods so the lcma
+                # boundary stays locked (issue #262).
+                if self._config.lcma.enabled:
                     # Prime the LCMA stats cache BEFORE OTEL gauge registration
                     # for the same reason we prime coordination stats (#181):
                     # EnrichWorker refreshes the cache after each drain cycle,
                     # but the first drain is 5 minutes out by default — until
                     # then the gauges would report zero on a populated DB.
                     try:
-                        await self.stats_store.refresh_cached_counts()
+                        await self.memory.refresh_cached_counts()
                     except Exception:
                         logger.warning(
                             "LCMA stats cache priming failed; gauges will "
@@ -737,9 +713,9 @@ class LithosServer:
                             exc_info=True,
                         )
                     register_lcma_metrics(
-                        get_enrich_queue_depth=self.stats_store.get_cached_enrich_queue_depth,
-                        get_coactivation_pairs=self.stats_store.get_cached_coactivation_pairs,
-                        get_working_memory_active_tasks=self.stats_store.get_cached_working_memory_active_tasks,
+                        get_enrich_queue_depth=self.memory.get_cached_enrich_queue_depth,
+                        get_coactivation_pairs=self.memory.get_cached_coactivation_pairs,
+                        get_working_memory_active_tasks=self.memory.get_cached_working_memory_active_tasks,
                     )
 
             except Exception as exc:
@@ -959,7 +935,6 @@ class LithosServer:
         """
         if self.memory is not None:
             await self.memory.stop()
-        self._enrich_worker = None
         if self.projection is not None:
             await self.projection.close()
 

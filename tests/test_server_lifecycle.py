@@ -50,10 +50,10 @@ class TestServerLifecycleValidation:
 
                     await server.initialize()
 
-                    assert server.stats_store._db is not None
+                    assert server.memory._stats_store._db is not None
                     assert server.edge_store._db is not None
 
-                    await server.stats_store.increment_node_stats(node_id=f"node-{{index}}")
+                    await server.memory._stats_store.increment_node_stats(node_id=f"node-{{index}}")
                     await server.edge_store.upsert(
                         from_id=f"from-{{index}}",
                         to_id=f"to-{{index}}",
@@ -64,7 +64,7 @@ class TestServerLifecycleValidation:
 
                     await server.shutdown()
 
-                    assert server.stats_store._db is None
+                    assert server.memory._stats_store._db is None
                     assert server.edge_store._db is None
 
                 print("lifecycle-ok")
