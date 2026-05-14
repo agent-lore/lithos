@@ -20,6 +20,7 @@ from starlette.responses import Response, StreamingResponse
 from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig, get_config, set_config
 from lithos.coordination import CoordinationService
+from lithos.edge_store import EdgeStore
 from lithos.errors import SearchBackendError
 from lithos.events import (
     AGENT_REGISTERED,
@@ -59,19 +60,12 @@ from lithos.telemetry import (
 from lithos.watch_intake import WatchIntake
 
 if TYPE_CHECKING:
-    # ``EdgeStore`` is used as a type annotation only — runtime construction
-    # is owned by ``ProvenanceProjection`` (ADR-0004, issue #251). We import
-    # via ``lithos.provenance`` (the legitimate gatekeeper) rather than
-    # ``lithos.lcma.edges`` directly so the rule "no edges-module import
-    # outside provenance.py" holds for the source tree. The remaining
-    # direct ``self.edge_store.<mutation>`` call sites
-    # (``lithos_edge_upsert``, the enrich worker, reinforcement helpers)
-    # move to projection-owned APIs in the follow-up slices
-    # (#254/#255/#258/#263). ``update_conflict_resolution`` now lives
-    # behind ``CognitiveMemory`` (issue #260).
+    # ``EnrichWorker`` and ``StatsStore`` are used as type annotations only —
+    # ``CognitiveMemory`` owns their runtime lifecycle. Issue #262 removes
+    # these transitional imports along with the back-aliased
+    # ``self.stats_store`` / ``self._enrich_worker`` attributes.
     from lithos.lcma.enrich import EnrichWorker
     from lithos.lcma.stats import StatsStore
-    from lithos.provenance import EdgeStore
 
 logger = logging.getLogger(__name__)
 
@@ -116,14 +110,10 @@ class LithosServer:
         # collaborators only.
         self.watch_intake: WatchIntake = None  # type: ignore[assignment]
 
-        # ``projection`` (and the EdgeStore it owns) is created
-        # asynchronously in :meth:`initialize` via
-        # ``ProvenanceProjection.create`` so the SQLite handle is opened
-        # eagerly. ``self.edge_store`` is then aliased to the projection's
-        # internal store so the un-migrated mutation handlers
-        # (``lithos_edge_upsert``, the enrich worker, reinforcement) keep
-        # working without change in this slice (issue #251). They migrate
-        # to the projection's API in #254/#255/#258/#263.
+        # ``edge_store`` is constructed directly in :meth:`initialize` and
+        # injected into both ``ProvenanceProjection`` and ``CorpusIntake``
+        # so a single SQLite handle backs the projection-class and
+        # asserted-class edge rows (ADR-0006 Slice 1, issue #263).
         self.projection: ProvenanceProjection = None  # type: ignore[assignment]
         self.edge_store: EdgeStore = None  # type: ignore[assignment]
 
@@ -588,42 +578,27 @@ class LithosServer:
                 if self.search is None:
                     self.search = await SearchEngine.create(self._config)
 
-                # Build the provenance projection eagerly so the underlying
-                # edge store is open before any request arrives (ADR-0004,
-                # mirrors ``SearchEngine.create``). Tests may pre-inject a
-                # ``projection`` instance to avoid touching real SQLite.
-                # ``self.edge_store`` aliases the projection's internal
-                # store — see the constructor for the rationale.
-                if self.projection is None:
-                    self.projection = await ProvenanceProjection.create(self._config)
+                # Construct the EdgeStore directly and inject the same
+                # instance into the projection and the intake (ADR-0006
+                # Slice 1, issue #263). The projection owns
+                # projection-class rows; ``CorpusIntake.assert_edge`` owns
+                # asserted-class rows. They share the SQLite handle so
+                # there is exactly one writer per server. Tests may
+                # pre-inject either ``self.edge_store`` or
+                # ``self.projection`` to skip real SQLite.
                 if self.edge_store is None:
-                    self.edge_store = self.projection._edge_store
-
-                # Build the CognitiveMemory Module eagerly (ADR-0005, issue
-                # #255). Six-argument seam per the ADR / issue; the
-                # transitional ``attach_coordination`` setter supplies the
-                # CoordinationService that ``EnrichWorker`` requires until
-                # coordination consolidates into the Module per ADR-0005's
-                # "Anticipated evolution" section. Un-migrated tool
-                # handlers continue to access ``self.stats_store`` /
-                # ``self._enrich_worker`` via the aliases set below;
-                # method migration is in #257-#260.
-                if self.memory is None:
-                    self.memory = await CognitiveMemory.create(
-                        config=self._config,
-                        knowledge=self.knowledge,
-                        search=self.search,
-                        graph=self.graph,
-                        projection=self.projection,
-                        event_bus=self.event_bus,
+                    self.edge_store = EdgeStore(self._config)
+                    await self.edge_store.open()
+                if self.projection is None:
+                    self.projection = await ProvenanceProjection.create(
+                        self._config, edge_store=self.edge_store
                     )
-                    self.memory.attach_coordination(self.coordination)
-                if self.stats_store is None:
-                    self.stats_store = self.memory._stats_store
 
-                # Build the Corpus intake now that all collaborators exist.
-                # See ADR-0003. Tests that pre-inject ``self.intake`` (e.g. with
-                # a stub) keep that injection — same idiom used for ``search``.
+                # Build the Corpus intake before the CognitiveMemory Module.
+                # ADR-0006 Slice 1 (#263) makes ``CognitiveMemory`` declare
+                # ``CorpusIntake`` as a constructor dependency so that
+                # ``edge_upsert`` routes through ``intake.assert_edge``.
+                # Tests that pre-inject ``self.intake`` keep that injection.
                 if self.intake is None:
                     self.intake = CorpusIntake(
                         knowledge=self.knowledge,
@@ -631,6 +606,7 @@ class LithosServer:
                         graph=self.graph,
                         coordination=self.coordination,
                         event_bus=self.event_bus,
+                        edge_store=self.edge_store,
                     )
 
                 # Build the watcher intake — peer of CorpusIntake (ADR-0007).
@@ -644,6 +620,28 @@ class LithosServer:
                         event_bus=self.event_bus,
                         watch_path=self.config.storage.knowledge_path,
                     )
+
+                # Build the CognitiveMemory Module eagerly (ADR-0005, issue
+                # #255). The transitional ``attach_coordination`` setter
+                # supplies the CoordinationService that ``EnrichWorker``
+                # requires until coordination consolidates into the Module
+                # per ADR-0005's "Anticipated evolution" section.
+                # Un-migrated tool handlers continue to access
+                # ``self.stats_store`` / ``self._enrich_worker`` via the
+                # aliases set below; method migration is in #257-#260.
+                if self.memory is None:
+                    self.memory = await CognitiveMemory.create(
+                        config=self._config,
+                        knowledge=self.knowledge,
+                        search=self.search,
+                        graph=self.graph,
+                        projection=self.projection,
+                        event_bus=self.event_bus,
+                        intake=self.intake,
+                    )
+                    self.memory.attach_coordination(self.coordination)
+                if self.stats_store is None:
+                    self.stats_store = self.memory._stats_store
 
                 # Initialize and run schema migrations
                 registry_path = (
@@ -1733,7 +1731,13 @@ class LithosServer:
 
                 evidence_str = json.dumps(evidence) if evidence is not None else None
 
+                # The MCP surface carries no separate ``agent`` field for
+                # this tool; the asserting party is ``provenance_actor`` (with
+                # a tool-name fallback so ``ensure_agent_known`` always runs,
+                # per ADR-0006 Slice 1 / issue #263).
+                agent = provenance_actor or "lithos_edge_upsert"
                 edge_id = await self.memory.edge_upsert(
+                    agent=agent,
                     from_id=from_id,
                     to_id=to_id,
                     edge_type=type,

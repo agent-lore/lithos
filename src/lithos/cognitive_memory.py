@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from lithos.errors import SearchBackendError
 from lithos.events import EDGE_UPSERTED, LithosEvent
+from lithos.intake import EdgeRequest
 from lithos.knowledge import _normalize_datetime
 from lithos.lcma.enrich import EnrichWorker
 from lithos.lcma.stats import StatsStore
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from lithos.coordination import CoordinationService
     from lithos.events import EventBus
     from lithos.graph import KnowledgeGraph
+    from lithos.intake import CorpusIntake
     from lithos.knowledge import KnowledgeManager
     from lithos.provenance import ProvenanceProjection
     from lithos.search import SearchEngine
@@ -107,11 +109,12 @@ def _as_optional_str(value: object) -> str | None:
 class CognitiveMemory:
     """Module facade over LCMA's agent-facing surface (ADR-0005).
 
-    The public seam is the six-argument ``create(config, knowledge, search,
-    graph, projection, event_bus)`` factory, exactly as ADR-0005 and issue
-    #255 specify. The Module owns the ``StatsStore`` lifecycle and the
-    ``EnrichWorker``. Public retrieve / edge / reinforcement methods are
-    migrated in subsequent slices; this slice exposes only the lifecycle.
+    The public seam is the seven-argument ``create(config, knowledge, search,
+    graph, projection, event_bus, intake)`` factory. ADR-0005 / issue #255
+    originally specified the six-argument shape; ADR-0006 Slice 1 (issue
+    #263) adds ``CorpusIntake`` so that :meth:`edge_upsert` can route
+    through ``intake.assert_edge``. The Module owns the ``StatsStore``
+    lifecycle and the ``EnrichWorker``.
 
     ``EnrichWorker`` requires a ``CoordinationService`` that is not part of
     the Module's logical dependency set. The transitional
@@ -129,6 +132,7 @@ class CognitiveMemory:
         graph: KnowledgeGraph,
         projection: ProvenanceProjection,
         event_bus: EventBus,
+        intake: CorpusIntake,
     ) -> None:
         self._config = config
         self._knowledge = knowledge
@@ -136,6 +140,7 @@ class CognitiveMemory:
         self._graph = graph
         self._projection = projection
         self._event_bus = event_bus
+        self._intake = intake
 
         # Transitional: see class docstring.
         self._coordination: CoordinationService | None = None
@@ -156,6 +161,7 @@ class CognitiveMemory:
         graph: KnowledgeGraph,
         projection: ProvenanceProjection,
         event_bus: EventBus,
+        intake: CorpusIntake,
     ) -> CognitiveMemory:
         """Construct the Module eagerly.
 
@@ -172,6 +178,7 @@ class CognitiveMemory:
             graph=graph,
             projection=projection,
             event_bus=event_bus,
+            intake=intake,
         )
 
     def attach_coordination(self, coordination: CoordinationService) -> None:
@@ -340,6 +347,7 @@ class CognitiveMemory:
     async def edge_upsert(
         self,
         *,
+        agent: str,
         from_id: str,
         to_id: str,
         edge_type: str,
@@ -350,43 +358,27 @@ class CognitiveMemory:
         evidence: str | None = None,
         conflict_state: str | None = None,
     ) -> str:
-        """Upsert an edge and emit :data:`EDGE_UPSERTED`. Returns the edge id.
+        """Upsert an asserted edge via ``CorpusIntake.assert_edge``.
 
-        Interim shape per ADR-0005: writes call the projection's internal
-        ``EdgeStore`` directly. ADR-0006 / issue #263 relocates this to
-        ``CorpusIntake.assert_edge`` — keeping the body small (a single
-        upsert + the emit) makes that move a one-method swap.
+        Thin wrapper per ADR-0006 Slice 1 (issue #263). The intake owns
+        the agent registration, the atomic upsert, and the ``EDGE_UPSERTED``
+        event emission. Returns the freshly-upserted ``edge_id``.
         """
-        # Interim: ADR-0005 / #263 will replace this direct edge-store call
-        # with ``self._intake.assert_edge(...)`` once CorpusIntake owns
-        # assertion. Not a layering bug today.
-        edge_id = await self._projection._edge_store.upsert(
-            from_id=from_id,
-            to_id=to_id,
-            edge_type=edge_type,
-            weight=weight,
-            namespace=namespace,
-            provenance_actor=provenance_actor,
-            provenance_type=provenance_type,
-            evidence=evidence,
-            conflict_state=conflict_state,
+        outcome = await self._intake.assert_edge(
+            agent,
+            EdgeRequest(
+                from_id=from_id,
+                to_id=to_id,
+                edge_type=edge_type,
+                weight=weight,
+                namespace=namespace,
+                provenance_actor=provenance_actor,
+                provenance_type=provenance_type,
+                evidence=evidence,
+                conflict_state=conflict_state,
+            ),
         )
-        try:
-            await self._event_bus.emit(
-                LithosEvent(
-                    type=EDGE_UPSERTED,
-                    payload={
-                        "edge_id": edge_id,
-                        "from_id": from_id,
-                        "to_id": to_id,
-                        "type": edge_type,
-                        "namespace": namespace,
-                    },
-                )
-            )
-        except Exception:
-            logger.exception("Failed to emit %s event", EDGE_UPSERTED)
-        return edge_id
+        return outcome.edge_id
 
     async def edge_list(
         self,

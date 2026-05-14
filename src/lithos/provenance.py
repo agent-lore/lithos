@@ -17,19 +17,19 @@ from dataclasses import dataclass
 from typing import Literal
 
 from lithos.config import LithosConfig
-from lithos.knowledge import KnowledgeDocument, derive_namespace
 
-# This module is the single legitimate import site for the package-internal
-# edge store and the corpus-to-edges projection helpers (ADR-0004,
-# issue #251). The class and helpers stay importable from here as
-# **undocumented transitional internals** — they are deliberately NOT
-# listed in ``__all__``. The enrich worker's full sweep
-# (``lcma/enrich.py``) still consumes ``_project_provenance_to_edges``;
+# ``EdgeStore`` lives at the public peer module ``lithos.edge_store`` after
+# ADR-0006 Slice 1 (issue #263) — ``ProvenanceProjection`` owns the
+# projection-class rows, ``CorpusIntake.assert_edge`` owns the asserted-class
+# rows, and both share an injected store. The two corpus-to-edges projection
+# helpers stay in ``lcma/edges.py`` and are re-exported here as
+# **undocumented transitional internals** (NOT listed in ``__all__``). The
+# enrich worker's full sweep still consumes ``_project_provenance_to_edges``;
 # migrating that path through the projection's plan/apply is a separate
-# follow-up. The import-graph guard in #262 will enforce the rule
-# mechanically.
+# follow-up.
+from lithos.edge_store import EdgeStore
+from lithos.knowledge import KnowledgeDocument, derive_namespace
 from lithos.lcma.edges import (
-    EdgeStore,
     _project_node_provenance,  # noqa: F401  re-exported for transitional callers
     _project_provenance_to_edges,  # noqa: F401  consumed by lcma/enrich.py full_sweep
 )
@@ -134,19 +134,48 @@ class ProvenanceProjection:
     _CANONICAL_EVIDENCE: str | None = None
     _CANONICAL_CONFLICT_STATE: str | None = None
 
-    def __init__(self, config: LithosConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: LithosConfig | None = None,
+        *,
+        edge_store: EdgeStore | None = None,
+    ) -> None:
         self._config = config
-        self._edge_store: EdgeStore = EdgeStore(config)
+        # Accept an injected store (ADR-0006 Slice 1, issue #263) so the same
+        # ``EdgeStore`` instance backs both this projection and
+        # ``CorpusIntake.assert_edge``. Fall back to constructing one when
+        # callers (e.g. legacy tests) don't inject — preserves the prior
+        # contract that ``create()`` is enough to obtain a working
+        # projection.
+        self._edge_store: EdgeStore = edge_store or EdgeStore(config)
 
     @classmethod
-    async def create(cls, config: LithosConfig | None = None) -> ProvenanceProjection:
-        """Construct the projection and open its underlying store eagerly."""
-        projection = cls(config)
-        await projection._edge_store.open()
+    async def create(
+        cls,
+        config: LithosConfig | None = None,
+        *,
+        edge_store: EdgeStore | None = None,
+    ) -> ProvenanceProjection:
+        """Construct the projection and open its underlying store eagerly.
+
+        When *edge_store* is supplied the projection adopts it without
+        re-opening — the caller is expected to manage the store's lifecycle
+        (open / close). When omitted, the projection constructs its own
+        store and opens it (legacy path).
+        """
+        projection = cls(config, edge_store=edge_store)
+        if edge_store is None:
+            await projection._edge_store.open()
         return projection
 
     async def close(self) -> None:
-        """Close the underlying store. Idempotent."""
+        """Close the underlying store. Idempotent.
+
+        When an external ``edge_store`` was injected the caller owns the
+        store's lifecycle and should close it themselves; calling
+        ``close`` here is still safe (``EdgeStore.close`` is idempotent)
+        but does not coordinate with other holders of the same handle.
+        """
         await self._edge_store.close()
 
     # ---- package-private plan/apply (ADR-0001 step 3 / ADR-0004) ----
