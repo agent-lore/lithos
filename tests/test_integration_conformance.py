@@ -2162,7 +2162,7 @@ class TestSourceUrlMCPResponses:
             assert stats["index_drift_detected"] is False
 
     @pytest.mark.asyncio
-    async def test_stats_drift_detected_when_tantivy_count_differs(
+    async def test_stats_drift_detected_when_ft_count_differs(
         self, server: LithosServer, monkeypatch
     ):
         """index_drift_detected is True when Tantivy count diverges from KnowledgeManager.
@@ -2426,8 +2426,8 @@ class TestSyncFromDisk:
         await server.watch_intake.upsert_from_disk(file_path)
 
         # Verify provenance indexes are updated
-        assert doc_id in server.knowledge._doc_to_sources
-        assert server.knowledge._doc_to_sources[doc_id] == [src_id]
+        assert server.knowledge.has_document(doc_id)
+        assert server.knowledge.get_doc_sources(doc_id) == [src_id]
         assert doc_id in server.knowledge._source_to_derived.get(src_id, set())
         assert server.knowledge._id_to_title[doc_id] == "External Derived"
 
@@ -2459,7 +2459,7 @@ class TestSyncFromDisk:
         derived_path_str = derived["path"]
 
         # Verify initial provenance
-        assert server.knowledge._doc_to_sources[derived_id] == [s1["id"]]
+        assert server.knowledge.get_doc_sources(derived_id) == [s1["id"]]
         assert derived_id in server.knowledge._source_to_derived.get(s1["id"], set())
 
         # Externally modify the file's derived_from_ids on disk
@@ -2473,7 +2473,7 @@ class TestSyncFromDisk:
         await server.watch_intake.upsert_from_disk(file_path)
 
         # Verify indexes updated: s1 removed, s2 added
-        assert server.knowledge._doc_to_sources[derived_id] == [s2["id"]]
+        assert server.knowledge.get_doc_sources(derived_id) == [s2["id"]]
         assert derived_id not in server.knowledge._source_to_derived.get(s1["id"], set())
         assert derived_id in server.knowledge._source_to_derived.get(s2["id"], set())
 
@@ -2655,7 +2655,7 @@ class TestRebuildIndicesProvenance:
 
         # Verify provenance indexes before rebuild
         mgr = server.knowledge
-        assert mgr._doc_to_sources.get(derived_id) == [source_id]
+        assert mgr.get_doc_sources(derived_id) == [source_id]
         assert derived_id in mgr._source_to_derived.get(source_id, set())
         assert mgr._id_to_title.get(source_id) == "Rebuild Source"
         assert mgr._id_to_title.get(derived_id) == "Rebuild Derived"
@@ -2664,7 +2664,7 @@ class TestRebuildIndicesProvenance:
         await server._rebuild_indices()
 
         # Verify provenance indexes are restored after rebuild
-        assert mgr._doc_to_sources.get(derived_id) == [source_id]
+        assert mgr.get_doc_sources(derived_id) == [source_id]
         assert derived_id in mgr._source_to_derived.get(source_id, set())
         assert mgr._id_to_title.get(source_id) == "Rebuild Source"
         assert mgr._id_to_title.get(derived_id) == "Rebuild Derived"
@@ -2693,7 +2693,7 @@ class TestRebuildIndicesProvenance:
 
         # Verify unresolved provenance is detected
         mgr = server.knowledge
-        assert mgr._doc_to_sources.get(doc_id) == [missing_id]
+        assert mgr.get_doc_sources(doc_id) == [missing_id]
         assert doc_id in mgr._unresolved_provenance.get(missing_id, set())
         assert missing_id not in mgr._source_to_derived
 
@@ -2733,7 +2733,7 @@ class TestRebuildIndicesProvenance:
         await server._rebuild_indices()
 
         # The derived doc should no longer be in any indexes
-        assert derived_id not in mgr._doc_to_sources
+        assert not mgr.has_document(derived_id)
         assert derived_id not in mgr._source_to_derived.get(source_id, set())
         assert derived_id not in mgr._id_to_title
 

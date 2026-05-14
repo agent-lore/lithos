@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from lithos.config import LithosConfig
-from lithos.search import Healthy, SearchEngine, Unhealthy
+from lithos.search import ChromaIndex, Healthy, SearchEngine, Unhealthy
 
 
 @pytest.mark.asyncio
@@ -20,7 +20,7 @@ async def test_health_returns_healthy_when_both_backends_respond(
 
 
 @pytest.mark.asyncio
-async def test_health_returns_unhealthy_when_chroma_store_corrupt(
+async def test_health_returns_unhealthy_when_semantic_store_corrupt(
     search_engine: SearchEngine,
 ) -> None:
     """Health composes the Chroma probe; a corrupt store surfaces as Unhealthy."""
@@ -38,15 +38,25 @@ async def test_health_returns_unhealthy_when_chroma_store_corrupt(
 
 @pytest.mark.asyncio
 async def test_health_returns_unhealthy_when_embedding_model_load_fails(
-    search_engine: SearchEngine,
+    test_config: LithosConfig,
 ) -> None:
     """Health probes the embedding model; a load failure surfaces as Unhealthy."""
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("model probe failed")
 
-    with patch.object(search_engine._chroma, "health_check", side_effect=_boom):
-        status = search_engine.health()
+    # Inject a real semantic backend whose health_check raises, exercising
+    # the engine's health-composition behavior without reaching into
+    # engine-private state (issue #264).
+    semantic = ChromaIndex(
+        test_config.storage.chroma_path,
+        test_config.search.embedding_model,
+        device=test_config.search.device,
+    )
+    semantic.health_check = _boom  # type: ignore[method-assign]
+    engine = await SearchEngine.create(test_config, semantic_backend=semantic)
+
+    status = engine.health()
 
     assert isinstance(status, Unhealthy)
     assert "embedding model" in status.reason
@@ -57,7 +67,7 @@ async def test_health_returns_unhealthy_when_embedding_model_load_fails(
 async def test_count_documents_matches_backend(search_engine: SearchEngine) -> None:
     """count_documents() agrees with the underlying full-text backend count."""
     # Empty engine — no docs indexed.
-    assert search_engine.count_documents() == search_engine._tantivy.count_docs() == 0
+    assert search_engine.count_documents() == 0
 
 
 @pytest.mark.asyncio
@@ -67,7 +77,7 @@ async def test_count_chunks_matches_backend(search_engine: SearchEngine) -> None
 
 
 @pytest.mark.asyncio
-async def test_count_chunks_returns_zero_when_chroma_unhealthy(
+async def test_count_chunks_returns_zero_when_semantic_unhealthy(
     search_engine: SearchEngine,
 ) -> None:
     """count_chunks() returns 0 (not raise) when the semantic store is unhealthy."""
@@ -79,7 +89,7 @@ async def test_count_chunks_returns_zero_when_chroma_unhealthy(
 
 
 @pytest.mark.asyncio
-async def test_needs_initial_rebuild_reflects_tantivy_state(
+async def test_needs_initial_rebuild_reflects_ft_state(
     test_config: LithosConfig,
 ) -> None:
     """needs_initial_rebuild() is True for a fresh engine (newly-created index)."""
@@ -90,29 +100,56 @@ async def test_needs_initial_rebuild_reflects_tantivy_state(
 
 
 @pytest.mark.asyncio
-async def test_chroma_health_check_does_not_call_encode(
-    search_engine: SearchEngine,
+async def test_semantic_backend_health_check_does_not_call_encode(
+    test_config: LithosConfig,
 ) -> None:
     """Regression for #198: liveness probe must not invoke the embedding model.
 
     The previous implementation called ``self.model.encode(["health check"])`` on
     every HTTP /health hit, which Docker HEALTHCHECKs and load-balancer liveness
     probes call every few seconds.
+
+    Tests the ``ChromaIndex.health_check`` contract directly — analogous to
+    the ``TantivyIndex`` direct-instantiation pattern in
+    ``test_freshness_conformance.py`` (issue #264).
     """
-    with patch.object(search_engine._chroma._model, "encode") as encode_spy:
-        search_engine._chroma.health_check()
+    idx = ChromaIndex(
+        test_config.storage.chroma_path,
+        test_config.search.embedding_model,
+        device=test_config.search.device,
+    )
+    await idx.ensure_model_loaded()
+
+    with patch.object(idx.model, "encode") as encode_spy:
+        idx.health_check()
     encode_spy.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_chroma_health_check_raises_when_model_unloaded(
-    search_engine: SearchEngine,
+async def test_semantic_backend_health_check_raises_when_model_unloaded(
+    test_config: LithosConfig,
 ) -> None:
     """Liveness probe still fails loudly when the model is genuinely missing."""
-    original = search_engine._chroma._model
-    search_engine._chroma._model = None
-    try:
-        with pytest.raises(RuntimeError, match="not loaded"):
-            search_engine._chroma.health_check()
-    finally:
-        search_engine._chroma._model = original
+    idx = ChromaIndex(
+        test_config.storage.chroma_path,
+        test_config.search.embedding_model,
+        device=test_config.search.device,
+    )
+    # No ``ensure_model_loaded`` — the model attribute stays unset, simulating
+    # the production failure mode the probe must catch.
+    with pytest.raises(RuntimeError, match="not loaded"):
+        idx.health_check()
+
+
+@pytest.mark.asyncio
+async def test_is_semantic_model_loaded_reflects_create_contract(
+    test_config: LithosConfig,
+) -> None:
+    """``SearchEngine.create`` eagerly loads the embedding model.
+
+    This is the public observability point for the eager-load contract
+    introduced in #224 — operators / ops dashboards can query the
+    engine's readiness without reaching into backend internals (issue #264).
+    """
+    engine = await SearchEngine.create(test_config)
+    assert engine.is_semantic_model_loaded() is True

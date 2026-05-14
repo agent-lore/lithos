@@ -120,7 +120,7 @@ async def _project_provenance_to_edges(
     # Namespace comes from the metadata cache so explicit frontmatter
     # overrides are honored — never re-derived from path here.
     desired: set[tuple[str, str, str]] = set()
-    for doc_id, sources in knowledge._doc_to_sources.items():
+    for doc_id, sources in knowledge.iter_doc_sources():
         if not sources:
             continue
         cached = knowledge.get_cached_meta(doc_id)

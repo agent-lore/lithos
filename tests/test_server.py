@@ -700,7 +700,7 @@ class TestKnowledgeToolWorkflow:
         assert all_returned_ids == set(widget_ids)
 
     @pytest.mark.asyncio
-    async def test_lithos_list_content_query_pushes_filters_to_tantivy(self, server: LithosServer):
+    async def test_lithos_list_content_query_pushes_filters_to_ft(self, server: LithosServer):
         """content_query must push tags/author/path_prefix into full_text_search
         so ranking runs over the filtered candidate set. Regression guard for
         #194, where a global-then-intersect strategy silently dropped matches

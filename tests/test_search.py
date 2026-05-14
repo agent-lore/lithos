@@ -3,13 +3,15 @@
 import concurrent.futures
 import logging
 import threading
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lithos.config import LithosConfig
 from lithos.errors import IndexingError, SearchBackendError
 from lithos.knowledge import KnowledgeManager
 from lithos.search import (
+    ChromaIndex,
     IndexableDocument,
     SearchEngine,
     TantivyIndex,
@@ -398,7 +400,7 @@ class TestTantivyIndex:
         results = search_engine.full_text_search("Temporary")
         assert not any(r.id == doc.id for r in results)
 
-    def test_concurrent_tantivy_writes_are_serialized(self, tmp_path):
+    def test_concurrent_ft_writes_are_serialized(self, tmp_path):
         """Concurrent writes through one TantivyIndex do not lose documents."""
         idx = TantivyIndex(tmp_path / "tantivy")
         idx.open_or_create()
@@ -411,7 +413,7 @@ class TestTantivyIndex:
 
         assert idx.get_indexed_doc_ids() == {doc.id for doc in docs}
 
-    def test_tantivy_write_retries_external_lock_busy(self, tmp_path, monkeypatch):
+    def test_ft_write_retries_external_lock_busy(self, tmp_path, monkeypatch):
         """A transient external writer lock is retried instead of dropping the write."""
         idx = TantivyIndex(tmp_path / "tantivy")
         idx.open_or_create()
@@ -642,13 +644,13 @@ class TestSearchEngineIntegration:
 
 
 class TestChromaIndexFilters:
-    """Tests for author and path_prefix filters on ChromaIndex.search()."""
+    """Tests for author and path_prefix filters on SearchEngine.semantic_search()."""
 
     @pytest.mark.asyncio
     async def test_author_filter_includes_matching(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
-        """ChromaIndex.search() returns only docs by the specified author."""
+        """SearchEngine.semantic_search() returns only docs by the specified author."""
         alice_doc = (
             await knowledge_manager.create(
                 title="Alice's Research",
@@ -666,7 +668,7 @@ class TestChromaIndexFilters:
         search_engine.index(KnowledgeManager.to_indexable(alice_doc))
         search_engine.index(KnowledgeManager.to_indexable(bob_doc))
 
-        results = search_engine._chroma.search(
+        results = search_engine.semantic_search(
             "deep learning transformers", limit=10, threshold=0.0, author="alice"
         )
         result_ids = [r.id for r in results]
@@ -678,7 +680,7 @@ class TestChromaIndexFilters:
     async def test_author_filter_excludes_all_when_no_match(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
-        """ChromaIndex.search() returns empty list when author filter matches nobody."""
+        """semantic_search returns empty list when author filter matches nobody."""
         doc = (
             await knowledge_manager.create(
                 title="Some Research",
@@ -688,7 +690,7 @@ class TestChromaIndexFilters:
         ).document
         search_engine.index(KnowledgeManager.to_indexable(doc))
 
-        results = search_engine._chroma.search(
+        results = search_engine.semantic_search(
             "machine learning", limit=10, threshold=0.0, author="nobody"
         )
         assert results == []
@@ -697,7 +699,7 @@ class TestChromaIndexFilters:
     async def test_path_prefix_filter_includes_matching(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
-        """ChromaIndex.search() returns only docs under the given path prefix."""
+        """SearchEngine.semantic_search() returns only docs under the given path prefix."""
         procedures_doc = (
             await knowledge_manager.create(
                 title="Deployment Procedure",
@@ -717,7 +719,7 @@ class TestChromaIndexFilters:
         search_engine.index(KnowledgeManager.to_indexable(procedures_doc))
         search_engine.index(KnowledgeManager.to_indexable(notes_doc))
 
-        results = search_engine._chroma.search(
+        results = search_engine.semantic_search(
             "deploying microservices", limit=10, threshold=0.0, path_prefix="procedures"
         )
         result_ids = [r.id for r in results]
@@ -729,7 +731,7 @@ class TestChromaIndexFilters:
     async def test_author_and_path_prefix_combined(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
-        """ChromaIndex.search() applies author and path_prefix as AND filters."""
+        """SearchEngine.semantic_search() applies author and path_prefix as AND filters."""
         match_doc = (
             await knowledge_manager.create(
                 title="Alice Procedures Doc",
@@ -758,7 +760,7 @@ class TestChromaIndexFilters:
         search_engine.index(KnowledgeManager.to_indexable(wrong_author_doc))
         search_engine.index(KnowledgeManager.to_indexable(wrong_path_doc))
 
-        results = search_engine._chroma.search(
+        results = search_engine.semantic_search(
             "database indexing",
             limit=10,
             threshold=0.0,
@@ -838,18 +840,23 @@ class TestSearchEngineResiliency:
     """Tests for error propagation and partial-failure handling in SearchEngine."""
 
     def test_ensure_semantic_backend_quarantines_corrupt_store(
-        self, search_engine: SearchEngine, monkeypatch: pytest.MonkeyPatch
+        self,
+        test_config: LithosConfig,
+        monkeypatch: pytest.MonkeyPatch,
     ):
-        """A broken persisted Chroma store is moved aside before in-process access."""
-        marker = search_engine._chroma.chroma_path / "corrupt-marker.txt"
+        """A broken persisted Chroma store is moved aside before in-process access.
+
+        Injects a pre-built semantic backend with a monkeypatched ``probe_store``
+        so the test does not reach into engine internals (issue #264).
+        """
+        semantic = ChromaIndex(
+            test_config.storage.chroma_path,
+            test_config.search.embedding_model,
+            device=test_config.search.device,
+        )
+        marker = semantic.chroma_path / "corrupt-marker.txt"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("bad-store")
-
-        # SearchEngine.create() already primed the probe cache; reset so
-        # this test's monkeypatched probe is the one that runs.
-        search_engine._semantic_store_checked = False
-        search_engine._semantic_store_healthy = True
-        search_engine._semantic_store_error = None
 
         calls = {"count": 0}
 
@@ -859,38 +866,48 @@ class TestSearchEngineResiliency:
                 return False, "simulated corruption"
             return True, None
 
-        monkeypatch.setattr(search_engine._chroma, "probe_store", _probe)
+        monkeypatch.setattr(semantic, "probe_store", _probe)
 
-        healthy, backup = search_engine.ensure_semantic_backend_healthy()
+        # Construct directly (no eager probe in ``create``) so the test
+        # controls when ``ensure_semantic_backend_healthy`` runs.
+        engine = SearchEngine(test_config, semantic_backend=semantic)
+
+        healthy, backup = engine.ensure_semantic_backend_healthy()
 
         assert healthy is True
         assert backup is not None
         assert backup.exists()
         assert (backup / "corrupt-marker.txt").exists()
-        assert search_engine._chroma.chroma_path.exists()
+        assert engine.chroma_store_path.exists()
         assert not marker.exists()
         assert calls["count"] == 2
 
     def test_ensure_semantic_backend_caches_successful_probe(
-        self, search_engine: SearchEngine, monkeypatch: pytest.MonkeyPatch
+        self,
+        test_config: LithosConfig,
+        monkeypatch: pytest.MonkeyPatch,
     ):
-        """The Chroma probe only runs once after a successful health check."""
-        # SearchEngine.create() already primed the probe cache; reset so this
-        # test sees the monkeypatched probe.
-        search_engine._semantic_store_checked = False
-        search_engine._semantic_store_healthy = True
-        search_engine._semantic_store_error = None
+        """The Chroma probe only runs once after a successful health check.
 
+        Injects the semantic backend so the probe-cache test does not reach
+        into engine internals (issue #264).
+        """
+        semantic = ChromaIndex(
+            test_config.storage.chroma_path,
+            test_config.search.embedding_model,
+            device=test_config.search.device,
+        )
         calls = {"count": 0}
 
         def _probe(timeout_seconds: float = 10.0):
             calls["count"] += 1
             return True, None
 
-        monkeypatch.setattr(search_engine._chroma, "probe_store", _probe)
+        monkeypatch.setattr(semantic, "probe_store", _probe)
+        engine = SearchEngine(test_config, semantic_backend=semantic)
 
-        first = search_engine.ensure_semantic_backend_healthy()
-        second = search_engine.ensure_semantic_backend_healthy()
+        first = engine.ensure_semantic_backend_healthy()
+        second = engine.ensure_semantic_backend_healthy()
 
         assert first == (True, None)
         assert second == (True, None)
@@ -898,42 +915,55 @@ class TestSearchEngineResiliency:
 
     @pytest.mark.asyncio
     async def test_full_text_search_raises_on_backend_error(
-        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+        self,
+        test_config: LithosConfig,
     ):
         """full_text_search raises SearchBackendError when Tantivy errors.
 
-        Callers must be able to distinguish a backend failure from an empty
-        result set; silent swallowing of exceptions is not acceptable.
+        Injects a real full-text backend whose ``search`` raises so the engine's
+        error-wrapper runs end-to-end without reaching into engine internals
+        (issue #264).
         """
 
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated tantivy failure")
 
-        search_engine._tantivy.search = _boom  # type: ignore[method-assign]
+        ft = TantivyIndex(test_config.storage.tantivy_path)
+        ft.open_or_create()
+        ft.search = _boom  # type: ignore[method-assign]
+        engine = await SearchEngine.create(test_config, ft_backend=ft)
 
         with pytest.raises(SearchBackendError) as exc_info:
-            search_engine.full_text_search("anything")
+            engine.full_text_search("anything")
 
         assert "tantivy" in exc_info.value.backend_errors
         assert isinstance(exc_info.value.backend_errors["tantivy"], RuntimeError)
 
     @pytest.mark.asyncio
     async def test_semantic_search_raises_on_backend_error(
-        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+        self,
+        test_config: LithosConfig,
     ):
         """semantic_search raises SearchBackendError when ChromaDB errors.
 
-        Callers must be able to distinguish a backend failure from an empty
-        result set; silent swallowing of exceptions is not acceptable.
+        Injects a real semantic backend whose ``search`` raises so the engine's
+        error-wrapper runs end-to-end without reaching into engine internals
+        (issue #264).
         """
 
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated chroma failure")
 
-        search_engine._chroma.search = _boom  # type: ignore[method-assign]
+        semantic = ChromaIndex(
+            test_config.storage.chroma_path,
+            test_config.search.embedding_model,
+            device=test_config.search.device,
+        )
+        semantic.search = _boom  # type: ignore[method-assign]
+        engine = await SearchEngine.create(test_config, semantic_backend=semantic)
 
         with pytest.raises(SearchBackendError) as exc_info:
-            search_engine.semantic_search("anything")
+            engine.semantic_search("anything")
 
         assert "chroma" in exc_info.value.backend_errors
         assert isinstance(exc_info.value.backend_errors["chroma"], RuntimeError)
@@ -957,28 +987,36 @@ class TestSearchEngineResiliency:
         assert "simulated corruption" in str(exc_info.value.backend_errors["chroma"])
 
     @pytest.mark.asyncio
-    async def test_search_backend_error_is_lithos_error(self, search_engine: SearchEngine):
+    async def test_search_backend_error_is_lithos_error(self, test_config: LithosConfig):
         """SearchBackendError is a subclass of LithosError for broad catching."""
         from lithos.errors import LithosError
 
         def _boom(*args, **kwargs):
             raise RuntimeError("boom")
 
-        search_engine._tantivy.search = _boom  # type: ignore[method-assign]
+        ft = TantivyIndex(test_config.storage.tantivy_path)
+        ft.open_or_create()
+        ft.search = _boom  # type: ignore[method-assign]
+        engine = await SearchEngine.create(test_config, ft_backend=ft)
 
         with pytest.raises(LithosError):
-            search_engine.full_text_search("anything")
+            engine.full_text_search("anything")
 
     @pytest.mark.asyncio
     async def test_index_document_partial_failure_does_not_raise(
-        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+        self,
+        knowledge_manager: KnowledgeManager,
+        test_config: LithosConfig,
     ):
-        """index_document logs and continues when one backend fails."""
+        """index() logs and continues when one backend fails."""
 
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        search_engine._tantivy.add_document = _boom  # type: ignore[method-assign]
+        ft = TantivyIndex(test_config.storage.tantivy_path)
+        ft.open_or_create()
+        ft.add_document = _boom  # type: ignore[method-assign]
+        engine = await SearchEngine.create(test_config, ft_backend=ft)
 
         doc = (
             await knowledge_manager.create(
@@ -987,22 +1025,32 @@ class TestSearchEngineResiliency:
                 agent="test-agent",
             )
         ).document
-        # Should not raise even though Tantivy is broken
-        chunks = search_engine.index(KnowledgeManager.to_indexable(doc))
-        # Chroma still works, so chunks > 0
+        # Should not raise even though the full-text backend is broken
+        chunks = engine.index(KnowledgeManager.to_indexable(doc))
+        # Semantic backend still works, so chunks > 0
         assert chunks >= 1
 
     @pytest.mark.asyncio
     async def test_index_document_total_failure_raises(
-        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+        self,
+        knowledge_manager: KnowledgeManager,
+        test_config: LithosConfig,
     ):
-        """index_document raises IndexingError when every backend fails."""
+        """index() raises IndexingError when every backend fails."""
 
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        search_engine._tantivy.add_document = _boom  # type: ignore[method-assign]
-        search_engine._chroma.add_document = _boom  # type: ignore[method-assign]
+        ft = TantivyIndex(test_config.storage.tantivy_path)
+        ft.open_or_create()
+        ft.add_document = _boom  # type: ignore[method-assign]
+        semantic = ChromaIndex(
+            test_config.storage.chroma_path,
+            test_config.search.embedding_model,
+            device=test_config.search.device,
+        )
+        semantic.add_document = _boom  # type: ignore[method-assign]
+        engine = await SearchEngine.create(test_config, ft_backend=ft, semantic_backend=semantic)
 
         doc = (
             await knowledge_manager.create(
@@ -1013,21 +1061,28 @@ class TestSearchEngineResiliency:
         ).document
 
         with pytest.raises(IndexingError) as exc_info:
-            search_engine.index(KnowledgeManager.to_indexable(doc))
+            engine.index(KnowledgeManager.to_indexable(doc))
 
         assert "tantivy" in exc_info.value.backend_errors
         assert "chroma" in exc_info.value.backend_errors
 
     @pytest.mark.asyncio
     async def test_remove_document_partial_failure_does_not_raise(
-        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+        self,
+        knowledge_manager: KnowledgeManager,
+        test_config: LithosConfig,
     ):
-        """remove_document logs and continues when one backend fails."""
+        """remove() logs and continues when one backend fails."""
 
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        search_engine._tantivy.remove_document = _boom  # type: ignore[method-assign]
+        ft = TantivyIndex(test_config.storage.tantivy_path)
+        ft.open_or_create()
+        # Capture the real method before injecting failure so index() still
+        # works during the seed; failure injection flips on for remove().
+        real_remove = ft.remove_document
+        engine = await SearchEngine.create(test_config, ft_backend=ft)
 
         doc = (
             await knowledge_manager.create(
@@ -1036,25 +1091,35 @@ class TestSearchEngineResiliency:
                 agent="test-agent",
             )
         ).document
-        search_engine.index(KnowledgeManager.to_indexable(doc))
+        engine.index(KnowledgeManager.to_indexable(doc))
 
-        # Should not raise even though Tantivy remove is broken
-        search_engine.remove(doc.id)  # no exception
+        # Now inject the failure for the remove path only.
+        _ = real_remove  # unused but documents the seam
+        ft.remove_document = _boom  # type: ignore[method-assign]
+
+        # Should not raise even though the full-text remove is broken
+        engine.remove(doc.id)
 
     @pytest.mark.asyncio
-    async def test_remove_document_total_failure_raises(
-        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
-    ):
-        """remove_document raises IndexingError when every backend fails."""
+    async def test_remove_document_total_failure_raises(self, test_config: LithosConfig):
+        """remove() raises IndexingError when every backend fails."""
 
         def _boom(*args, **kwargs):
             raise RuntimeError("simulated failure")
 
-        search_engine._tantivy.remove_document = _boom  # type: ignore[method-assign]
-        search_engine._chroma.remove_document = _boom  # type: ignore[method-assign]
+        ft = TantivyIndex(test_config.storage.tantivy_path)
+        ft.open_or_create()
+        ft.remove_document = _boom  # type: ignore[method-assign]
+        semantic = ChromaIndex(
+            test_config.storage.chroma_path,
+            test_config.search.embedding_model,
+            device=test_config.search.device,
+        )
+        semantic.remove_document = _boom  # type: ignore[method-assign]
+        engine = await SearchEngine.create(test_config, ft_backend=ft, semantic_backend=semantic)
 
         with pytest.raises(IndexingError) as exc_info:
-            search_engine.remove("fake-doc-id")
+            engine.remove("fake-doc-id")
 
         assert "tantivy" in exc_info.value.backend_errors
         assert "chroma" in exc_info.value.backend_errors
@@ -1069,7 +1134,7 @@ class TestSearchEngineResiliency:
 
         assert isinstance(search_engine.health(), Healthy)
 
-    def test_tantivy_open_or_create_recovers_from_corruption(self, tmp_path):
+    def test_ft_index_open_or_create_recovers_from_corruption(self, tmp_path):
         """open_or_create recreates a corrupted index rather than raising."""
         from lithos.search import TantivyIndex
 
@@ -1181,7 +1246,7 @@ class TestExpiresAtInSearch:
     """Tests for expires_at / is_stale in search index backends."""
 
     @pytest.mark.asyncio
-    async def test_tantivy_expired_doc_is_stale(
+    async def test_ft_expired_doc_is_stale(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Tantivy search returns is_stale=True for expired doc."""
@@ -1204,7 +1269,7 @@ class TestExpiresAtInSearch:
         assert match[0].is_stale is True
 
     @pytest.mark.asyncio
-    async def test_tantivy_fresh_doc_not_stale(
+    async def test_ft_fresh_doc_not_stale(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Tantivy search returns is_stale=False for fresh doc."""
@@ -1227,7 +1292,7 @@ class TestExpiresAtInSearch:
         assert match[0].is_stale is False
 
     @pytest.mark.asyncio
-    async def test_tantivy_no_expires_at_not_stale(
+    async def test_ft_no_expires_at_not_stale(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Tantivy search returns is_stale=False for doc without expires_at."""
@@ -1247,7 +1312,7 @@ class TestExpiresAtInSearch:
         assert match[0].is_stale is False
 
     @pytest.mark.asyncio
-    async def test_chroma_expired_doc_is_stale(
+    async def test_semantic_expired_doc_is_stale(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """ChromaDB search returns is_stale=True for expired doc."""
@@ -1269,7 +1334,7 @@ class TestExpiresAtInSearch:
         assert match[0].is_stale is True
 
     @pytest.mark.asyncio
-    async def test_chroma_fresh_doc_not_stale(
+    async def test_semantic_fresh_doc_not_stale(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """ChromaDB search returns is_stale=False for fresh doc."""
@@ -1291,7 +1356,7 @@ class TestExpiresAtInSearch:
         assert match[0].is_stale is False
 
     @pytest.mark.asyncio
-    async def test_chroma_no_expires_at_not_stale(
+    async def test_semantic_no_expires_at_not_stale(
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """ChromaDB search returns is_stale=False for doc without expires_at."""
@@ -1397,15 +1462,22 @@ class TestHybridSearch:
         ids = [r.id for r in results]
         assert ids.count(doc.id) <= 1
 
-    def test_hybrid_uses_literal_mode_for_tantivy_leg(self, search_engine: SearchEngine):
-        """Hybrid search is a natural-language surface, not a raw Tantivy API."""
-        with (
-            patch.object(search_engine._tantivy, "search", return_value=[]) as tantivy_search,
-            patch.object(
-                search_engine, "ensure_semantic_backend_healthy", return_value=(False, None)
-            ),
-        ):
-            search_engine.hybrid_search("When LLMs Stop Following Steps: A Diagnostic Study")
+    @pytest.mark.asyncio
+    async def test_hybrid_uses_literal_mode_for_ft_leg(self, test_config: LithosConfig):
+        """Hybrid search is a natural-language surface, not a raw Tantivy API.
 
-        assert tantivy_search.call_args is not None
-        assert tantivy_search.call_args.kwargs["query_mode"] == "literal"
+        Injects a real full-text backend whose ``search`` is a spy, so the
+        call-args check runs against the engine's natural call path without
+        reaching into engine internals (issue #264).
+        """
+        ft = TantivyIndex(test_config.storage.tantivy_path)
+        ft.open_or_create()
+        ft_search_spy = MagicMock(return_value=[])
+        ft.search = ft_search_spy  # type: ignore[method-assign]
+        engine = await SearchEngine.create(test_config, ft_backend=ft)
+
+        with patch.object(engine, "ensure_semantic_backend_healthy", return_value=(False, None)):
+            engine.hybrid_search("When LLMs Stop Following Steps: A Diagnostic Study")
+
+        assert ft_search_spy.call_args is not None
+        assert ft_search_spy.call_args.kwargs["query_mode"] == "literal"

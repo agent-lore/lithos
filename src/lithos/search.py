@@ -1028,7 +1028,13 @@ collection.count()
 class SearchEngine:
     """Combined search engine with full-text and semantic search."""
 
-    def __init__(self, config: LithosConfig | None = None):
+    def __init__(
+        self,
+        config: LithosConfig | None = None,
+        *,
+        ft_backend: TantivyIndex | None = None,
+        semantic_backend: ChromaIndex | None = None,
+    ):
         """Initialize search engine.
 
         Internal constructor: prefer :meth:`create` so the embedding model is
@@ -1036,17 +1042,29 @@ class SearchEngine:
 
         Args:
             config: Configuration. Uses global config if not provided.
+            ft_backend: Pre-built full-text backend. When supplied, the engine
+                adopts it without lazy-init. Tests use this to inject fakes
+                that simulate backend failures without reaching into engine
+                internals (issue #264).
+            semantic_backend: Pre-built semantic backend. Same contract as
+                ``ft_backend``.
         """
         self._config = config
-        self._tantivy_idx: TantivyIndex | None = None
-        self._chroma_idx: ChromaIndex | None = None
+        self._tantivy_idx: TantivyIndex | None = ft_backend
+        self._chroma_idx: ChromaIndex | None = semantic_backend
         self._semantic_probe_lock = threading.Lock()
         self._semantic_store_checked = False
         self._semantic_store_healthy = True
         self._semantic_store_error: str | None = None
 
     @classmethod
-    async def create(cls, config: LithosConfig | None = None) -> SearchEngine:
+    async def create(
+        cls,
+        config: LithosConfig | None = None,
+        *,
+        ft_backend: TantivyIndex | None = None,
+        semantic_backend: ChromaIndex | None = None,
+    ) -> SearchEngine:
         """Construct a fully-initialised :class:`SearchEngine`.
 
         Opens both backends and awaits the embedding-model load before
@@ -1054,8 +1072,11 @@ class SearchEngine:
         Chroma store is quarantined and replaced with a fresh one (preserving
         the behaviour of :meth:`ensure_semantic_backend_healthy`). Failure of
         the embedding-model load propagates to the caller.
+
+        ``ft_backend`` / ``semantic_backend`` forward to the constructor —
+        see :meth:`__init__` for the contract.
         """
-        engine = cls(config=config)
+        engine = cls(config=config, ft_backend=ft_backend, semantic_backend=semantic_backend)
 
         # Open the Tantivy index (triggers schema-version check / rebuild).
         _ = engine._tantivy
@@ -1098,6 +1119,39 @@ class SearchEngine:
                 device=self.config.search.device,
             )
         return self._chroma_idx
+
+    # ------------------------------------------------------------------
+    # Public diagnostic surface (issue #264)
+    # ------------------------------------------------------------------
+
+    def is_semantic_model_loaded(self) -> bool:
+        """Return ``True`` when the semantic backend's embedding model is loaded.
+
+        ``SearchEngine.create`` awaits the model load before returning, so
+        this is the contract observability point: after ``create()`` it
+        must be ``True``. Tests assert this without reaching into backend
+        internals (issue #264).
+        """
+        return self._chroma._model is not None
+
+    @property
+    def chroma_store_path(self) -> Path:
+        """Filesystem path of the persisted Chroma store.
+
+        Exposed for corruption / recovery tests that need to write marker
+        files into the store directory. Read-only on the public surface
+        (issue #264).
+        """
+        return self._chroma.chroma_path
+
+    def mark_needs_rebuild(self, flag: bool) -> None:
+        """Set the full-text backend's ``needs_rebuild`` flag.
+
+        Used by tests and operations tooling that want to force a
+        reconcile rebuild without recreating the index from scratch
+        (issue #264). The flag is read back via :meth:`needs_initial_rebuild`.
+        """
+        self._tantivy.needs_rebuild = flag
 
     def ensure_semantic_backend_healthy(self) -> tuple[bool, Path | None]:
         """Repair a corrupted Chroma store before touching it in-process."""
