@@ -75,9 +75,10 @@ through their public surfaces while owning its own accumulated stats.
 │  │  Per-view private plan/apply pairs (ADR-0001):                │  │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌────────────────────┐    │  │
 │  │  │ SearchEngine│  │   Graph     │  │ ProvenanceProjection│   │  │
-│  │  │ (Tantivy +  │  │ (NetworkX)  │  │ (frontmatter →     │    │  │
-│  │  │  ChromaDB,  │  │             │  │  edges.db,          │    │  │
-│  │  │  hidden)    │  │             │  │  reconcile-owned)  │    │  │
+│  │  │ (Tantivy +  │  │ (NetworkX)  │  │ (frontmatter        │   │  │
+│  │  │  ChromaDB,  │  │             │  │  derived_from →     │   │  │
+│  │  │  hidden)    │  │             │  │  edges.db,          │   │  │
+│  │  │             │  │             │  │  reconcile-owned)   │   │  │
 │  │  └─────────────┘  └─────────────┘  └────────────────────┘    │  │
 │  └───────────────────────────────────────────────────────────────┘  │
 │                              │                                      │
@@ -112,27 +113,34 @@ through their public surfaces while owning its own accumulated stats.
 ### 2.2 Data Flow
 
 1. **Agent write/delete**: MCP tool → `CorpusIntake.write` / `CorpusIntake.delete` →
-   ensure agent registered → `KnowledgeManager` writes the file atomically and
-   syncs derived views in order (Search, then Graph, then `ProvenanceProjection`)
-   → emit `note.created` / `note.updated` / `note.deleted` event.
-2. **Agent edge assertion**: `lithos_edge_upsert` (and `lithos_conflict_resolve`)
-   → `CorpusIntake.assert_edge` → `EdgeStore` writes an asserted row in `edges.db`
-   carrying a non-`frontmatter` `provenance_type` → emit `edge.upserted` event.
-3. **Filesystem change**: watchdog observer → `WatchIntake.upsert_from_disk` /
-   `delete_from_disk` / `rename_on_disk` → `KnowledgeManager` runs the same per-view
-   sync → emit `note.created` / `note.updated` / `note.deleted` / `note.renamed`.
-4. **Agent read/retrieve**: `lithos_search` → `SearchEngine` → results.
+   ensure agent registered → `KnowledgeManager` mutates the notes tier atomically →
+   intake syncs Search, then Graph → emit `note.created` / `note.updated` /
+   `note.deleted` event. `ProvenanceProjection` remains reconcile-owned today.
+2. **Agent edge assertion**: `lithos_edge_upsert` → `CorpusIntake.assert_edge` →
+   `EdgeStore` writes an asserted row in `edges.db` carrying a non-`frontmatter`
+   `provenance_type` → emit `edge.upserted` event.
+3. **Conflict resolution**: `lithos_conflict_resolve` →
+   `CognitiveMemory.conflict_resolve` → update an existing `contradicts` edge in
+   `edges.db` directly, optionally add a `supersedes` note update via
+   `KnowledgeManager.update`, then emit `edge.upserted`.
+4. **Filesystem change**: watchdog observer → `WatchIntake.upsert_from_disk` /
+   `delete_from_disk` / `rename_on_disk` → `KnowledgeManager` mutates the notes tier →
+   watch intake syncs Search, then Graph → emit `note.created` / `note.updated` /
+   `note.deleted` / `note.renamed`. `ProvenanceProjection` is still updated by
+   reconcile, not incrementally.
+5. **Agent read/retrieve**: `lithos_search` → `SearchEngine` → results.
    `lithos_retrieve`, `lithos_cache_lookup`, `lithos_conflict_resolve`, and
    `lithos_node_stats` route through `CognitiveMemory`, which reads through the
    public surfaces of the three derived views and updates its own state in
    `stats.db`.
-5. **Reconcile**: operator → `lithos reconcile` (CLI) → `KnowledgeManager`
+6. **Reconcile**: operator → `lithos reconcile` (CLI) → `KnowledgeManager`
    invokes each view's private plan/apply pair. Markdown is never modified.
    In `edges.db`, only projection rows (`provenance_type='frontmatter'`) are
    touched; asserted rows are scoped out by predicate.
-6. **Startup**: ensure directories and `coordination.db` → check rebuild
-   conditions → load graph cache or rebuild projections → pre-warm embedding
-   model in background → ready. The watchdog observer is started by
+7. **Startup**: ensure directories and `coordination.db` → construct
+   `SearchEngine` eagerly (embedding model loaded before `create()` returns) →
+   check rebuild conditions → load graph cache or rebuild projections → start
+   `CognitiveMemory` → ready. The watchdog observer is started by
    `lithos serve --watch`, not by `initialize()`.
 
 **Module reference.** The decomposition above is captured in seven accepted
@@ -208,13 +216,14 @@ data/
   ADR-0006):
   - Rows with `provenance_type='frontmatter'` are the **provenance projection**
     — a derived view of the notes-tier corpus owned by `ProvenanceProjection`.
-    Reconcile rebuilds these from frontmatter `derived_from_ids` and wiki-links;
-    they are not authoritative.
+    Today reconcile rebuilds these from frontmatter `derived_from_ids`; they
+    are not authoritative.
   - Rows with any other `provenance_type` (`agent`, `human`, `rule`, …) are the
-    **asserted-edge tier of the corpus**, written by `CorpusIntake.assert_edge`
-    via `lithos_edge_upsert` and `lithos_conflict_resolve`. Reconcile never
-    touches them. They are agent-authored persistent state and must be backed
-    up alongside `knowledge/`.
+    **asserted-edge tier of the corpus**. New asserted edges are written by
+    `CorpusIntake.assert_edge` via `lithos_edge_upsert`; `lithos_conflict_resolve`
+    updates existing asserted contradiction edges directly through
+    `CognitiveMemory` today. Reconcile never touches asserted rows. They are
+    agent-authored persistent state and must be backed up alongside `knowledge/`.
 
   Distinct from the `.graph/` NetworkX wiki-link cache — `edges.db` carries
   semantic and learned relationships; NetworkX continues to power the `links`
@@ -863,10 +872,11 @@ Get knowledge base statistics.
 These tools are additive to the pre-LCMA surface — they do not replace `lithos_search`, `lithos_read`, or `lithos_related`. See `docs/plans/lcma-design.md` for the design rationale.
 
 All LCMA tools delegate to the `CognitiveMemory` module (ADR-0005); the MCP
-layer is a thin envelope that wraps the module's public methods. Edge writes
-that originate from these tools (`lithos_edge_upsert`, the contradicts-edge
-side-effect of `lithos_conflict_resolve`) flow through `CorpusIntake.assert_edge`
-and land in `edges.db` as asserted-tier rows (see §3.1).
+layer is a thin envelope that wraps the module's public methods.
+`lithos_edge_upsert` routes through `CorpusIntake.assert_edge` and lands in
+`edges.db` as an asserted-tier row (see §3.1). `lithos_conflict_resolve`
+currently updates an existing `contradicts` edge directly, then emits the same
+`edge.upserted` event shape.
 
 #### `lithos_retrieve`
 
@@ -1008,7 +1018,7 @@ Lightweight health check for Docker `HEALTHCHECK`, load balancers, and monitorin
   "timestamp": "2026-03-18T12:00:00+00:00",
   "components": {
     "kb_directory": { "status": "ok" },
-    "embedding_model": { "status": "ok" },
+    "search": { "status": "ok" },
     "knowledge_base": { "status": "ok" }
   }
 }
@@ -1021,7 +1031,7 @@ Lightweight health check for Docker `HEALTHCHECK`, load balancers, and monitorin
 | Component | Check |
 |-----------|-------|
 | `kb_directory` | Knowledge base directory exists on disk |
-| `embedding_model` | ChromaDB embedding health check passes |
+| `search` | `SearchEngine.health()` passes (composed full-text + semantic signal) |
 | `knowledge_base` | Can list at least one document |
 
 **Use case:** The Docker image uses this endpoint in its `HEALTHCHECK` directive (`curl -f http://localhost:8765/health`). External orchestrators and load balancers can poll it to determine readiness.
@@ -1077,7 +1087,7 @@ be gated behind it.
    - NetworkX graph cache `GRAPH_CACHE_VERSION` field does not match the expected version → silent rebuild with a warning log
    - Graph cache loads successfully → use existing indices
 5. **Full rebuild** (when triggered): clear all indices, scan `knowledge/` directory, re-parse and re-index every `.md` file
-6. Pre-warm the embedding model in the background
+6. Finish eager `SearchEngine.create()` initialization, including embedding-model load
 
 **File watcher startup:** The server supports watching, but the watcher is started by the CLI `serve` command when `--watch` is enabled. `initialize()` does not start it by itself.
 
@@ -1090,9 +1100,12 @@ be gated behind it.
 | File created | Parse, chunk, add to all indices |
 | File modified | Parse, re-chunk, update all indices |
 | File deleted | Remove from all indices |
-| File moved/renamed | No dedicated move handler; watchdog create/modify/delete events are processed best-effort |
+| File moved/renamed | `WatchIntake.rename_on_disk` handles in-corpus renames, enter-corpus moves, and leave-corpus moves explicitly |
 
-**Note on renames and wiki-links:** When a file is renamed, UUID matching preserves identity in indices. However, wiki-link text in *other* files still points to the old path. `lithos validate` reports these as broken links.
+**Note on renames and wiki-links:** `WatchIntake.rename_on_disk` preserves the
+document id and rebinds Search and Graph state to the new path. However,
+wiki-link text in *other* files still points to the old path until those files
+are updated. `lithos validate` reports these as broken links.
 
 ### 6.3 Index Persistence
 

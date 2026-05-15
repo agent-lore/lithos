@@ -29,7 +29,7 @@ The module owning every full-text and semantic search concern. Holds the Tantivy
 _Avoid_: search service, indexer.
 
 **Provenance projection**:
-The derived view of the **Corpus** that holds typed edges (`derived_from`, wiki-link mirrors, `source_url`, …) projected from note content and frontmatter-declared lineage. The projection owns the existence and all columns of its rows; nothing outside the projection writes to those rows. Agent-asserted edges share the underlying `edges.db` storage but carry a different `provenance_type` and are scoped out of **Reconcile** by predicate. The projection is the third derived view alongside the **Search engine** and the link graph.
+The derived view of the **Corpus** that holds typed edges projected from note metadata. Today that means frontmatter-declared `derived_from` lineage; the projection may grow later, but the current implementation does not yet mirror wiki-links or `source_url` rows into `edges.db`. The projection owns the existence and all columns of its rows; nothing outside the projection writes to those rows. Agent-asserted edges share the underlying `edges.db` storage but carry a different `provenance_type` and are scoped out of **Reconcile** by predicate. The projection is the third derived view alongside the **Search engine** and the link graph.
 _Avoid_: edge store, link projection, edges database.
 
 **Corpus intake**:
