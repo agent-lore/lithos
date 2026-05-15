@@ -1,7 +1,7 @@
 # Lithos - Specification
 
-Version: 0.1.5
-Date: 2026-03-18
+Version: 0.1.6
+Date: 2026-05-15
 Status: Aligned with Implementation
 
 ---
@@ -38,50 +38,116 @@ Status: Aligned with Implementation
 
 ### 2.1 Component Overview
 
+The runtime is organised around the corpus/derived-view distinction defined in
+[`CONTEXT.md`](../CONTEXT.md). The **Corpus** is the joint source of truth
+(Markdown notes plus agent-asserted edges in `edges.db`). Three derived views
+project from the notes tier — `SearchEngine`, the wiki-link graph, and
+`ProvenanceProjection` — and the agent-facing `CognitiveMemory` module reads
+through their public surfaces while owning its own accumulated stats.
+
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                          Lithos                                 │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                    MCP Server (FastMCP)                  │    │
-│  │              stdio / SSE transport options               │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                              │                                   │
-│  ┌───────────────────────────┼───────────────────────────────┐  │
-│  │                     Core Services                          │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐    │  │
-│  │  │ Knowledge   │  │   Search    │  │  Coordination   │    │  │
-│  │  │  Manager    │  │   Engine    │  │    Service      │    │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────────┘    │  │
-│  │  ┌─────────────┐  ┌─────────────┐                          │  │
-│  │  │   Agent     │  │  Event Bus  │                          │  │
-│  │  │  Registry   │  │ (in-memory) │                          │  │
-│  │  └─────────────┘  └─────────────┘                          │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│  ┌───────────────────────────┼───────────────────────────────┐  │
-│  │                    Storage Layer                           │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐    │  │
-│  │  │  Markdown   │  │  Tantivy    │  │   ChromaDB      │    │  │
-│  │  │   Files     │  │  (Index)    │  │   (Vectors)     │    │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────────┘    │  │
-│  │  ┌─────────────┐  ┌─────────────┐                          │  │
-│  │  │  NetworkX   │  │   SQLite    │                          │  │
-│  │  │  (Graph)    │  │ (Coord DB)  │                          │  │
-│  │  └─────────────┘  └─────────────┘                          │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│  ┌───────────────────────────┼───────────────────────────────┐  │
-│  │                    File Watcher (watchdog)                 │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                              Lithos                                 │
+│                                                                      │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                    MCP Server (FastMCP)                        │  │
+│  │      stdio / SSE transports • HTTP routes (§5.7, §8.7)         │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│            │                                  │                      │
+│  ┌─────────┴───────────┐          ┌───────────┴──────────────┐      │
+│  │     Intake layer    │          │  Agent-facing facade     │      │
+│  │  ┌───────────────┐  │          │  ┌────────────────────┐  │      │
+│  │  │ CorpusIntake  │  │          │  │  CognitiveMemory   │  │      │
+│  │  │  write        │  │          │  │  retrieve          │  │      │
+│  │  │  delete       │  │          │  │  cache_lookup      │  │      │
+│  │  │  assert_edge  │  │          │  │  conflict_resolve  │  │      │
+│  │  └───────┬───────┘  │          │  │  node_stats        │  │      │
+│  │  ┌───────┴───────┐  │          │  │  reinforce_*       │  │      │
+│  │  │  WatchIntake  │  │          │  │  (scouts, PTS,     │  │      │
+│  │  │  upsert       │  │          │  │   working memory,  │  │      │
+│  │  │  delete       │  │          │  │   receipts)        │  │      │
+│  │  │  rename       │  │          │  └─────────┬──────────┘  │      │
+│  │  └───────┬───────┘  │          └────────────┼─────────────┘      │
+│  └──────────┼──────────┘                       │                    │
+│             ▼                                  │                    │
+│  ┌─────────────────────────────────────────────┼─────────────────┐  │
+│  │              KnowledgeManager (corpus)      │                 │  │
+│  │  Per-view private plan/apply pairs (ADR-0001):                │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌────────────────────┐    │  │
+│  │  │ SearchEngine│  │   Graph     │  │ ProvenanceProjection│   │  │
+│  │  │ (Tantivy +  │  │ (NetworkX)  │  │ (frontmatter        │   │  │
+│  │  │  ChromaDB,  │  │             │  │  derived_from →     │   │  │
+│  │  │  hidden)    │  │             │  │  edges.db,          │   │  │
+│  │  │             │  │             │  │  reconcile-owned)   │   │  │
+│  │  └─────────────┘  └─────────────┘  └────────────────────┘    │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                              │                                      │
+│  ┌───────────────────────────┼───────────────────────────────────┐  │
+│  │                    Storage Layer                               │  │
+│  │  Notes tier of corpus:                                         │  │
+│  │  ┌─────────────┐                                               │  │
+│  │  │  Markdown   │                                               │  │
+│  │  │   Files     │                                               │  │
+│  │  └─────────────┘                                               │  │
+│  │  Asserted-edge tier of corpus + projection (one DB, two tiers  │  │
+│  │  separated by `provenance_type` predicate, ADR-0006):          │  │
+│  │  ┌─────────────┐                                               │  │
+│  │  │  edges.db   │                                               │  │
+│  │  └─────────────┘                                               │  │
+│  │  Coordination + cognitive-memory state:                        │  │
+│  │  ┌─────────────┐  ┌─────────────┐                              │  │
+│  │  │coordination │  │  stats.db   │                              │  │
+│  │  │    .db      │  │ (LCMA)      │                              │  │
+│  │  └─────────────┘  └─────────────┘                              │  │
+│  │  Rebuildable derived caches:                                   │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │  │
+│  │  │  Tantivy    │  │  ChromaDB   │  │  NetworkX   │             │  │
+│  │  │  (.tantivy) │  │  (.chroma)  │  │  (.graph)   │             │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘             │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  Event bus (in-memory) ─── SSE delivery at GET /events (§8.7)        │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 2.2 Data Flow
 
-1. **Write path**: Agent → MCP tool → Knowledge Manager → Write file → Update indices and graph cache → Emit event
-2. **Read path**: Agent → MCP tool → Search Engine → Query indices → Return results
-3. **Startup**: Ensure directories and coordination DB → Check rebuild conditions → Load graph cache or rebuild projections → Pre-warm embeddings in background → Ready
+1. **Agent write/delete**: MCP tool → `CorpusIntake.write` / `CorpusIntake.delete` →
+   ensure agent registered → `KnowledgeManager` mutates the notes tier atomically →
+   intake syncs Search, then Graph → emit `note.created` / `note.updated` /
+   `note.deleted` event. `ProvenanceProjection` remains reconcile-owned today.
+2. **Agent edge assertion**: `lithos_edge_upsert` → `CorpusIntake.assert_edge` →
+   `EdgeStore` writes an asserted row in `edges.db` carrying a non-`frontmatter`
+   `provenance_type` → emit `edge.upserted` event.
+3. **Conflict resolution**: `lithos_conflict_resolve` →
+   `CognitiveMemory.conflict_resolve` → update an existing `contradicts` edge in
+   `edges.db` directly, optionally add a `supersedes` note update via
+   `KnowledgeManager.update`, then emit `edge.upserted`.
+4. **Filesystem change**: watchdog observer → `WatchIntake.upsert_from_disk` /
+   `delete_from_disk` / `rename_on_disk` → `KnowledgeManager` mutates the notes tier →
+   watch intake syncs Search, then Graph → emit `note.created` / `note.updated` /
+   `note.deleted` / `note.renamed`. `ProvenanceProjection` is still updated by
+   reconcile, not incrementally.
+5. **Agent read/retrieve**: `lithos_search` → `SearchEngine` → results.
+   `lithos_retrieve`, `lithos_cache_lookup`, `lithos_conflict_resolve`, and
+   `lithos_node_stats` route through `CognitiveMemory`, which reads through the
+   public surfaces of the three derived views and updates its own state in
+   `stats.db`.
+6. **Reconcile**: operator → `lithos reconcile` (CLI) → `KnowledgeManager`
+   invokes each view's private plan/apply pair. Markdown is never modified.
+   In `edges.db`, only projection rows (`provenance_type='frontmatter'`) are
+   touched; asserted rows are scoped out by predicate.
+7. **Startup**: ensure directories and `coordination.db` → construct
+   `SearchEngine` eagerly (embedding model loaded before `create()` returns) →
+   check rebuild conditions → load graph cache or rebuild projections → start
+   `CognitiveMemory` → ready. The watchdog observer is started by
+   `lithos serve --watch`, not by `initialize()`.
+
+**Module reference.** The decomposition above is captured in seven accepted
+ADRs under [`docs/adr/`](adr/): 0001 (reconcile lives on `KnowledgeManager`),
+0002 (`SearchEngine` hides Tantivy/Chroma), 0003 (`CorpusIntake`),
+0004 (`ProvenanceProjection`), 0005 (`CognitiveMemory`), 0006 (broaden Corpus
+to include asserted edges in `edges.db`), 0007 (`WatchIntake`).
 
 ### 2.3 Semantic Search: Chunking Strategy
 
@@ -139,9 +205,34 @@ data/
 
 **LCMA SQLite stores under `.lithos/`:**
 
-- **`coordination.db`** — agents, tasks, claims, findings (pre-LCMA, unchanged).
-- **`edges.db`** — LCMA typed/weighted edges. Tables: `edges` (`edge_id`, `from_id`, `to_id`, `type`, `weight`, `namespace`, `created_at`, `updated_at`, `provenance_actor`, `provenance_type`, `evidence`, `conflict_state`). Created lazily on the first `lithos_edge_upsert` call. Separate from the `.graph/` NetworkX wiki-link cache — `edges.db` carries semantic/learned relationships, NetworkX continues to power the `links` section of `lithos_related`.
-- **`stats.db`** — LCMA retrieval state. Tables: `node_stats`, `coactivation`, `enrich_queue`, `working_memory`, `receipts`. Created lazily on the first `lithos_retrieve` call (when the first receipt is written). The `enrich_queue` and reinforcement columns in `node_stats` are placeholders for the MVP 2 `lithos-enrich` worker.
+- **`coordination.db`** — agents, tasks, claims, findings, and the read-access
+  audit log (pre-LCMA tables, unchanged; the audit log feeds `GET /audit` and
+  `lithos audit`).
+- **`edges.db`** — typed/weighted edges. Single `edges` table with columns
+  `edge_id`, `from_id`, `to_id`, `type`, `weight`, `namespace`, `created_at`,
+  `updated_at`, `provenance_actor`, `provenance_type`, `evidence`,
+  `conflict_state`. Created lazily on the first edge write. The table holds
+  **two tiers separated by the `provenance_type` predicate** (ADR-0004,
+  ADR-0006):
+  - Rows with `provenance_type='frontmatter'` are the **provenance projection**
+    — a derived view of the notes-tier corpus owned by `ProvenanceProjection`.
+    Today reconcile rebuilds these from frontmatter `derived_from_ids`; they
+    are not authoritative.
+  - Rows with any other `provenance_type` (`agent`, `human`, `rule`, …) are the
+    **asserted-edge tier of the corpus**. New asserted edges are written by
+    `CorpusIntake.assert_edge` via `lithos_edge_upsert`; `lithos_conflict_resolve`
+    updates existing asserted contradiction edges directly through
+    `CognitiveMemory` today. Reconcile never touches asserted rows. They are
+    agent-authored persistent state and must be backed up alongside `knowledge/`.
+
+  Distinct from the `.graph/` NetworkX wiki-link cache — `edges.db` carries
+  semantic and learned relationships; NetworkX continues to power the `links`
+  section of `lithos_related`.
+- **`stats.db`** — `CognitiveMemory` state. Tables: `node_stats`,
+  `coactivation`, `enrich_queue`, `working_memory`, `receipts`, plus the MVP 2
+  consolidation-log tables. Created lazily on the first `lithos_retrieve` call
+  (when the first receipt is written). All accumulated agent state — no drift
+  condition relative to the corpus.
 
 ### 3.2 Knowledge File Format
 
@@ -189,6 +280,9 @@ status: <enum>                    # Optional: active | archived | quarantined (d
 summaries:                        # Optional: nested object with short/long summaries
   short: <string>                 # Optional, agent-written
   long: <string>                  # Optional, agent-written
+entities:                         # Optional: extracted entity strings (advisory)
+  - <entity-1>                    # Reserved for the lithos-enrich worker;
+  - <entity-2>                    # may be empty or absent on agent-written notes.
 ---
 
 # Title
@@ -401,11 +495,14 @@ Unified search across the knowledge base.
 |------|------|----------|-------------|
 | `query` | string | Yes | Search query |
 | `limit` | int | No | Max results (default: 10) |
-| `mode` | string | No | `"hybrid"` \| `"fulltext"` \| `"semantic"` (default: `"hybrid"`) |
+| `mode` | string | No | `"hybrid"` \| `"fulltext"` \| `"semantic"` \| `"graph"` (default: `"hybrid"`) |
 | `tags` | string[] | No | Filter by tags (AND) |
 | `author` | string | No | Filter by author |
 | `path_prefix` | string | No | Filter by path prefix |
-| `threshold` | float | No | Minimum similarity 0-1 for semantic/hybrid (default: 0.5) |
+| `threshold` | float | No | Minimum similarity 0-1 for semantic/hybrid/graph (default: 0.5) |
+| `seed_ids` | string[] | No | Starting document IDs for `graph` mode. When omitted, seeds are discovered via a fast hybrid pass on `query`. |
+| `graph_depth` | int | No | BFS hop depth for `graph` mode, 1–3 (default: 2) |
+| `agent_id` | string | No | Caller identity recorded in the read-access audit log |
 
 **Returns:** `{ results: [{ id, title, snippet, score, path, source_url, updated_at, is_stale, derived_from_ids }] }`
 
@@ -413,11 +510,13 @@ Unified search across the knowledge base.
 - `hybrid`: Reciprocal Rank Fusion over full-text and semantic results
 - `fulltext`: Tantivy BM25 search
 - `semantic`: ChromaDB vector similarity search
+- `graph`: Wiki-link graph traversal from `seed_ids` (or auto-discovered seeds), bounded by `graph_depth`
 
 **Notes:**
 - Search operates on chunks internally but returns deduplicated documents.
 - In `semantic` mode, the returned `score` is the semantic similarity value.
 - Invalid `mode` returns `{ status: "error", code: "invalid_mode", message }`.
+- Every returned document is recorded in the read-access audit log, batched per call. `agent_id` defaults to `"unknown"` when omitted.
 
 #### `lithos_cache_lookup`
 Check the knowledge base for a cached answer before performing expensive research.
@@ -772,6 +871,13 @@ Get knowledge base statistics.
 
 These tools are additive to the pre-LCMA surface — they do not replace `lithos_search`, `lithos_read`, or `lithos_related`. See `docs/plans/lcma-design.md` for the design rationale.
 
+All LCMA tools delegate to the `CognitiveMemory` module (ADR-0005); the MCP
+layer is a thin envelope that wraps the module's public methods.
+`lithos_edge_upsert` routes through `CorpusIntake.assert_edge` and lands in
+`edges.db` as an asserted-tier row (see §3.1). `lithos_conflict_resolve`
+currently updates an existing `contradicts` edge directly, then emits the same
+`edge.upserted` event shape.
+
 #### `lithos_retrieve`
 
 PTS-style retrieval orchestrating seven scouts in parallel and reranking via a fast Terrace 1 pass. Returns `lithos_search`-compatible results plus LCMA-only audit metadata.
@@ -852,9 +958,54 @@ Query edges by node, type, or namespace.
 
 **Returns:** `{ "results": [ { edge_id, from_id, to_id, type, weight, namespace, created_at, updated_at, provenance_actor, provenance_type, evidence, conflict_state } ] }`.
 
+#### `lithos_conflict_resolve`
+
+Resolve a contradiction between two notes by setting the `conflict_state` on a
+`contradicts` edge. The resolution is recorded so future retrieval reflects it,
+and an `edge.upserted` event is emitted carrying the new `conflict_state`.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `edge_id` | string | Yes | Edge ID of the `contradicts` edge to resolve |
+| `resolution` | string | Yes | One of `accepted_dual` \| `superseded` \| `refuted` \| `merged` |
+| `resolver` | string | Yes | Agent or user identifier performing the resolution |
+| `winner_id` | string | No | Required when `resolution="superseded"`; must equal the edge's `from_id` or `to_id`. The winner is also marked as superseding the loser via `lithos_write` (`supersedes` field). |
+
+**Returns:** `{ "status": "ok", "edge_id": "...", "conflict_state": "..." }` on
+success, or `{ "status": "error", "code": "...", "message": "..." }` on failure.
+Error codes:
+
+- `invalid_input` — `resolution` not in the allowed set; edge is not a
+  `contradicts` edge; `winner_id` missing when `resolution="superseded"`;
+  `winner_id` is not one of the edge's endpoints.
+- `not_found` — no edge with the given `edge_id` exists.
+- `update_failed` — the edge lookup succeeded but the persistence write did
+  not (e.g. concurrent deletion).
+
+**Side effect:** emits `edge.upserted` (see §8.2) carrying the new
+`conflict_state`.
+
+#### `lithos_node_stats`
+
+Inspect a single node's `CognitiveMemory` state — salience, retrieval counts,
+and reinforcement penalty fields — by reading from `stats.db.node_stats`.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `node_id` | string | Yes | Document ID to look up |
+
+**Returns (success):** `{ node_id, salience, retrieval_count, cited_count, last_retrieved_at, last_used_at, ignored_count, misleading_count, decay_rate, spaced_rep_strength, last_decay_applied_at }` — verbatim row from `stats.db.node_stats` for the given node. Counts and timestamps default to `0` / `null` until the node accrues retrieval activity.
+
+**Returns (not found):** `{ status: "error", code: "doc_not_found", message }` when `node_id` does not match any document.
+
+**Use case:** lets an agent or operator inspect why retrieval is or isn't
+surfacing a particular document, without having to query SQLite directly.
+
 ### 5.7 HTTP Endpoints
 
-These endpoints are standard HTTP routes mounted alongside the MCP transport. They are **not** MCP tools and do not appear in `tools/list`.
+These endpoints are standard HTTP routes mounted alongside the MCP transport. They are **not** MCP tools and do not appear in `tools/list`. The server mounts three: `GET /health`, `GET /events`, and `GET /audit`.
 
 #### `GET /health`
 
@@ -867,7 +1018,7 @@ Lightweight health check for Docker `HEALTHCHECK`, load balancers, and monitorin
   "timestamp": "2026-03-18T12:00:00+00:00",
   "components": {
     "kb_directory": { "status": "ok" },
-    "embedding_model": { "status": "ok" },
+    "search": { "status": "ok" },
     "knowledge_base": { "status": "ok" }
   }
 }
@@ -880,10 +1031,45 @@ Lightweight health check for Docker `HEALTHCHECK`, load balancers, and monitorin
 | Component | Check |
 |-----------|-------|
 | `kb_directory` | Knowledge base directory exists on disk |
-| `embedding_model` | ChromaDB embedding health check passes |
+| `search` | `SearchEngine.health()` passes (composed full-text + semantic signal) |
 | `knowledge_base` | Can list at least one document |
 
 **Use case:** The Docker image uses this endpoint in its `HEALTHCHECK` directive (`curl -f http://localhost:8765/health`). External orchestrators and load balancers can poll it to determine readiness.
+
+#### `GET /events`
+
+Server-Sent Events delivery surface for the in-memory event bus. The contract,
+query parameters (`types`, `tags`, `since`), `Last-Event-ID` header behavior,
+ring-buffer replay, keepalive, `429`, `503`, and auth gating are all defined
+in §8.7. This row is here so §5.7 enumerates every HTTP route the server
+mounts.
+
+#### `GET /audit`
+
+Read-only access to the audit log of document reads (search results returned,
+documents fetched, etc.). Useful for offline analysis and debugging retrieval
+behavior.
+
+**Query parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `agent_id` | string | No | Filter to entries reported by this agent |
+| `after` | string | No | ISO-8601 timestamp; only entries after this time |
+| `limit` | int | No | Max entries (default: 100) |
+| `doc_id` | string | No | Filter entries for a specific document |
+
+**Returns (200 OK):** `{ "entries": [ { "id", "agent_id", "doc_id", "operation", "timestamp" } ] }`
+
+**Returns (400):** `{ "error": "invalid_after", "message": "..." }` when `after` cannot be parsed.
+
+**Returns (503):** `{ "error": "audit_log_unavailable", "entries": [] }` when the coordination layer fails.
+
+**Trust boundary:** the endpoint is **unauthenticated** in the current
+implementation and `agent_id` values are self-reported by callers, so the audit
+log is advisory-only and must not be used for access control. Suitable only for
+trusted-network deployments. When MCP authentication lands, this endpoint must
+be gated behind it.
 
 ---
 
@@ -901,7 +1087,7 @@ Lightweight health check for Docker `HEALTHCHECK`, load balancers, and monitorin
    - NetworkX graph cache `GRAPH_CACHE_VERSION` field does not match the expected version → silent rebuild with a warning log
    - Graph cache loads successfully → use existing indices
 5. **Full rebuild** (when triggered): clear all indices, scan `knowledge/` directory, re-parse and re-index every `.md` file
-6. Pre-warm the embedding model in the background
+6. Finish eager `SearchEngine.create()` initialization, including embedding-model load
 
 **File watcher startup:** The server supports watching, but the watcher is started by the CLI `serve` command when `--watch` is enabled. `initialize()` does not start it by itself.
 
@@ -914,9 +1100,12 @@ Lightweight health check for Docker `HEALTHCHECK`, load balancers, and monitorin
 | File created | Parse, chunk, add to all indices |
 | File modified | Parse, re-chunk, update all indices |
 | File deleted | Remove from all indices |
-| File moved/renamed | No dedicated move handler; watchdog create/modify/delete events are processed best-effort |
+| File moved/renamed | `WatchIntake.rename_on_disk` handles in-corpus renames, enter-corpus moves, and leave-corpus moves explicitly |
 
-**Note on renames and wiki-links:** When a file is renamed, UUID matching preserves identity in indices. However, wiki-link text in *other* files still points to the old path. `lithos validate` reports these as broken links.
+**Note on renames and wiki-links:** `WatchIntake.rename_on_disk` preserves the
+document id and rebinds Search and Graph state to the new path. However,
+wiki-link text in *other* files still points to the old path until those files
+are updated. `lithos validate` reports these as broken links.
 
 ### 6.3 Index Persistence
 
@@ -1020,6 +1209,8 @@ Lithos includes an in-memory event bus that emits `LithosEvent` on all write, de
 | `note.created` | `lithos_write` (create) | `id`, `title`, `path` |
 | `note.updated` | `lithos_write` (update), file watcher (create/modify) | `id`, `title`, `path` (tool); `path` (watcher) |
 | `note.deleted` | `lithos_delete`, file watcher (delete) | `id`, `path` (tool); `path` (watcher) |
+| `note.renamed` | `WatchIntake.rename_on_disk` (in-corpus rename detected by the watcher) | `id`, `src_path`, `dest_path` |
+| `edge.upserted` | `lithos_edge_upsert` via `CorpusIntake.assert_edge`; also `lithos_conflict_resolve` when it updates a `contradicts` edge | `edge_id`, `from_id`, `to_id`, `type`, `namespace` (assert_edge); `edge_id`, `from_id`, `to_id`, `type`, `conflict_state` (conflict_resolve) |
 | `task.created` | `lithos_task_create` | `task_id`, `title` |
 | `task.claimed` | `lithos_task_claim` | `task_id`, `agent`, `aspect` |
 | `task.released` | `lithos_task_release` | `task_id`, `agent`, `aspect` |
@@ -1193,6 +1384,11 @@ lithos --data-dir ./data inspect health
 lithos --data-dir ./data inspect agents
 lithos --data-dir ./data inspect tasks --all
 lithos --data-dir ./data inspect doc <id-or-path> --content
+
+# Show the read-access audit log (HTTP equivalent: GET /audit)
+lithos --data-dir ./data audit
+lithos --data-dir ./data audit --agent agent-zero --limit 100
+lithos --data-dir ./data audit --doc <id> --since 2026-01-01T00:00:00
 ```
 
 ---
@@ -1315,10 +1511,10 @@ These are explicitly not part of the initial implementation but may be considere
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`, `lithos_finding_post`, `lithos_finding_list` |
 | System | `lithos_stats` |
-| LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list` |
-| HTTP | `GET /health` (not an MCP tool; see §5.7) |
+| LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
+| HTTP | `GET /health`, `GET /events`, `GET /audit` (not MCP tools; see §5.7 and §8.7) |
 
-**Total: 28 MCP tools + 1 HTTP endpoint** (the Graph surface was tightened pre-1.0 by removing `lithos_links` and `lithos_provenance` in favour of the composite `lithos_related`; `lithos_edge_list` is retained for non-doc-centric edge-table queries)
+**Total: 28 MCP tools + 3 HTTP endpoints** (LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
 
 ---
 
