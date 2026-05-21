@@ -153,7 +153,7 @@ class TestTaskLifecycle:
 
     @pytest.mark.asyncio
     async def test_complete_task_persists_outcome(self, coordination_service: CoordinationService):
-        """complete_task(outcome=...) persists the free-text summary and completed_at."""
+        """complete_task(outcome=...) persists the free-text summary and resolved_at."""
         task_id = await coordination_service.create_task(
             title="Task with Outcome",
             agent="agent",
@@ -167,7 +167,7 @@ class TestTaskLifecycle:
         assert task is not None
         assert task.status == "completed"
         assert task.outcome == outcome
-        assert task.completed_at is not None
+        assert task.resolved_at is not None
 
     @pytest.mark.asyncio
     async def test_complete_task_outcome_defaults_none(
@@ -186,7 +186,7 @@ class TestTaskLifecycle:
         assert task is not None
         assert task.status == "completed"
         assert task.outcome is None
-        assert task.completed_at is not None
+        assert task.resolved_at is not None
 
     @pytest.mark.asyncio
     async def test_complete_releases_claims(self, coordination_service: CoordinationService):
@@ -282,6 +282,27 @@ class TestTaskLifecycle:
         success = await coordination_service.cancel_task(task_id, "agent")
 
         assert not success
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_writes_resolved_at(self, coordination_service: CoordinationService):
+        """cancel_task dual-writes resolved_at alongside the status flip (#286)."""
+        before = datetime.now(timezone.utc)
+        task_id = await coordination_service.create_task(
+            title="Cancellable Task",
+            agent="agent",
+        )
+
+        success = await coordination_service.cancel_task(task_id, "agent")
+        assert success
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.status == "cancelled"
+        assert task.resolved_at is not None
+        # The dual-write timestamp must be in [before, now]. We allow ~5s of
+        # slack to absorb clock skew under heavy CI load.
+        after = datetime.now(timezone.utc)
+        assert before - timedelta(seconds=5) <= task.resolved_at <= after + timedelta(seconds=5)
 
     @pytest.mark.asyncio
     async def test_get_task_status(self, coordination_service: CoordinationService):
@@ -885,6 +906,87 @@ class TestListTasks:
         task = next(t for t in tasks if t["id"] == task_id)
         assert task["claims"] == []
 
+    @pytest.mark.asyncio
+    async def test_list_tasks_filter_by_resolved_since_includes_completed_and_cancelled(
+        self, coordination_service: CoordinationService
+    ):
+        """resolved_since returns terminal tasks (both completed and cancelled).
+
+        This is the core use case from #286: SSE consumers replaying recent
+        terminal state on restart need a single query that covers both
+        ``complete`` and ``cancel`` resolutions.
+        """
+        import asyncio
+
+        open_id = await coordination_service.create_task(title="Open", agent="agent")
+        complete_id = await coordination_service.create_task(title="Will Complete", agent="agent")
+        cancel_id = await coordination_service.create_task(title="Will Cancel", agent="agent")
+
+        cutoff = datetime.now(timezone.utc).isoformat()
+        await asyncio.sleep(0.05)
+
+        await coordination_service.complete_task(complete_id, "agent", outcome="done")
+        await coordination_service.cancel_task(cancel_id, "agent")
+
+        tasks = await coordination_service.list_tasks(resolved_since=cutoff)
+        ids = {t["id"] for t in tasks}
+        assert complete_id in ids
+        assert cancel_id in ids
+        assert open_id not in ids
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_filter_by_resolved_since_excludes_null_resolved_at(
+        self, coordination_service: CoordinationService
+    ):
+        """Rows with resolved_at IS NULL are excluded by the resolved_since filter.
+
+        Covers two row shapes that legitimately have NULL resolved_at after
+        migration: (a) open tasks that never reached a terminal transition,
+        and (b) tasks cancelled before the dual-write was added (we simulate
+        the latter by manually NULLing resolved_at after cancel).
+        """
+        open_id = await coordination_service.create_task(title="Still Open", agent="agent")
+
+        legacy_cancel_id = await coordination_service.create_task(
+            title="Pre-dual-write cancel", agent="agent"
+        )
+        await coordination_service.cancel_task(legacy_cancel_id, "agent")
+        # Simulate the historical state where cancel_task did not write resolved_at.
+        async with aiosqlite.connect(coordination_service.db_path) as db:
+            await db.execute(
+                "UPDATE tasks SET resolved_at = NULL WHERE id = ?",
+                (legacy_cancel_id,),
+            )
+            await db.commit()
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
+        tasks = await coordination_service.list_tasks(resolved_since=cutoff)
+        ids = {t["id"] for t in tasks}
+        assert open_id not in ids
+        assert legacy_cancel_id not in ids
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_returns_resolved_at_key(
+        self, coordination_service: CoordinationService
+    ):
+        """list_tasks payload exposes resolved_at so consumers can sort/group.
+
+        Open tasks: resolved_at is None.
+        Completed tasks: resolved_at carries an ISO timestamp string.
+        """
+        open_id = await coordination_service.create_task(title="Open", agent="agent")
+        done_id = await coordination_service.create_task(title="Done", agent="agent")
+        await coordination_service.complete_task(done_id, "agent", outcome="ok")
+
+        tasks = await coordination_service.list_tasks()
+        by_id = {t["id"]: t for t in tasks}
+
+        assert "resolved_at" in by_id[open_id]
+        assert by_id[open_id]["resolved_at"] is None
+
+        assert "resolved_at" in by_id[done_id]
+        assert by_id[done_id]["resolved_at"] is not None
+
 
 class TestCoordinationStats:
     """Tests for coordination statistics."""
@@ -998,14 +1100,21 @@ class TestTaskUpdate:
 
 
 class TestTaskOutcomeMigration:
-    """Verify ALTER-TABLE migrations add outcome/completed_at to pre-existing DBs."""
+    """Verify ALTER-TABLE migrations add outcome/resolved_at to pre-existing DBs."""
 
     @pytest.mark.asyncio
-    async def test_migration_adds_outcome_and_completed_at_columns(self, tmp_path):
-        """Simulate a pre-#178 coordination.db and confirm initialize() migrates it."""
+    async def test_migration_adds_outcome_and_resolved_at_columns(self, tmp_path):
+        """Simulate a pre-#178 coordination.db and confirm initialize() migrates it.
+
+        Pre-#178 databases lack both ``outcome`` and the resolution timestamp.
+        After ``initialize()`` they should have ``outcome`` and ``resolved_at``
+        (the latter via the consolidated ``_migrate_tasks_ensure_resolved_at``
+        migration, which adds the column from scratch when neither
+        ``completed_at`` nor ``resolved_at`` is present).
+        """
         db_path = tmp_path / "coordination.db"
 
-        # Build a legacy tasks table with the pre-#178 schema (no outcome/completed_at).
+        # Build a legacy tasks table with the pre-#178 schema (no outcome/resolved_at).
         async with aiosqlite.connect(db_path) as db:
             await db.execute(
                 """
@@ -1036,13 +1145,14 @@ class TestTaskOutcomeMigration:
             columns = {row[1] for row in await cursor.fetchall()}
 
         assert "outcome" in columns
-        assert "completed_at" in columns
+        assert "resolved_at" in columns
+        assert "completed_at" not in columns
 
         # Legacy row still readable and reports None for the new fields.
         task = await service.get_task("legacy-task")
         assert task is not None
         assert task.outcome is None
-        assert task.completed_at is None
+        assert task.resolved_at is None
 
         # Completing the legacy task works and persists outcome on the migrated schema.
         success = await service.complete_task("legacy-task", "legacy-agent", outcome="done")
@@ -1050,7 +1160,141 @@ class TestTaskOutcomeMigration:
         task = await service.get_task("legacy-task")
         assert task is not None
         assert task.outcome == "done"
-        assert task.completed_at is not None
+        assert task.resolved_at is not None
+
+    @pytest.mark.asyncio
+    async def test_migration_renames_completed_at_to_resolved_at(self, tmp_path):
+        """A current-main DB with completed_at is renamed to resolved_at in place.
+
+        This is the common production upgrade path. The fixture pre-populates a
+        completed row (resolved_at populated) and a cancelled row (resolved_at
+        NULL — the historical state where cancel_task never wrote the column).
+        Both rows must survive the migration with their data preserved.
+        """
+        db_path = tmp_path / "coordination.db"
+
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSON,
+                    outcome TEXT,
+                    completed_at TIMESTAMP,
+                    metadata JSON
+                )
+                """
+            )
+            done_at = "2025-01-01T12:00:00+00:00"
+            await db.execute(
+                "INSERT INTO tasks (id, title, status, created_by, outcome, completed_at) "
+                "VALUES (?, ?, 'completed', ?, ?, ?)",
+                ("done-task", "Already done", "old-agent", "shipped", done_at),
+            )
+            await db.execute(
+                "INSERT INTO tasks (id, title, status, created_by) VALUES (?, ?, 'cancelled', ?)",
+                ("cancelled-task", "Already cancelled", "old-agent"),
+            )
+            await db.commit()
+
+        config = LithosConfig(storage=StorageConfig(data_dir=tmp_path))
+        service = CoordinationService(config=config)
+        service._db_path = db_path
+        await service.initialize()
+
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("PRAGMA table_info(tasks)")
+            columns = {row[1] for row in await cursor.fetchall()}
+        assert "resolved_at" in columns
+        assert "completed_at" not in columns
+
+        done = await service.get_task("done-task")
+        assert done is not None
+        assert done.status == "completed"
+        assert done.outcome == "shipped"
+        assert done.resolved_at is not None
+        assert done.resolved_at.isoformat().startswith("2025-01-01T12:00:00")
+
+        cancelled = await service.get_task("cancelled-task")
+        assert cancelled is not None
+        assert cancelled.status == "cancelled"
+        # Historical cancellation: predates the dual-write so resolved_at stays NULL.
+        assert cancelled.resolved_at is None
+
+    @pytest.mark.asyncio
+    async def test_migration_is_idempotent(self, tmp_path):
+        """Re-running initialize() against a migrated DB is a no-op.
+
+        Specifically: the resolved_at column does not disappear, and no
+        spurious completed_at column reappears. This guards against future
+        regressions where the migration logic might inadvertently strip or
+        re-create columns.
+        """
+        db_path = tmp_path / "coordination.db"
+        config = LithosConfig(storage=StorageConfig(data_dir=tmp_path))
+        service = CoordinationService(config=config)
+        service._db_path = db_path
+
+        # First initialize from clean state — sets up the canonical schema.
+        await service.initialize()
+        # Second initialize against the already-migrated DB.
+        await service.initialize()
+
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("PRAGMA table_info(tasks)")
+            columns = {row[1] for row in await cursor.fetchall()}
+        assert "resolved_at" in columns
+        assert "completed_at" not in columns
+
+    @pytest.mark.asyncio
+    async def test_migration_preserves_row_count(self, tmp_path):
+        """The rename migration must not lose rows.
+
+        SQLite's RENAME COLUMN guarantees this at the storage level; the test
+        protects the invariant for future migration evolution (e.g. if someone
+        replaces it with a create-new-table-copy-rows dance).
+        """
+        db_path = tmp_path / "coordination.db"
+
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSON,
+                    outcome TEXT,
+                    completed_at TIMESTAMP,
+                    metadata JSON
+                )
+                """
+            )
+            for i in range(7):
+                await db.execute(
+                    "INSERT INTO tasks (id, title, created_by) VALUES (?, ?, ?)",
+                    (f"task-{i}", f"Task {i}", "row-count-agent"),
+                )
+            await db.commit()
+
+        config = LithosConfig(storage=StorageConfig(data_dir=tmp_path))
+        service = CoordinationService(config=config)
+        service._db_path = db_path
+        await service.initialize()
+
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("SELECT COUNT(*) FROM tasks")
+            row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == 7
 
 
 class TestTaskMetadata:

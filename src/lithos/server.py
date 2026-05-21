@@ -2722,6 +2722,7 @@ class LithosServer:
             status: str | None = None,
             tags: list[str] | None = None,
             since: str | None = None,
+            resolved_since: str | None = None,
             with_claims: bool = False,
         ) -> dict[str, list[dict[str, Any]]]:
             """List tasks with optional filters.
@@ -2731,6 +2732,12 @@ class LithosServer:
                 status: Filter by status: "open", "completed", or "cancelled" (None = all)
                 tags: Filter by tags (task must have all specified tags)
                 since: Filter by created_at >= this ISO datetime string (e.g. "2024-01-01T00:00:00Z")
+                resolved_since: Filter by resolved_at >= this ISO datetime string.
+                    ``resolved_at`` is set on both terminal transitions (complete
+                    and cancel), so this returns tasks resolved (in either way)
+                    within the window. Open tasks and historical cancellations
+                    from before the column was populated on cancel are excluded
+                    automatically (their ``resolved_at`` is NULL).
                 with_claims: When True, each task in the response includes its
                     active (non-expired) claims inline as a ``claims`` array
                     (same shape as ``lithos_task_status``). Defaults to False.
@@ -2739,14 +2746,17 @@ class LithosServer:
 
             Returns:
                 Dict with tasks list containing id, title, description, status,
-                created_by, created_at, tags, metadata, and (when with_claims) claims.
+                created_by, created_at, resolved_at, tags, metadata, and
+                (when with_claims) claims.
             """
             logger.info(
-                "lithos_task_list agent=%s status=%s tags=%s since=%s with_claims=%s",
+                "lithos_task_list agent=%s status=%s tags=%s since=%s resolved_since=%s "
+                "with_claims=%s",
                 agent,
                 status,
                 tags,
                 since,
+                resolved_since,
                 with_claims,
             )
             tracer = get_tracer()
@@ -2763,6 +2773,7 @@ class LithosServer:
                     status=status,
                     tags=tags,
                     since=since,
+                    resolved_since=resolved_since,
                     with_claims=with_claims,
                 )
                 return {"tasks": tasks}

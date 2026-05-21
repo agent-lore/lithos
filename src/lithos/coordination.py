@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -37,7 +38,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     tags JSON,
     outcome TEXT,
-    completed_at TIMESTAMP,
+    resolved_at TIMESTAMP,
     metadata JSON
 );
 
@@ -108,7 +109,7 @@ class Task:
     created_at: datetime | None = None
     tags: list[str] = field(default_factory=list)
     outcome: str | None = None
-    completed_at: datetime | None = None
+    resolved_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -234,7 +235,7 @@ class CoordinationService:
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
             await self._migrate_tasks_add_outcome(db)
-            await self._migrate_tasks_add_completed_at(db)
+            await self._migrate_tasks_ensure_resolved_at(db)
             await self._migrate_tasks_add_metadata(db)
             await db.commit()
         logger.info("coordination service initialized: db_path=%s", self.db_path)
@@ -249,13 +250,83 @@ class CoordinationService:
             logger.info("coordination.db migration applied: added tasks.outcome")
 
     @staticmethod
-    async def _migrate_tasks_add_completed_at(db: aiosqlite.Connection) -> None:
-        """Add completed_at column to existing tasks tables (pre-outcome databases)."""
+    async def _migrate_tasks_ensure_resolved_at(db: aiosqlite.Connection) -> None:
+        """Ensure tasks.resolved_at exists, renaming legacy completed_at if present.
+
+        Handles three legitimate pre-states for the ``tasks`` schema:
+
+        * ``resolved_at`` already present — no-op (idempotent re-run, or fresh
+          install where the CREATE TABLE statement supplied the column).
+        * Only ``completed_at`` present — rename to ``resolved_at`` via
+          ``ALTER TABLE ... RENAME COLUMN`` (the common upgrade path; data
+          preserved row-for-row by SQLite).
+        * Neither present — ancient pre-#178 database that never received the
+          ``completed_at`` migration; add ``resolved_at`` as a NULL column.
+
+        The defensive fourth state — both columns present — is logged loudly
+        and left alone; ``resolved_at`` already exists so the migration is
+        effectively complete.
+
+        Robustness measures:
+
+        * ``ALTER TABLE ... RENAME COLUMN`` requires SQLite >= 3.25.0 (Sept
+          2018). Before renaming we assert the runtime SQLite supports it and
+          raise with a clear upgrade message if it does not — daemon refuses to
+          start rather than leaving a half-migrated DB.
+        * Row count is captured before and after the ALTER and a mismatch
+          raises ``RuntimeError``. SQLite's RENAME COLUMN does not move rows,
+          but the explicit check protects against future migration evolution.
+        """
         cursor = await db.execute("PRAGMA table_info(tasks)")
         columns = {row[1] for row in await cursor.fetchall()}
-        if "completed_at" not in columns:
-            await db.execute("ALTER TABLE tasks ADD COLUMN completed_at TIMESTAMP")
-            logger.info("coordination.db migration applied: added tasks.completed_at")
+
+        if "resolved_at" in columns:
+            if "completed_at" in columns:
+                # Defensive: both columns present (only reachable if a
+                # previous migration attempt partially succeeded). Prefer
+                # resolved_at; leave the orphan completed_at alone so the
+                # operator can inspect it.
+                logger.warning(
+                    "coordination.db migration: both 'completed_at' and 'resolved_at' "
+                    "present on tasks; treating resolved_at as canonical and leaving "
+                    "completed_at untouched for forensic inspection."
+                )
+            return
+
+        cursor = await db.execute("SELECT COUNT(*) FROM tasks")
+        row = await cursor.fetchone()
+        row_count_before = row[0] if row else 0
+
+        if "completed_at" in columns:
+            if sqlite3.sqlite_version_info < (3, 25, 0):
+                raise RuntimeError(
+                    "coordination.db migration requires SQLite >= 3.25.0 to rename "
+                    "the 'completed_at' column to 'resolved_at'. Current SQLite "
+                    f"version is {sqlite3.sqlite_version}. Please upgrade SQLite "
+                    "(e.g. by upgrading the host Python or container base image) "
+                    "and restart."
+                )
+            await db.execute("ALTER TABLE tasks RENAME COLUMN completed_at TO resolved_at")
+            logger.info(
+                "coordination.db migration applied: renamed tasks.completed_at -> "
+                "tasks.resolved_at (rows=%d)",
+                row_count_before,
+            )
+        else:
+            await db.execute("ALTER TABLE tasks ADD COLUMN resolved_at TIMESTAMP")
+            logger.info(
+                "coordination.db migration applied: added tasks.resolved_at (rows=%d)",
+                row_count_before,
+            )
+
+        cursor = await db.execute("SELECT COUNT(*) FROM tasks")
+        row = await cursor.fetchone()
+        row_count_after = row[0] if row else 0
+        if row_count_after != row_count_before:
+            raise RuntimeError(
+                "coordination.db migration row count mismatch on tasks: "
+                f"before={row_count_before} after={row_count_after}. Aborting."
+            )
 
     @staticmethod
     async def _migrate_tasks_add_metadata(db: aiosqlite.Connection) -> None:
@@ -506,11 +577,11 @@ class CoordinationService:
                 with contextlib.suppress(json.JSONDecodeError):
                     tags = json.loads(row["tags"])
 
-            # outcome/completed_at/metadata may be absent on legacy rows (pre-migration
+            # outcome/resolved_at/metadata may be absent on legacy rows (pre-migration
             # reads should not be possible, but defend against it defensively).
             row_keys = row.keys()
             outcome = row["outcome"] if "outcome" in row_keys else None
-            completed_at_raw = row["completed_at"] if "completed_at" in row_keys else None
+            resolved_at_raw = row["resolved_at"] if "resolved_at" in row_keys else None
 
             task_metadata: dict[str, Any] = {}
             if "metadata" in row_keys and row["metadata"]:
@@ -526,7 +597,7 @@ class CoordinationService:
                 created_at=_parse_datetime(row["created_at"]),
                 tags=tags,
                 outcome=outcome,
-                completed_at=_parse_datetime(completed_at_raw),
+                resolved_at=_parse_datetime(resolved_at_raw),
                 metadata=task_metadata,
             )
 
@@ -625,13 +696,13 @@ class CoordinationService:
         now = _format_datetime(datetime.now(timezone.utc))
 
         async with aiosqlite.connect(self.db_path) as db:
-            # Update task status, outcome, and completed_at in a single statement
+            # Update task status, outcome, and resolved_at in a single statement
             cursor = await db.execute(
                 """
                 UPDATE tasks
                    SET status = 'completed',
                        outcome = ?,
-                       completed_at = ?
+                       resolved_at = ?
                  WHERE id = ? AND status = 'open'
                 """,
                 (outcome, now, task_id),
@@ -670,10 +741,17 @@ class CoordinationService:
         lithos_metrics.coordination_ops.add(1, {"op": "cancel"})
         await self.ensure_agent_known(agent)
 
+        now = _format_datetime(datetime.now(timezone.utc))
+
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "UPDATE tasks SET status = 'cancelled' WHERE id = ? AND status = 'open'",
-                (task_id,),
+                """
+                UPDATE tasks
+                   SET status = 'cancelled',
+                       resolved_at = ?
+                 WHERE id = ? AND status = 'open'
+                """,
+                (now, task_id),
             )
             if cursor.rowcount == 0:
                 return False
@@ -699,6 +777,7 @@ class CoordinationService:
         status: str | None = None,
         tags: list[str] | None = None,
         since: str | None = None,
+        resolved_since: str | None = None,
         with_claims: bool = False,
     ) -> list[dict[str, Any]]:
         """List tasks with optional filters.
@@ -708,6 +787,12 @@ class CoordinationService:
             status: Filter by status (open/completed/cancelled), or None for all
             tags: Filter by tags (task must have all specified tags)
             since: Filter by created_at >= this ISO datetime string
+            resolved_since: Filter by resolved_at >= this ISO datetime string.
+                ``resolved_at`` is set on both terminal transitions (complete
+                and cancel). Rows whose ``resolved_at`` is NULL — open tasks,
+                and historical cancellations from before the column was
+                populated on cancel — are excluded automatically by the
+                SQL ``>=`` comparison.
             with_claims: When True, include each task's active (non-expired)
                 claims inline as a ``claims`` array. Defaults to False to
                 preserve the lightweight payload for callers that don't need
@@ -715,7 +800,7 @@ class CoordinationService:
 
         Returns:
             List of task dicts with id, title, description, status, created_by,
-            created_at, tags, metadata, and (when with_claims) claims.
+            created_at, resolved_at, tags, metadata, and (when with_claims) claims.
         """
         import json
 
@@ -733,6 +818,10 @@ class CoordinationService:
         if since:
             query += " AND created_at >= ?"
             params.append(since)
+
+        if resolved_since:
+            query += " AND resolved_at >= ?"
+            params.append(resolved_since)
 
         query += " ORDER BY created_at DESC"
 
@@ -761,6 +850,11 @@ class CoordinationService:
                     with contextlib.suppress(json.JSONDecodeError):
                         task_metadata = json.loads(row["metadata"])
 
+                resolved_at = (
+                    row["resolved_at"]
+                    if row_keys is not None and "resolved_at" in row_keys
+                    else None
+                )
                 results.append(
                     {
                         "id": row["id"],
@@ -769,6 +863,7 @@ class CoordinationService:
                         "status": row["status"],
                         "created_by": row["created_by"],
                         "created_at": row["created_at"],
+                        "resolved_at": resolved_at,
                         "tags": task_tags,
                         "metadata": task_metadata,
                     }
