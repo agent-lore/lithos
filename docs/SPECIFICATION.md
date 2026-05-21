@@ -1212,6 +1212,7 @@ Lithos includes an in-memory event bus that emits `LithosEvent` on all write, de
 | `note.renamed` | `WatchIntake.rename_on_disk` (in-corpus rename detected by the watcher) | `id`, `src_path`, `dest_path` |
 | `edge.upserted` | `lithos_edge_upsert` via `CorpusIntake.assert_edge`; also `lithos_conflict_resolve` when it updates a `contradicts` edge | `edge_id`, `from_id`, `to_id`, `type`, `namespace` (assert_edge); `edge_id`, `from_id`, `to_id`, `type`, `conflict_state` (conflict_resolve) |
 | `task.created` | `lithos_task_create` | `task_id`, `title` |
+| `task.updated` | `lithos_task_update` | `task_id` |
 | `task.claimed` | `lithos_task_claim` | `task_id`, `agent`, `aspect` |
 | `task.released` | `lithos_task_release` | `task_id`, `agent`, `aspect` |
 | `task.completed` | `lithos_task_complete` | `task_id`, `agent` |
