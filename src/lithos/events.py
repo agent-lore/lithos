@@ -33,6 +33,7 @@ NOTE_DELETED = "note.deleted"
 NOTE_RENAMED = "note.renamed"
 
 TASK_CREATED = "task.created"
+TASK_UPDATED = "task.updated"
 TASK_CLAIMED = "task.claimed"
 TASK_RELEASED = "task.released"
 TASK_COMPLETED = "task.completed"

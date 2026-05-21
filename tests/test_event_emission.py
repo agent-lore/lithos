@@ -15,6 +15,7 @@ from lithos.events import (
     TASK_COMPLETED,
     TASK_CREATED,
     TASK_RELEASED,
+    TASK_UPDATED,
     LithosEvent,
 )
 from lithos.server import LithosServer
@@ -274,6 +275,68 @@ class TestTaskEventEmission:
         assert task is not None
         assert task.outcome == outcome_text
         assert task.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_lithos_task_update_emits_task_updated(self, server: LithosServer) -> None:
+        """#283: lithos_task_update must emit task.updated so live SSE
+        consumers see metadata mutations without restarting."""
+        create_result = await _call_tool(
+            server,
+            "lithos_task_create",
+            {"title": "Updatable Task", "agent": "test-agent"},
+        )
+        task_id = create_result["task_id"]
+
+        queue = server.event_bus.subscribe(event_types=[TASK_UPDATED])
+        update_result = await _call_tool(
+            server,
+            "lithos_task_update",
+            {"task_id": task_id, "agent": "test-agent", "metadata": {"project": "demo"}},
+        )
+        assert update_result["success"] is True
+
+        event = queue.get_nowait()
+        assert event.type == TASK_UPDATED
+        assert event.agent == "test-agent"
+        assert event.payload["task_id"] == task_id
+        server.event_bus.unsubscribe(queue)
+
+    @pytest.mark.asyncio
+    async def test_lithos_task_update_no_event_on_task_not_found(
+        self, server: LithosServer
+    ) -> None:
+        """Failed updates against unknown task ids must not emit task.updated."""
+        queue = server.event_bus.subscribe(event_types=[TASK_UPDATED])
+        result = await _call_tool(
+            server,
+            "lithos_task_update",
+            {"task_id": "does-not-exist", "agent": "test-agent", "title": "x"},
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "task_not_found"
+        assert queue.empty()
+        server.event_bus.unsubscribe(queue)
+
+    @pytest.mark.asyncio
+    async def test_lithos_task_update_no_event_on_invalid_input(self, server: LithosServer) -> None:
+        """Invalid-input rejections (no fields supplied) must not emit task.updated."""
+        create_result = await _call_tool(
+            server,
+            "lithos_task_create",
+            {"title": "Invalid-Update Target", "agent": "test-agent"},
+        )
+        task_id = create_result["task_id"]
+
+        queue = server.event_bus.subscribe(event_types=[TASK_UPDATED])
+        result = await _call_tool(
+            server,
+            "lithos_task_update",
+            {"task_id": task_id, "agent": "test-agent"},
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+        assert queue.empty()
+        server.event_bus.unsubscribe(queue)
 
 
 class TestFindingEventEmission:
