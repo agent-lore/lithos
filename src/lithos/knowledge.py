@@ -988,7 +988,7 @@ class KnowledgeManager:
                 if existing_id is not None:
                     try:
                         existing_doc, _ = await self.read(id=existing_id)
-                        logger.warning(
+                        logger.info(
                             "Duplicate URL rejected: url=%s existing_owner=%s rejected_doc title=%r",
                             norm_url,
                             existing_id,
@@ -1343,7 +1343,7 @@ class KnowledgeManager:
                     if existing_owner is not None and existing_owner != id:
                         try:
                             existing_doc, _ = await self.read(id=existing_owner)
-                            logger.warning(
+                            logger.info(
                                 "Duplicate URL rejected: url=%s existing_owner=%s rejected_doc_id=%s",
                                 new_norm,
                                 existing_owner,
