@@ -1252,6 +1252,110 @@ class TestTaskOutcomeMigration:
         assert "completed_at" not in columns
 
     @pytest.mark.asyncio
+    async def test_migration_both_columns_backfills_resolved_at(self, tmp_path):
+        """Defensive branch: if both columns exist, backfill resolved_at from completed_at.
+
+        Without the backfill, rows whose terminal timestamp lives only in
+        ``completed_at`` would silently vanish from
+        ``lithos_task_list(resolved_since=...)`` and ``get_task().resolved_at``,
+        because every read path on the new schema looks at ``resolved_at``
+        only. The migration's defensive branch must reconcile the two
+        columns before returning so the public surface stays consistent
+        with the underlying data.
+        """
+        db_path = tmp_path / "coordination.db"
+
+        async with aiosqlite.connect(db_path) as db:
+            # Build a tasks table with BOTH columns — the defensive state.
+            await db.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSON,
+                    outcome TEXT,
+                    completed_at TIMESTAMP,
+                    resolved_at TIMESTAMP,
+                    metadata JSON
+                )
+                """
+            )
+            legacy_ts = "2025-02-15T09:30:00+00:00"
+            modern_ts = "2025-03-01T14:00:00+00:00"
+            # Row A: only completed_at populated — vulnerable to silent loss.
+            await db.execute(
+                "INSERT INTO tasks (id, title, status, created_by, completed_at) "
+                "VALUES (?, ?, 'completed', ?, ?)",
+                ("legacy-only", "Legacy-shaped row", "old-agent", legacy_ts),
+            )
+            # Row B: only resolved_at populated — already canonical.
+            await db.execute(
+                "INSERT INTO tasks (id, title, status, created_by, resolved_at) "
+                "VALUES (?, ?, 'completed', ?, ?)",
+                ("modern-only", "Modern-shaped row", "new-agent", modern_ts),
+            )
+            # Row C: both populated — resolved_at must win, completed_at preserved.
+            await db.execute(
+                "INSERT INTO tasks (id, title, status, created_by, completed_at, resolved_at) "
+                "VALUES (?, ?, 'completed', ?, ?, ?)",
+                ("both", "Both-populated row", "mixed-agent", legacy_ts, modern_ts),
+            )
+            # Row D: open task — both NULL, must stay NULL.
+            await db.execute(
+                "INSERT INTO tasks (id, title, created_by) VALUES (?, ?, ?)",
+                ("open-task", "Open", "open-agent"),
+            )
+            await db.commit()
+
+        config = LithosConfig(storage=StorageConfig(data_dir=tmp_path))
+        service = CoordinationService(config=config)
+        service._db_path = db_path
+        await service.initialize()
+
+        # completed_at is preserved for forensic inspection.
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("PRAGMA table_info(tasks)")
+            columns = {row[1] for row in await cursor.fetchall()}
+        assert "resolved_at" in columns
+        assert "completed_at" in columns
+
+        # Row A: backfilled from completed_at — no longer silently invisible.
+        legacy_task = await service.get_task("legacy-only")
+        assert legacy_task is not None
+        assert legacy_task.resolved_at is not None
+        assert legacy_task.resolved_at.isoformat().startswith("2025-02-15T09:30:00")
+
+        # Row B: untouched — already canonical.
+        modern_task = await service.get_task("modern-only")
+        assert modern_task is not None
+        assert modern_task.resolved_at is not None
+        assert modern_task.resolved_at.isoformat().startswith("2025-03-01T14:00:00")
+
+        # Row C: resolved_at wins over completed_at (no overwrite of populated values).
+        both_task = await service.get_task("both")
+        assert both_task is not None
+        assert both_task.resolved_at is not None
+        assert both_task.resolved_at.isoformat().startswith("2025-03-01T14:00:00")
+
+        # Row D: open task stays NULL.
+        open_task = await service.get_task("open-task")
+        assert open_task is not None
+        assert open_task.resolved_at is None
+
+        # The new query surface now finds rows A, B, and C — the rescue worked.
+        cutoff = "2025-01-01T00:00:00+00:00"
+        tasks = await service.list_tasks(resolved_since=cutoff)
+        ids = {t["id"] for t in tasks}
+        assert "legacy-only" in ids
+        assert "modern-only" in ids
+        assert "both" in ids
+        assert "open-task" not in ids
+
+    @pytest.mark.asyncio
     async def test_migration_preserves_row_count(self, tmp_path):
         """The rename migration must not lose rows.
 

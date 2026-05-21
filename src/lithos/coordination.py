@@ -283,13 +283,27 @@ class CoordinationService:
         if "resolved_at" in columns:
             if "completed_at" in columns:
                 # Defensive: both columns present (only reachable if a
-                # previous migration attempt partially succeeded). Prefer
-                # resolved_at; leave the orphan completed_at alone so the
-                # operator can inspect it.
+                # previous migration attempt partially succeeded, or if
+                # external tooling added one of the columns out-of-band).
+                # Read paths (get_task, list_tasks SQL filter, list_tasks
+                # payload) look only at resolved_at, so rows whose timestamp
+                # landed in completed_at would silently vanish from the
+                # public surface. Backfill resolved_at from completed_at
+                # where resolved_at IS NULL, then leave the orphan
+                # completed_at column in place for forensic inspection.
+                # We do not DROP completed_at — DROP COLUMN needs SQLite
+                # >= 3.35 and operators may want to inspect the legacy
+                # values manually.
+                update_cursor = await db.execute(
+                    "UPDATE tasks SET resolved_at = completed_at "
+                    "WHERE resolved_at IS NULL AND completed_at IS NOT NULL"
+                )
                 logger.warning(
                     "coordination.db migration: both 'completed_at' and 'resolved_at' "
-                    "present on tasks; treating resolved_at as canonical and leaving "
-                    "completed_at untouched for forensic inspection."
+                    "columns present on tasks; backfilled resolved_at from completed_at "
+                    "for %d row(s) and left completed_at in place for forensic "
+                    "inspection.",
+                    update_cursor.rowcount,
                 )
             return
 
