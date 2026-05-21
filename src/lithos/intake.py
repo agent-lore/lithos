@@ -345,7 +345,7 @@ class CorpusIntake:
                         summaries=request.summaries,
                     )
             except SlugCollisionError as exc:
-                logger.warning(
+                logger.info(
                     "lithos_write slug_collision: agent=%s title=%.120s slug=%s existing_id=%s",
                     agent,
                     request.title,
