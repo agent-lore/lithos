@@ -30,6 +30,7 @@ from lithos.events import (
     TASK_COMPLETED,
     TASK_CREATED,
     TASK_RELEASED,
+    TASK_UPDATED,
     EventBus,
     LithosEvent,
 )
@@ -2366,6 +2367,13 @@ class LithosServer:
                 span.set_attribute("lithos.success", updated)
 
                 if updated:
+                    await self._emit(
+                        LithosEvent(
+                            type=TASK_UPDATED,
+                            agent=agent,
+                            payload={"task_id": task_id},
+                        )
+                    )
                     return {"success": True, "message": f"Task {task_id} updated"}
                 return {
                     "status": "error",
