@@ -2687,3 +2687,39 @@ class TestTaskListWithClaims:
         result = await self._call_task_list(server, with_claims=True)
         task = next(t for t in result["tasks"] if t["id"] == task_id)
         assert task["claims"] == []
+
+
+class TestTaskListResolvedSince:
+    """lithos_task_list `resolved_since` filter at the MCP boundary (#286)."""
+
+    async def _call_task_list(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_task_list")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_resolved_since_returns_terminal_tasks_with_resolved_at_key(
+        self, server: LithosServer
+    ):
+        """End-to-end: completed + cancelled tasks are returned, each carrying resolved_at."""
+        open_id = await server.coordination.create_task(title="Open", agent="resolved-agent")
+        complete_id = await server.coordination.create_task(
+            title="Will Complete", agent="resolved-agent"
+        )
+        cancel_id = await server.coordination.create_task(
+            title="Will Cancel", agent="resolved-agent"
+        )
+
+        cutoff = datetime.now(timezone.utc).isoformat()
+        await asyncio.sleep(0.05)
+
+        await server.coordination.complete_task(complete_id, "resolved-agent", outcome="ok")
+        await server.coordination.cancel_task(cancel_id, "resolved-agent")
+
+        result = await self._call_task_list(server, resolved_since=cutoff)
+        by_id = {t["id"]: t for t in result["tasks"]}
+
+        assert complete_id in by_id
+        assert cancel_id in by_id
+        assert open_id not in by_id
+        assert by_id[complete_id]["resolved_at"] is not None
+        assert by_id[cancel_id]["resolved_at"] is not None

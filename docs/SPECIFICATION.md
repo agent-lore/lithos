@@ -779,7 +779,7 @@ Mark a task as completed.
 
 **Returns:** `{ success: true }` on success, or `{ status: "error", code: "task_not_found", message }` if the task does not exist or is not open.
 
-**Behavior:** Sets task status to 'completed' and releases all active claims on the task.
+**Behavior:** Sets task status to 'completed', persists `resolved_at = now`, and releases all active claims on the task.
 
 #### `lithos_task_cancel`
 Cancel a task and release all claims.
@@ -793,7 +793,7 @@ Cancel a task and release all claims.
 
 **Returns:** `{ success: true }` on success, or `{ status: "error", code: "task_not_found", message }` on failure.
 
-**Behavior:** Marks an open task as `cancelled` and deletes all claims on that task. The optional `reason` is accepted by the MCP surface but is not persisted in SQLite.
+**Behavior:** Marks an open task as `cancelled`, persists `resolved_at = now` (dual-write with `lithos_task_complete` so both terminal transitions populate the same timestamp), and deletes all claims on that task. The optional `reason` is accepted by the MCP surface but is not persisted in SQLite.
 
 #### `lithos_task_list`
 List tasks with optional filters.
@@ -805,9 +805,10 @@ List tasks with optional filters.
 | `status` | string | No | Filter by task status: `open`, `completed`, or `cancelled` |
 | `tags` | string[] | No | Filter to tasks containing all listed tags |
 | `since` | string | No | Filter by `created_at >= since` (ISO datetime) |
+| `resolved_since` | string | No | Filter by `resolved_at >= resolved_since` (ISO datetime). `resolved_at` is set on both terminal transitions (`complete` and `cancel`), so this surfaces tasks resolved in either way within the window. Open tasks and historical cancellations whose `resolved_at` is `NULL` are excluded automatically. |
 | `with_claims` | boolean | No | When `true`, each task in the response includes its active (non-expired) claims inline as a `claims` array (same shape as `lithos_task_status`). Defaults to `false`. Use to avoid an N+1 of `lithos_task_status` calls when rendering a list view. |
 
-**Returns:** `{ tasks: [{ id, title, description, status, created_by, created_at, tags, metadata }] }`. When `with_claims=true`, each task also carries `claims: [{ agent, aspect, expires_at }]`.
+**Returns:** `{ tasks: [{ id, title, description, status, created_by, created_at, resolved_at, tags, metadata }] }`. `resolved_at` is `null` for open tasks (and for historical cancellations from before the dual-write was added). When `with_claims=true`, each task also carries `claims: [{ agent, aspect, expires_at }]`.
 
 #### `lithos_task_status`
 Get task status and claims.
@@ -1158,7 +1159,10 @@ CREATE TABLE tasks (
   status TEXT DEFAULT 'open',  -- open, completed, cancelled
   created_by TEXT NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  tags JSON
+  tags JSON,
+  outcome TEXT,                -- free-text summary set by lithos_task_complete
+  resolved_at TIMESTAMP,       -- dual-written on both terminal transitions (complete and cancel); NULL while open
+  metadata JSON
 );
 
 -- Claims (with automatic expiry)

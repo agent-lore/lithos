@@ -274,7 +274,7 @@ class TestTaskEventEmission:
         task = await server.coordination.get_task(task_id)
         assert task is not None
         assert task.outcome == outcome_text
-        assert task.completed_at is not None
+        assert task.resolved_at is not None
 
     @pytest.mark.asyncio
     async def test_lithos_task_update_emits_task_updated(self, server: LithosServer) -> None:
