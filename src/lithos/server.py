@@ -19,7 +19,7 @@ from starlette.responses import Response, StreamingResponse
 
 from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig, get_config, set_config
-from lithos.coordination import CoordinationService
+from lithos.coordination import CoordinationService, Task, TaskStatus
 from lithos.edge_store import EdgeStore
 from lithos.errors import SearchBackendError
 from lithos.events import (
@@ -67,6 +67,32 @@ logger = logging.getLogger(__name__)
 # matches from a single FTS query would already be degenerate; at that
 # point the caller should tighten the query, not ask for more results.
 _CONTENT_QUERY_FTS_CAP = 1_000_000
+
+
+def _serialize_task_record(task: Task | TaskStatus) -> dict[str, Any]:
+    """Render a Task or TaskStatus as the MCP wire-shape task dict.
+
+    Used by both ``lithos_task_get`` (which serialises a ``Task``) and
+    ``lithos_task_status`` (which serialises the task-shaped subset of a
+    ``TaskStatus``, then layers ``claims`` on top). Centralising the field
+    set + datetime formatting here stops the two responses drifting on
+    additions or ISO serialisation choices.
+
+    Claims are deliberately excluded — ``lithos_task_status`` adds them
+    alongside this dict; ``lithos_task_get`` does not return them.
+    """
+    return {
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "status": task.status,
+        "created_by": task.created_by,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "resolved_at": task.resolved_at.isoformat() if task.resolved_at else None,
+        "tags": task.tags,
+        "metadata": task.metadata,
+        "outcome": task.outcome,
+    }
 
 
 class LithosServer:
@@ -2812,16 +2838,7 @@ class LithosServer:
                 return {
                     "tasks": [
                         {
-                            "id": s.id,
-                            "title": s.title,
-                            "description": s.description,
-                            "status": s.status,
-                            "created_by": s.created_by,
-                            "created_at": s.created_at.isoformat() if s.created_at else None,
-                            "resolved_at": s.resolved_at.isoformat() if s.resolved_at else None,
-                            "tags": s.tags,
-                            "metadata": s.metadata,
-                            "outcome": s.outcome,
+                            **_serialize_task_record(s),
                             "claims": [
                                 {
                                     "agent": c.agent,
@@ -2871,20 +2888,7 @@ class LithosServer:
                         "message": f"Task '{task_id}' not found.",
                     }
 
-                return {
-                    "task": {
-                        "id": task.id,
-                        "title": task.title,
-                        "description": task.description,
-                        "status": task.status,
-                        "created_by": task.created_by,
-                        "created_at": task.created_at.isoformat() if task.created_at else None,
-                        "resolved_at": (task.resolved_at.isoformat() if task.resolved_at else None),
-                        "tags": task.tags,
-                        "metadata": task.metadata,
-                        "outcome": task.outcome,
-                    }
-                }
+                return {"task": _serialize_task_record(task)}
 
         @self.mcp.tool()
         @tool_metrics()

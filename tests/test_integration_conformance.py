@@ -949,6 +949,48 @@ class TestAgentAndCoordinationMCPTools:
         assert "definitely-not-a-real-id" in got["message"]
 
     @pytest.mark.asyncio
+    async def test_integration_mcp_task_get_and_status_share_task_record(
+        self, server: LithosServer
+    ):
+        """Contract: lithos_task_get and lithos_task_status return the same
+        task fields. Guards the regularisation goal so the two responses
+        can't drift on field set or datetime formatting as fields are added.
+        """
+        created = await _call_tool(
+            server,
+            "lithos_task_create",
+            {
+                "title": "Shared Shape",
+                "agent": "shared-agent",
+                "description": "Same shape on both surfaces.",
+                "tags": ["x"],
+                "metadata": {"k": "v"},
+            },
+        )
+        task_id = created["task_id"]
+        # Add a claim so the status view actually carries one — it must still
+        # be a strict superset of the task_get shape (no missing/extra task
+        # fields), just with the claims array layered on top.
+        await _call_tool(
+            server,
+            "lithos_task_claim",
+            {
+                "task_id": task_id,
+                "aspect": "verification",
+                "agent": "shared-agent",
+                "ttl_minutes": 10,
+            },
+        )
+
+        got = (await _call_tool(server, "lithos_task_get", {"task_id": task_id}))["task"]
+        status_task = (await _call_tool(server, "lithos_task_status", {"task_id": task_id}))[
+            "tasks"
+        ][0]
+
+        status_minus_claims = {k: v for k, v in status_task.items() if k != "claims"}
+        assert got == status_minus_claims
+
+    @pytest.mark.asyncio
     async def test_integration_mcp_task_list_includes_outcome(self, server: LithosServer):
         """lithos_task_list dicts carry the persisted outcome field."""
         created = await _call_tool(

@@ -1011,10 +1011,15 @@ class CoordinationService:
                 if tags and not all(t in task_tags for t in tags):
                     continue
 
+                # Route metadata decode through _decode_metadata for parity
+                # with get_task / get_task_status. Raw json.loads accepted
+                # legacy/corrupt rows whose JSON parses to non-objects
+                # (`null`, arrays, scalars), causing list_tasks to return a
+                # non-dict metadata payload while the other surfaces regularised
+                # it back to {}.
                 task_metadata: dict[str, Any] = {}
-                if "metadata" in row_keys and row["metadata"]:
-                    with contextlib.suppress(json.JSONDecodeError):
-                        task_metadata = json.loads(row["metadata"])
+                if "metadata" in row_keys:
+                    task_metadata = _decode_metadata(row["metadata"])
 
                 resolved_at = (
                     row["resolved_at"]
