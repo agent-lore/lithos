@@ -193,6 +193,45 @@ def _format_datetime(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _decode_metadata(raw: Any) -> dict[str, Any]:
+    """Decode a stored ``tasks.metadata`` JSON column into a dict, safely.
+
+    The schema expects a JSON object, but real-world ``raw`` can be any
+    of three problem shapes: ``NULL``/empty (legitimately missing), a
+    non-string Python value produced by SQLite's loose type affinity
+    (e.g. a row written with a bare numeric literal comes back as
+    ``int``), or a valid JSON string whose top-level value isn't an
+    object (``null``, arrays, scalars). Treat all three as ``{}`` so
+    downstream consumers (``get_task``, the merge path) never see a
+    non-dict for a field typed as ``dict[str, Any]``. Log a warning on
+    the corruption cases — operators will want to know.
+    """
+    import json
+
+    if raw is None or raw == "":
+        return {}
+    if not isinstance(raw, (str, bytes, bytearray)):
+        logger.warning(
+            "tasks.metadata stored as non-string %s; treating as empty: %r",
+            type(raw).__name__,
+            raw,
+        )
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("tasks.metadata is not valid JSON; treating as empty: %r", raw)
+        return {}
+    if not isinstance(decoded, dict):
+        logger.warning(
+            "tasks.metadata is not a JSON object (got %s); treating as empty: %r",
+            type(decoded).__name__,
+            raw,
+        )
+        return {}
+    return decoded
+
+
 def _merge_metadata(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     """Apply an additive per-key patch to a metadata dict.
 
@@ -620,9 +659,8 @@ class CoordinationService:
             resolved_at_raw = row["resolved_at"] if "resolved_at" in row_keys else None
 
             task_metadata: dict[str, Any] = {}
-            if "metadata" in row_keys and row["metadata"]:
-                with contextlib.suppress(json.JSONDecodeError):
-                    task_metadata = json.loads(row["metadata"])
+            if "metadata" in row_keys:
+                task_metadata = _decode_metadata(row["metadata"])
 
             return Task(
                 id=row["id"],
@@ -757,11 +795,7 @@ class CoordinationService:
                     await db.execute("ROLLBACK")
                     return False
 
-                existing: dict[str, Any] = {}
-                if row[0]:
-                    with contextlib.suppress(json.JSONDecodeError):
-                        existing = json.loads(row[0])
-
+                existing = _decode_metadata(row[0])
                 merged = _merge_metadata(existing, metadata_patch)
                 merged_json = json.dumps(merged)
 

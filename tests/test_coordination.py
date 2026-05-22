@@ -1742,6 +1742,47 @@ class TestTaskUpdateMetadataMerge:
         assert task.title == "New Title"
         assert task.metadata == {"a": 1, "b": 2}
 
+    @pytest.mark.parametrize(
+        "stored_raw",
+        ["null", "[1, 2]", '"x"', "42", "true"],
+        ids=["null", "array", "string", "number", "bool"],
+    )
+    @pytest.mark.asyncio
+    async def test_merge_resilient_to_non_dict_stored_metadata(
+        self, coordination_service: CoordinationService, stored_raw: str
+    ):
+        """Merge degrades to {} when stored metadata is valid JSON but not an object.
+
+        Regression for the Copilot/reviewer finding on #291: ``json.loads(null)``,
+        arrays, and scalars all decode to non-dict values that would otherwise
+        crash ``_merge_metadata`` via ``dict(existing)``. The decode helper
+        treats any non-object as empty and logs a warning; the merge proceeds.
+        """
+        task_id = await coordination_service.create_task(
+            title="Corrupt Meta Task",
+            agent="agent",
+            metadata={"will_be": "clobbered"},
+        )
+
+        # Force on-disk corruption by writing a non-object JSON directly.
+        async with aiosqlite.connect(coordination_service.db_path) as db:
+            await db.execute(
+                "UPDATE tasks SET metadata = ? WHERE id = ?",
+                (stored_raw, task_id),
+            )
+            await db.commit()
+
+        updated = await coordination_service.update_task(
+            task_id=task_id, agent="agent", metadata={"new": 1}
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        # Corrupt stored value collapsed to {} before the merge; patch
+        # applies cleanly on top of the empty dict.
+        assert task.metadata == {"new": 1}
+
     @pytest.mark.asyncio
     async def test_merge_concurrent_writers_do_not_clobber(
         self, coordination_service: CoordinationService
