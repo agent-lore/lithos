@@ -2327,10 +2327,16 @@ class LithosServer:
             tags: list[str] | None = None,
             metadata: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
-            """Update mutable task metadata (title, description, tags, metadata).
+            """Update mutable task fields (title, description, tags, metadata).
 
             At least one of title, description, tags, or metadata must be provided.
-            Pass an empty dict ``{}`` for metadata to clear it.
+
+            ``metadata`` is applied as an additive per-key merge: keys with non-null
+            values overwrite the existing value, keys whose value is ``None`` are
+            deleted from the existing metadata, and keys not mentioned are preserved.
+            To clear a specific key, pass ``{"key": None}``. There is no
+            wholesale-clear affordance — ``metadata={}`` is a no-op that preserves
+            all existing keys.
 
             Args:
                 task_id: Task ID to update
@@ -2338,7 +2344,8 @@ class LithosServer:
                 title: New task title (optional)
                 description: New task description (optional)
                 tags: New task tags (optional)
-                metadata: Arbitrary JSON metadata dict; pass {} to clear (optional)
+                metadata: Per-key merge patch into the existing metadata dict
+                    (optional). See merge contract above.
 
             Returns:
                 Dict with success and message

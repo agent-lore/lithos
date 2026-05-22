@@ -2531,46 +2531,70 @@ class TestTaskMetadataTool:
         assert task.metadata == {}
 
     @pytest.mark.asyncio
-    async def test_task_update_metadata(self, server: LithosServer):
-        """lithos_task_update: metadata field is updated correctly."""
+    async def test_task_update_metadata_merges_per_key(self, server: LithosServer):
+        """lithos_task_update merges metadata per-key without clobbering others (#290)."""
         task_id = await server.coordination.create_task(
-            title="Update Meta Task",
+            title="Merge Meta Task",
             agent="test-agent",
-            metadata={"old_key": "old_val"},
+            metadata={"existing": "stay", "old_key": "old_val"},
         )
 
         result = await self._call_task_update(
             server,
             task_id=task_id,
             agent="test-agent",
-            metadata={"new_key": "new_val", "count": 99},
+            metadata={"new_key": "new_val", "old_key": "updated"},
         )
         assert result["success"] is True
 
         task = await server.coordination.get_task(task_id)
         assert task is not None
-        assert task.metadata == {"new_key": "new_val", "count": 99}
+        assert task.metadata == {
+            "existing": "stay",
+            "old_key": "updated",
+            "new_key": "new_val",
+        }
 
     @pytest.mark.asyncio
-    async def test_task_update_clear_metadata(self, server: LithosServer):
-        """lithos_task_update: passing {} clears metadata."""
+    async def test_task_update_metadata_null_deletes_key(self, server: LithosServer):
+        """lithos_task_update with metadata={k: None} deletes that key only (#290)."""
         task_id = await server.coordination.create_task(
-            title="Clear Meta Task",
+            title="Delete-Key Meta Task",
             agent="test-agent",
-            metadata={"to_be": "cleared"},
+            metadata={"keep": "yes", "drop": "soon"},
         )
 
         result = await self._call_task_update(
             server,
             task_id=task_id,
             agent="test-agent",
-            metadata={},
+            metadata={"drop": None},
         )
         assert result["success"] is True
 
         task = await server.coordination.get_task(task_id)
         assert task is not None
-        assert task.metadata == {}
+        assert task.metadata == {"keep": "yes"}
+
+    @pytest.mark.asyncio
+    async def test_task_update_metadata_only_arg_satisfies_at_least_one(self, server: LithosServer):
+        """metadata={k: v} alone is enough to satisfy the at-least-one check (#290)."""
+        task_id = await server.coordination.create_task(
+            title="Metadata-Only Update",
+            agent="test-agent",
+        )
+
+        result = await self._call_task_update(
+            server,
+            task_id=task_id,
+            agent="test-agent",
+            metadata={"priority": "high"},
+        )
+        assert result.get("success") is True
+
+        task = await server.coordination.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"priority": "high"}
 
     @pytest.mark.asyncio
     async def test_task_list_includes_metadata(self, server: LithosServer):

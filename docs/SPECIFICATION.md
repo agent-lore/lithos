@@ -711,7 +711,7 @@ Create a coordination task.
 **Returns:** `{ task_id: string }`
 
 #### `lithos_task_update`
-Update mutable task metadata.
+Update mutable task fields.
 
 **Arguments:**
 | Name | Type | Required | Description |
@@ -721,12 +721,14 @@ Update mutable task metadata.
 | `title` | string | No | Replacement title |
 | `description` | string | No | Replacement description |
 | `tags` | string[] | No | Replacement tags |
+| `metadata` | object | No | Additive per-key merge patch into the existing task metadata dict. See **Behavior** for merge semantics. |
 
 **Returns:** `{ success: true, message }` on success, or `{ status: "error", code, message }` on failure (codes: `invalid_input`, `task_not_found`).
 
 **Behavior:**
-- At least one of `title`, `description`, or `tags` must be provided.
+- At least one of `title`, `description`, `tags`, or `metadata` must be provided.
 - Only `open` tasks can be updated. Completed and cancelled tasks are treated as not found at the MCP boundary.
+- `metadata` is applied as an **additive per-key merge**: keys with non-null values overwrite the existing value, keys whose value is `null` are deleted from the existing metadata, and keys not mentioned are preserved. `metadata={}` is a no-op (preserves all existing keys); there is no wholesale-clear affordance. To clear a specific key, pass `{"key": null}`. The merge is performed atomically (single `BEGIN IMMEDIATE` transaction) so concurrent writers updating different keys never clobber each other.
 
 #### `lithos_task_claim`
 Claim an aspect of a task.
