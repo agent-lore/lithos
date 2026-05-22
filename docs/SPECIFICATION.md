@@ -707,6 +707,7 @@ Create a coordination task.
 | `description` | string | No | Task description |
 | `tags` | string[] | No | Task tags |
 | `agent` | string | Yes | Creating agent identifier |
+| `metadata` | object | No | Arbitrary JSON metadata dict persisted on the task row at insert time. Omitted (or `null`) creates a task with empty metadata. This is an **initial set**, not a merge — the row does not yet exist, so there is nothing to merge into. Subsequent mutations go through `lithos_task_update`, which applies an additive per-key merge (see that tool's **Behavior** for the contract). |
 
 **Returns:** `{ task_id: string }`
 
