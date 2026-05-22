@@ -2753,8 +2753,8 @@ class LithosServer:
 
             Returns:
                 Dict with tasks list containing id, title, description, status,
-                created_by, created_at, resolved_at, tags, metadata, and
-                (when with_claims) claims.
+                created_by, created_at, resolved_at, tags, metadata, outcome,
+                and (when with_claims) claims.
             """
             logger.info(
                 "lithos_task_list agent=%s status=%s tags=%s since=%s resolved_since=%s "
@@ -2790,13 +2790,16 @@ class LithosServer:
         async def lithos_task_status(
             task_id: str,
         ) -> dict[str, list[dict[str, Any]]]:
-            """Get status of a specific task with its active claims.
+            """Get the full record of a specific task with its active claims.
 
             Args:
                 task_id: Task ID to look up
 
             Returns:
-                Dict with tasks list containing id, title, status, claims
+                Dict with tasks list containing id, title, description, status,
+                created_by, created_at, resolved_at, tags, metadata, outcome,
+                and claims. Returns an empty tasks list if the task does not
+                exist (mirrors the historical behaviour).
             """
             logger.info("lithos_task_status task_id=%s", task_id)
             tracer = get_tracer()
@@ -2811,8 +2814,14 @@ class LithosServer:
                         {
                             "id": s.id,
                             "title": s.title,
+                            "description": s.description,
                             "status": s.status,
+                            "created_by": s.created_by,
+                            "created_at": s.created_at.isoformat() if s.created_at else None,
+                            "resolved_at": s.resolved_at.isoformat() if s.resolved_at else None,
+                            "tags": s.tags,
                             "metadata": s.metadata,
+                            "outcome": s.outcome,
                             "claims": [
                                 {
                                     "agent": c.agent,
@@ -2824,6 +2833,57 @@ class LithosServer:
                         }
                         for s in statuses
                     ]
+                }
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_task_get(
+            task_id: str,
+        ) -> dict[str, Any]:
+            """Get the full record of a single task by ID.
+
+            Returns the task on its own (not wrapped in a list) so callers
+            that already know the ID don't have to unwrap a one-element
+            response. Does not include claims — use ``lithos_task_status``
+            when you need claims alongside the task fields.
+
+            Args:
+                task_id: Task ID to look up
+
+            Returns:
+                Dict with task fields (id, title, description, status,
+                created_by, created_at, resolved_at, tags, metadata, outcome).
+                Returns the standard error envelope
+                ``{status: "error", code: "task_not_found", message: ...}``
+                when no task matches.
+            """
+            logger.info("lithos_task_get task_id=%s", task_id)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_get") as span:
+                span.set_attribute("lithos.tool", "lithos_task_get")
+                span.set_attribute("lithos.task_id", task_id)
+
+                task = await self.coordination.get_task(task_id)
+                if task is None:
+                    return {
+                        "status": "error",
+                        "code": "task_not_found",
+                        "message": f"Task '{task_id}' not found.",
+                    }
+
+                return {
+                    "task": {
+                        "id": task.id,
+                        "title": task.title,
+                        "description": task.description,
+                        "status": task.status,
+                        "created_by": task.created_by,
+                        "created_at": task.created_at.isoformat() if task.created_at else None,
+                        "resolved_at": (task.resolved_at.isoformat() if task.resolved_at else None),
+                        "tags": task.tags,
+                        "metadata": task.metadata,
+                        "outcome": task.outcome,
+                    }
                 }
 
         @self.mcp.tool()

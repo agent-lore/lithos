@@ -810,19 +810,31 @@ List tasks with optional filters.
 | `resolved_since` | string | No | Filter by `resolved_at >= resolved_since` (ISO datetime). `resolved_at` is set on both terminal transitions (`complete` and `cancel`), so this surfaces tasks resolved in either way within the window. Open tasks and historical cancellations whose `resolved_at` is `NULL` are excluded automatically. |
 | `with_claims` | boolean | No | When `true`, each task in the response includes its active (non-expired) claims inline as a `claims` array (same shape as `lithos_task_status`). Defaults to `false`. Use to avoid an N+1 of `lithos_task_status` calls when rendering a list view. |
 
-**Returns:** `{ tasks: [{ id, title, description, status, created_by, created_at, resolved_at, tags, metadata }] }`. `resolved_at` is `null` for open tasks (and for historical cancellations from before the dual-write was added). When `with_claims=true`, each task also carries `claims: [{ agent, aspect, expires_at }]`.
+**Returns:** `{ tasks: [{ id, title, description, status, created_by, created_at, resolved_at, tags, metadata, outcome }] }`. `resolved_at` is `null` for open tasks (and for historical cancellations from before the dual-write was added). `outcome` is `null` until the task is completed with an outcome. When `with_claims=true`, each task also carries `claims: [{ agent, aspect, expires_at }]`.
 
 #### `lithos_task_status`
-Get task status and claims.
+Get the full record of a task along with its active claims.
 
 **Arguments:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `task_id` | string | Yes | Specific task ID |
 
-**Returns:** `{ tasks: [{ id, title, status, claims: [{ agent, aspect, expires_at }] }] }`
+**Returns:** `{ tasks: [{ id, title, description, status, created_by, created_at, resolved_at, tags, metadata, outcome, claims: [{ agent, aspect, expires_at }] }] }`. Returns `{ tasks: [] }` when the task does not exist (mirrors historical behaviour — does not return the error envelope). Use `lithos_task_get` when you want a single-task fetch with an explicit not-found envelope and don't need claims.
 
 **Claim expiry handling:** Expired claims (where `expires_at < now()`) are automatically excluded from results. Cleanup is lazy—expired claims are filtered at query time rather than eagerly deleted.
+
+#### `lithos_task_get`
+Fetch a single task by ID. Returns the full task record without claims; use `lithos_task_status` when claims are needed.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `task_id` | string | Yes | Task ID |
+
+**Returns (success):** `{ task: { id, title, description, status, created_by, created_at, resolved_at, tags, metadata, outcome } }`
+
+**Returns (unknown task):** `{ status: "error", code: "task_not_found", message: string }`
 
 #### `lithos_finding_post`
 Post a finding to a task.
@@ -1407,7 +1419,7 @@ lithos --data-dir ./data audit --doc <id> --since 2026-01-01T00:00:00
 Tools indicate routine domain failures through return values, and unexpected backend failures may still surface as MCP-level exceptions.
 
 - **Structured status envelopes**: `lithos_write` returns `{ status: "error", code, message, ... }` for invalid input and contract-level failures
-- **Structured error envelopes on many tools**: `lithos_delete`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_update`, `lithos_task_cancel`, `lithos_search`, `lithos_list`, and `lithos_cache_lookup` use `{ status: "error", code, message }` for routine domain failures
+- **Structured error envelopes on many tools**: `lithos_delete`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_update`, `lithos_task_cancel`, `lithos_task_get`, `lithos_search`, `lithos_list`, and `lithos_cache_lookup` use `{ status: "error", code, message }` for routine domain failures
 - **Nullable results**: `lithos_agent_info` returns `null` when the agent is not found
 - **Exceptions**: Unexpected file/index/backend errors may still propagate at the MCP layer
 
@@ -1425,6 +1437,7 @@ Tools indicate routine domain failures through return values, and unexpected bac
 | Completing unknown or non-open task | `lithos_task_complete` returns `{ status: "error", code: "task_not_found" }` |
 | Updating task with no fields provided | `lithos_task_update` returns `{ status: "error", code: "invalid_input" }` |
 | Updating or cancelling unknown/closed task | `lithos_task_update` / `lithos_task_cancel` returns `{ status: "error", code: "task_not_found" }` |
+| Fetching unknown task via `lithos_task_get` | Returns `{ status: "error", code: "task_not_found" }` |
 | Invalid arguments | FastMCP validation rejects the call |
 | Ambiguous wiki-link | Link treated as unresolved (no error raised) |
 | Write content exceeds configured limit | `lithos_write` returns `{ status: "error", code: "content_too_large" }` |
