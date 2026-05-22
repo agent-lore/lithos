@@ -143,13 +143,27 @@ class Finding:
 
 @dataclass
 class TaskStatus:
-    """Task status with claims."""
+    """Task status with claims.
+
+    Carries the same persisted fields as :class:`Task` (modulo identity)
+    plus the task's currently-active (non-expired) claims. Earlier revisions
+    of this dataclass returned only ``id``, ``title``, ``status``, ``metadata``
+    and ``claims``; consumers (lithos-loom) ended up doing an N+1 re-fetch
+    via ``lithos_task_list`` just to recover the missing fields. The store
+    already has them — surface them.
+    """
 
     id: str
     title: str
     status: str
     claims: list[Claim]
     metadata: dict[str, Any] = field(default_factory=dict)
+    description: str | None = None
+    created_by: str = ""
+    created_at: datetime | None = None
+    tags: list[str] = field(default_factory=list)
+    outcome: str | None = None
+    resolved_at: datetime | None = None
 
 
 @dataclass
@@ -951,7 +965,8 @@ class CoordinationService:
 
         Returns:
             List of task dicts with id, title, description, status, created_by,
-            created_at, resolved_at, tags, metadata, and (when with_claims) claims.
+            created_at, resolved_at, tags, metadata, outcome, and (when
+            with_claims) claims.
         """
         import json
 
@@ -996,16 +1011,22 @@ class CoordinationService:
                 if tags and not all(t in task_tags for t in tags):
                     continue
 
+                # Route metadata decode through _decode_metadata for parity
+                # with get_task / get_task_status. Raw json.loads accepted
+                # legacy/corrupt rows whose JSON parses to non-objects
+                # (`null`, arrays, scalars), causing list_tasks to return a
+                # non-dict metadata payload while the other surfaces regularised
+                # it back to {}.
                 task_metadata: dict[str, Any] = {}
-                if "metadata" in row_keys and row["metadata"]:
-                    with contextlib.suppress(json.JSONDecodeError):
-                        task_metadata = json.loads(row["metadata"])
+                if "metadata" in row_keys:
+                    task_metadata = _decode_metadata(row["metadata"])
 
                 resolved_at = (
                     row["resolved_at"]
                     if row_keys is not None and "resolved_at" in row_keys
                     else None
                 )
+                outcome = row["outcome"] if row_keys is not None and "outcome" in row_keys else None
                 results.append(
                     {
                         "id": row["id"],
@@ -1017,6 +1038,7 @@ class CoordinationService:
                         "resolved_at": resolved_at,
                         "tags": task_tags,
                         "metadata": task_metadata,
+                        "outcome": outcome,
                     }
                 )
 
@@ -1126,8 +1148,15 @@ class CoordinationService:
 
                 task_metadata: dict[str, Any] = {}
                 if "metadata" in task_row_keys and task["metadata"]:
+                    task_metadata = _decode_metadata(task["metadata"])
+
+                task_tags: list[str] = []
+                if task["tags"]:
                     with contextlib.suppress(json.JSONDecodeError):
-                        task_metadata = json.loads(task["metadata"])
+                        task_tags = json.loads(task["tags"])
+
+                outcome = task["outcome"] if "outcome" in task_row_keys else None
+                resolved_at_raw = task["resolved_at"] if "resolved_at" in task_row_keys else None
 
                 result.append(
                     TaskStatus(
@@ -1136,6 +1165,12 @@ class CoordinationService:
                         status=task["status"],
                         claims=claims,
                         metadata=task_metadata,
+                        description=task["description"],
+                        created_by=task["created_by"],
+                        created_at=_parse_datetime(task["created_at"]),
+                        tags=task_tags,
+                        outcome=outcome,
+                        resolved_at=_parse_datetime(resolved_at_raw),
                     )
                 )
 

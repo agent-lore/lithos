@@ -865,6 +865,152 @@ class TestAgentAndCoordinationMCPTools:
         assert status["tasks"][0]["claims"] == []
 
     @pytest.mark.asyncio
+    async def test_integration_mcp_task_status_surfaces_full_task_record(
+        self, server: LithosServer
+    ):
+        """lithos_task_status returns the full task row, not just id/title/status."""
+        created = await _call_tool(
+            server,
+            "lithos_task_create",
+            {
+                "title": "Full Status Roundtrip",
+                "agent": "status-agent",
+                "description": "Full record exercise.",
+                "tags": ["loom", "demo"],
+                "metadata": {"priority": "high"},
+            },
+        )
+        task_id = created["task_id"]
+
+        status = await _call_tool(server, "lithos_task_status", {"task_id": task_id})
+        assert len(status["tasks"]) == 1
+        task = status["tasks"][0]
+        assert task["id"] == task_id
+        assert task["title"] == "Full Status Roundtrip"
+        assert task["description"] == "Full record exercise."
+        assert task["created_by"] == "status-agent"
+        assert task["created_at"] is not None
+        assert task["resolved_at"] is None
+        assert task["tags"] == ["loom", "demo"]
+        assert task["metadata"] == {"priority": "high"}
+        assert task["outcome"] is None
+        assert task["claims"] == []
+
+        # After completion, outcome and resolved_at populate.
+        await _call_tool(
+            server,
+            "lithos_task_complete",
+            {"task_id": task_id, "agent": "status-agent", "outcome": "shipped"},
+        )
+        done_status = await _call_tool(server, "lithos_task_status", {"task_id": task_id})
+        done = done_status["tasks"][0]
+        assert done["status"] == "completed"
+        assert done["outcome"] == "shipped"
+        assert done["resolved_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_integration_mcp_task_get_returns_full_record(self, server: LithosServer):
+        """lithos_task_get returns a single task by ID with all persisted fields."""
+        created = await _call_tool(
+            server,
+            "lithos_task_create",
+            {
+                "title": "Get Roundtrip",
+                "agent": "get-agent",
+                "description": "Single-record fetch.",
+                "tags": ["a", "b"],
+                "metadata": {"k": "v"},
+            },
+        )
+        task_id = created["task_id"]
+
+        got = await _call_tool(server, "lithos_task_get", {"task_id": task_id})
+        assert "task" in got
+        task = got["task"]
+        assert task["id"] == task_id
+        assert task["title"] == "Get Roundtrip"
+        assert task["description"] == "Single-record fetch."
+        assert task["created_by"] == "get-agent"
+        assert task["created_at"] is not None
+        assert task["resolved_at"] is None
+        assert task["tags"] == ["a", "b"]
+        assert task["metadata"] == {"k": "v"}
+        assert task["outcome"] is None
+        assert task["status"] == "open"
+
+    @pytest.mark.asyncio
+    async def test_integration_mcp_task_get_unknown_returns_error_envelope(
+        self, server: LithosServer
+    ):
+        """lithos_task_get returns the standard error envelope for unknown ids."""
+        got = await _call_tool(server, "lithos_task_get", {"task_id": "definitely-not-a-real-id"})
+        assert got["status"] == "error"
+        assert got["code"] == "task_not_found"
+        assert "definitely-not-a-real-id" in got["message"]
+
+    @pytest.mark.asyncio
+    async def test_integration_mcp_task_get_and_status_share_task_record(
+        self, server: LithosServer
+    ):
+        """Contract: lithos_task_get and lithos_task_status return the same
+        task fields. Guards the regularisation goal so the two responses
+        can't drift on field set or datetime formatting as fields are added.
+        """
+        created = await _call_tool(
+            server,
+            "lithos_task_create",
+            {
+                "title": "Shared Shape",
+                "agent": "shared-agent",
+                "description": "Same shape on both surfaces.",
+                "tags": ["x"],
+                "metadata": {"k": "v"},
+            },
+        )
+        task_id = created["task_id"]
+        # Add a claim so the status view actually carries one — it must still
+        # be a strict superset of the task_get shape (no missing/extra task
+        # fields), just with the claims array layered on top.
+        await _call_tool(
+            server,
+            "lithos_task_claim",
+            {
+                "task_id": task_id,
+                "aspect": "verification",
+                "agent": "shared-agent",
+                "ttl_minutes": 10,
+            },
+        )
+
+        got = (await _call_tool(server, "lithos_task_get", {"task_id": task_id}))["task"]
+        status_task = (await _call_tool(server, "lithos_task_status", {"task_id": task_id}))[
+            "tasks"
+        ][0]
+
+        status_minus_claims = {k: v for k, v in status_task.items() if k != "claims"}
+        assert got == status_minus_claims
+
+    @pytest.mark.asyncio
+    async def test_integration_mcp_task_list_includes_outcome(self, server: LithosServer):
+        """lithos_task_list dicts carry the persisted outcome field."""
+        created = await _call_tool(
+            server,
+            "lithos_task_create",
+            {"title": "Outcome List Task", "agent": "outcome-agent"},
+        )
+        task_id = created["task_id"]
+        await _call_tool(
+            server,
+            "lithos_task_complete",
+            {"task_id": task_id, "agent": "outcome-agent", "outcome": "the answer"},
+        )
+
+        listing = await _call_tool(server, "lithos_task_list", {"status": "completed"})
+        match = next((t for t in listing["tasks"] if t["id"] == task_id), None)
+        assert match is not None
+        assert match["outcome"] == "the answer"
+
+    @pytest.mark.asyncio
     async def test_integration_mcp_findings_with_since_filter(self, server: LithosServer):
         task = await _call_tool(
             server,

@@ -850,6 +850,24 @@ class TestListTasks:
         assert task["created_by"] == "agent"
         assert "tag1" in task["tags"]
         assert task["created_at"] is not None
+        # Open tasks have no outcome yet but the key is present so consumers
+        # don't have to do an existence-check on every row.
+        assert task["outcome"] is None
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_surfaces_outcome_after_completion(
+        self, coordination_service: CoordinationService
+    ):
+        """Completed tasks expose the persisted outcome via list_tasks."""
+        task_id = await coordination_service.create_task(
+            title="Outcome Task",
+            agent="agent",
+        )
+        await coordination_service.complete_task(task_id, "agent", outcome="ship it")
+
+        tasks = await coordination_service.list_tasks(status="completed")
+        task = next(t for t in tasks if t["id"] == task_id)
+        assert task["outcome"] == "ship it"
 
     @pytest.mark.asyncio
     async def test_list_tasks_without_with_claims_omits_claims_field(
@@ -1478,6 +1496,39 @@ class TestTaskMetadata:
         statuses = await coordination_service.get_task_status(task_id)
         assert len(statuses) == 1
         assert statuses[0].metadata == meta
+
+    @pytest.mark.asyncio
+    async def test_get_task_status_includes_all_task_fields(
+        self, coordination_service: CoordinationService
+    ):
+        """get_task_status surfaces description, tags, created_by, created_at,
+        resolved_at, outcome — fields that earlier dropped silently."""
+        meta = {"priority": "high"}
+        task_id = await coordination_service.create_task(
+            title="Full Status",
+            agent="creator-agent",
+            description="A full description",
+            tags=["loom", "demo"],
+            metadata=meta,
+        )
+
+        # Open task: outcome and resolved_at are None, the rest are populated.
+        [open_status] = await coordination_service.get_task_status(task_id)
+        assert open_status.description == "A full description"
+        assert open_status.created_by == "creator-agent"
+        assert open_status.created_at is not None
+        assert open_status.tags == ["loom", "demo"]
+        assert open_status.metadata == meta
+        assert open_status.outcome is None
+        assert open_status.resolved_at is None
+
+        # Completed task: outcome and resolved_at are populated.
+        await coordination_service.complete_task(task_id, "creator-agent", outcome="shipped")
+        [done_status] = await coordination_service.get_task_status(task_id)
+        assert done_status.outcome == "shipped"
+        assert done_status.resolved_at is not None
+        assert done_status.tags == ["loom", "demo"]
+        assert done_status.metadata == meta
 
     @pytest.mark.asyncio
     async def test_migration_adds_metadata_column(self, tmp_path):

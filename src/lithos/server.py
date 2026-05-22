@@ -19,7 +19,7 @@ from starlette.responses import Response, StreamingResponse
 
 from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig, get_config, set_config
-from lithos.coordination import CoordinationService
+from lithos.coordination import CoordinationService, Task, TaskStatus
 from lithos.edge_store import EdgeStore
 from lithos.errors import SearchBackendError
 from lithos.events import (
@@ -67,6 +67,32 @@ logger = logging.getLogger(__name__)
 # matches from a single FTS query would already be degenerate; at that
 # point the caller should tighten the query, not ask for more results.
 _CONTENT_QUERY_FTS_CAP = 1_000_000
+
+
+def _serialize_task_record(task: Task | TaskStatus) -> dict[str, Any]:
+    """Render a Task or TaskStatus as the MCP wire-shape task dict.
+
+    Used by both ``lithos_task_get`` (which serialises a ``Task``) and
+    ``lithos_task_status`` (which serialises the task-shaped subset of a
+    ``TaskStatus``, then layers ``claims`` on top). Centralising the field
+    set + datetime formatting here stops the two responses drifting on
+    additions or ISO serialisation choices.
+
+    Claims are deliberately excluded — ``lithos_task_status`` adds them
+    alongside this dict; ``lithos_task_get`` does not return them.
+    """
+    return {
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "status": task.status,
+        "created_by": task.created_by,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "resolved_at": task.resolved_at.isoformat() if task.resolved_at else None,
+        "tags": task.tags,
+        "metadata": task.metadata,
+        "outcome": task.outcome,
+    }
 
 
 class LithosServer:
@@ -2753,8 +2779,8 @@ class LithosServer:
 
             Returns:
                 Dict with tasks list containing id, title, description, status,
-                created_by, created_at, resolved_at, tags, metadata, and
-                (when with_claims) claims.
+                created_by, created_at, resolved_at, tags, metadata, outcome,
+                and (when with_claims) claims.
             """
             logger.info(
                 "lithos_task_list agent=%s status=%s tags=%s since=%s resolved_since=%s "
@@ -2790,13 +2816,16 @@ class LithosServer:
         async def lithos_task_status(
             task_id: str,
         ) -> dict[str, list[dict[str, Any]]]:
-            """Get status of a specific task with its active claims.
+            """Get the full record of a specific task with its active claims.
 
             Args:
                 task_id: Task ID to look up
 
             Returns:
-                Dict with tasks list containing id, title, status, claims
+                Dict with tasks list containing id, title, description, status,
+                created_by, created_at, resolved_at, tags, metadata, outcome,
+                and claims. Returns an empty tasks list if the task does not
+                exist (mirrors the historical behaviour).
             """
             logger.info("lithos_task_status task_id=%s", task_id)
             tracer = get_tracer()
@@ -2809,10 +2838,7 @@ class LithosServer:
                 return {
                     "tasks": [
                         {
-                            "id": s.id,
-                            "title": s.title,
-                            "status": s.status,
-                            "metadata": s.metadata,
+                            **_serialize_task_record(s),
                             "claims": [
                                 {
                                     "agent": c.agent,
@@ -2825,6 +2851,44 @@ class LithosServer:
                         for s in statuses
                     ]
                 }
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_task_get(
+            task_id: str,
+        ) -> dict[str, Any]:
+            """Get the full record of a single task by ID.
+
+            Returns the task on its own (not wrapped in a list) so callers
+            that already know the ID don't have to unwrap a one-element
+            response. Does not include claims — use ``lithos_task_status``
+            when you need claims alongside the task fields.
+
+            Args:
+                task_id: Task ID to look up
+
+            Returns:
+                Dict with task fields (id, title, description, status,
+                created_by, created_at, resolved_at, tags, metadata, outcome).
+                Returns the standard error envelope
+                ``{status: "error", code: "task_not_found", message: ...}``
+                when no task matches.
+            """
+            logger.info("lithos_task_get task_id=%s", task_id)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_get") as span:
+                span.set_attribute("lithos.tool", "lithos_task_get")
+                span.set_attribute("lithos.task_id", task_id)
+
+                task = await self.coordination.get_task(task_id)
+                if task is None:
+                    return {
+                        "status": "error",
+                        "code": "task_not_found",
+                        "message": f"Task '{task_id}' not found.",
+                    }
+
+                return {"task": _serialize_task_record(task)}
 
         @self.mcp.tool()
         @tool_metrics()
