@@ -193,6 +193,67 @@ def _format_datetime(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _decode_metadata(raw: Any) -> dict[str, Any]:
+    """Decode a stored ``tasks.metadata`` JSON column into a dict, safely.
+
+    The schema expects a JSON object, but real-world ``raw`` can be any
+    of three problem shapes: ``NULL``/empty (legitimately missing), a
+    non-string Python value produced by SQLite's loose type affinity
+    (e.g. a row written with a bare numeric literal comes back as
+    ``int``), or a valid JSON string whose top-level value isn't an
+    object (``null``, arrays, scalars). Treat all three as ``{}`` so
+    downstream consumers (``get_task``, the merge path) never see a
+    non-dict for a field typed as ``dict[str, Any]``. Log a warning on
+    the corruption cases — operators will want to know.
+    """
+    import json
+
+    if raw is None or raw == "":
+        return {}
+    if not isinstance(raw, (str, bytes, bytearray)):
+        logger.warning(
+            "tasks.metadata stored as non-string %s; treating as empty: %r",
+            type(raw).__name__,
+            raw,
+        )
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("tasks.metadata is not valid JSON; treating as empty: %r", raw)
+        return {}
+    if not isinstance(decoded, dict):
+        logger.warning(
+            "tasks.metadata is not a JSON object (got %s); treating as empty: %r",
+            type(decoded).__name__,
+            raw,
+        )
+        return {}
+    return decoded
+
+
+def _merge_metadata(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Apply an additive per-key patch to a metadata dict.
+
+    Keys in ``patch`` whose value is ``None`` are removed from the result
+    (silently if absent). Keys with any other value overwrite the existing
+    entry. Keys present in ``existing`` but absent from ``patch`` are
+    preserved. ``patch == {}`` is a no-op that returns a fresh copy of
+    ``existing``.
+
+    Pure: returns a new dict; neither argument is mutated. The
+    multi-writer guarantee in #290 depends on this being called inside a
+    BEGIN IMMEDIATE transaction so the read-merge-write cycle is atomic.
+    """
+    merged = dict(existing)
+    for key, value in patch.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
+
+
 class CoordinationService:
     """SQLite-based coordination service."""
 
@@ -598,9 +659,8 @@ class CoordinationService:
             resolved_at_raw = row["resolved_at"] if "resolved_at" in row_keys else None
 
             task_metadata: dict[str, Any] = {}
-            if "metadata" in row_keys and row["metadata"]:
-                with contextlib.suppress(json.JSONDecodeError):
-                    task_metadata = json.loads(row["metadata"])
+            if "metadata" in row_keys:
+                task_metadata = _decode_metadata(row["metadata"])
 
             return Task(
                 id=row["id"],
@@ -631,7 +691,10 @@ class CoordinationService:
         Only open tasks can be updated; completed or cancelled tasks are
         treated as not found (consistent with complete_task behaviour).
 
-        To clear metadata entirely, pass an empty dict ``{}``.
+        ``metadata`` is applied as an additive per-key merge: keys with
+        non-null values overwrite, keys whose value is ``None`` are deleted,
+        keys not in the patch are preserved. ``metadata={}`` is a no-op.
+        There is no wholesale-clear affordance (#290).
 
         Returns:
             True if task was found, is open, and was updated; False otherwise
@@ -641,40 +704,57 @@ class CoordinationService:
         lithos_metrics.coordination_ops.add(1, {"op": "update_task"})
         await self.ensure_agent_known(agent)
 
-        sets: list[str] = []
-        params: list[Any] = []
+        non_metadata_sets: list[str] = []
+        non_metadata_params: list[Any] = []
 
         if title is not None:
-            sets.append("title = ?")
-            params.append(title)
+            non_metadata_sets.append("title = ?")
+            non_metadata_params.append(title)
         if description is not None:
-            sets.append("description = ?")
-            params.append(description)
+            non_metadata_sets.append("description = ?")
+            non_metadata_params.append(description)
         if tags is not None:
-            sets.append("tags = ?")
-            params.append(json.dumps(tags))
-        if metadata is not None:
-            sets.append("metadata = ?")
-            params.append(json.dumps(metadata))
+            non_metadata_sets.append("tags = ?")
+            non_metadata_params.append(json.dumps(tags))
 
+        if metadata is None:
+            return await self._update_task_fast(
+                task_id, agent, non_metadata_sets, non_metadata_params
+            )
+        return await self._update_task_with_merge(
+            task_id, agent, non_metadata_sets, non_metadata_params, metadata
+        )
+
+    async def _update_task_fast(
+        self,
+        task_id: str,
+        agent: str,
+        sets: list[str],
+        params: list[Any],
+    ) -> bool:
+        """Update title/description/tags without touching metadata.
+
+        Single UPDATE, no SELECT needed. When ``sets`` is empty the caller
+        passed only no-op arguments — we still return True/False based on
+        whether the task exists and is open, matching the contract of the
+        merge path.
+        """
         if not sets:
-            # Nothing to update; check task exists and is open
             async with aiosqlite.connect(self.db_path) as db:
                 cursor = await db.execute(
                     "SELECT id FROM tasks WHERE id = ? AND status = 'open'", (task_id,)
                 )
                 return await cursor.fetchone() is not None
 
-        params.append(task_id)
+        params_with_id = [*params, task_id]
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 f"UPDATE tasks SET {', '.join(sets)} WHERE id = ? AND status = 'open'",
-                params,
+                params_with_id,
             )
             await db.commit()
             updated = cursor.rowcount > 0
             if updated:
-                # Derive logical field names from SQL clauses (e.g. "title = ?" -> "title")
                 updated_fields = [clause.split(" = ")[0] for clause in sets]
                 logger.info(
                     "Task updated: task_id=%s agent=%s fields=%s",
@@ -684,6 +764,63 @@ class CoordinationService:
                     extra={"task_id": task_id, "agent": agent, "fields": updated_fields},
                 )
             return updated
+
+    async def _update_task_with_merge(
+        self,
+        task_id: str,
+        agent: str,
+        non_metadata_sets: list[str],
+        non_metadata_params: list[Any],
+        metadata_patch: dict[str, Any],
+    ) -> bool:
+        """Read-merge-write the metadata column inside BEGIN IMMEDIATE.
+
+        BEGIN IMMEDIATE acquires the database-level write lock at the start
+        of the transaction, so two concurrent callers writing different
+        keys cannot both pass the SELECT and then race on the UPDATE — the
+        second caller blocks until the first commits, then reads the merged
+        state. This is the property the #290 multi-writer guarantee relies on.
+        """
+        import json
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT metadata FROM tasks WHERE id = ? AND status = 'open'",
+                    (task_id,),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    await db.execute("ROLLBACK")
+                    return False
+
+                existing = _decode_metadata(row[0])
+                merged = _merge_metadata(existing, metadata_patch)
+                merged_json = json.dumps(merged)
+
+                sets = [*non_metadata_sets, "metadata = ?"]
+                params = [*non_metadata_params, merged_json, task_id]
+                await db.execute(
+                    f"UPDATE tasks SET {', '.join(sets)} WHERE id = ? AND status = 'open'",
+                    params,
+                )
+                await db.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    await db.execute("ROLLBACK")
+                raise
+
+        updated_fields = [clause.split(" = ")[0] for clause in non_metadata_sets]
+        updated_fields.append("metadata")
+        logger.info(
+            "Task updated: task_id=%s agent=%s fields=%s",
+            task_id,
+            agent,
+            updated_fields,
+            extra={"task_id": task_id, "agent": agent, "fields": updated_fields},
+        )
+        return True
 
     @traced("lithos.coordination.complete_task")
     async def complete_task(

@@ -1433,46 +1433,6 @@ class TestTaskMetadata:
         assert task.metadata == {}
 
     @pytest.mark.asyncio
-    async def test_update_task_metadata(self, coordination_service: CoordinationService):
-        """update_task(metadata=...) replaces the stored metadata."""
-        task_id = await coordination_service.create_task(
-            title="Updatable Task",
-            agent="agent",
-            metadata={"initial": True},
-        )
-
-        updated = await coordination_service.update_task(
-            task_id=task_id,
-            agent="agent",
-            metadata={"priority": "low", "revised": True},
-        )
-        assert updated
-
-        task = await coordination_service.get_task(task_id)
-        assert task is not None
-        assert task.metadata == {"priority": "low", "revised": True}
-
-    @pytest.mark.asyncio
-    async def test_update_task_metadata_clear(self, coordination_service: CoordinationService):
-        """Passing metadata={} clears the stored metadata."""
-        task_id = await coordination_service.create_task(
-            title="Task To Clear",
-            agent="agent",
-            metadata={"to_be": "cleared"},
-        )
-
-        updated = await coordination_service.update_task(
-            task_id=task_id,
-            agent="agent",
-            metadata={},
-        )
-        assert updated
-
-        task = await coordination_service.get_task(task_id)
-        assert task is not None
-        assert task.metadata == {}
-
-    @pytest.mark.asyncio
     async def test_list_tasks_includes_metadata(self, coordination_service: CoordinationService):
         """list_tasks response dicts include the metadata field."""
         meta = {"env": "test"}
@@ -1562,6 +1522,298 @@ class TestTaskMetadata:
         task = await service.get_task("legacy-task-215")
         assert task is not None
         assert task.metadata == {}
+
+
+class TestMergeMetadataHelper:
+    """Tests for the module-level _merge_metadata pure helper (#290)."""
+
+    def test_empty_patch_returns_copy_of_existing(self):
+        from lithos.coordination import _merge_metadata
+
+        existing = {"a": 1, "b": 2}
+        result = _merge_metadata(existing, {})
+        assert result == {"a": 1, "b": 2}
+        # Pure function: must not mutate inputs and must return a new dict.
+        assert result is not existing
+
+    def test_set_new_key(self):
+        from lithos.coordination import _merge_metadata
+
+        assert _merge_metadata({"a": 1}, {"b": 2}) == {"a": 1, "b": 2}
+
+    def test_overwrite_existing_key(self):
+        from lithos.coordination import _merge_metadata
+
+        assert _merge_metadata({"a": 1, "b": 2}, {"a": 99}) == {"a": 99, "b": 2}
+
+    def test_null_deletes_key(self):
+        from lithos.coordination import _merge_metadata
+
+        assert _merge_metadata({"a": 1, "b": 2}, {"a": None}) == {"b": 2}
+
+    def test_null_for_absent_key_is_silent_noop(self):
+        from lithos.coordination import _merge_metadata
+
+        assert _merge_metadata({"a": 1}, {"absent": None}) == {"a": 1}
+
+    def test_combined_set_and_delete(self):
+        from lithos.coordination import _merge_metadata
+
+        assert _merge_metadata({"a": 1, "b": 2}, {"a": None, "c": 3}) == {"b": 2, "c": 3}
+
+
+class TestTaskUpdateMetadataMerge:
+    """Tests for additive per-key metadata merge on update_task (#290)."""
+
+    @pytest.mark.asyncio
+    async def test_merge_sets_new_key_preserves_existing(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(
+            title="Merge New Key",
+            agent="agent",
+            metadata={"a": 1, "b": 2},
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id, agent="agent", metadata={"c": 3}
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"a": 1, "b": 2, "c": 3}
+
+    @pytest.mark.asyncio
+    async def test_merge_overwrites_existing_key_preserves_others(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(
+            title="Merge Overwrite",
+            agent="agent",
+            metadata={"a": 1, "b": 2},
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id, agent="agent", metadata={"a": 99}
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"a": 99, "b": 2}
+
+    @pytest.mark.asyncio
+    async def test_merge_null_deletes_key(self, coordination_service: CoordinationService):
+        task_id = await coordination_service.create_task(
+            title="Merge Delete",
+            agent="agent",
+            metadata={"a": 1, "b": 2},
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id, agent="agent", metadata={"a": None}
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"b": 2}
+
+    @pytest.mark.asyncio
+    async def test_merge_combined_set_and_delete_in_one_call(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(
+            title="Merge Combined",
+            agent="agent",
+            metadata={"a": 1, "b": 2},
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id,
+            agent="agent",
+            metadata={"a": None, "c": 3},
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"b": 2, "c": 3}
+
+    @pytest.mark.asyncio
+    async def test_merge_empty_dict_is_noop(self, coordination_service: CoordinationService):
+        """metadata={} preserves all existing keys (no wholesale-clear affordance)."""
+        task_id = await coordination_service.create_task(
+            title="Merge Empty Patch",
+            agent="agent",
+            metadata={"a": 1, "b": 2},
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id, agent="agent", metadata={}
+        )
+        # Task exists and is open, so the call still reports success.
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"a": 1, "b": 2}
+
+    @pytest.mark.asyncio
+    async def test_merge_into_initially_empty_metadata(
+        self, coordination_service: CoordinationService
+    ):
+        """Patch into a task created with no metadata (NULL column) yields the patch."""
+        task_id = await coordination_service.create_task(
+            title="Merge From Empty",
+            agent="agent",
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id, agent="agent", metadata={"a": 1}
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"a": 1}
+
+    @pytest.mark.asyncio
+    async def test_merge_null_for_missing_key_is_silent(
+        self, coordination_service: CoordinationService
+    ):
+        """Deleting a key that isn't present is a silent no-op, not an error."""
+        task_id = await coordination_service.create_task(
+            title="Merge Delete Missing",
+            agent="agent",
+            metadata={"a": 1},
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id, agent="agent", metadata={"absent": None}
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"a": 1}
+
+    @pytest.mark.asyncio
+    async def test_merge_on_completed_task_returns_false(
+        self, coordination_service: CoordinationService
+    ):
+        """Completed tasks are treated as not-found; metadata is not mutated."""
+        task_id = await coordination_service.create_task(
+            title="Completed Task",
+            agent="agent",
+            metadata={"a": 1},
+        )
+        await coordination_service.complete_task(task_id, agent="agent", outcome="done")
+
+        updated = await coordination_service.update_task(
+            task_id=task_id, agent="agent", metadata={"b": 2}
+        )
+        assert updated is False
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"a": 1}
+
+    @pytest.mark.asyncio
+    async def test_merge_preserves_other_columns(self, coordination_service: CoordinationService):
+        """Title and metadata merge in the same call both take effect."""
+        task_id = await coordination_service.create_task(
+            title="Original Title",
+            agent="agent",
+            metadata={"a": 1},
+        )
+
+        updated = await coordination_service.update_task(
+            task_id=task_id,
+            agent="agent",
+            title="New Title",
+            metadata={"b": 2},
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.title == "New Title"
+        assert task.metadata == {"a": 1, "b": 2}
+
+    @pytest.mark.parametrize(
+        "stored_raw",
+        ["null", "[1, 2]", '"x"', "42", "true"],
+        ids=["null", "array", "string", "number", "bool"],
+    )
+    @pytest.mark.asyncio
+    async def test_merge_resilient_to_non_dict_stored_metadata(
+        self, coordination_service: CoordinationService, stored_raw: str
+    ):
+        """Merge degrades to {} when stored metadata is valid JSON but not an object.
+
+        Regression for the Copilot/reviewer finding on #291: ``json.loads(null)``,
+        arrays, and scalars all decode to non-dict values that would otherwise
+        crash ``_merge_metadata`` via ``dict(existing)``. The decode helper
+        treats any non-object as empty and logs a warning; the merge proceeds.
+        """
+        task_id = await coordination_service.create_task(
+            title="Corrupt Meta Task",
+            agent="agent",
+            metadata={"will_be": "clobbered"},
+        )
+
+        # Force on-disk corruption by writing a non-object JSON directly.
+        async with aiosqlite.connect(coordination_service.db_path) as db:
+            await db.execute(
+                "UPDATE tasks SET metadata = ? WHERE id = ?",
+                (stored_raw, task_id),
+            )
+            await db.commit()
+
+        updated = await coordination_service.update_task(
+            task_id=task_id, agent="agent", metadata={"new": 1}
+        )
+        assert updated
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        # Corrupt stored value collapsed to {} before the merge; patch
+        # applies cleanly on top of the empty dict.
+        assert task.metadata == {"new": 1}
+
+    @pytest.mark.asyncio
+    async def test_merge_concurrent_writers_do_not_clobber(
+        self, coordination_service: CoordinationService
+    ):
+        """Two concurrent updates writing different keys both land in the final state.
+
+        Regression guard for the multi-writer property that motivates #290:
+        without BEGIN IMMEDIATE serialisation, two callers could both pass
+        the SELECT and the loser's write would clobber the winner's key.
+        """
+        task_id = await coordination_service.create_task(
+            title="Concurrent Writers",
+            agent="agent",
+            metadata={"base": "seed"},
+        )
+
+        results = await asyncio.gather(
+            coordination_service.update_task(
+                task_id=task_id, agent="writer-a", metadata={"a": "from-a"}
+            ),
+            coordination_service.update_task(
+                task_id=task_id, agent="writer-b", metadata={"b": "from-b"}
+            ),
+        )
+        assert all(results)
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        # Both keys must survive — neither writer clobbered the other, and
+        # the original "base" key is preserved.
+        assert task.metadata == {"base": "seed", "a": "from-a", "b": "from-b"}
 
 
 class TestParseDatetimeWarnsOnFailure:
