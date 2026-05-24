@@ -23,9 +23,11 @@ class TestFileWatcherEventEmission:
         Pins the create-side attribution: an externally-written file that
         is not yet in ``KnowledgeManager._id_to_path`` produces
         ``NOTE_CREATED`` (not ``NOTE_UPDATED``), and the event carries the
-        watcher sentinel. The branch is otherwise only exercised by the
-        telemetry counter test (``TestFileWatcherEventsCounter``), which
-        does not subscribe to the event.
+        watcher sentinel.
+
+        Also pins the canonical payload shape — ``{id, title, path}`` — that
+        ``CorpusIntake.write`` emits, so subscribers (e.g. lithos-loom's
+        ``LithosNoteStream``) can resolve the note from either producer.
         """
         queue = server.event_bus.subscribe(event_types=[NOTE_CREATED])
 
@@ -34,13 +36,23 @@ class TestFileWatcherEventEmission:
 
         await server.watch_intake.upsert_from_disk(new_file)
 
+        expected_id = server.knowledge.get_id_by_path(Path("brand-new-watcher.md"))
+        assert expected_id is not None
+
         event = queue.get_nowait()
         assert event.type == NOTE_CREATED
         assert event.agent == WATCHER_AGENT
+        assert event.payload["id"] == expected_id
+        assert event.payload["title"] == "Brand New Watcher Doc"
         assert event.payload["path"] == "brand-new-watcher.md"
+        assert event.tags == []
 
     async def test_file_modify_emits_note_updated(self, server: LithosServer) -> None:
-        """A file create/modify triggers note.updated event with agent="watcher"."""
+        """A file create/modify triggers note.updated event with agent="watcher".
+
+        Pins the canonical ``{id, title, path}`` payload shape so the watcher
+        emit cannot drift from ``CorpusIntake.write``'s contract again.
+        """
         doc = (
             await server.knowledge.create(
                 title="Watcher Event Doc",
@@ -60,7 +72,37 @@ class TestFileWatcherEventEmission:
         event = queue.get_nowait()
         assert event.type == NOTE_UPDATED
         assert event.agent == WATCHER_AGENT
+        assert event.payload["id"] == doc.id
+        assert event.payload["title"] == doc.title
         assert event.payload["path"] == str(doc.path)
+        assert event.tags == list(doc.metadata.tags)
+
+    async def test_file_modify_propagates_tags_to_event(self, server: LithosServer) -> None:
+        """WatchIntake mirrors CorpusIntake.write by setting event.tags
+        from the document's frontmatter, so tag-filtered EventBus
+        subscribers receive watcher-originated events.
+        """
+        doc = (
+            await server.knowledge.create(
+                title="Tagged Watcher Doc",
+                content="Tagged content for the watcher tag-propagation test.",
+                agent="test-agent",
+                tags=["alpha", "beta"],
+                path="watched",
+            )
+        ).document
+        server.search.index(KnowledgeManager.to_indexable(doc))
+        server.graph.add_document(doc)
+
+        queue = server.event_bus.subscribe(event_types=[NOTE_UPDATED])
+
+        file_path = server.config.storage.knowledge_path / doc.path
+        await server.watch_intake.upsert_from_disk(file_path)
+
+        event = queue.get_nowait()
+        assert event.type == NOTE_UPDATED
+        assert event.agent == WATCHER_AGENT
+        assert set(event.tags) == {"alpha", "beta"}
 
     async def test_file_delete_emits_note_deleted(self, server: LithosServer) -> None:
         """A file deletion triggers note.deleted event with agent="watcher"."""

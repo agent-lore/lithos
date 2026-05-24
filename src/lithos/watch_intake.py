@@ -163,7 +163,12 @@ class WatchIntake:
                         LithosEvent(
                             type=NOTE_CREATED if is_new else NOTE_UPDATED,
                             agent=WATCHER_AGENT,
-                            payload={"path": str(relative_path)},
+                            payload={
+                                "id": doc.id,
+                                "title": doc.title,
+                                "path": str(doc.path),
+                            },
+                            tags=list(doc.metadata.tags),
                         )
                     )
                 except Exception as e:
