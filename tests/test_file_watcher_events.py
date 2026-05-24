@@ -104,6 +104,41 @@ class TestFileWatcherEventEmission:
         assert event.agent == WATCHER_AGENT
         assert set(event.tags) == {"alpha", "beta"}
 
+    async def test_tag_filtered_subscriber_receives_watcher_event(
+        self, server: LithosServer
+    ) -> None:
+        """End-to-end pin for #297's downstream concern: a subscriber with
+        ``tags=["alpha"]`` actually receives a watcher-originated
+        ``NOTE_UPDATED`` for a doc carrying that tag, not just that
+        ``event.tags`` is populated. ``EventBus._matches`` filters on
+        ``event.tags`` (events.py:265-269), so this test exercises the full
+        delivery path that tag-filtered consumers depend on.
+        """
+        doc = (
+            await server.knowledge.create(
+                title="Tag-filtered Watcher Doc",
+                content="Body for tag-filter delivery test.",
+                agent="test-agent",
+                tags=["alpha", "beta"],
+                path="watched",
+            )
+        ).document
+        server.search.index(KnowledgeManager.to_indexable(doc))
+        server.graph.add_document(doc)
+
+        queue = server.event_bus.subscribe(
+            event_types=[NOTE_UPDATED],
+            tags=["alpha"],
+        )
+
+        file_path = server.config.storage.knowledge_path / doc.path
+        await server.watch_intake.upsert_from_disk(file_path)
+
+        event = queue.get_nowait()
+        assert event.type == NOTE_UPDATED
+        assert event.agent == WATCHER_AGENT
+        assert "alpha" in event.tags
+
     async def test_file_delete_emits_note_deleted(self, server: LithosServer) -> None:
         """A file deletion triggers note.deleted event with agent="watcher"."""
         doc = (
