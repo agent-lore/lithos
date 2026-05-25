@@ -8,6 +8,7 @@ no-event semantics, and the "event-emit failures don't undo writes" rule.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -537,6 +538,95 @@ async def test_lithos_write_handler_routes_through_intake(
         assert event.payload["id"] == doc_id
     finally:
         server.event_bus.unsubscribe(queue)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_lithos_write_md_path_used_as_explicit_filename(
+    server: LithosServer,
+) -> None:
+    """End-to-end: a `.md`-ending path is stored at exactly that location.
+
+    Regression test for issue #300: the caller controls the filename, not the
+    slugified title.
+    """
+    write_tool = await server.mcp.get_tool("lithos_write")
+
+    result = await write_tool.fn(
+        title="Something Different",
+        content="explicit filename",
+        agent="agent-1",
+        path="projects/explicit/foo.md",
+    )
+
+    assert result["status"] == "created"
+    assert result["path"] == str(Path("projects") / "explicit" / "foo.md")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_lithos_write_rejects_md_in_intermediate_segment(
+    server: LithosServer,
+) -> None:
+    """End-to-end: paths with `.md` in a non-final segment are rejected.
+
+    Regression test for issue #300: we must not silently create directories
+    whose names end in `.md`.
+    """
+    write_tool = await server.mcp.get_tool("lithos_write")
+
+    result = await write_tool.fn(
+        title="Bad Path",
+        content="should fail",
+        agent="agent-1",
+        path="bad.md/nested.md",
+    )
+
+    assert result["status"] == "invalid_input"
+    assert ".md" in result["message"]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_lithos_write_explicit_md_path_collision_returns_path_collision(
+    server: LithosServer,
+) -> None:
+    """End-to-end: two distinct titles targeting the same explicit `.md` path must
+    not silently overwrite. The second call gets ``status="path_collision"`` (per
+    ``docs/plans/unified-write-contract.md``: ``"duplicate"`` is reserved for
+    source-URL dedup) carrying the first doc's id in ``existing_id``, and the
+    on-disk content remains the first body.
+
+    Regression test for the path-collision class of bugs that would otherwise
+    accompany issue #300's explicit-filename mode.
+    """
+    write_tool = await server.mcp.get_tool("lithos_write")
+    read_tool = await server.mcp.get_tool("lithos_read")
+
+    first = await write_tool.fn(
+        title="First Title",
+        content="first body",
+        agent="agent-1",
+        path="conflicts/same.md",
+    )
+    assert first["status"] == "created"
+    first_id = first["id"]
+
+    second = await write_tool.fn(
+        title="Different Title",
+        content="second body",
+        agent="agent-1",
+        path="conflicts/same.md",
+    )
+    assert second["status"] == "path_collision"
+    assert second["existing_id"] == first_id
+    assert "duplicate_of" not in second
+    assert ".md" in second["message"]
+
+    # Round-trip: reading by id still returns the first body (no overwrite).
+    fetched = await read_tool.fn(id=first_id)
+    assert fetched["title"] == "First Title"
+    assert "first body" in fetched["content"]
 
 
 @pytest.mark.integration

@@ -447,11 +447,16 @@ class WriteResult:
     """Structured result type for create/update operations.
 
     Error outcomes use the error code as the canonical ``status`` value
-    (``invalid_input`` / ``version_conflict`` / ``content_too_large``)
-    rather than ``status="error"`` plus a separate discriminator field.
-    The plain ``"error"`` status remains as a generic fallback for
-    unforeseen failures and ``slug_collision`` is raised as a
+    (``invalid_input`` / ``version_conflict`` / ``content_too_large`` /
+    ``path_collision``) rather than ``status="error"`` plus a separate
+    discriminator field. The plain ``"error"`` status remains as a generic
+    fallback for unforeseen failures and ``slug_collision`` is raised as a
     ``SlugCollisionError`` exception (not represented in WriteResult).
+
+    Per ``docs/plans/unified-write-contract.md``: ``"duplicate"`` is specific
+    to source URL dedup; filesystem-level conflicts use ``"path_collision"``
+    and carry the existing doc's id in ``path_collision_existing_id``,
+    mirroring ``slug_collision_existing_id`` on the intake-layer outcome.
     """
 
     status: Literal[
@@ -462,12 +467,14 @@ class WriteResult:
         "invalid_input",
         "version_conflict",
         "content_too_large",
+        "path_collision",
     ]
     document: KnowledgeDocument | None = None
     warnings: list[str] = field(default_factory=list)
     message: str | None = None
     duplicate_of: DuplicateInfo | None = None
     current_version: int | None = None
+    path_collision_existing_id: str | None = None
 
 
 def slugify(text: str) -> str:
@@ -1042,9 +1049,34 @@ class KnowledgeManager:
                 summaries=summaries,
             )
 
-            # Determine file path
+            # Determine file path.
+            #
+            # `path` semantics:
+            #   - None/empty   → filename = slugify(title) + ".md" at knowledge root
+            #   - ends in ".md" (final segment only) → treat as explicit relative file path;
+            #                    the filename is taken verbatim, title is not slugified into it
+            #   - otherwise    → treat as subdirectory; append slugify(title) + ".md"
+            #
+            # Any non-final path segment ending in ".md" is rejected: that shape would
+            # silently create a directory whose name ends in ".md", which is what
+            # confused callers into double-nesting documents (issue #300).
             slug = slugify(title)
-            file_path = Path(path) / f"{slug}.md" if path else Path(f"{slug}.md")
+            if not path:
+                file_path = Path(f"{slug}.md")
+            else:
+                parts = Path(path).parts
+                if any(p.endswith(".md") for p in parts[:-1]):
+                    return WriteResult(
+                        status="invalid_input",
+                        message=(
+                            f"path contains a '.md' segment that is not the final "
+                            f"segment: {path!r}; directories ending in '.md' are not allowed"
+                        ),
+                    )
+                if parts and parts[-1].endswith(".md"):
+                    file_path = Path(path)
+                else:
+                    file_path = Path(path) / f"{slug}.md"
             file_path, full_path = self._resolve_safe_path(file_path)
 
             # Parse wiki-links
@@ -1063,6 +1095,29 @@ class KnowledgeManager:
             existing_slug_id = self._slug_to_id.get(slug)
             if existing_slug_id is not None and existing_slug_id != doc_id:
                 raise SlugCollisionError(slug, existing_slug_id)
+
+            # Check for explicit-path collision. In the directory-semantics
+            # mode the slug check above already covers this (slug uniquely
+            # determines file_path). In the explicit-`.md` mode added for
+            # issue #300, two distinct titles can resolve to the same file
+            # path — without this guard the second create would silently
+            # overwrite the first file and leave `_id_to_path` retaining
+            # both IDs pointing at one path.
+            #
+            # Status is "path_collision" per docs/plans/unified-write-contract.md:
+            # "duplicate" is reserved for source-URL dedup; filesystem-level
+            # conflicts get their own machine-readable code with the existing
+            # doc id carried in `path_collision_existing_id` (mirrors how
+            # `slug_collision_existing_id` works at the intake layer).
+            existing_path_id = self._path_to_id.get(file_path)
+            if existing_path_id is not None and existing_path_id != doc_id:
+                return WriteResult(
+                    status="path_collision",
+                    path_collision_existing_id=existing_path_id,
+                    message=(
+                        f"Path {str(file_path)!r} is already used by document {existing_path_id!r}"
+                    ),
+                )
 
             # Write to disk
             full_path.parent.mkdir(parents=True, exist_ok=True)
