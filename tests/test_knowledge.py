@@ -312,6 +312,120 @@ class TestKnowledgeManager:
         assert ".md" in result.message
 
     @pytest.mark.asyncio
+    async def test_create_explicit_md_path_collision_does_not_overwrite(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Two distinct titles targeting the same explicit `.md` path must not collide
+        silently. The second create returns status="duplicate" pointing at the first
+        doc; the on-disk file and the path/id indexes still resolve to the first doc.
+
+        Regression test for the path-collision class of bugs introduced when explicit
+        filenames became possible (issue #300).
+        """
+        first = await knowledge_manager.create(
+            title="First Title",
+            content="first body",
+            agent="agent",
+            path="same.md",
+        )
+        assert first.status == "created"
+        assert first.document is not None
+        first_id = first.document.id
+
+        second = await knowledge_manager.create(
+            title="Different Title",
+            content="second body",
+            agent="agent",
+            path="same.md",
+        )
+        assert second.status == "duplicate"
+        assert second.duplicate_of is not None
+        assert second.duplicate_of.id == first_id
+        assert second.duplicate_of.title == "First Title"
+
+        # The original file content is intact (no silent overwrite).
+        by_id, _ = await knowledge_manager.read(id=first_id)
+        assert by_id.title == "First Title"
+        assert by_id.content == "first body"
+
+        # `_path_to_id` still resolves to the first doc.
+        by_path, _ = await knowledge_manager.read(path="same.md")
+        assert by_path.id == first_id
+
+    @pytest.mark.asyncio
+    async def test_create_explicit_md_path_collides_with_directory_semantics_write(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """A directory-mode write that lands at `procedures/foo.md` must block a
+        subsequent explicit-path write to `procedures/foo.md` from a different title.
+        Same invariant, different entry vector.
+        """
+        first = await knowledge_manager.create(
+            title="Foo",
+            content="from dir mode",
+            agent="agent",
+            path="procedures",
+        )
+        assert first.status == "created"
+        assert first.document is not None
+        assert str(first.document.path) == str(Path("procedures") / "foo.md")
+        first_id = first.document.id
+
+        second = await knowledge_manager.create(
+            title="Completely Different",
+            content="from explicit mode",
+            agent="agent",
+            path="procedures/foo.md",
+        )
+        assert second.status == "duplicate"
+        assert second.duplicate_of is not None
+        assert second.duplicate_of.id == first_id
+
+        by_id, _ = await knowledge_manager.read(id=first_id)
+        assert by_id.content == "from dir mode"
+
+    @pytest.mark.asyncio
+    async def test_create_explicit_md_path_round_trip_after_reload(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Doc created via explicit `.md` path is reachable by id AND by path after a
+        fresh `KnowledgeManager` reloads the index from disk — proving the on-disk
+        scan correctly seeds `_path_to_id` for explicit-filename writes.
+        """
+        created = (
+            await knowledge_manager.create(
+                title="Round Trip",
+                content="payload",
+                agent="agent",
+                path="projects/explicit/note.md",
+            )
+        ).document
+        assert created is not None
+        doc_id = created.id
+
+        # Simulate a process restart: a brand-new manager over the same data dir.
+        reloaded = KnowledgeManager(knowledge_manager.config)
+
+        by_id, _ = await reloaded.read(id=doc_id)
+        assert by_id.title == "Round Trip"
+        assert by_id.content == "payload"
+
+        by_path, _ = await reloaded.read(path="projects/explicit/note.md")
+        assert by_path.id == doc_id
+        assert by_path.content == "payload"
+
+        # And the path-collision guard still fires after restart.
+        collision = await reloaded.create(
+            title="Stomp Attempt",
+            content="should be rejected",
+            agent="agent",
+            path="projects/explicit/note.md",
+        )
+        assert collision.status == "duplicate"
+        assert collision.duplicate_of is not None
+        assert collision.duplicate_of.id == doc_id
+
+    @pytest.mark.asyncio
     async def test_read_document_by_id(self, knowledge_manager: KnowledgeManager):
         """Read document by UUID."""
         created = (

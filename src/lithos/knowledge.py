@@ -1089,6 +1089,27 @@ class KnowledgeManager:
             if existing_slug_id is not None and existing_slug_id != doc_id:
                 raise SlugCollisionError(slug, existing_slug_id)
 
+            # Check for explicit-path collision. In the directory-semantics
+            # mode the slug check above already covers this (slug uniquely
+            # determines file_path). In the explicit-`.md` mode added for
+            # issue #300, two distinct titles can resolve to the same file
+            # path — without this guard the second create would silently
+            # overwrite the first file and leave `_id_to_path` retaining
+            # both IDs pointing at one path.
+            existing_path_id = self._path_to_id.get(file_path)
+            if existing_path_id is not None and existing_path_id != doc_id:
+                existing_title = self._id_to_title.get(existing_path_id, "")
+                return WriteResult(
+                    status="duplicate",
+                    duplicate_of=DuplicateInfo(
+                        id=existing_path_id,
+                        title=existing_title,
+                    ),
+                    message=(
+                        f"Path {str(file_path)!r} is already used by document {existing_path_id!r}"
+                    ),
+                )
+
             # Write to disk
             full_path.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write(full_path, doc.to_markdown())
