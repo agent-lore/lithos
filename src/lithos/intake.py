@@ -154,12 +154,14 @@ class WriteOutcome:
         "version_conflict",
         "content_too_large",
         "slug_collision",
+        "path_collision",
         "error",
     ]
     document: KnowledgeDocument | None = None
     duplicate_of: DuplicateInfo | None = None
     current_version: int | None = None
     slug_collision_existing_id: str | None = None
+    path_collision_existing_id: str | None = None
     message: str | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -366,6 +368,7 @@ class CorpusIntake:
                     document=result.document,
                     duplicate_of=result.duplicate_of,
                     current_version=result.current_version,
+                    path_collision_existing_id=result.path_collision_existing_id,
                     message=result.message,
                     warnings=list(result.warnings),
                 )

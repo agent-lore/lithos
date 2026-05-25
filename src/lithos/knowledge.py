@@ -447,11 +447,16 @@ class WriteResult:
     """Structured result type for create/update operations.
 
     Error outcomes use the error code as the canonical ``status`` value
-    (``invalid_input`` / ``version_conflict`` / ``content_too_large``)
-    rather than ``status="error"`` plus a separate discriminator field.
-    The plain ``"error"`` status remains as a generic fallback for
-    unforeseen failures and ``slug_collision`` is raised as a
+    (``invalid_input`` / ``version_conflict`` / ``content_too_large`` /
+    ``path_collision``) rather than ``status="error"`` plus a separate
+    discriminator field. The plain ``"error"`` status remains as a generic
+    fallback for unforeseen failures and ``slug_collision`` is raised as a
     ``SlugCollisionError`` exception (not represented in WriteResult).
+
+    Per ``docs/plans/unified-write-contract.md``: ``"duplicate"`` is specific
+    to source URL dedup; filesystem-level conflicts use ``"path_collision"``
+    and carry the existing doc's id in ``path_collision_existing_id``,
+    mirroring ``slug_collision_existing_id`` on the intake-layer outcome.
     """
 
     status: Literal[
@@ -462,12 +467,14 @@ class WriteResult:
         "invalid_input",
         "version_conflict",
         "content_too_large",
+        "path_collision",
     ]
     document: KnowledgeDocument | None = None
     warnings: list[str] = field(default_factory=list)
     message: str | None = None
     duplicate_of: DuplicateInfo | None = None
     current_version: int | None = None
+    path_collision_existing_id: str | None = None
 
 
 def slugify(text: str) -> str:
@@ -1096,15 +1103,17 @@ class KnowledgeManager:
             # path — without this guard the second create would silently
             # overwrite the first file and leave `_id_to_path` retaining
             # both IDs pointing at one path.
+            #
+            # Status is "path_collision" per docs/plans/unified-write-contract.md:
+            # "duplicate" is reserved for source-URL dedup; filesystem-level
+            # conflicts get their own machine-readable code with the existing
+            # doc id carried in `path_collision_existing_id` (mirrors how
+            # `slug_collision_existing_id` works at the intake layer).
             existing_path_id = self._path_to_id.get(file_path)
             if existing_path_id is not None and existing_path_id != doc_id:
-                existing_title = self._id_to_title.get(existing_path_id, "")
                 return WriteResult(
-                    status="duplicate",
-                    duplicate_of=DuplicateInfo(
-                        id=existing_path_id,
-                        title=existing_title,
-                    ),
+                    status="path_collision",
+                    path_collision_existing_id=existing_path_id,
                     message=(
                         f"Path {str(file_path)!r} is already used by document {existing_path_id!r}"
                     ),

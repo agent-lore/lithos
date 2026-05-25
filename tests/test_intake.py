@@ -588,12 +588,14 @@ async def test_lithos_write_rejects_md_in_intermediate_segment(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_lithos_write_explicit_md_path_collision_returns_duplicate(
+async def test_lithos_write_explicit_md_path_collision_returns_path_collision(
     server: LithosServer,
 ) -> None:
     """End-to-end: two distinct titles targeting the same explicit `.md` path must
-    not silently overwrite. The second call gets status="duplicate" carrying the
-    first doc's id+title, and the on-disk content remains the first body.
+    not silently overwrite. The second call gets ``status="path_collision"`` (per
+    ``docs/plans/unified-write-contract.md``: ``"duplicate"`` is reserved for
+    source-URL dedup) carrying the first doc's id in ``existing_id``, and the
+    on-disk content remains the first body.
 
     Regression test for the path-collision class of bugs that would otherwise
     accompany issue #300's explicit-filename mode.
@@ -616,10 +618,10 @@ async def test_lithos_write_explicit_md_path_collision_returns_duplicate(
         agent="agent-1",
         path="conflicts/same.md",
     )
-    assert second["status"] == "duplicate"
-    assert second["duplicate_of"] is not None
-    assert second["duplicate_of"]["id"] == first_id
-    assert second["duplicate_of"]["title"] == "First Title"
+    assert second["status"] == "path_collision"
+    assert second["existing_id"] == first_id
+    assert "duplicate_of" not in second
+    assert ".md" in second["message"]
 
     # Round-trip: reading by id still returns the first body (no overwrite).
     fetched = await read_tool.fn(id=first_id)

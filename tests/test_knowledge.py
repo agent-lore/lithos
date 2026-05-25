@@ -316,8 +316,11 @@ class TestKnowledgeManager:
         self, knowledge_manager: KnowledgeManager
     ):
         """Two distinct titles targeting the same explicit `.md` path must not collide
-        silently. The second create returns status="duplicate" pointing at the first
-        doc; the on-disk file and the path/id indexes still resolve to the first doc.
+        silently. The second create returns ``status="path_collision"`` (NOT
+        ``"duplicate"`` — per docs/plans/unified-write-contract.md ``"duplicate"`` is
+        reserved for source-URL dedup) carrying the first doc's id in
+        ``path_collision_existing_id``. The on-disk file and the path/id indexes still
+        resolve to the first doc.
 
         Regression test for the path-collision class of bugs introduced when explicit
         filenames became possible (issue #300).
@@ -338,10 +341,13 @@ class TestKnowledgeManager:
             agent="agent",
             path="same.md",
         )
-        assert second.status == "duplicate"
-        assert second.duplicate_of is not None
-        assert second.duplicate_of.id == first_id
-        assert second.duplicate_of.title == "First Title"
+        assert second.status == "path_collision"
+        assert second.path_collision_existing_id == first_id
+        # `duplicate_of` must NOT be populated for path collisions — that field is
+        # part of the URL-dedup envelope only.
+        assert second.duplicate_of is None
+        assert second.message is not None
+        assert "same.md" in second.message
 
         # The original file content is intact (no silent overwrite).
         by_id, _ = await knowledge_manager.read(id=first_id)
@@ -358,7 +364,7 @@ class TestKnowledgeManager:
     ):
         """A directory-mode write that lands at `procedures/foo.md` must block a
         subsequent explicit-path write to `procedures/foo.md` from a different title.
-        Same invariant, different entry vector.
+        Same invariant, different entry vector — same ``path_collision`` status.
         """
         first = await knowledge_manager.create(
             title="Foo",
@@ -377,9 +383,8 @@ class TestKnowledgeManager:
             agent="agent",
             path="procedures/foo.md",
         )
-        assert second.status == "duplicate"
-        assert second.duplicate_of is not None
-        assert second.duplicate_of.id == first_id
+        assert second.status == "path_collision"
+        assert second.path_collision_existing_id == first_id
 
         by_id, _ = await knowledge_manager.read(id=first_id)
         assert by_id.content == "from dir mode"
@@ -421,9 +426,8 @@ class TestKnowledgeManager:
             agent="agent",
             path="projects/explicit/note.md",
         )
-        assert collision.status == "duplicate"
-        assert collision.duplicate_of is not None
-        assert collision.duplicate_of.id == doc_id
+        assert collision.status == "path_collision"
+        assert collision.path_collision_existing_id == doc_id
 
     @pytest.mark.asyncio
     async def test_read_document_by_id(self, knowledge_manager: KnowledgeManager):

@@ -133,6 +133,54 @@ class TestMCPToolContracts:
         assert delete_payload == {"success": True}
 
     @pytest.mark.asyncio
+    async def test_write_path_collision_envelope_contract(self, server: LithosServer):
+        """Pins the public envelope shape for ``status="path_collision"``.
+
+        Per ``docs/plans/unified-write-contract.md`` (line 134): ``"duplicate"`` is
+        reserved for source-URL dedup; filesystem-level conflicts use the
+        ``"path_collision"`` code from the Error Model (line 151). The MCP envelope
+        for ``path_collision`` mirrors ``slug_collision``: ``{status, message,
+        existing_id, warnings}`` — and crucially does **not** include a
+        ``duplicate_of`` field, since that's part of the URL-dedup envelope only.
+        """
+        first = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Path Conformance First",
+                "content": "first body",
+                "agent": "conformance-agent",
+                "path": "path-conformance/same.md",
+            },
+        )
+        assert first["status"] == "created"
+        first_id = first["id"]
+
+        second = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Path Conformance Different",
+                "content": "second body",
+                "agent": "conformance-agent",
+                "path": "path-conformance/same.md",
+            },
+        )
+
+        # Envelope shape: exactly these keys, no `duplicate_of` leakage.
+        assert set(second.keys()) == {"status", "message", "existing_id", "warnings"}
+        assert second["status"] == "path_collision"
+        assert second["existing_id"] == first_id
+        assert isinstance(second["message"], str)
+        assert "path-conformance/same.md" in second["message"]
+        assert isinstance(second["warnings"], list)
+
+        # No silent overwrite: first body still readable.
+        fetched = await _call_tool(server, "lithos_read", {"id": first_id})
+        assert fetched["title"] == "Path Conformance First"
+        assert "first body" in fetched["content"]
+
+    @pytest.mark.asyncio
     async def test_projection_consistency_after_write(self, server: LithosServer):
         write_payload = await _call_tool(
             server,

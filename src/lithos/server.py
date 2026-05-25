@@ -1291,6 +1291,14 @@ class LithosServer:
                         "existing_id": outcome.slug_collision_existing_id,
                         "warnings": [],
                     }
+                if outcome.status == "path_collision":
+                    span.set_attribute("lithos.write_status", "path_collision")
+                    return {
+                        "status": "path_collision",
+                        "message": outcome.message,
+                        "existing_id": outcome.path_collision_existing_id,
+                        "warnings": list(outcome.warnings),
+                    }
                 if outcome.status == "duplicate":
                     span.set_attribute("lithos.write_status", "duplicate")
                     dup = outcome.duplicate_of
