@@ -1034,7 +1034,16 @@ class LithosServer:
                     all tags; non-empty list replaces.
                 confidence: Confidence score 0-1 (default: 1.0 on create). On update:
                     null/omit preserves existing; float sets new value.
-                path: Subdirectory path (e.g., "procedures").
+                path: Where to store the note. Two accepted forms:
+                    - Subdirectory (e.g., "procedures") — the filename is derived
+                      from the title (slugified) and ".md" is appended.
+                    - Full relative file path ending in ".md"
+                      (e.g., "procedures/my-doc.md") — the final segment is used
+                      as the filename verbatim; the title does NOT influence the
+                      filename in this mode.
+                    Intermediate path segments may not end in ".md"; such inputs
+                    are rejected with status "invalid_input" to prevent
+                    accidental creation of directories whose names end in ".md".
 
                 --- Provenance ---
                 source_url: URL provenance for this knowledge. On update: null/omit

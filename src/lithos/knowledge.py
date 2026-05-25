@@ -1042,9 +1042,34 @@ class KnowledgeManager:
                 summaries=summaries,
             )
 
-            # Determine file path
+            # Determine file path.
+            #
+            # `path` semantics:
+            #   - None/empty   → filename = slugify(title) + ".md" at knowledge root
+            #   - ends in ".md" (final segment only) → treat as explicit relative file path;
+            #                    the filename is taken verbatim, title is not slugified into it
+            #   - otherwise    → treat as subdirectory; append slugify(title) + ".md"
+            #
+            # Any non-final path segment ending in ".md" is rejected: that shape would
+            # silently create a directory whose name ends in ".md", which is what
+            # confused callers into double-nesting documents (issue #300).
             slug = slugify(title)
-            file_path = Path(path) / f"{slug}.md" if path else Path(f"{slug}.md")
+            if not path:
+                file_path = Path(f"{slug}.md")
+            else:
+                parts = Path(path).parts
+                if any(p.endswith(".md") for p in parts[:-1]):
+                    return WriteResult(
+                        status="invalid_input",
+                        message=(
+                            f"path contains a '.md' segment that is not the final "
+                            f"segment: {path!r}; directories ending in '.md' are not allowed"
+                        ),
+                    )
+                if parts and parts[-1].endswith(".md"):
+                    file_path = Path(path)
+                else:
+                    file_path = Path(path) / f"{slug}.md"
             file_path, full_path = self._resolve_safe_path(file_path)
 
             # Parse wiki-links

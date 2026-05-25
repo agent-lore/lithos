@@ -213,6 +213,105 @@ class TestKnowledgeManager:
         assert "procedures" in str(doc.path)
 
     @pytest.mark.asyncio
+    async def test_create_no_path_uses_slugified_filename_at_root(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """When `path` is omitted, file lives at root with slugified title."""
+        doc = (
+            await knowledge_manager.create(
+                title="Top Level Note",
+                content="hi",
+                agent="agent",
+            )
+        ).document
+
+        assert str(doc.path) == "top-level-note.md"
+
+    @pytest.mark.asyncio
+    async def test_create_deep_directory_path_appends_slug(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Multi-segment directory path still appends slugified title."""
+        doc = (
+            await knowledge_manager.create(
+                title="Deep Doc",
+                content="nested",
+                agent="agent",
+                path="a/b/c",
+            )
+        ).document
+
+        assert str(doc.path) == str(Path("a") / "b" / "c" / "deep-doc.md")
+
+    @pytest.mark.asyncio
+    async def test_create_md_path_uses_path_as_full_filename(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """A `.md`-ending path is taken as the complete relative file path.
+
+        The title is intentionally different from the path's leaf to prove the
+        filename comes from `path`, not slugify(title). Regression guard for
+        issue #300.
+        """
+        doc = (
+            await knowledge_manager.create(
+                title="Anything Else",
+                content="explicit",
+                agent="agent",
+                path="procedures/my-explicit-name.md",
+            )
+        ).document
+
+        assert str(doc.path) == str(Path("procedures") / "my-explicit-name.md")
+
+    @pytest.mark.asyncio
+    async def test_create_md_path_at_root_uses_path_as_filename(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Single `.md` segment is treated as a filename at the knowledge root."""
+        doc = (
+            await knowledge_manager.create(
+                title="Different Title",
+                content="root file",
+                agent="agent",
+                path="root-level.md",
+            )
+        ).document
+
+        assert str(doc.path) == "root-level.md"
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_md_in_non_final_segment(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """`.md` in an intermediate segment must not create a `.md` directory."""
+        result = await knowledge_manager.create(
+            title="Bad Path",
+            content="should fail",
+            agent="agent",
+            path="projects/foo.md/bar",
+        )
+
+        assert result.status == "invalid_input"
+        assert result.message is not None
+        assert ".md" in result.message
+        assert "final segment" in result.message
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_multiple_md_segments(self, knowledge_manager: KnowledgeManager):
+        """Multiple `.md` segments hit the same non-final-segment rule."""
+        result = await knowledge_manager.create(
+            title="Bad Path 2",
+            content="should fail",
+            agent="agent",
+            path="a.md/b.md",
+        )
+
+        assert result.status == "invalid_input"
+        assert result.message is not None
+        assert ".md" in result.message
+
+    @pytest.mark.asyncio
     async def test_read_document_by_id(self, knowledge_manager: KnowledgeManager):
         """Read document by UUID."""
         created = (
@@ -618,6 +717,24 @@ class TestDocumentPersistence:
                 content="Should fail.",
                 agent="agent",
                 path="../outside",
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_md_traversal_still_raises_value_error(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """A `.md`-ending traversal path must still trip the traversal guard.
+
+        The new `.md`-segment validation runs before `_resolve_safe_path`, but
+        `..` doesn't end in `.md`, so the input falls through to the existing
+        traversal check, which raises ValueError (not a structured invalid_input).
+        """
+        with pytest.raises(ValueError, match="within knowledge directory"):
+            await knowledge_manager.create(
+                title="Unsafe MD Path",
+                content="Should fail.",
+                agent="agent",
+                path="../outside.md",
             )
 
     @pytest.mark.asyncio
