@@ -400,7 +400,7 @@ Parameters are flat at the MCP boundary but grouped below by role to aid discove
 | `id` | string | No | UUID to update existing; omit to create new |
 | `tags` | string[] | No | List of tags |
 | `confidence` | float | No | Confidence score 0-1 (default: 1.0) |
-| `path` | string | No | Subdirectory path (e.g., "procedures") |
+| `path` | string | No | Either a subdirectory (e.g. `"procedures"`) under which the filename is derived from `title` (slugified) and `.md` appended, OR a full relative file path ending in `.md` (e.g. `"procedures/my-doc.md"`) used verbatim as the filename. Intermediate path segments may not end in `.md` — such inputs return `status="invalid_input"`. Paths that resolve to an already-owned file return `status="path_collision"`. |
 
 *Provenance:*
 
@@ -442,13 +442,15 @@ The error code is the canonical top-level `status` value (e.g. `status="slug_col
 
 `{ status: "updated", id: string, path: string, version: int, warnings: string[] }`
 
-`{ status: "duplicate", duplicate_of: { id, title, source_url }, message: string, warnings: string[] }`
+`{ status: "duplicate", duplicate_of: { id, title, source_url }, message: string, warnings: string[] }`  *(source-URL dedup only — never used for filesystem-path conflicts; see `path_collision` below)*
 
 `{ status: "invalid_input", message: string, warnings: string[] }`
 
 `{ status: "content_too_large", message: string, warnings: string[] }`
 
 `{ status: "slug_collision", message: string, existing_id: string, warnings: string[] }`
+
+`{ status: "path_collision", message: string, existing_id: string, warnings: string[] }`  *(another doc already owns the requested file path — e.g. caller passed an explicit `path` ending in `.md` that's already in use)*
 
 `{ status: "version_conflict", message: string, current_version: int, warnings: string[] }`
 
