@@ -893,6 +893,42 @@ class TestDocumentMetadata:
         assert doc.metadata.extra == {}
 
     @pytest.mark.asyncio
+    async def test_create_reserved_metadata_key_rejected_at_storage_layer(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """The reserved-key invariant is enforced in the manager, not just MCP."""
+        result = await knowledge_manager.create(
+            title="Reserved Create",
+            content="Body.",
+            agent="agent",
+            extra={"title": "shadow"},
+        )
+        assert result.status == "invalid_input"
+        assert "reserved" in result.message
+
+    @pytest.mark.asyncio
+    async def test_update_reserved_metadata_key_rejected_at_storage_layer(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """update() rejects reserved metadata keys before mutating the doc."""
+        created = (
+            await knowledge_manager.create(
+                title="Reserved Update",
+                content="Body.",
+                agent="agent",
+                extra={"ok": 1},
+            )
+        ).document
+
+        result = await knowledge_manager.update(
+            id=created.id, agent="editor", extra={"version": 99}
+        )
+        assert result.status == "invalid_input"
+        # Original metadata untouched.
+        doc, _ = await knowledge_manager.read(id=created.id)
+        assert doc.metadata.extra == {"ok": 1}
+
+    @pytest.mark.asyncio
     async def test_metadata_keys_serialized_top_level_in_frontmatter(
         self, knowledge_manager: KnowledgeManager, test_config
     ):

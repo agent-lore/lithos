@@ -119,6 +119,32 @@ _KNOWN_METADATA_KEYS = frozenset(
     }
 )
 
+
+def validate_extra_metadata(extra: dict) -> None:
+    """Validate free-form document metadata before it is stored in ``extra`` (#305).
+
+    The ``extra`` dict serializes as top-level frontmatter keys, and
+    ``KnowledgeMetadata.to_dict`` lets known keys win on collision. A key that
+    shadows a reserved field would therefore be silently dropped on the next
+    write. Enforcing this in the storage layer keeps the invariant true for
+    every caller, not just the MCP boundary.
+
+    Raises:
+        ValueError: if ``extra`` is not a dict, has non-string keys, or uses a
+            key reserved by known frontmatter fields.
+    """
+    if not isinstance(extra, dict):
+        raise ValueError("metadata must be an object of string keys.")
+    if any(not isinstance(k, str) for k in extra):
+        raise ValueError("metadata keys must be strings.")
+    reserved = sorted(set(extra) & _KNOWN_METADATA_KEYS)
+    if reserved:
+        raise ValueError(
+            f"metadata keys collide with reserved frontmatter fields: {reserved}. "
+            "Choose different keys."
+        )
+
+
 # Valid LCMA enum values
 VALID_ACCESS_SCOPES = frozenset({"shared", "task", "agent_private"})
 VALID_NOTE_TYPES = frozenset(
@@ -1030,6 +1056,13 @@ class KnowledgeManager:
                         message=str(e),
                     )
 
+            # Guard free-form metadata against reserved-key collisions (#305).
+            if extra:
+                try:
+                    validate_extra_metadata(extra)
+                except ValueError as e:
+                    return WriteResult(status="invalid_input", message=str(e))
+
             doc_id = str(uuid.uuid4())
             now = datetime.now(timezone.utc)
 
@@ -1343,6 +1376,14 @@ class KnowledgeManager:
         async with self._write_lock:
             lithos_metrics.knowledge_ops.add(1, {"op": "update"})
             doc, _ = await self.read(id=id)
+
+            # Guard free-form metadata against reserved-key collisions (#305).
+            # {} (clear) has no keys to check; _UNSET means preserve.
+            if not isinstance(extra, _UnsetType) and extra:
+                try:
+                    validate_extra_metadata(extra)
+                except ValueError as e:
+                    return WriteResult(status="invalid_input", message=str(e))
 
             # Validate task-scope invariant under the write lock so the
             # source-existence check is atomic with the write. See

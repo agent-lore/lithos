@@ -37,7 +37,6 @@ from lithos.events import (
 from lithos.graph import KnowledgeGraph
 from lithos.intake import CorpusIntake, DeleteRequest, WriteRequest
 from lithos.knowledge import (
-    _KNOWN_METADATA_KEYS,
     _UNSET,
     VALID_ACCESS_SCOPES,
     VALID_NOTE_TYPES,
@@ -45,6 +44,7 @@ from lithos.knowledge import (
     KnowledgeManager,
     _normalize_datetime,
     _UnsetType,
+    validate_extra_metadata,
 )
 from lithos.provenance import ProvenanceProjection
 from lithos.search import Healthy, SearchEngine
@@ -1165,30 +1165,16 @@ class LithosServer:
                                 "warnings": [],
                             }
 
-                # Validate metadata shape. metadata persists into the document's
-                # frontmatter via KnowledgeMetadata.extra; reject non-dict inputs,
-                # non-string keys, and keys that would collide with (and be
-                # silently dropped by) reserved frontmatter fields.
+                # Validate metadata shape at the boundary for a fast, clean
+                # envelope. The same rule is enforced in the storage layer
+                # (KnowledgeManager) so the invariant holds for every caller.
                 if metadata is not None:
-                    if not isinstance(metadata, dict):
+                    try:
+                        validate_extra_metadata(metadata)
+                    except ValueError as e:
                         return {
                             "status": "invalid_input",
-                            "message": "metadata must be an object of string keys.",
-                            "warnings": [],
-                        }
-                    non_string_keys = [k for k in metadata if not isinstance(k, str)]
-                    if non_string_keys:
-                        return {
-                            "status": "invalid_input",
-                            "message": "metadata keys must be strings.",
-                            "warnings": [],
-                        }
-                    reserved = sorted(set(metadata.keys()) & _KNOWN_METADATA_KEYS)
-                    if reserved:
-                        return {
-                            "status": "invalid_input",
-                            "message": f"metadata keys collide with reserved "
-                            f"frontmatter fields: {reserved}. Choose different keys.",
+                            "message": str(e),
                             "warnings": [],
                         }
 
