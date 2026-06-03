@@ -717,6 +717,69 @@ class TestUpdateSemantics:
         read_after = await _call_tool(server, "lithos_read", {"id": doc_id})
         assert read_after["metadata"]["confidence"] == 0.5
 
+    @pytest.mark.asyncio
+    async def test_metadata_omit_clear_and_merge_distinguishable(self, server: LithosServer):
+        """Through the real MCP boundary, omit (preserve), {} (clear), and a
+        non-empty dict (per-key merge) are distinguishable for metadata (#305)."""
+        write_payload = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Metadata Semantics Doc",
+                "content": "Original content.",
+                "agent": "semantics-agent",
+                "metadata": {"a": 1, "b": 2},
+            },
+        )
+        doc_id = write_payload["id"]
+
+        read = await _call_tool(server, "lithos_read", {"id": doc_id})
+        assert read["metadata"]["extra"] == {"a": 1, "b": 2}
+
+        # Omit metadata → preserve.
+        await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "id": doc_id,
+                "title": "Metadata Semantics Doc",
+                "content": "Updated content.",
+                "agent": "semantics-agent",
+            },
+        )
+        read = await _call_tool(server, "lithos_read", {"id": doc_id})
+        assert read["metadata"]["extra"] == {"a": 1, "b": 2}
+
+        # Non-empty dict → additive per-key merge.
+        await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "id": doc_id,
+                "title": "Metadata Semantics Doc",
+                "content": "Updated content.",
+                "agent": "semantics-agent",
+                "metadata": {"c": 3},
+            },
+        )
+        read = await _call_tool(server, "lithos_read", {"id": doc_id})
+        assert read["metadata"]["extra"] == {"a": 1, "b": 2, "c": 3}
+
+        # Empty dict → clear all.
+        await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "id": doc_id,
+                "title": "Metadata Semantics Doc",
+                "content": "Updated content.",
+                "agent": "semantics-agent",
+                "metadata": {},
+            },
+        )
+        read = await _call_tool(server, "lithos_read", {"id": doc_id})
+        assert read["metadata"]["extra"] == {}
+
 
 class TestGraphEdgeConsistency:
     """Tests for graph edge correctness through the MCP write pipeline."""

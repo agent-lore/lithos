@@ -32,6 +32,7 @@ Required update fields:
 Optional shared fields (create/update as applicable):
 
 - Core: `tags`, `confidence`, `path`, `source_task`
+- Free-form metadata: `metadata` (key/value dict persisted to frontmatter via `KnowledgeMetadata.extra`)
 - Provenance and dedup: `source_url`, `derived_from_ids`
 - Freshness: `ttl_hours`, `expires_at`
 - LCMA metadata: `note_type`, `namespace`, `access_scope`, `entities`, `status`, `schema_version`
@@ -66,6 +67,15 @@ Update requests must distinguish omitted values from explicit clears.
 - `expires_at`: parse and store as UTC instant
 - omitted: preserve existing `expires_at` on update
 - explicit `expires_at: null`: clear expiry
+
+`metadata` (free-form key/value, #305):
+
+- omitted / `null`: preserve existing metadata
+- `{}`: clear all metadata
+- non-empty dict: additive per-key merge into existing metadata. A key whose
+  value is `null` deletes that key; other keys are set; absent keys are
+  preserved. This mirrors task metadata merge semantics (shared
+  `lithos._merge.merge_metadata`).
 
 Other optional fields follow standard patch semantics:
 
@@ -111,6 +121,25 @@ Authority rule:
 - Enums must be validated (`note_type`, `access_scope`, `status`).
 - Defaults applied when absent.
 - Before LCMA metadata support ships, these fields may be rejected as `invalid_input`/`unsupported_feature`.
+
+### Free-form Metadata (#305)
+
+- `metadata` must be an object with string keys; non-dict input or non-string
+  keys are rejected as `invalid_input`.
+- Keys must not collide with reserved frontmatter fields
+  (`KnowledgeMetadata` known keys such as `title`, `tags`, `version`,
+  `source_url`, …). Colliding keys would be silently dropped by frontmatter
+  serialization, so they are rejected as `invalid_input` instead.
+- Persisted into `KnowledgeMetadata.extra`, which serializes as **top-level**
+  frontmatter keys (Obsidian-compatible) and round-trips on read.
+- `expected_version` optimistic locking applies to metadata writes unchanged.
+
+## Read and List Return Shapes
+
+- `lithos_read` returns the free-form metadata as an isolated dict under
+  `metadata.extra`, alongside the full frontmatter `metadata` envelope.
+- `lithos_list` includes the free-form metadata dict on each item under the
+  `metadata` key.
 
 ## Canonical Write Outcome Envelope
 
@@ -221,7 +250,7 @@ Phase 8 is scoped to **option 2**. Rationale:
 The canonical taxonomy used in docs and the `lithos_write` docstring is:
 
 - **Core (required):** `title`, `content`, `agent`
-- **Identity & metadata:** `id`, `tags`, `confidence`, `path`
+- **Identity & metadata:** `id`, `tags`, `metadata`, `confidence`, `path`
 - **Provenance:** `source_url`, `derived_from_ids`, `source_task`
 - **Freshness:** `ttl_hours`, `expires_at`
 - **Concurrency:** `expected_version`, and the batch-only `if_match_updated_at` / `if_match_hash`

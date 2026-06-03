@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import frontmatter
 
+from lithos._merge import merge_metadata
 from lithos.config import LithosConfig
 from lithos.errors import SlugCollisionError
 from lithos.telemetry import lithos_metrics, timed_write, traced
@@ -971,8 +972,12 @@ class KnowledgeManager:
         note_type: str | None = None,
         lcma_status: str | None = None,
         summaries: dict | None = None,
+        extra: dict | None = None,
     ) -> WriteResult:
         """Create a new knowledge document.
+
+        ``extra`` is free-form key/value metadata persisted into the
+        document's frontmatter via ``KnowledgeMetadata.extra`` (#305).
 
         Returns WriteResult with status 'created', 'duplicate', or 'error'.
         """
@@ -1047,6 +1052,7 @@ class KnowledgeManager:
                 note_type=note_type if note_type is not None else "observation",
                 status=lcma_status if lcma_status is not None else "active",
                 summaries=summaries,
+                extra=dict(extra) if extra else {},
             )
 
             # Determine file path.
@@ -1296,6 +1302,7 @@ class KnowledgeManager:
         summaries: dict | None | _UnsetType = _UNSET,
         supersedes: str | None | _UnsetType = _UNSET,
         entities: list[str] | None | _UnsetType = _UNSET,
+        extra: dict | _UnsetType = _UNSET,
     ) -> WriteResult:
         """Update an existing document.
 
@@ -1322,6 +1329,12 @@ class KnowledgeManager:
         - _UNSET (default): preserve existing expires_at
         - None: clear existing expires_at
         - datetime: set new value
+
+        extra semantics (#305) — free-form key/value metadata:
+        - _UNSET (default): preserve existing metadata
+        - {}: clear all metadata
+        - non-empty dict: additive per-key merge (a key whose value is None
+          deletes that key; other keys are set; absent keys are preserved)
 
         Note: version is incremented on every call, even when no fields actually change.
         This is intentional — simplicity over precision. Callers should not rely on
@@ -1506,6 +1519,12 @@ class KnowledgeManager:
                 doc.metadata.summaries = summaries
             if not isinstance(entities, _UnsetType):
                 doc.metadata.entities = entities if entities is not None else []
+            if not isinstance(extra, _UnsetType):
+                # {} clears all metadata; a non-empty dict is an additive
+                # per-key merge into the existing extra (mirrors task metadata).
+                doc.metadata.extra = (
+                    {} if extra == {} else merge_metadata(doc.metadata.extra, extra)
+                )
 
             # Update fields
             if content is not None:

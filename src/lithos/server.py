@@ -37,6 +37,7 @@ from lithos.events import (
 from lithos.graph import KnowledgeGraph
 from lithos.intake import CorpusIntake, DeleteRequest, WriteRequest
 from lithos.knowledge import (
+    _KNOWN_METADATA_KEYS,
     _UNSET,
     VALID_ACCESS_SCOPES,
     VALID_NOTE_TYPES,
@@ -1015,6 +1016,7 @@ class LithosServer:
             note_type: str | None = None,
             status: str | None = None,
             summaries: dict | None = None,
+            metadata: dict | None = None,
         ) -> dict[str, Any]:
             """Create or update a knowledge file.
 
@@ -1032,6 +1034,12 @@ class LithosServer:
                 id: UUID to update existing; omit to create new.
                 tags: List of tags. On update: null/omit preserves existing; [] clears
                     all tags; non-empty list replaces.
+                metadata: Free-form key/value dict persisted into the document's
+                    frontmatter. On update: null/omit preserves existing; {} clears
+                    all metadata; a non-empty dict is an additive per-key merge (a
+                    key whose value is null deletes it). Keys must be strings and
+                    must not collide with reserved frontmatter fields (e.g. title,
+                    tags, version) — such writes are rejected as invalid_input.
                 confidence: Confidence score 0-1 (default: 1.0 on create). On update:
                     null/omit preserves existing; float sets new value.
                 path: Where to store the note. Two accepted forms:
@@ -1157,6 +1165,33 @@ class LithosServer:
                                 "warnings": [],
                             }
 
+                # Validate metadata shape. metadata persists into the document's
+                # frontmatter via KnowledgeMetadata.extra; reject non-dict inputs,
+                # non-string keys, and keys that would collide with (and be
+                # silently dropped by) reserved frontmatter fields.
+                if metadata is not None:
+                    if not isinstance(metadata, dict):
+                        return {
+                            "status": "invalid_input",
+                            "message": "metadata must be an object of string keys.",
+                            "warnings": [],
+                        }
+                    non_string_keys = [k for k in metadata if not isinstance(k, str)]
+                    if non_string_keys:
+                        return {
+                            "status": "invalid_input",
+                            "message": "metadata keys must be strings.",
+                            "warnings": [],
+                        }
+                    reserved = sorted(set(metadata.keys()) & _KNOWN_METADATA_KEYS)
+                    if reserved:
+                        return {
+                            "status": "invalid_input",
+                            "message": f"metadata keys collide with reserved "
+                            f"frontmatter fields: {reserved}. Choose different keys.",
+                            "warnings": [],
+                        }
+
                 # Validate task-scope create-time invariant. The update-time
                 # case is enforced under ``_write_lock`` inside
                 # ``KnowledgeManager.update`` to avoid the TOCTOU window
@@ -1246,6 +1281,7 @@ class LithosServer:
                     nt_arg: str | None | _UnsetType = _UNSET if note_type is None else note_type
                     st_arg: str | None | _UnsetType = _UNSET if status is None else status
                     sum_arg: dict | None | _UnsetType = _UNSET if summaries is None else summaries
+                    meta_arg: dict | _UnsetType = _UNSET if metadata is None else metadata
                 else:
                     # Create path forwards raw values; KnowledgeManager.create
                     # applies its own defaults.
@@ -1260,6 +1296,7 @@ class LithosServer:
                     nt_arg = note_type
                     st_arg = status
                     sum_arg = summaries
+                    meta_arg = metadata if metadata is not None else _UNSET
 
                 request = WriteRequest(
                     title=title,
@@ -1279,6 +1316,7 @@ class LithosServer:
                     note_type=nt_arg,
                     lcma_status=st_arg,
                     summaries=sum_arg,
+                    metadata=meta_arg,
                 )
 
                 outcome = await self.intake.write(agent, request)
@@ -1407,6 +1445,10 @@ class LithosServer:
                 meta = doc.metadata.to_dict()
                 meta["source_url"] = doc.metadata.source_url  # null when None
                 meta.setdefault("derived_from_ids", [])
+                # Free-form key/value metadata (#305) as an isolated dict, so
+                # callers can read back exactly what they wrote via the
+                # lithos_write `metadata` param without sifting reserved fields.
+                meta["extra"] = dict(doc.metadata.extra)
                 return {
                     "id": doc.id,
                     "title": doc.title,
@@ -2017,6 +2059,7 @@ class LithosServer:
                             "tags": d.metadata.tags,
                             "source_url": d.metadata.source_url or "",
                             "derived_from_ids": self.knowledge.get_doc_sources(d.id),
+                            "metadata": dict(d.metadata.extra),
                         }
                         for d in docs
                     ],
