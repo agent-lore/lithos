@@ -2481,6 +2481,147 @@ class TestHealthEndpoint:
         assert response.status_code == 503
 
 
+class TestDocumentMetadataTool:
+    """Tests for the metadata param on lithos_write and its surfacing on
+    lithos_read / lithos_list (#305)."""
+
+    async def _call_write(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_write")
+        return await tool.fn(**kwargs)
+
+    async def _call_read(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_read")
+        return await tool.fn(**kwargs)
+
+    async def _call_list(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_list")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_write_metadata_persists_and_read_returns_it(self, server: LithosServer):
+        """lithos_write(metadata=...) persists; lithos_read returns it under metadata.extra."""
+        meta = {"github_repo": "owner/name", "github_watch_enabled": True}
+        result = await self._call_write(
+            server,
+            title="Loom Project",
+            content="Project context.",
+            agent="agent",
+            metadata=meta,
+        )
+        assert result["status"] == "created"
+
+        read = await self._call_read(server, id=result["id"])
+        assert read["metadata"]["extra"] == meta
+
+    @pytest.mark.asyncio
+    async def test_list_includes_metadata(self, server: LithosServer):
+        """lithos_list items include the free-form metadata dict."""
+        result = await self._call_write(
+            server,
+            title="Listed Doc",
+            content="Body.",
+            agent="agent",
+            path="projects",
+            metadata={"github_repo": "a/b"},
+        )
+        assert result["status"] == "created"
+
+        listing = await self._call_list(server, path_prefix="projects")
+        item = next(i for i in listing["items"] if i["id"] == result["id"])
+        assert item["metadata"] == {"github_repo": "a/b"}
+
+    @pytest.mark.asyncio
+    async def test_update_merge_then_clear(self, server: LithosServer):
+        """Merge semantics through the tool: {a:1} then {b:2} -> both; {} clears."""
+        created = await self._call_write(
+            server,
+            title="Merge Doc",
+            content="Body.",
+            agent="agent",
+            metadata={"a": 1},
+        )
+        doc_id = created["id"]
+
+        await self._call_write(
+            server, id=doc_id, title="Merge Doc", content="Body.", agent="ed", metadata={"b": 2}
+        )
+        read = await self._call_read(server, id=doc_id)
+        assert read["metadata"]["extra"] == {"a": 1, "b": 2}
+
+        await self._call_write(
+            server, id=doc_id, title="Merge Doc", content="Body.", agent="ed", metadata={}
+        )
+        read = await self._call_read(server, id=doc_id)
+        assert read["metadata"]["extra"] == {}
+
+    @pytest.mark.asyncio
+    async def test_update_omit_metadata_preserves(self, server: LithosServer):
+        """Omitting metadata on update preserves existing."""
+        created = await self._call_write(
+            server,
+            title="Preserve Doc",
+            content="Body.",
+            agent="agent",
+            metadata={"keep": "this"},
+        )
+        await self._call_write(
+            server,
+            id=created["id"],
+            title="Preserve Doc",
+            content="Changed.",
+            agent="ed",
+            # metadata omitted
+        )
+        read = await self._call_read(server, id=created["id"])
+        assert read["metadata"]["extra"] == {"keep": "this"}
+
+    @pytest.mark.asyncio
+    async def test_metadata_reserved_key_collision_rejected(self, server: LithosServer):
+        """Keys colliding with reserved frontmatter fields are rejected."""
+        result = await self._call_write(
+            server,
+            title="Bad Keys",
+            content="Body.",
+            agent="agent",
+            metadata={"title": "shadow"},
+        )
+        assert result["status"] == "invalid_input"
+        assert "reserved" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_metadata_non_dict_rejected(self, server: LithosServer):
+        """A non-object metadata value is rejected."""
+        result = await self._call_write(
+            server,
+            title="Bad Type",
+            content="Body.",
+            agent="agent",
+            metadata=["not", "a", "dict"],
+        )
+        assert result["status"] == "invalid_input"
+
+    @pytest.mark.asyncio
+    async def test_expected_version_conflict_unchanged_with_metadata(self, server: LithosServer):
+        """A stale expected_version still yields version_conflict when metadata is supplied."""
+        created = await self._call_write(
+            server,
+            title="Locked Doc",
+            content="Body.",
+            agent="agent",
+            metadata={"a": 1},
+        )
+        result = await self._call_write(
+            server,
+            id=created["id"],
+            title="Locked Doc",
+            content="Body.",
+            agent="ed",
+            metadata={"b": 2},
+            expected_version=999,
+        )
+        assert result["status"] == "version_conflict"
+
+
 class TestTaskMetadataTool:
     """Tests for metadata field in lithos_task_create, lithos_task_update, lithos_task_list, lithos_task_status (#215)."""
 

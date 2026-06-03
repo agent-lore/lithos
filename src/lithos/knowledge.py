@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import frontmatter
 
+from lithos._merge import merge_metadata
 from lithos.config import LithosConfig
 from lithos.errors import SlugCollisionError
 from lithos.telemetry import lithos_metrics, timed_write, traced
@@ -117,6 +118,32 @@ _KNOWN_METADATA_KEYS = frozenset(
         "entities",
     }
 )
+
+
+def validate_extra_metadata(extra: dict) -> None:
+    """Validate free-form document metadata before it is stored in ``extra`` (#305).
+
+    The ``extra`` dict serializes as top-level frontmatter keys, and
+    ``KnowledgeMetadata.to_dict`` lets known keys win on collision. A key that
+    shadows a reserved field would therefore be silently dropped on the next
+    write. Enforcing this in the storage layer keeps the invariant true for
+    every caller, not just the MCP boundary.
+
+    Raises:
+        ValueError: if ``extra`` is not a dict, has non-string keys, or uses a
+            key reserved by known frontmatter fields.
+    """
+    if not isinstance(extra, dict):
+        raise ValueError("metadata must be an object of string keys.")
+    if any(not isinstance(k, str) for k in extra):
+        raise ValueError("metadata keys must be strings.")
+    reserved = sorted(set(extra) & _KNOWN_METADATA_KEYS)
+    if reserved:
+        raise ValueError(
+            f"metadata keys collide with reserved frontmatter fields: {reserved}. "
+            "Choose different keys."
+        )
+
 
 # Valid LCMA enum values
 VALID_ACCESS_SCOPES = frozenset({"shared", "task", "agent_private"})
@@ -971,8 +998,12 @@ class KnowledgeManager:
         note_type: str | None = None,
         lcma_status: str | None = None,
         summaries: dict | None = None,
+        extra: dict | None = None,
     ) -> WriteResult:
         """Create a new knowledge document.
+
+        ``extra`` is free-form key/value metadata persisted into the
+        document's frontmatter via ``KnowledgeMetadata.extra`` (#305).
 
         Returns WriteResult with status 'created', 'duplicate', or 'error'.
         """
@@ -1025,6 +1056,13 @@ class KnowledgeManager:
                         message=str(e),
                     )
 
+            # Guard free-form metadata against reserved-key collisions (#305).
+            if extra:
+                try:
+                    validate_extra_metadata(extra)
+                except ValueError as e:
+                    return WriteResult(status="invalid_input", message=str(e))
+
             doc_id = str(uuid.uuid4())
             now = datetime.now(timezone.utc)
 
@@ -1047,6 +1085,7 @@ class KnowledgeManager:
                 note_type=note_type if note_type is not None else "observation",
                 status=lcma_status if lcma_status is not None else "active",
                 summaries=summaries,
+                extra=dict(extra) if extra else {},
             )
 
             # Determine file path.
@@ -1296,6 +1335,7 @@ class KnowledgeManager:
         summaries: dict | None | _UnsetType = _UNSET,
         supersedes: str | None | _UnsetType = _UNSET,
         entities: list[str] | None | _UnsetType = _UNSET,
+        extra: dict | _UnsetType = _UNSET,
     ) -> WriteResult:
         """Update an existing document.
 
@@ -1323,6 +1363,12 @@ class KnowledgeManager:
         - None: clear existing expires_at
         - datetime: set new value
 
+        extra semantics (#305) — free-form key/value metadata:
+        - _UNSET (default): preserve existing metadata
+        - {}: clear all metadata
+        - non-empty dict: additive per-key merge (a key whose value is None
+          deletes that key; other keys are set; absent keys are preserved)
+
         Note: version is incremented on every call, even when no fields actually change.
         This is intentional — simplicity over precision. Callers should not rely on
         version stability as a proxy for content equality.
@@ -1330,6 +1376,14 @@ class KnowledgeManager:
         async with self._write_lock:
             lithos_metrics.knowledge_ops.add(1, {"op": "update"})
             doc, _ = await self.read(id=id)
+
+            # Guard free-form metadata against reserved-key collisions (#305).
+            # {} (clear) has no keys to check; _UNSET means preserve.
+            if not isinstance(extra, _UnsetType) and extra:
+                try:
+                    validate_extra_metadata(extra)
+                except ValueError as e:
+                    return WriteResult(status="invalid_input", message=str(e))
 
             # Validate task-scope invariant under the write lock so the
             # source-existence check is atomic with the write. See
@@ -1506,6 +1560,12 @@ class KnowledgeManager:
                 doc.metadata.summaries = summaries
             if not isinstance(entities, _UnsetType):
                 doc.metadata.entities = entities if entities is not None else []
+            if not isinstance(extra, _UnsetType):
+                # {} clears all metadata; a non-empty dict is an additive
+                # per-key merge into the existing extra (mirrors task metadata).
+                doc.metadata.extra = (
+                    {} if extra == {} else merge_metadata(doc.metadata.extra, extra)
+                )
 
             # Update fields
             if content is not None:

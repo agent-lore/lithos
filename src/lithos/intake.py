@@ -102,6 +102,7 @@ class WriteRequest:
     note_type: str | None | _UnsetType = _UNSET
     lcma_status: str | None | _UnsetType = _UNSET
     summaries: dict | None | _UnsetType = _UNSET
+    metadata: dict | _UnsetType = _UNSET
 
 
 @dataclass(frozen=True)
@@ -308,6 +309,9 @@ class CorpusIntake:
                     create_summaries = (
                         None if isinstance(request.summaries, _UnsetType) else request.summaries
                     )
+                    create_metadata = (
+                        None if isinstance(request.metadata, _UnsetType) else request.metadata
+                    )
                     result = await self._knowledge.create(
                         title=request.title,
                         content=request.content,
@@ -325,6 +329,7 @@ class CorpusIntake:
                         note_type=create_note,
                         lcma_status=create_status,
                         summaries=create_summaries,
+                        extra=create_metadata,
                     )
                 else:
                     result = await self._knowledge.update(
@@ -345,6 +350,7 @@ class CorpusIntake:
                         note_type=request.note_type,
                         lcma_status=request.lcma_status,
                         summaries=request.summaries,
+                        extra=request.metadata,
                     )
             except SlugCollisionError as exc:
                 logger.info(

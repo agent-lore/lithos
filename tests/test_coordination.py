@@ -1576,41 +1576,41 @@ class TestTaskMetadata:
 
 
 class TestMergeMetadataHelper:
-    """Tests for the module-level _merge_metadata pure helper (#290)."""
+    """Tests for the shared merge_metadata pure helper (#290, #305)."""
 
     def test_empty_patch_returns_copy_of_existing(self):
-        from lithos.coordination import _merge_metadata
+        from lithos._merge import merge_metadata
 
         existing = {"a": 1, "b": 2}
-        result = _merge_metadata(existing, {})
+        result = merge_metadata(existing, {})
         assert result == {"a": 1, "b": 2}
         # Pure function: must not mutate inputs and must return a new dict.
         assert result is not existing
 
     def test_set_new_key(self):
-        from lithos.coordination import _merge_metadata
+        from lithos._merge import merge_metadata
 
-        assert _merge_metadata({"a": 1}, {"b": 2}) == {"a": 1, "b": 2}
+        assert merge_metadata({"a": 1}, {"b": 2}) == {"a": 1, "b": 2}
 
     def test_overwrite_existing_key(self):
-        from lithos.coordination import _merge_metadata
+        from lithos._merge import merge_metadata
 
-        assert _merge_metadata({"a": 1, "b": 2}, {"a": 99}) == {"a": 99, "b": 2}
+        assert merge_metadata({"a": 1, "b": 2}, {"a": 99}) == {"a": 99, "b": 2}
 
     def test_null_deletes_key(self):
-        from lithos.coordination import _merge_metadata
+        from lithos._merge import merge_metadata
 
-        assert _merge_metadata({"a": 1, "b": 2}, {"a": None}) == {"b": 2}
+        assert merge_metadata({"a": 1, "b": 2}, {"a": None}) == {"b": 2}
 
     def test_null_for_absent_key_is_silent_noop(self):
-        from lithos.coordination import _merge_metadata
+        from lithos._merge import merge_metadata
 
-        assert _merge_metadata({"a": 1}, {"absent": None}) == {"a": 1}
+        assert merge_metadata({"a": 1}, {"absent": None}) == {"a": 1}
 
     def test_combined_set_and_delete(self):
-        from lithos.coordination import _merge_metadata
+        from lithos._merge import merge_metadata
 
-        assert _merge_metadata({"a": 1, "b": 2}, {"a": None, "c": 3}) == {"b": 2, "c": 3}
+        assert merge_metadata({"a": 1, "b": 2}, {"a": None, "c": 3}) == {"b": 2, "c": 3}
 
 
 class TestTaskUpdateMetadataMerge:

@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 import aiosqlite
 
+from lithos._merge import merge_metadata
 from lithos.config import LithosConfig, get_config
 from lithos.telemetry import lithos_metrics, traced
 
@@ -244,28 +245,6 @@ def _decode_metadata(raw: Any) -> dict[str, Any]:
         )
         return {}
     return decoded
-
-
-def _merge_metadata(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-    """Apply an additive per-key patch to a metadata dict.
-
-    Keys in ``patch`` whose value is ``None`` are removed from the result
-    (silently if absent). Keys with any other value overwrite the existing
-    entry. Keys present in ``existing`` but absent from ``patch`` are
-    preserved. ``patch == {}`` is a no-op that returns a fresh copy of
-    ``existing``.
-
-    Pure: returns a new dict; neither argument is mutated. The
-    multi-writer guarantee in #290 depends on this being called inside a
-    BEGIN IMMEDIATE transaction so the read-merge-write cycle is atomic.
-    """
-    merged = dict(existing)
-    for key, value in patch.items():
-        if value is None:
-            merged.pop(key, None)
-        else:
-            merged[key] = value
-    return merged
 
 
 class CoordinationService:
@@ -810,7 +789,7 @@ class CoordinationService:
                     return False
 
                 existing = _decode_metadata(row[0])
-                merged = _merge_metadata(existing, metadata_patch)
+                merged = merge_metadata(existing, metadata_patch)
                 merged_json = json.dumps(merged)
 
                 sets = [*non_metadata_sets, "metadata = ?"]

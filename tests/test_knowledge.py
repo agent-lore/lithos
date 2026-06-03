@@ -753,6 +753,203 @@ class TestCachedMetaAccessors:
         list(pairs)
 
 
+class TestDocumentMetadata:
+    """Tests for free-form document metadata persisted via extra (#305)."""
+
+    @pytest.mark.asyncio
+    async def test_create_with_metadata_persists_to_extra(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """create(metadata=...) stores keys in KnowledgeMetadata.extra."""
+        doc = (
+            await knowledge_manager.create(
+                title="Configured Doc",
+                content="Body.",
+                agent="agent",
+                extra={"github_repo": "owner/name", "github_watch_enabled": True},
+            )
+        ).document
+        assert doc.metadata.extra == {
+            "github_repo": "owner/name",
+            "github_watch_enabled": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_metadata_round_trips_through_frontmatter(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """Metadata survives a write-read cycle via a fresh manager."""
+        created = (
+            await knowledge_manager.create(
+                title="Round Trip",
+                content="Body.",
+                agent="agent",
+                extra={"k": "v", "n": 3},
+            )
+        ).document
+
+        new_manager = KnowledgeManager(knowledge_manager.config)
+        doc, _ = await new_manager.read(id=created.id)
+        assert doc.metadata.extra == {"k": "v", "n": 3}
+
+    @pytest.mark.asyncio
+    async def test_create_no_metadata_yields_empty_extra(self, knowledge_manager: KnowledgeManager):
+        """Omitting metadata on create leaves extra == {}."""
+        doc = (
+            await knowledge_manager.create(
+                title="Bare Doc",
+                content="Body.",
+                agent="agent",
+            )
+        ).document
+        assert doc.metadata.extra == {}
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_merges_per_key(self, knowledge_manager: KnowledgeManager):
+        """Updating with a new key merges additively without clobbering others."""
+        created = (
+            await knowledge_manager.create(
+                title="Mergeable",
+                content="Body.",
+                agent="agent",
+                extra={"a": 1},
+            )
+        ).document
+
+        await knowledge_manager.update(
+            id=created.id,
+            agent="editor",
+            extra={"b": 2},
+        )
+        doc, _ = await knowledge_manager.read(id=created.id)
+        assert doc.metadata.extra == {"a": 1, "b": 2}
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_overwrites_existing_key(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """A repeated key is overwritten by the patch value."""
+        created = (
+            await knowledge_manager.create(
+                title="Overwrite",
+                content="Body.",
+                agent="agent",
+                extra={"a": 1, "b": 2},
+            )
+        ).document
+
+        await knowledge_manager.update(id=created.id, agent="editor", extra={"a": 99})
+        doc, _ = await knowledge_manager.read(id=created.id)
+        assert doc.metadata.extra == {"a": 99, "b": 2}
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_null_value_deletes_key(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """A per-key None value deletes that key (consistent with task metadata)."""
+        created = (
+            await knowledge_manager.create(
+                title="Deletable",
+                content="Body.",
+                agent="agent",
+                extra={"a": 1, "b": 2},
+            )
+        ).document
+
+        await knowledge_manager.update(id=created.id, agent="editor", extra={"a": None})
+        doc, _ = await knowledge_manager.read(id=created.id)
+        assert doc.metadata.extra == {"b": 2}
+
+    @pytest.mark.asyncio
+    async def test_update_omitting_metadata_preserves(self, knowledge_manager: KnowledgeManager):
+        """Omitting metadata on update (default _UNSET) preserves existing."""
+        created = (
+            await knowledge_manager.create(
+                title="Preserve",
+                content="Body.",
+                agent="agent",
+                extra={"keep": "this"},
+            )
+        ).document
+
+        await knowledge_manager.update(id=created.id, agent="editor", content="New body.")
+        doc, _ = await knowledge_manager.read(id=created.id)
+        assert doc.metadata.extra == {"keep": "this"}
+
+    @pytest.mark.asyncio
+    async def test_update_empty_dict_clears_metadata(self, knowledge_manager: KnowledgeManager):
+        """Passing metadata={} clears all metadata."""
+        created = (
+            await knowledge_manager.create(
+                title="Clearable",
+                content="Body.",
+                agent="agent",
+                extra={"a": 1, "b": 2},
+            )
+        ).document
+
+        await knowledge_manager.update(id=created.id, agent="editor", extra={})
+        doc, _ = await knowledge_manager.read(id=created.id)
+        assert doc.metadata.extra == {}
+
+    @pytest.mark.asyncio
+    async def test_create_reserved_metadata_key_rejected_at_storage_layer(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """The reserved-key invariant is enforced in the manager, not just MCP."""
+        result = await knowledge_manager.create(
+            title="Reserved Create",
+            content="Body.",
+            agent="agent",
+            extra={"title": "shadow"},
+        )
+        assert result.status == "invalid_input"
+        assert "reserved" in result.message
+
+    @pytest.mark.asyncio
+    async def test_update_reserved_metadata_key_rejected_at_storage_layer(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """update() rejects reserved metadata keys before mutating the doc."""
+        created = (
+            await knowledge_manager.create(
+                title="Reserved Update",
+                content="Body.",
+                agent="agent",
+                extra={"ok": 1},
+            )
+        ).document
+
+        result = await knowledge_manager.update(
+            id=created.id, agent="editor", extra={"version": 99}
+        )
+        assert result.status == "invalid_input"
+        # Original metadata untouched.
+        doc, _ = await knowledge_manager.read(id=created.id)
+        assert doc.metadata.extra == {"ok": 1}
+
+    @pytest.mark.asyncio
+    async def test_metadata_keys_serialized_top_level_in_frontmatter(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """Metadata keys land as top-level frontmatter (Obsidian-compatible)."""
+        import yaml
+
+        created = (
+            await knowledge_manager.create(
+                title="Frontmatter Check",
+                content="Body.",
+                agent="agent",
+                extra={"github_repo": "owner/name"},
+            )
+        ).document
+
+        file_path = test_config.storage.knowledge_path / created.path
+        raw = file_path.read_text(encoding="utf-8")
+        parsed = yaml.safe_load(raw.split("---", 2)[1])
+        assert parsed["github_repo"] == "owner/name"
+
+
 class TestDocumentPersistence:
     """Tests for document file persistence."""
 
