@@ -765,6 +765,21 @@ class TestUpdateSemantics:
         read = await _call_tool(server, "lithos_read", {"id": doc_id})
         assert read["metadata"]["extra"] == {"a": 1, "b": 2, "c": 3}
 
+        # Per-key null → delete just that key, preserving the rest.
+        await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "id": doc_id,
+                "title": "Metadata Semantics Doc",
+                "content": "Updated content.",
+                "agent": "semantics-agent",
+                "metadata": {"a": None},
+            },
+        )
+        read = await _call_tool(server, "lithos_read", {"id": doc_id})
+        assert read["metadata"]["extra"] == {"b": 2, "c": 3}
+
         # Empty dict → clear all.
         await _call_tool(
             server,
