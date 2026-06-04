@@ -31,7 +31,7 @@ Just as Alation coined the term "Knowledge Layer" for enterprise data governance
 - **🧠 Research cache**: One-call freshness check so agents skip redundant research — returns hit/miss/stale with update guidance
 - **🔗 URL deduplication**: Automatic detection and prevention of duplicate notes from the same source URL
 - **🧬 Provenance tracking**: Declare which notes a synthesis is derived from and query lineage across the knowledge base
-- **🏷️ Free-form metadata**: Attach arbitrary key/value metadata (scalars or lists) to notes and tasks, then filter by it — `lithos_list`/`lithos_task_list` `metadata_match` (e.g. find the project doc whose `github_repos` contains a repo). Notes are filtered through an in-memory inverted index (no full scan); task filtering is evaluated inside SQLite (no Python post-scan, composes with other indexed filters)
+- **🏷️ Free-form metadata**: Attach arbitrary JSON metadata to notes and tasks, then filter by it with `lithos_list` / `lithos_task_list` `metadata_match` (scalar equality or array membership, AND across keys). Notes are filtered through an in-memory inverted index (no full scan); task filtering is evaluated inside SQLite (no Python post-scan)
 - **🔌 MCP interface**: Works with any MCP-compatible agent or tool
 - **🏠 Local & private**: No cloud dependencies, you own your data
 
@@ -79,6 +79,16 @@ claude mcp add --transport sse lithos http://localhost:8765/sse
 - [CLI Reference](docs/cli.md) — installing and using the `lithos` command-line tool
 - [Specification](docs/SPECIFICATION.md) — full technical specification
 - [LCMA Design](docs/lcma-design.md) — design notes
+
+## Metadata Filtering
+
+Lithos supports arbitrary metadata on both notes and tasks.
+
+- Notes: `lithos_write(metadata={...})` stores free-form metadata in frontmatter. `lithos_read` returns it under `metadata.extra`; `lithos_list` returns it as each item's `metadata`.
+- Tasks: `lithos_task_create(metadata={...})` stores initial metadata; `lithos_task_update(metadata={...})` applies a per-key merge patch.
+- Note update semantics: omit or `null` preserves existing metadata, `{}` clears all metadata, and `{"key": null}` deletes one key.
+- Task update semantics: omit or `null` preserves existing metadata, `{}` is a no-op, and `{"key": null}` deletes one key.
+- Filtering: `metadata_match` is AND-across-keys. Each `key: value` matches when the stored value equals the scalar query value or is an array containing it. Query values must be strings, numbers, or booleans.
 
 ## Tech Stack
 

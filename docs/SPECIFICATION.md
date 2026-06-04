@@ -1,7 +1,7 @@
 # Lithos - Specification
 
-Version: 0.1.6
-Date: 2026-05-15
+Version: 0.3.0
+Date: 2026-06-04
 Status: Aligned with Implementation
 
 ---
@@ -287,7 +287,9 @@ entities:                         # Optional: extracted entity strings (advisory
 # Any frontmatter key NOT listed above is preserved as free-form metadata,
 # settable via lithos_write(metadata={...}) and returned by lithos_read /
 # lithos_list. Keys must not collide with the reserved fields above. Values may
-# be scalars or lists; list values are matched element-wise by metadata_match.
+# be arbitrary JSON-compatible values. Current metadata_match filtering accepts
+# only scalar query values and matches either exact scalar equality or
+# element-wise membership in stored arrays.
 github_repos:                     # Example free-form key (arbitrary name)
   - <owner/repo-1>
   - <owner/repo-2>
@@ -408,7 +410,7 @@ Parameters are flat at the MCP boundary but grouped below by role to aid discove
 |------|------|----------|-------------|
 | `id` | string | No | UUID to update existing; omit to create new |
 | `tags` | string[] | No | List of tags |
-| `metadata` | object | No | Free-form key/value metadata persisted to frontmatter (#305). Values may be scalars or lists. On update: omit/`null` preserves; `{}` clears; a non-empty dict is an additive per-key merge (a key whose value is `null` deletes it). Keys must be strings and must not collide with reserved frontmatter fields, else `status="invalid_input"`. Returned by `lithos_read` (as `metadata.extra`) and `lithos_list` (as each item's `metadata`), and filterable via `lithos_list(metadata_match=...)`. |
+| `metadata` | object | No | Free-form key/value metadata persisted to frontmatter (#305). Values may be arbitrary JSON-compatible values. On update: omit/`null` preserves; `{}` clears; a non-empty dict is an additive per-key merge (a key whose value is `null` deletes it). Keys must be strings and must not collide with reserved frontmatter fields, else `status="invalid_input"`. Returned by `lithos_read` (as `metadata.extra`) and `lithos_list` (as each item's `metadata`), and filterable via `lithos_list(metadata_match=...)`. |
 | `confidence` | float | No | Confidence score 0-1 (default: 1.0) |
 | `path` | string | No | Either a subdirectory (e.g. `"procedures"`) under which the filename is derived from `title` (slugified) and `.md` appended, OR a full relative file path ending in `.md` (e.g. `"procedures/my-doc.md"`) used verbatim as the filename. Intermediate path segments may not end in `.md` — such inputs return `status="invalid_input"`. Paths that resolve to an already-owned file return `status="path_collision"`. |
 
@@ -479,12 +481,13 @@ Read a knowledge file by ID or path.
 | `id` | string | No* | UUID of knowledge item |
 | `path` | string | No* | File path relative to knowledge/ |
 | `max_length` | int | No | Truncate content to N characters (default: unlimited) |
+| `agent_id` | string | No | Caller identity recorded in the read-access audit log; defaults to `"unknown"` |
 
 *One of `id` or `path` required.
 
-**Returns:** `{ id, title, content, metadata, links, truncated: boolean }`
+**Returns:** `{ id, title, content, metadata, links, truncated: boolean, retrieval_count: int }`
 
-**Metadata includes:** `derived_from_ids` (list of source UUIDs, may be empty).
+**Metadata includes:** the reserved frontmatter fields, `derived_from_ids` (list of source UUIDs, may be empty), and `extra` (the isolated free-form metadata dict written through `lithos_write(metadata=...)`).
 
 **Truncation behavior:** When `max_length` is specified, content is truncated at the nearest paragraph or sentence boundary at or before the limit. Returns `truncated: true` if content was shortened.
 
@@ -608,14 +611,15 @@ List knowledge items with filters.
 (`metadata` is the document's free-form key/value dict.)
 
 **Behavior:**
-- When `title_contains` or `content_query` is present, Lithos fetches the full base-filtered set first, then applies post-filters before pagination. This keeps `items` and `total` correct across pages.
+- When `title_contains` is present, Lithos materializes the full base-filtered set, applies the title substring filter in memory, then paginates. This keeps `items` and `total` correct across pages.
+- When `content_query` is present, Lithos runs Tantivy first (with `tags`, `author`, and `path_prefix` pushed into the search query), then applies the remaining filters (`since`, `title_contains`, `metadata_match`) before pagination.
 - `content_query` backend failures return `{ status: "error", code: "search_backend_error", message }`.
 - `metadata_match` is resolved through an in-memory inverted index, so a metadata-filtered list never scans the whole knowledge base.
 
 **Filter semantics (`metadata_match`, #306):**
 - AND across keys: a document must match every `key: q` pair.
 - Per key, a document matches when its stored value **equals `q`** or **is a list containing `q`** (e.g. a note with `github_repos: ["org/a","org/b"]` matches `{"github_repos": "org/a"}`).
-- Query values must be JSON scalars (string/number/boolean); `null`/list/dict query values return `{ status: "invalid_input" }`. Matching is type-sensitive (`"1"` ≠ `1`).
+- Query values must be JSON scalars (string/number/boolean); `null`/list/dict query values return `{ status: "invalid_input", message, warnings: [] }`. Matching is type-sensitive (`"1"` ≠ `1`).
 
 ### 5.2 Graph Operations
 
@@ -799,10 +803,14 @@ Mark a task as completed.
 |------|------|----------|-------------|
 | `task_id` | string | Yes | Task ID |
 | `agent` | string | Yes | Agent marking completion |
+| `outcome` | string | No | Optional free-text completion summary persisted on the task row and included in the `task.completed` event payload |
+| `cited_nodes` | string[] | No | Optional node IDs the caller found useful; used for LCMA reinforcement feedback |
+| `misleading_nodes` | string[] | No | Optional node IDs the caller found misleading; used for LCMA reinforcement feedback |
+| `receipt_id` | string | No | Optional specific LCMA receipt to bind the feedback to; otherwise the latest receipt for the same `(task_id, agent)` is used |
 
-**Returns:** `{ success: true }` on success, or `{ status: "error", code: "task_not_found", message }` if the task does not exist or is not open.
+**Returns:** `{ success: true }` on success, `{ status: "error", code: "task_not_found", message }` if the task does not exist or is not open, or `{ status: "error", code: "receipt_not_found", message }` if feedback references a missing or unrelated receipt.
 
-**Behavior:** Sets task status to 'completed', persists `resolved_at = now`, and releases all active claims on the task.
+**Behavior:** Sets task status to `completed`, persists `resolved_at = now`, stores `outcome`, and releases all active claims on the task. When `cited_nodes` / `misleading_nodes` are supplied, Lithos validates them against the bound LCMA receipt before completion, then applies reinforcement side effects after the task closes. If no receipt can be found and no explicit `receipt_id` was supplied, the feedback is silently dropped and the task still completes.
 
 #### `lithos_task_cancel`
 Cancel a task and release all claims.
@@ -830,7 +838,7 @@ List tasks with optional filters.
 | `since` | string | No | Filter by `created_at >= since` (ISO datetime) |
 | `resolved_since` | string | No | Filter by `resolved_at >= resolved_since` (ISO datetime). `resolved_at` is set on both terminal transitions (`complete` and `cancel`), so this surfaces tasks resolved in either way within the window. Open tasks and historical cancellations whose `resolved_at` is `NULL` are excluded automatically. |
 | `with_claims` | boolean | No | When `true`, each task in the response includes its active (non-expired) claims inline as a `claims` array (same shape as `lithos_task_status`). Defaults to `false`. Use to avoid an N+1 of `lithos_task_status` calls when rendering a list view. |
-| `metadata_match` | object | No | Filter by task metadata. Same semantics as `lithos_list.metadata_match` (AND across keys; stored value equals the query or is a list containing it; scalar query values; type-sensitive). Pushed into SQLite via `json_extract`/`json_each`, so it is engine-evaluated rather than a Python post-scan. |
+| `metadata_match` | object | No | Filter by task metadata. Same semantics as `lithos_list.metadata_match` (AND across keys; stored value equals the query or is a list containing it; scalar query values; type-sensitive). Pushed into SQLite via `json_extract`/`json_each`, so it is engine-evaluated rather than a Python post-scan. Invalid query values return `{ status: "invalid_input", message, warnings: [] }`. |
 
 **Returns:** `{ tasks: [{ id, title, description, status, created_by, created_at, resolved_at, tags, metadata, outcome }] }`. `resolved_at` is `null` for open tasks (and for historical cancellations from before the dual-write was added). `outcome` is `null` until the task is completed with an outcome. When `with_claims=true`, each task also carries `claims: [{ agent, aspect, expires_at }]`.
 
@@ -980,7 +988,7 @@ Insert or update a typed weighted edge in `edges.db`. The unique key is `(from_i
 | `namespace` | string | Yes | LCMA namespace this edge belongs to. |
 | `provenance_actor` | string | No | Agent or rule ID that authored the edge. |
 | `provenance_type` | string | No | `human` \| `agent` \| `rule` \| `frontmatter`. |
-| `evidence` | object \| string | No | Anchors/snippets supporting the edge. |
+| `evidence` | object \| array \| null | No | Anchors/snippets supporting the edge. Scalars are rejected as `invalid_input`. |
 | `conflict_state` | string | No | Reserved for `contradicts` edges (MVP 2). |
 
 **Returns:** `{ "status": "ok", "edge_id": "edge_<short-uuid>" }`.
@@ -1255,10 +1263,12 @@ Lithos includes an in-memory event bus that emits `LithosEvent` on all write, de
 | `task.updated` | `lithos_task_update` | `task_id` |
 | `task.claimed` | `lithos_task_claim` | `task_id`, `agent`, `aspect` |
 | `task.released` | `lithos_task_release` | `task_id`, `agent`, `aspect` |
-| `task.completed` | `lithos_task_complete` | `task_id`, `agent` |
+| `task.completed` | `lithos_task_complete` | `task_id`, `agent`, `outcome`, `cited_nodes`, `misleading_nodes`, `receipt_id` |
 | `task.cancelled` | `lithos_task_cancel` | `task_id`, `agent`, `reason` |
 | `finding.posted` | `lithos_finding_post` | `finding_id`, `task_id`, `agent` |
 | `agent.registered` | `lithos_agent_register` | `agent_id`, `name` |
+
+For `task.completed`, the current implementation emits `cited_nodes`, `misleading_nodes`, and `receipt_id` as JSON-encoded strings in the event payload (for example `"[\"node-1\"]"` or `"null"`), while `outcome` is emitted as a normal string or `null`.
 | `batch.queued` | Defined constant only; not currently emitted by server tool paths | — |
 | `batch.applying` | Defined constant only; not currently emitted by server tool paths | — |
 | `batch.projecting` | Defined constant only; not currently emitted by server tool paths | — |
@@ -1530,7 +1540,7 @@ These are explicitly not part of the initial implementation but may be considere
 ← { tasks: [{ id: "task-456", status: "open", claims: [{ agent: "agent-zero", aspect: "literature review", expires_at: "..." }] }] }
 
 # Complete the task
-→ lithos_task_complete(task_id="task-456", agent="agent-zero")
+→ lithos_task_complete(task_id="task-456", agent="agent-zero", outcome="Captured the main asyncio.gather patterns and tradeoffs.")
 ← { success: true }
 
 # List all known agents
@@ -1551,12 +1561,12 @@ These are explicitly not part of the initial implementation but may be considere
 | Knowledge | `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup` |
 | Graph | `lithos_tags`, `lithos_related` |
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
-| Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`, `lithos_finding_post`, `lithos_finding_list` |
+| Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`, `lithos_task_get`, `lithos_finding_post`, `lithos_finding_list` |
 | System | `lithos_stats` |
 | LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
 | HTTP | `GET /health`, `GET /events`, `GET /audit` (not MCP tools; see §5.7 and §8.7) |
 
-**Total: 28 MCP tools + 3 HTTP endpoints** (LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
+**Total: 29 MCP tools + 3 HTTP endpoints** (includes `lithos_task_get` in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
 
 ---
 
