@@ -2622,6 +2622,97 @@ class TestDocumentMetadataTool:
         assert result["status"] == "version_conflict"
 
 
+class TestMetadataMatchFilterTool:
+    """Tool-layer tests for metadata_match on lithos_list and lithos_task_list (#306)."""
+
+    async def _write(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_write")).fn(**kwargs)
+
+    async def _list(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_list")).fn(**kwargs)
+
+    async def _task_create(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_task_create")).fn(**kwargs)
+
+    async def _task_list(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_task_list")).fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_list_metadata_match_scalar_and_list(self, server: LithosServer):
+        m = await self._write(
+            server,
+            title="Multi",
+            content="b",
+            agent="a",
+            path="projects",
+            metadata={"github_repos": ["org/a", "org/b"]},
+        )
+        await self._write(
+            server,
+            title="Other",
+            content="b",
+            agent="a",
+            path="projects",
+            metadata={"github_repos": ["org/c"]},
+        )
+        res = await self._list(server, metadata_match={"github_repos": "org/a"})
+        assert [i["id"] for i in res["items"]] == [m["id"]]
+        assert res["items"][0]["metadata"] == {"github_repos": ["org/a", "org/b"]}
+        # no match
+        res2 = await self._list(server, metadata_match={"github_repos": "org/z"})
+        assert res2["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_content_query_combined_with_metadata_match(self, server: LithosServer):
+        """content_query + metadata_match: the metadata candidate set is
+        intersected with the FTS hits, so only docs matching both survive.
+        Mirrors the since/title_contains post-filter on this path (#306)."""
+        keep = (
+            await server.knowledge.create(
+                title="Keep", content="payload", agent="agent", extra={"team": "x"}
+            )
+        ).document
+        drop = (
+            await server.knowledge.create(
+                title="Drop", content="payload", agent="agent", extra={"team": "y"}
+            )
+        ).document
+
+        # Both rank for the content query; metadata_match must drop "Drop".
+        hits = [SimpleNamespace(id=keep.id), SimpleNamespace(id=drop.id)]
+        tool = await server.mcp.get_tool("lithos_list")
+        with patch.object(server.search, "full_text_search", return_value=hits):
+            r = await tool.fn(content_query="payload", metadata_match={"team": "x"})
+        assert {i["id"] for i in r["items"]} == {keep.id}
+
+        # No metadata match → empty, even though both are FTS hits.
+        with patch.object(server.search, "full_text_search", return_value=hits):
+            r = await tool.fn(content_query="payload", metadata_match={"team": "z"})
+        assert r["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_list_invalid_metadata_match(self, server: LithosServer):
+        assert (await self._list(server, metadata_match=["not", "dict"]))["status"] == (
+            "invalid_input"
+        )
+        assert (await self._list(server, metadata_match={"k": ["list", "val"]}))["status"] == (
+            "invalid_input"
+        )
+        assert (await self._list(server, metadata_match={"": "v"}))["status"] == "invalid_input"
+
+    @pytest.mark.asyncio
+    async def test_task_list_metadata_match(self, server: LithosServer):
+        t = await self._task_create(server, title="A", agent="a", metadata={"team": "x"})
+        await self._task_create(server, title="B", agent="a", metadata={"team": "y"})
+        res = await self._task_list(server, metadata_match={"team": "x"})
+        assert [t2["id"] for t2 in res["tasks"]] == [t["task_id"]]
+
+    @pytest.mark.asyncio
+    async def test_task_list_invalid_metadata_match(self, server: LithosServer):
+        res = await self._task_list(server, metadata_match={"k": None})
+        assert res["status"] == "invalid_input"
+
+
 class TestTaskMetadataTool:
     """Tests for metadata field in lithos_task_create, lithos_task_update, lithos_task_list, lithos_task_status (#215)."""
 

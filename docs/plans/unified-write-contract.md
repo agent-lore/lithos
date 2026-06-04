@@ -140,6 +140,16 @@ Authority rule:
   `metadata.extra`, alongside the full frontmatter `metadata` envelope.
 - `lithos_list` includes the free-form metadata dict on each item under the
   `metadata` key.
+- Both `lithos_list` and `lithos_task_list` accept `metadata_match` (#306) to
+  filter by free-form metadata: AND across keys, where each `key: q` matches a
+  record whose stored value equals `q` or is a list containing `q`. Query values
+  are scalars; matching is type-sensitive. `lithos_list` is backed by an
+  in-memory inverted index, so a metadata-filtered list never scans the whole
+  knowledge base. `lithos_task_list` pushes the predicate into SQLite
+  (`json_extract`/`json_each`), so it is engine-evaluated (no Python post-scan)
+  and composes with indexed filters such as `status`; a metadata-only query can
+  still scan the `tasks` table until an expression index on the queried key is
+  added (a documented future optimization).
 
 ## Canonical Write Outcome Envelope
 

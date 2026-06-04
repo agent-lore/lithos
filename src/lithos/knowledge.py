@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import re
@@ -143,6 +144,51 @@ def validate_extra_metadata(extra: dict) -> None:
             f"metadata keys collide with reserved frontmatter fields: {reserved}. "
             "Choose different keys."
         )
+
+
+# Scalar JSON types accepted as metadata_match *query* values (#306).
+_METADATA_MATCH_SCALARS = (str, int, float, bool)
+
+
+def validate_metadata_match(metadata_match: dict) -> None:
+    """Validate a ``metadata_match`` filter (#306).
+
+    Used by both ``lithos_list`` and ``lithos_task_list`` so the two surfaces
+    share one ``invalid_input`` contract. Query values must be JSON scalars;
+    a stored value that is a *list* is matched element-wise downstream, but the
+    query value itself stays scalar (list/dict/null query values are rejected).
+
+    Raises:
+        ValueError: if ``metadata_match`` is not a dict, has a non-string or
+            empty key, or a non-scalar value.
+    """
+    if not isinstance(metadata_match, dict):
+        raise ValueError("metadata_match must be an object of string keys.")
+    for key, value in metadata_match.items():
+        if not isinstance(key, str) or not key:
+            raise ValueError("metadata_match keys must be non-empty strings.")
+        # bool is a subclass of int — both are allowed scalars; reject only
+        # null, lists and dicts.
+        if not isinstance(value, _METADATA_MATCH_SCALARS):
+            raise ValueError(f"metadata_match[{key!r}] must be a string, number, or boolean.")
+
+
+def extract_extra(frontmatter_meta: dict) -> dict:
+    """Return the free-form metadata: keys not recognised as known fields.
+
+    Single source of truth for "what counts as ``extra``", shared by
+    ``KnowledgeMetadata.from_dict`` and the startup scan.
+    """
+    return {k: v for k, v in frontmatter_meta.items() if k not in _KNOWN_METADATA_KEYS}
+
+
+def canonical_metadata_value(value: object) -> str:
+    """Canonical, hashable bucket key for a metadata value (#306).
+
+    JSON-equal values map to the same string, so equality matching is correct
+    across types and across dict key orderings.
+    """
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 # Valid LCMA enum values
@@ -390,7 +436,7 @@ class KnowledgeMetadata:
         elif not isinstance(expires_at, datetime):
             expires_at = None
 
-        extra = {k: v for k, v in data.items() if k not in _KNOWN_METADATA_KEYS}
+        extra = extract_extra(data)
 
         # Parse LCMA fields — only unpack what is present; defaults applied by caller
         schema_version_raw = data.get("schema_version")
@@ -648,6 +694,12 @@ class _CachedMeta:
     note_type: str | None = None
     status: str | None = None
     source_url: str | None = None
+    # Free-form key/value metadata (#305) — kept here so equality filtering and
+    # the inverted index (#306) work without a disk read.
+    extra: dict = field(default_factory=dict)
+    # Insertion ordinal — reproduces _meta_cache ordering in the index path so
+    # list pagination stays stable (#306).
+    seq: int = 0
 
 
 class _UnsetType:
@@ -799,7 +851,102 @@ class KnowledgeManager:
         self._unresolved_provenance: dict[str, set[str]] = {}
         self._id_to_title: dict[str, str] = {}
         self._meta_cache: dict[str, _CachedMeta] = {}
+        # Inverted indexes for sub-linear equality filtering (#306). All map a
+        # value to the set of doc ids carrying it; maintained beside _meta_cache.
+        self._author_index: dict[str, set[str]] = {}
+        self._status_index: dict[str, set[str]] = {}
+        self._tag_index: dict[str, set[str]] = {}
+        self._metadata_index: dict[str, dict[str, set[str]]] = {}
+        self._meta_seq: int = 0
         self._scan_existing()
+
+    def _next_seq(self) -> int:
+        self._meta_seq += 1
+        return self._meta_seq
+
+    def _index_doc(self, doc_id: str, cached: _CachedMeta) -> None:
+        """Add a doc's equality-filter contributions to the inverted indexes."""
+        if cached.author:
+            self._author_index.setdefault(cached.author, set()).add(doc_id)
+        if cached.status:
+            self._status_index.setdefault(cached.status, set()).add(doc_id)
+        for tag in cached.tags:
+            self._tag_index.setdefault(tag, set()).add(doc_id)
+        for key, value in cached.extra.items():
+            buckets = self._metadata_index.setdefault(key, {})
+            # A list value is matched element-wise (contains); a scalar by value.
+            elements = value if isinstance(value, list) else [value]
+            for element in elements:
+                buckets.setdefault(canonical_metadata_value(element), set()).add(doc_id)
+
+    def _deindex_doc(self, doc_id: str, cached: _CachedMeta) -> None:
+        """Remove a doc's contributions (using its *previous* cached meta)."""
+
+        def _discard(index: dict[str, set[str]], value: str | None) -> None:
+            if value is None:
+                return
+            bucket = index.get(value)
+            if bucket is not None:
+                bucket.discard(doc_id)
+                if not bucket:
+                    del index[value]
+
+        _discard(self._author_index, cached.author or None)
+        _discard(self._status_index, cached.status or None)
+        for tag in cached.tags:
+            _discard(self._tag_index, tag)
+        for key, value in cached.extra.items():
+            buckets = self._metadata_index.get(key)
+            if buckets is None:
+                continue
+            elements = value if isinstance(value, list) else [value]
+            for element in elements:
+                _discard(buckets, canonical_metadata_value(element))
+            if not buckets:
+                del self._metadata_index[key]
+
+    def _candidate_ids(
+        self,
+        *,
+        tags: list[str] | None,
+        author: str | None,
+        metadata_match: dict | None,
+        exclude_status: list[str] | None,
+    ) -> set[str] | None:
+        """Resolve equality filters to a candidate id set via the inverted index.
+
+        Returns ``None`` when no equality/AND filter is supplied, signalling the
+        caller to use the existing full-scan path (correct for unfiltered /
+        prefix-only / since-only / exclude-only queries). Otherwise returns the
+        (possibly empty) intersected candidate set — never iterating all docs.
+        """
+        seed_sets: list[set[str]] = []
+        if author:
+            seed_sets.append(self._author_index.get(author, set()))
+        if tags:
+            for tag in tags:
+                seed_sets.append(self._tag_index.get(tag, set()))
+        if metadata_match:
+            for key, value in metadata_match.items():
+                bucket = self._metadata_index.get(key, {})
+                seed_sets.append(bucket.get(canonical_metadata_value(value), set()))
+
+        if not seed_sets:
+            return None
+
+        # Intersect smallest-first; any empty seed short-circuits to empty.
+        seed_sets.sort(key=len)
+        candidates = set(seed_sets[0])
+        for s in seed_sets[1:]:
+            candidates &= s
+            if not candidates:
+                break
+
+        if candidates and exclude_status:
+            for status in exclude_status:
+                candidates -= self._status_index.get(status, set())
+
+        return candidates
 
     def _scan_existing(self) -> None:
         """Scan existing documents and build indices.
@@ -818,6 +965,11 @@ class KnowledgeManager:
         self._unresolved_provenance.clear()
         self._id_to_title.clear()
         self._meta_cache.clear()
+        self._author_index.clear()
+        self._status_index.clear()
+        self._tag_index.clear()
+        self._metadata_index.clear()
+        self._meta_seq = 0
         self.duplicate_url_count = 0
 
         if not self.knowledge_path.exists():
@@ -890,7 +1042,7 @@ class KnowledgeManager:
                         if isinstance(raw_namespace, str) and raw_namespace
                         else derive_namespace(rel_path)
                     )
-                    self._meta_cache[doc_id] = _CachedMeta(
+                    cached = _CachedMeta(
                         title=title,
                         author=raw_author if isinstance(raw_author, str) else "",
                         tags=raw_tags if isinstance(raw_tags, list) else [],
@@ -905,7 +1057,11 @@ class KnowledgeManager:
                         note_type=raw_note_type if isinstance(raw_note_type, str) else None,
                         status=raw_status if isinstance(raw_status, str) else None,
                         source_url=raw_source_url if isinstance(raw_source_url, str) else None,
+                        extra=extract_extra(post.metadata),
+                        seq=self._next_seq(),
                     )
+                    self._meta_cache[doc_id] = cached
+                    self._index_doc(doc_id, cached)
 
                     # Populate source_url -> id map
                     raw_url: str | None = post.metadata.get("source_url")  # type: ignore[assignment]
@@ -1202,7 +1358,7 @@ class KnowledgeManager:
             # from path (matches apply_lcma_defaults at read time).
             cached_namespace = metadata.namespace or derive_namespace(file_path)
 
-            self._meta_cache[doc_id] = _CachedMeta(
+            cached = _CachedMeta(
                 title=title,
                 author=metadata.author,
                 tags=list(metadata.tags),
@@ -1215,7 +1371,11 @@ class KnowledgeManager:
                 note_type=metadata.note_type,
                 status=metadata.status,
                 source_url=metadata.source_url,
+                extra=dict(metadata.extra),
+                seq=self._next_seq(),
             )
+            self._meta_cache[doc_id] = cached
+            self._index_doc(doc_id, cached)
 
             logger.info(
                 "Document created: doc_id=%s title=%.60s agent=%s",
@@ -1604,9 +1764,14 @@ class KnowledgeManager:
             if title is not None:
                 self._id_to_title[id] = title
 
-            # Update metadata cache
+            # Update metadata cache + inverted index. Deindex the previous entry
+            # first, then index the new one; preserve the insertion ordinal so
+            # list ordering/pagination is unchanged by an update.
             cached_namespace = doc.metadata.namespace or derive_namespace(doc.path)
-            self._meta_cache[id] = _CachedMeta(
+            old_cached = self._meta_cache.get(id)
+            if old_cached is not None:
+                self._deindex_doc(id, old_cached)
+            cached = _CachedMeta(
                 title=doc.metadata.title,
                 author=doc.metadata.author,
                 tags=list(doc.metadata.tags),
@@ -1619,7 +1784,11 @@ class KnowledgeManager:
                 note_type=doc.metadata.note_type,
                 status=doc.metadata.status,
                 source_url=doc.metadata.source_url,
+                extra=dict(doc.metadata.extra),
+                seq=old_cached.seq if old_cached is not None else self._next_seq(),
             )
+            self._meta_cache[id] = cached
+            self._index_doc(id, cached)
 
             if logger.isEnabledFor(logging.INFO):
                 changed: list[str] = []
@@ -1683,9 +1852,11 @@ class KnowledgeManager:
             derived_docs = self._source_to_derived.pop(id, set())
             if derived_docs:
                 self._unresolved_provenance[id] = derived_docs
-            # 4. Remove from title and metadata caches
+            # 4. Remove from title and metadata caches + inverted index
             self._id_to_title.pop(id, None)
-            self._meta_cache.pop(id, None)
+            removed = self._meta_cache.pop(id, None)
+            if removed is not None:
+                self._deindex_doc(id, removed)
 
             logger.info("Document deleted: doc_id=%s path=%s", id, file_path)
             return True, str(file_path)
@@ -1700,6 +1871,7 @@ class KnowledgeManager:
         tags: list[str] | None = None,
         author: str | None = None,
         exclude_status: list[str] | None = None,
+        metadata_match: dict | None = None,
     ) -> tuple[list[KnowledgeDocument], int]:
         """List all documents with optional filtering.
 
@@ -1708,24 +1880,52 @@ class KnowledgeManager:
 
         ``exclude_status`` filters out documents whose cached status is in
         the given list (e.g. ``['quarantined']``).
-        """
-        matching_ids: list[str] = []
-        normalized_since = _normalize_datetime(since) if since else None
 
-        for doc_id, cached in self._meta_cache.items():
-            if exclude_status and cached.status in exclude_status:
-                continue
-            if path_prefix and not str(cached.path).startswith(path_prefix):
-                continue
-            if tags and not all(t in cached.tags for t in tags):
-                continue
-            if author and cached.author != author:
-                continue
-            if normalized_since:
-                doc_updated = _normalize_datetime(cached.updated_at)
-                if doc_updated < normalized_since:
+        ``metadata_match`` filters by free-form metadata (#306): each ``key: q``
+        matches docs whose stored value equals ``q`` or is a list containing it.
+
+        Equality filters (``tags``, ``author``, ``metadata_match``) are resolved
+        through inverted indexes to a candidate set, so a filtered query never
+        scans the whole cache; ``path_prefix``/``since`` then refine only those
+        candidates. With no equality filter, falls back to a full scan (which is
+        unavoidable for unfiltered / prefix-only / since-only listings).
+        """
+        normalized_since = _normalize_datetime(since) if since else None
+        candidate_ids = self._candidate_ids(
+            tags=tags,
+            author=author,
+            metadata_match=metadata_match,
+            exclude_status=exclude_status,
+        )
+
+        if candidate_ids is None:
+            # No equality filter — full scan (existing behaviour + ordering).
+            matching_ids: list[str] = []
+            for doc_id, cached in self._meta_cache.items():
+                if exclude_status and cached.status in exclude_status:
                     continue
-            matching_ids.append(doc_id)
+                if path_prefix and not str(cached.path).startswith(path_prefix):
+                    continue
+                if normalized_since and _normalize_datetime(cached.updated_at) < normalized_since:
+                    continue
+                matching_ids.append(doc_id)
+        else:
+            # Index path — refine the (small) candidate set, then restore the
+            # _meta_cache insertion order via the stored seq for stable paging.
+            refined: list[_CachedMeta] = []
+            refined_ids: list[str] = []
+            for doc_id in candidate_ids:
+                cached = self._meta_cache.get(doc_id)
+                if cached is None:
+                    continue
+                if path_prefix and not str(cached.path).startswith(path_prefix):
+                    continue
+                if normalized_since and _normalize_datetime(cached.updated_at) < normalized_since:
+                    continue
+                refined.append(cached)
+                refined_ids.append(doc_id)
+            order = sorted(range(len(refined_ids)), key=lambda i: refined[i].seq)
+            matching_ids = [refined_ids[i] for i in order]
 
         total = len(matching_ids)
         docs = []
@@ -1745,6 +1945,20 @@ class KnowledgeManager:
             extra={"total": total, "returned": len(docs), "offset": offset, "limit": limit},
         )
         return docs, total
+
+    def metadata_candidate_ids(self, metadata_match: dict | None) -> set[str] | None:
+        """Public wrapper: candidate ids for a ``metadata_match`` filter (#306).
+
+        Returns ``None`` when ``metadata_match`` is empty/None (no filtering),
+        otherwise the set of doc ids matching every key (sub-linear, index-based).
+        Used by the content-query path of ``lithos_list`` to intersect with
+        full-text hits without scanning the cache.
+        """
+        if not metadata_match:
+            return None
+        return self._candidate_ids(
+            tags=None, author=None, metadata_match=metadata_match, exclude_status=None
+        )
 
     async def get_all_tags(self) -> dict[str, int]:
         """Get all tags with document counts (from in-memory cache)."""
@@ -1916,9 +2130,13 @@ class KnowledgeManager:
                     self._source_to_derived[doc_id] = set()
                 self._source_to_derived[doc_id].update(resolved_docs)
 
-        # Update metadata cache
+        # Update metadata cache + inverted index (deindex prior entry first;
+        # preserve insertion ordinal so list ordering stays stable).
         cached_namespace = metadata.namespace or derive_namespace(file_path)
-        self._meta_cache[doc_id] = _CachedMeta(
+        old_cached = self._meta_cache.get(doc_id)
+        if old_cached is not None:
+            self._deindex_doc(doc_id, old_cached)
+        cached = _CachedMeta(
             title=title,
             author=metadata.author,
             tags=list(metadata.tags),
@@ -1931,7 +2149,11 @@ class KnowledgeManager:
             note_type=metadata.note_type,
             status=metadata.status,
             source_url=metadata.source_url,
+            extra=dict(metadata.extra),
+            seq=old_cached.seq if old_cached is not None else self._next_seq(),
         )
+        self._meta_cache[doc_id] = cached
+        self._index_doc(doc_id, cached)
 
         return doc
 

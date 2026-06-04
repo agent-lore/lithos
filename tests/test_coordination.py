@@ -752,6 +752,104 @@ class TestFindings:
         assert findings[0].summary == "New finding"
 
 
+class TestListTasksMetadataMatch:
+    """Tests for list_tasks metadata_match filtering via SQL pushdown (#306)."""
+
+    @pytest.mark.asyncio
+    async def test_scalar_match(self, coordination_service: CoordinationService):
+        t1 = await coordination_service.create_task(
+            title="A", agent="agent", metadata={"priority": "high"}
+        )
+        await coordination_service.create_task(
+            title="B", agent="agent", metadata={"priority": "low"}
+        )
+        tasks = await coordination_service.list_tasks(metadata_match={"priority": "high"})
+        assert [t["id"] for t in tasks] == [t1]
+
+    @pytest.mark.asyncio
+    async def test_no_match(self, coordination_service: CoordinationService):
+        await coordination_service.create_task(title="A", agent="agent", metadata={"k": "v"})
+        assert await coordination_service.list_tasks(metadata_match={"k": "other"}) == []
+        assert await coordination_service.list_tasks(metadata_match={"missing": "x"}) == []
+
+    @pytest.mark.asyncio
+    async def test_multi_key_and(self, coordination_service: CoordinationService):
+        t1 = await coordination_service.create_task(
+            title="A", agent="agent", metadata={"repo": "x", "watch": True}
+        )
+        await coordination_service.create_task(
+            title="B", agent="agent", metadata={"repo": "x", "watch": False}
+        )
+        tasks = await coordination_service.list_tasks(metadata_match={"repo": "x", "watch": True})
+        assert [t["id"] for t in tasks] == [t1]
+
+    @pytest.mark.asyncio
+    async def test_type_fidelity(self, coordination_service: CoordinationService):
+        await coordination_service.create_task(title="A", agent="agent", metadata={"n": 3})
+        assert len(await coordination_service.list_tasks(metadata_match={"n": 3})) == 1
+        assert await coordination_service.list_tasks(metadata_match={"n": "3"}) == []
+
+    @pytest.mark.asyncio
+    async def test_list_contains(self, coordination_service: CoordinationService):
+        t1 = await coordination_service.create_task(
+            title="A", agent="agent", metadata={"github_repos": ["org/a", "org/b"]}
+        )
+        await coordination_service.create_task(
+            title="B", agent="agent", metadata={"github_repos": ["org/c"]}
+        )
+        hit = await coordination_service.list_tasks(metadata_match={"github_repos": "org/a"})
+        assert [t["id"] for t in hit] == [t1]
+        assert await coordination_service.list_tasks(metadata_match={"github_repos": "org/z"}) == []
+
+    @pytest.mark.asyncio
+    async def test_bool_not_matched_by_int(self, coordination_service: CoordinationService):
+        """Type-sensitive: a stored JSON bool must not match an int query (and
+        vice versa), even though SQLite stores booleans as 1/0."""
+        bool_task = await coordination_service.create_task(
+            title="bool", agent="agent", metadata={"watch": True}
+        )
+        int_task = await coordination_service.create_task(
+            title="int", agent="agent", metadata={"watch": 1}
+        )
+        by_true = await coordination_service.list_tasks(metadata_match={"watch": True})
+        by_one = await coordination_service.list_tasks(metadata_match={"watch": 1})
+        assert [t["id"] for t in by_true] == [bool_task]
+        assert [t["id"] for t in by_one] == [int_task]
+
+    @pytest.mark.asyncio
+    async def test_object_value_not_matched_by_contains(
+        self, coordination_service: CoordinationService
+    ):
+        """A stored JSON object must not be treated as a 'contains' collection —
+        only arrays are iterated."""
+        await coordination_service.create_task(
+            title="obj", agent="agent", metadata={"repos": {"nested": "org/a"}}
+        )
+        assert await coordination_service.list_tasks(metadata_match={"repos": "org/a"}) == []
+
+    @pytest.mark.asyncio
+    async def test_composes_with_status_filter(self, coordination_service: CoordinationService):
+        t1 = await coordination_service.create_task(
+            title="A", agent="agent", metadata={"team": "x"}
+        )
+        t2 = await coordination_service.create_task(
+            title="B", agent="agent", metadata={"team": "x"}
+        )
+        await coordination_service.complete_task(t2, agent="agent", outcome="done")
+        tasks = await coordination_service.list_tasks(status="open", metadata_match={"team": "x"})
+        assert [t["id"] for t in tasks] == [t1]
+
+    @pytest.mark.asyncio
+    async def test_injection_style_key_is_inert(self, coordination_service: CoordinationService):
+        await coordination_service.create_task(title="A", agent="agent", metadata={"k": "v"})
+        # A key crafted to look like SQL/JSON-path injection is bound as a
+        # parameter, so it simply addresses a (nonexistent) key → no match,
+        # and the table is intact afterwards.
+        evil = '") = 1 OR "1"=("1'
+        assert await coordination_service.list_tasks(metadata_match={evil: "v"}) == []
+        assert len(await coordination_service.list_tasks()) == 1
+
+
 class TestListTasks:
     """Tests for list_tasks filtering."""
 

@@ -208,6 +208,34 @@ def _format_datetime(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _json_path_for_key(key: str) -> str:
+    """Build a SQLite JSON path addressing a top-level metadata ``key`` (#306).
+
+    Always uses the quoted-label form ``$."key"`` (valid for keys with dots,
+    spaces, etc.), escaping embedded backslashes and quotes. The result is
+    passed to ``json_extract``/``json_each`` as a *bound parameter*, so it
+    cannot inject SQL — this only ensures the path addresses the right key.
+    """
+    escaped = key.replace("\\", "\\\\").replace('"', '\\"')
+    return f'$."{escaped}"'
+
+
+def _json_type_label(value: object) -> str:
+    """Map a Python scalar to the ``json_type()`` label SQLite reports (#306).
+
+    Used to make ``metadata_match`` type-sensitive: SQLite stores JSON booleans
+    as 1/0, so without this a query value of ``1`` would match a stored ``true``.
+    ``bool`` is checked before ``int`` because ``bool`` is an ``int`` subclass.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "real"
+    return "text"
+
+
 def _decode_metadata(raw: Any) -> dict[str, Any]:
     """Decode a stored ``tasks.metadata`` JSON column into a dict, safely.
 
@@ -923,6 +951,7 @@ class CoordinationService:
         since: str | None = None,
         resolved_since: str | None = None,
         with_claims: bool = False,
+        metadata_match: dict | None = None,
     ) -> list[dict[str, Any]]:
         """List tasks with optional filters.
 
@@ -930,6 +959,11 @@ class CoordinationService:
             agent: Filter by created_by agent
             status: Filter by status (open/completed/cancelled), or None for all
             tags: Filter by tags (task must have all specified tags)
+            metadata_match: Filter by metadata (AND across keys). For each
+                ``key: q`` a task matches when its stored metadata value equals
+                ``q`` or is a list containing ``q``. Pushed into SQL via
+                ``json_extract``/``json_each`` (engine-evaluated, not a Python
+                post-scan). Query values must be scalars.
             since: Filter by created_at >= this ISO datetime string
             resolved_since: Filter by resolved_at >= this ISO datetime string.
                 ``resolved_at`` is set on both terminal transitions (complete
@@ -967,6 +1001,26 @@ class CoordinationService:
         if resolved_since:
             query += " AND resolved_at >= ?"
             params.append(resolved_since)
+
+        # Metadata equality/contains filter (#306), pushed into SQL so the
+        # engine evaluates it (no full-table load into Python). For each key the
+        # task matches when the stored value equals the query OR is an element of
+        # a JSON *array* at that key. Matching is type-sensitive to mirror the
+        # knowledge side: ``json_type`` is checked so a JSON boolean (stored as
+        # 1/0 by SQLite) never matches an integer query, and the array branch is
+        # gated on ``json_type(...) = 'array'`` so JSON objects are not iterated.
+        # The JSON path and value are bound parameters, so caller keys cannot
+        # inject SQL.
+        if metadata_match:
+            for key, value in metadata_match.items():
+                path = _json_path_for_key(key)
+                jtype = _json_type_label(value)
+                query += (
+                    " AND ( (json_type(metadata, ?) = ? AND json_extract(metadata, ?) = ?)"
+                    " OR (json_type(metadata, ?) = 'array' AND EXISTS"
+                    " (SELECT 1 FROM json_each(metadata, ?) WHERE type = ? AND value = ?)) )"
+                )
+                params.extend([path, jtype, path, value, path, path, jtype, value])
 
         query += " ORDER BY created_at DESC"
 

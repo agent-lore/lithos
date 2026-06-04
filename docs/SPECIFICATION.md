@@ -283,6 +283,15 @@ summaries:                        # Optional: nested object with short/long summ
 entities:                         # Optional: extracted entity strings (advisory)
   - <entity-1>                    # Reserved for the lithos-enrich worker;
   - <entity-2>                    # may be empty or absent on agent-written notes.
+# --- Free-form metadata (#305) ---
+# Any frontmatter key NOT listed above is preserved as free-form metadata,
+# settable via lithos_write(metadata={...}) and returned by lithos_read /
+# lithos_list. Keys must not collide with the reserved fields above. Values may
+# be scalars or lists; list values are matched element-wise by metadata_match.
+github_repos:                     # Example free-form key (arbitrary name)
+  - <owner/repo-1>
+  - <owner/repo-2>
+github_watch_enabled: <bool>      # Example scalar free-form value
 ---
 
 # Title
@@ -399,6 +408,7 @@ Parameters are flat at the MCP boundary but grouped below by role to aid discove
 |------|------|----------|-------------|
 | `id` | string | No | UUID to update existing; omit to create new |
 | `tags` | string[] | No | List of tags |
+| `metadata` | object | No | Free-form key/value metadata persisted to frontmatter (#305). Values may be scalars or lists. On update: omit/`null` preserves; `{}` clears; a non-empty dict is an additive per-key merge (a key whose value is `null` deletes it). Keys must be strings and must not collide with reserved frontmatter fields, else `status="invalid_input"`. Returned by `lithos_read` (as `metadata.extra`) and `lithos_list` (as each item's `metadata`), and filterable via `lithos_list(metadata_match=...)`. |
 | `confidence` | float | No | Confidence score 0-1 (default: 1.0) |
 | `path` | string | No | Either a subdirectory (e.g. `"procedures"`) under which the filename is derived from `title` (slugified) and `.md` appended, OR a full relative file path ending in `.md` (e.g. `"procedures/my-doc.md"`) used verbatim as the filename. Intermediate path segments may not end in `.md` — such inputs return `status="invalid_input"`. Paths that resolve to an already-owned file return `status="path_collision"`. |
 
@@ -592,12 +602,20 @@ List knowledge items with filters.
 | `offset` | int | No | Pagination offset |
 | `title_contains` | string | No | Case-insensitive substring match on title |
 | `content_query` | string | No | Tantivy full-text query applied after the base filters |
+| `metadata_match` | object | No | Filter by free-form metadata (see Filter semantics) |
 
-**Returns:** `{ items: [{ id, title, path, updated, tags, source_url, derived_from_ids }], total: int }`
+**Returns:** `{ items: [{ id, title, path, updated, tags, source_url, derived_from_ids, metadata }], total: int }`
+(`metadata` is the document's free-form key/value dict.)
 
 **Behavior:**
 - When `title_contains` or `content_query` is present, Lithos fetches the full base-filtered set first, then applies post-filters before pagination. This keeps `items` and `total` correct across pages.
 - `content_query` backend failures return `{ status: "error", code: "search_backend_error", message }`.
+- `metadata_match` is resolved through an in-memory inverted index, so a metadata-filtered list never scans the whole knowledge base.
+
+**Filter semantics (`metadata_match`, #306):**
+- AND across keys: a document must match every `key: q` pair.
+- Per key, a document matches when its stored value **equals `q`** or **is a list containing `q`** (e.g. a note with `github_repos: ["org/a","org/b"]` matches `{"github_repos": "org/a"}`).
+- Query values must be JSON scalars (string/number/boolean); `null`/list/dict query values return `{ status: "invalid_input" }`. Matching is type-sensitive (`"1"` ≠ `1`).
 
 ### 5.2 Graph Operations
 
@@ -812,6 +830,7 @@ List tasks with optional filters.
 | `since` | string | No | Filter by `created_at >= since` (ISO datetime) |
 | `resolved_since` | string | No | Filter by `resolved_at >= resolved_since` (ISO datetime). `resolved_at` is set on both terminal transitions (`complete` and `cancel`), so this surfaces tasks resolved in either way within the window. Open tasks and historical cancellations whose `resolved_at` is `NULL` are excluded automatically. |
 | `with_claims` | boolean | No | When `true`, each task in the response includes its active (non-expired) claims inline as a `claims` array (same shape as `lithos_task_status`). Defaults to `false`. Use to avoid an N+1 of `lithos_task_status` calls when rendering a list view. |
+| `metadata_match` | object | No | Filter by task metadata. Same semantics as `lithos_list.metadata_match` (AND across keys; stored value equals the query or is a list containing it; scalar query values; type-sensitive). Pushed into SQLite via `json_extract`/`json_each`, so it is engine-evaluated rather than a Python post-scan. |
 
 **Returns:** `{ tasks: [{ id, title, description, status, created_by, created_at, resolved_at, tags, metadata, outcome }] }`. `resolved_at` is `null` for open tasks (and for historical cancellations from before the dual-write was added). `outcome` is `null` until the task is completed with an outcome. When `with_claims=true`, each task also carries `claims: [{ agent, aspect, expires_at }]`.
 
