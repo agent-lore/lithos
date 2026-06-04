@@ -31,7 +31,7 @@ Just as Alation coined the term "Knowledge Layer" for enterprise data governance
 - **🧠 Research cache**: One-call freshness check so agents skip redundant research — returns hit/miss/stale with update guidance
 - **🔗 URL deduplication**: Automatic detection and prevention of duplicate notes from the same source URL
 - **🧬 Provenance tracking**: Declare which notes a synthesis is derived from and query lineage across the knowledge base
-- **🏷️ Free-form metadata**: Attach arbitrary key/value metadata (scalars or lists) to notes and tasks, then filter by it — `lithos_list`/`lithos_task_list` `metadata_match` (e.g. find the project doc whose `github_repos` contains a repo), index-backed so it never scans the whole base
+- **🏷️ Free-form metadata**: Attach arbitrary key/value metadata (scalars or lists) to notes and tasks, then filter by it — `lithos_list`/`lithos_task_list` `metadata_match` (e.g. find the project doc whose `github_repos` contains a repo). Notes are filtered through an in-memory inverted index (no full scan); task filtering is evaluated inside SQLite (no Python post-scan, composes with other indexed filters)
 - **🔌 MCP interface**: Works with any MCP-compatible agent or tool
 - **🏠 Local & private**: No cloud dependencies, you own your data
 

@@ -220,6 +220,22 @@ def _json_path_for_key(key: str) -> str:
     return f'$."{escaped}"'
 
 
+def _json_type_label(value: object) -> str:
+    """Map a Python scalar to the ``json_type()`` label SQLite reports (#306).
+
+    Used to make ``metadata_match`` type-sensitive: SQLite stores JSON booleans
+    as 1/0, so without this a query value of ``1`` would match a stored ``true``.
+    ``bool`` is checked before ``int`` because ``bool`` is an ``int`` subclass.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "real"
+    return "text"
+
+
 def _decode_metadata(raw: Any) -> dict[str, Any]:
     """Decode a stored ``tasks.metadata`` JSON column into a dict, safely.
 
@@ -988,17 +1004,23 @@ class CoordinationService:
 
         # Metadata equality/contains filter (#306), pushed into SQL so the
         # engine evaluates it (no full-table load into Python). For each key the
-        # task matches when the stored value equals the query OR is a JSON array
-        # containing it. The JSON path and value are bound parameters, so keys
-        # from the caller cannot inject SQL.
+        # task matches when the stored value equals the query OR is an element of
+        # a JSON *array* at that key. Matching is type-sensitive to mirror the
+        # knowledge side: ``json_type`` is checked so a JSON boolean (stored as
+        # 1/0 by SQLite) never matches an integer query, and the array branch is
+        # gated on ``json_type(...) = 'array'`` so JSON objects are not iterated.
+        # The JSON path and value are bound parameters, so caller keys cannot
+        # inject SQL.
         if metadata_match:
             for key, value in metadata_match.items():
                 path = _json_path_for_key(key)
+                jtype = _json_type_label(value)
                 query += (
-                    " AND ( json_extract(metadata, ?) = ?"
-                    " OR EXISTS (SELECT 1 FROM json_each(metadata, ?) WHERE value = ?) )"
+                    " AND ( (json_type(metadata, ?) = ? AND json_extract(metadata, ?) = ?)"
+                    " OR (json_type(metadata, ?) = 'array' AND EXISTS"
+                    " (SELECT 1 FROM json_each(metadata, ?) WHERE type = ? AND value = ?)) )"
                 )
-                params.extend([path, value, path, value])
+                params.extend([path, jtype, path, value, path, path, jtype, value])
 
         query += " ORDER BY created_at DESC"
 

@@ -802,6 +802,32 @@ class TestListTasksMetadataMatch:
         assert await coordination_service.list_tasks(metadata_match={"github_repos": "org/z"}) == []
 
     @pytest.mark.asyncio
+    async def test_bool_not_matched_by_int(self, coordination_service: CoordinationService):
+        """Type-sensitive: a stored JSON bool must not match an int query (and
+        vice versa), even though SQLite stores booleans as 1/0."""
+        bool_task = await coordination_service.create_task(
+            title="bool", agent="agent", metadata={"watch": True}
+        )
+        int_task = await coordination_service.create_task(
+            title="int", agent="agent", metadata={"watch": 1}
+        )
+        by_true = await coordination_service.list_tasks(metadata_match={"watch": True})
+        by_one = await coordination_service.list_tasks(metadata_match={"watch": 1})
+        assert [t["id"] for t in by_true] == [bool_task]
+        assert [t["id"] for t in by_one] == [int_task]
+
+    @pytest.mark.asyncio
+    async def test_object_value_not_matched_by_contains(
+        self, coordination_service: CoordinationService
+    ):
+        """A stored JSON object must not be treated as a 'contains' collection —
+        only arrays are iterated."""
+        await coordination_service.create_task(
+            title="obj", agent="agent", metadata={"repos": {"nested": "org/a"}}
+        )
+        assert await coordination_service.list_tasks(metadata_match={"repos": "org/a"}) == []
+
+    @pytest.mark.asyncio
     async def test_composes_with_status_filter(self, coordination_service: CoordinationService):
         t1 = await coordination_service.create_task(
             title="A", agent="agent", metadata={"team": "x"}
