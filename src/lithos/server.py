@@ -1987,6 +1987,14 @@ class LithosServer:
                     # metadata cache / inverted index so we don't incur a disk
                     # read per candidate. ``meta_candidates`` is None when no
                     # metadata filter is requested.
+                    #
+                    # Like ``since``/``title_contains``, ``metadata_match`` is a
+                    # post-rank filter here: metadata isn't a Tantivy field, so
+                    # it can't be pushed into the query the way tags/author/
+                    # path_prefix are (#194). It runs against the full ranked
+                    # window (cap = _CONTENT_QUERY_FTS_CAP = 1e6), so a match is
+                    # only ever dropped if >1e6 docs match content_query — the
+                    # same bound the other two post-filters already accept.
                     meta_candidates = self.knowledge.metadata_candidate_ids(metadata_match)
                     matching_ids: list[str] = []
                     for r in fts_results:

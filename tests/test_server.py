@@ -2663,6 +2663,34 @@ class TestMetadataMatchFilterTool:
         assert res2["total"] == 0
 
     @pytest.mark.asyncio
+    async def test_content_query_combined_with_metadata_match(self, server: LithosServer):
+        """content_query + metadata_match: the metadata candidate set is
+        intersected with the FTS hits, so only docs matching both survive.
+        Mirrors the since/title_contains post-filter on this path (#306)."""
+        keep = (
+            await server.knowledge.create(
+                title="Keep", content="payload", agent="agent", extra={"team": "x"}
+            )
+        ).document
+        drop = (
+            await server.knowledge.create(
+                title="Drop", content="payload", agent="agent", extra={"team": "y"}
+            )
+        ).document
+
+        # Both rank for the content query; metadata_match must drop "Drop".
+        hits = [SimpleNamespace(id=keep.id), SimpleNamespace(id=drop.id)]
+        tool = await server.mcp.get_tool("lithos_list")
+        with patch.object(server.search, "full_text_search", return_value=hits):
+            r = await tool.fn(content_query="payload", metadata_match={"team": "x"})
+        assert {i["id"] for i in r["items"]} == {keep.id}
+
+        # No metadata match → empty, even though both are FTS hits.
+        with patch.object(server.search, "full_text_search", return_value=hits):
+            r = await tool.fn(content_query="payload", metadata_match={"team": "z"})
+        assert r["total"] == 0
+
+    @pytest.mark.asyncio
     async def test_list_invalid_metadata_match(self, server: LithosServer):
         assert (await self._list(server, metadata_match=["not", "dict"]))["status"] == (
             "invalid_input"
