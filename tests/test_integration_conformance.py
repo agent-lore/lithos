@@ -796,6 +796,60 @@ class TestUpdateSemantics:
         assert read["metadata"]["extra"] == {}
 
 
+class TestMetadataMatchFilterConformance:
+    """metadata_match filtering round-trips across the real MCP boundary (#306)."""
+
+    @pytest.mark.asyncio
+    async def test_list_filter_scalar_and_list_contains(self, server: LithosServer):
+        multi = await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Kindred Code",
+                "content": "Project context.",
+                "agent": "a",
+                "path": "projects",
+                "metadata": {"github_repos": ["org/a", "org/b"], "watch": True},
+            },
+        )
+        await _call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Other Project",
+                "content": "ctx",
+                "agent": "a",
+                "path": "projects",
+                "metadata": {"github_repos": ["org/c"], "watch": False},
+            },
+        )
+
+        # list-contains by a single repo
+        res = await _call_tool(server, "lithos_list", {"metadata_match": {"github_repos": "org/a"}})
+        assert [i["id"] for i in res["items"]] == [multi["id"]]
+
+        # multi-key AND (list-contains + scalar bool)
+        res = await _call_tool(
+            server, "lithos_list", {"metadata_match": {"github_repos": "org/b", "watch": True}}
+        )
+        assert [i["id"] for i in res["items"]] == [multi["id"]]
+
+        # no match
+        res = await _call_tool(server, "lithos_list", {"metadata_match": {"github_repos": "org/z"}})
+        assert res["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_task_list_filter(self, server: LithosServer):
+        t = await _call_tool(
+            server, "lithos_task_create", {"title": "A", "agent": "a", "metadata": {"team": "x"}}
+        )
+        await _call_tool(
+            server, "lithos_task_create", {"title": "B", "agent": "a", "metadata": {"team": "y"}}
+        )
+        res = await _call_tool(server, "lithos_task_list", {"metadata_match": {"team": "x"}})
+        assert [task["id"] for task in res["tasks"]] == [t["task_id"]]
+
+
 class TestGraphEdgeConsistency:
     """Tests for graph edge correctness through the MCP write pipeline."""
 

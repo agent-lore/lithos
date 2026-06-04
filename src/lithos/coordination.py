@@ -208,6 +208,18 @@ def _format_datetime(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _json_path_for_key(key: str) -> str:
+    """Build a SQLite JSON path addressing a top-level metadata ``key`` (#306).
+
+    Always uses the quoted-label form ``$."key"`` (valid for keys with dots,
+    spaces, etc.), escaping embedded backslashes and quotes. The result is
+    passed to ``json_extract``/``json_each`` as a *bound parameter*, so it
+    cannot inject SQL — this only ensures the path addresses the right key.
+    """
+    escaped = key.replace("\\", "\\\\").replace('"', '\\"')
+    return f'$."{escaped}"'
+
+
 def _decode_metadata(raw: Any) -> dict[str, Any]:
     """Decode a stored ``tasks.metadata`` JSON column into a dict, safely.
 
@@ -923,6 +935,7 @@ class CoordinationService:
         since: str | None = None,
         resolved_since: str | None = None,
         with_claims: bool = False,
+        metadata_match: dict | None = None,
     ) -> list[dict[str, Any]]:
         """List tasks with optional filters.
 
@@ -930,6 +943,11 @@ class CoordinationService:
             agent: Filter by created_by agent
             status: Filter by status (open/completed/cancelled), or None for all
             tags: Filter by tags (task must have all specified tags)
+            metadata_match: Filter by metadata (AND across keys). For each
+                ``key: q`` a task matches when its stored metadata value equals
+                ``q`` or is a list containing ``q``. Pushed into SQL via
+                ``json_extract``/``json_each`` (engine-evaluated, not a Python
+                post-scan). Query values must be scalars.
             since: Filter by created_at >= this ISO datetime string
             resolved_since: Filter by resolved_at >= this ISO datetime string.
                 ``resolved_at`` is set on both terminal transitions (complete
@@ -967,6 +985,20 @@ class CoordinationService:
         if resolved_since:
             query += " AND resolved_at >= ?"
             params.append(resolved_since)
+
+        # Metadata equality/contains filter (#306), pushed into SQL so the
+        # engine evaluates it (no full-table load into Python). For each key the
+        # task matches when the stored value equals the query OR is a JSON array
+        # containing it. The JSON path and value are bound parameters, so keys
+        # from the caller cannot inject SQL.
+        if metadata_match:
+            for key, value in metadata_match.items():
+                path = _json_path_for_key(key)
+                query += (
+                    " AND ( json_extract(metadata, ?) = ?"
+                    " OR EXISTS (SELECT 1 FROM json_each(metadata, ?) WHERE value = ?) )"
+                )
+                params.extend([path, value, path, value])
 
         query += " ORDER BY created_at DESC"
 

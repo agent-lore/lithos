@@ -45,6 +45,7 @@ from lithos.knowledge import (
     _normalize_datetime,
     _UnsetType,
     validate_extra_metadata,
+    validate_metadata_match,
 )
 from lithos.provenance import ProvenanceProjection
 from lithos.search import Healthy, SearchEngine
@@ -1913,6 +1914,7 @@ class LithosServer:
             offset: int = 0,
             title_contains: str | None = None,
             content_query: str | None = None,
+            metadata_match: dict | None = None,
         ) -> dict[str, Any]:
             """List knowledge documents with filters.
 
@@ -1924,6 +1926,13 @@ class LithosServer:
                 limit: Max results (default: 50)
                 offset: Pagination offset
                 title_contains: Filter by case-insensitive substring match on title
+                metadata_match: Filter by free-form metadata (AND across keys). For
+                    each ``key: q`` a document matches when its stored metadata
+                    value equals ``q`` or is a list containing ``q`` (so a note with
+                    ``github_repos: ["org/a","org/b"]`` matches
+                    ``{"github_repos": "org/a"}``). Query values must be scalars
+                    (string/number/boolean); type-sensitive. Resolved via an
+                    inverted index (no full scan).
                 content_query: Filter by full-text search query (Tantivy).
                     Tantivy-native filters (``tags``, ``author``,
                     ``path_prefix``) are pushed down into the search query so
@@ -1944,6 +1953,12 @@ class LithosServer:
                 since_dt = None
                 if since:
                     since_dt = datetime.fromisoformat(since)
+
+                if metadata_match is not None:
+                    try:
+                        validate_metadata_match(metadata_match)
+                    except ValueError as e:
+                        return {"status": "invalid_input", "message": str(e), "warnings": []}
 
                 if content_query is not None:
                     # Push the Tantivy-native filters into the search call so
@@ -1967,11 +1982,16 @@ class LithosServer:
                             "message": f"Full-text search failed: {exc}",
                         }
 
-                    # Apply the filters Tantivy doesn't handle: ``since`` and
-                    # ``title_contains``. Consult the metadata cache so we
-                    # don't incur a disk read per candidate.
+                    # Apply the filters Tantivy doesn't handle: ``since``,
+                    # ``title_contains`` and ``metadata_match``. Consult the
+                    # metadata cache / inverted index so we don't incur a disk
+                    # read per candidate. ``meta_candidates`` is None when no
+                    # metadata filter is requested.
+                    meta_candidates = self.knowledge.metadata_candidate_ids(metadata_match)
                     matching_ids: list[str] = []
                     for r in fts_results:
+                        if meta_candidates is not None and r.id not in meta_candidates:
+                            continue
                         cached = self.knowledge.get_cached_meta(r.id)
                         if cached is None:
                             continue
@@ -2006,6 +2026,7 @@ class LithosServer:
                         tags=tags,
                         author=author,
                         since=since_dt,
+                        metadata_match=metadata_match,
                         limit=0,
                         offset=0,
                     )
@@ -2015,6 +2036,7 @@ class LithosServer:
                             tags=tags,
                             author=author,
                             since=since_dt,
+                            metadata_match=metadata_match,
                             limit=total_base,
                             offset=0,
                         )
@@ -2029,6 +2051,7 @@ class LithosServer:
                         tags=tags,
                         author=author,
                         since=since_dt,
+                        metadata_match=metadata_match,
                         limit=limit,
                         offset=offset,
                     )
@@ -2803,6 +2826,7 @@ class LithosServer:
             since: str | None = None,
             resolved_since: str | None = None,
             with_claims: bool = False,
+            metadata_match: dict | None = None,
         ) -> dict[str, list[dict[str, Any]]]:
             """List tasks with optional filters.
 
@@ -2810,6 +2834,10 @@ class LithosServer:
                 agent: Filter by creating agent
                 status: Filter by status: "open", "completed", or "cancelled" (None = all)
                 tags: Filter by tags (task must have all specified tags)
+                metadata_match: Filter by metadata (AND across keys). For each
+                    ``key: q`` a task matches when its stored metadata value
+                    equals ``q`` or is a list containing ``q``. Query values must
+                    be scalars (string/number/boolean); type-sensitive.
                 since: Filter by created_at >= this ISO datetime string (e.g. "2024-01-01T00:00:00Z")
                 resolved_since: Filter by resolved_at >= this ISO datetime string.
                     ``resolved_at`` is set on both terminal transitions (complete
@@ -2847,6 +2875,12 @@ class LithosServer:
                     span.set_attribute("lithos.status", status)
                 span.set_attribute("lithos.with_claims", with_claims)
 
+                if metadata_match is not None:
+                    try:
+                        validate_metadata_match(metadata_match)
+                    except ValueError as e:
+                        return {"status": "invalid_input", "message": str(e), "warnings": []}  # type: ignore[return-value]
+
                 tasks = await self.coordination.list_tasks(
                     agent=agent,
                     status=status,
@@ -2854,6 +2888,7 @@ class LithosServer:
                     since=since,
                     resolved_since=resolved_since,
                     with_claims=with_claims,
+                    metadata_match=metadata_match,
                 )
                 return {"tasks": tasks}
 

@@ -2622,6 +2622,69 @@ class TestDocumentMetadataTool:
         assert result["status"] == "version_conflict"
 
 
+class TestMetadataMatchFilterTool:
+    """Tool-layer tests for metadata_match on lithos_list and lithos_task_list (#306)."""
+
+    async def _write(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_write")).fn(**kwargs)
+
+    async def _list(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_list")).fn(**kwargs)
+
+    async def _task_create(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_task_create")).fn(**kwargs)
+
+    async def _task_list(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_task_list")).fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_list_metadata_match_scalar_and_list(self, server: LithosServer):
+        m = await self._write(
+            server,
+            title="Multi",
+            content="b",
+            agent="a",
+            path="projects",
+            metadata={"github_repos": ["org/a", "org/b"]},
+        )
+        await self._write(
+            server,
+            title="Other",
+            content="b",
+            agent="a",
+            path="projects",
+            metadata={"github_repos": ["org/c"]},
+        )
+        res = await self._list(server, metadata_match={"github_repos": "org/a"})
+        assert [i["id"] for i in res["items"]] == [m["id"]]
+        assert res["items"][0]["metadata"] == {"github_repos": ["org/a", "org/b"]}
+        # no match
+        res2 = await self._list(server, metadata_match={"github_repos": "org/z"})
+        assert res2["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_list_invalid_metadata_match(self, server: LithosServer):
+        assert (await self._list(server, metadata_match=["not", "dict"]))["status"] == (
+            "invalid_input"
+        )
+        assert (await self._list(server, metadata_match={"k": ["list", "val"]}))["status"] == (
+            "invalid_input"
+        )
+        assert (await self._list(server, metadata_match={"": "v"}))["status"] == "invalid_input"
+
+    @pytest.mark.asyncio
+    async def test_task_list_metadata_match(self, server: LithosServer):
+        t = await self._task_create(server, title="A", agent="a", metadata={"team": "x"})
+        await self._task_create(server, title="B", agent="a", metadata={"team": "y"})
+        res = await self._task_list(server, metadata_match={"team": "x"})
+        assert [t2["id"] for t2 in res["tasks"]] == [t["task_id"]]
+
+    @pytest.mark.asyncio
+    async def test_task_list_invalid_metadata_match(self, server: LithosServer):
+        res = await self._task_list(server, metadata_match={"k": None})
+        assert res["status"] == "invalid_input"
+
+
 class TestTaskMetadataTool:
     """Tests for metadata field in lithos_task_create, lithos_task_update, lithos_task_list, lithos_task_status (#215)."""
 

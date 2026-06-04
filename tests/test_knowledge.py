@@ -950,6 +950,154 @@ class TestDocumentMetadata:
         assert parsed["github_repo"] == "owner/name"
 
 
+class _CountingDict(dict):
+    """dict that counts full iterations, to prove the index path avoids a scan."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.iter_count = 0
+
+    def items(self):  # type: ignore[override]
+        self.iter_count += 1
+        return super().items()
+
+    def __iter__(self):
+        self.iter_count += 1
+        return super().__iter__()
+
+
+class TestMetadataFiltering:
+    """Tests for metadata_match filtering on list_all via the inverted index (#306)."""
+
+    async def _mk(self, km: KnowledgeManager, title: str, **kw) -> str:
+        return (await km.create(title=title, content="Body.", agent="agent", **kw)).document.id
+
+    @pytest.mark.asyncio
+    async def test_scalar_equality_match(self, knowledge_manager: KnowledgeManager):
+        a = await self._mk(knowledge_manager, "A", extra={"github_repo": "org/a"})
+        await self._mk(knowledge_manager, "B", extra={"github_repo": "org/b"})
+        docs, total = await knowledge_manager.list_all(metadata_match={"github_repo": "org/a"})
+        assert total == 1
+        assert [d.id for d in docs] == [a]
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_empty(self, knowledge_manager: KnowledgeManager):
+        await self._mk(knowledge_manager, "A", extra={"k": "v"})
+        docs, total = await knowledge_manager.list_all(metadata_match={"k": "other"})
+        assert total == 0
+        assert docs == []
+        # Absent key also yields empty (short-circuit).
+        _, total2 = await knowledge_manager.list_all(metadata_match={"missing": "x"})
+        assert total2 == 0
+
+    @pytest.mark.asyncio
+    async def test_multi_key_and(self, knowledge_manager: KnowledgeManager):
+        a = await self._mk(knowledge_manager, "A", extra={"repo": "x", "watch": True})
+        await self._mk(knowledge_manager, "B", extra={"repo": "x", "watch": False})
+        docs, total = await knowledge_manager.list_all(metadata_match={"repo": "x", "watch": True})
+        assert total == 1 and [d.id for d in docs] == [a]
+
+    @pytest.mark.asyncio
+    async def test_type_sensitive(self, knowledge_manager: KnowledgeManager):
+        await self._mk(knowledge_manager, "A", extra={"n": 3})
+        # int 3 matches; string "3" does not.
+        _, hit = await knowledge_manager.list_all(metadata_match={"n": 3})
+        _, miss = await knowledge_manager.list_all(metadata_match={"n": "3"})
+        assert hit == 1 and miss == 0
+
+    @pytest.mark.asyncio
+    async def test_list_valued_contains(self, knowledge_manager: KnowledgeManager):
+        multi = await self._mk(
+            knowledge_manager, "Multi", extra={"github_repos": ["org/a", "org/b"]}
+        )
+        scalar = await self._mk(knowledge_manager, "Scalar", extra={"github_repos": "org/a"})
+        # "org/a" matches both the list-containing doc and the scalar doc.
+        docs, total = await knowledge_manager.list_all(metadata_match={"github_repos": "org/a"})
+        assert total == 2 and {d.id for d in docs} == {multi, scalar}
+        # "org/b" matches only the list doc; "org/c" matches nothing.
+        _, only_b = await knowledge_manager.list_all(metadata_match={"github_repos": "org/b"})
+        _, none = await knowledge_manager.list_all(metadata_match={"github_repos": "org/c"})
+        assert only_b == 1 and none == 0
+
+    @pytest.mark.asyncio
+    async def test_combined_with_path_prefix(self, knowledge_manager: KnowledgeManager):
+        a = await self._mk(knowledge_manager, "A", path="projects", extra={"k": "v"})
+        await self._mk(knowledge_manager, "B", path="other", extra={"k": "v"})
+        docs, total = await knowledge_manager.list_all(
+            metadata_match={"k": "v"}, path_prefix="projects"
+        )
+        assert total == 1 and [d.id for d in docs] == [a]
+
+    @pytest.mark.asyncio
+    async def test_update_rebuckets_value(self, knowledge_manager: KnowledgeManager):
+        doc_id = await self._mk(knowledge_manager, "A", extra={"repo": "x"})
+        await knowledge_manager.update(id=doc_id, agent="ed", extra={"repo": "y"})
+        _, old = await knowledge_manager.list_all(metadata_match={"repo": "x"})
+        _, new = await knowledge_manager.list_all(metadata_match={"repo": "y"})
+        assert old == 0 and new == 1
+
+    @pytest.mark.asyncio
+    async def test_update_list_add_remove_element(self, knowledge_manager: KnowledgeManager):
+        doc_id = await self._mk(knowledge_manager, "A", extra={"repos": ["a", "b"]})
+        await knowledge_manager.update(id=doc_id, agent="ed", extra={"repos": ["b", "c"]})
+        _, gone = await knowledge_manager.list_all(metadata_match={"repos": "a"})
+        _, kept = await knowledge_manager.list_all(metadata_match={"repos": "b"})
+        _, added = await knowledge_manager.list_all(metadata_match={"repos": "c"})
+        assert gone == 0 and kept == 1 and added == 1
+
+    @pytest.mark.asyncio
+    async def test_clear_and_delete_deindex(self, knowledge_manager: KnowledgeManager):
+        clear_id = await self._mk(knowledge_manager, "Clear", extra={"k": "v"})
+        del_id = await self._mk(knowledge_manager, "Del", extra={"k": "v"})
+        await knowledge_manager.update(id=clear_id, agent="ed", extra={})
+        await knowledge_manager.delete(del_id)
+        _, total = await knowledge_manager.list_all(metadata_match={"k": "v"})
+        assert total == 0
+
+    @pytest.mark.asyncio
+    async def test_index_correct_after_rescan(self, knowledge_manager: KnowledgeManager):
+        a = await self._mk(knowledge_manager, "A", extra={"github_repos": ["a", "b"]})
+        # Rebuild all in-memory indexes from disk.
+        knowledge_manager.rescan()
+        docs, total = await knowledge_manager.list_all(metadata_match={"github_repos": "a"})
+        assert total == 1 and [d.id for d in docs] == [a]
+
+    @pytest.mark.asyncio
+    async def test_pagination_stable_and_ordered(self, knowledge_manager: KnowledgeManager):
+        ids = [await self._mk(knowledge_manager, f"D{i}", extra={"k": "v"}) for i in range(5)]
+        page1, total = await knowledge_manager.list_all(
+            metadata_match={"k": "v"}, limit=2, offset=0
+        )
+        page2, _ = await knowledge_manager.list_all(metadata_match={"k": "v"}, limit=2, offset=2)
+        page3, _ = await knowledge_manager.list_all(metadata_match={"k": "v"}, limit=2, offset=4)
+        assert total == 5
+        got = [d.id for d in page1] + [d.id for d in page2] + [d.id for d in page3]
+        assert got == ids  # insertion order, disjoint, complete
+
+    @pytest.mark.asyncio
+    async def test_filtered_query_does_not_scan_cache(self, knowledge_manager: KnowledgeManager):
+        """Efficiency proof: an equality-filtered list_all never iterates _meta_cache."""
+        for i in range(10):
+            await self._mk(knowledge_manager, f"D{i}", extra={"k": "v" if i == 0 else "w"})
+        counting = _CountingDict(knowledge_manager._meta_cache)
+        knowledge_manager._meta_cache = counting
+
+        counting.iter_count = 0
+        _, total = await knowledge_manager.list_all(metadata_match={"k": "v"})
+        assert total == 1
+        assert counting.iter_count == 0  # resolved via index, no full scan
+
+        # A tag filter is also index-backed.
+        counting.iter_count = 0
+        await knowledge_manager.list_all(tags=["nonexistent"])
+        assert counting.iter_count == 0
+
+        # An unfiltered list legitimately scans (sanity check the probe works).
+        counting.iter_count = 0
+        await knowledge_manager.list_all()
+        assert counting.iter_count >= 1
+
+
 class TestDocumentPersistence:
     """Tests for document file persistence."""
 
