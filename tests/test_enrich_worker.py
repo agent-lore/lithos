@@ -21,7 +21,8 @@ from lithos.events import (
     LithosEvent,
 )
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.enrich import EnrichWorker, _extract_entities_from_text, _resolve_node_id
+from lithos.lcma.enrich import EnrichWorker, _resolve_node_id
+from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION
 from lithos.lcma.stats import StatsStore
 from lithos.provenance import EdgeStore, _project_node_provenance
 
@@ -916,53 +917,6 @@ class TestConsolidateTask:
 # ---------------------------------------------------------------------------
 
 
-class TestExtractEntitiesFromText:
-    """Verify rule-based entity extraction from text."""
-
-    def test_wiki_links_extracted(self) -> None:
-        text = "This references [[Knowledge Graph]] and [[NetworkX]]."
-        entities = _extract_entities_from_text(text)
-        assert "Knowledge Graph" in entities
-        assert "NetworkX" in entities
-
-    def test_backtick_terms_extracted(self) -> None:
-        text = "The `EnrichWorker` processes events from the `EventBus`."
-        entities = _extract_entities_from_text(text)
-        assert "EnrichWorker" in entities
-        assert "EventBus" in entities
-
-    def test_capitalized_phrases_extracted(self) -> None:
-        text = "The Knowledge Manager handles all document operations."
-        entities = _extract_entities_from_text(text)
-        assert "Knowledge Manager" in entities
-
-    def test_proper_nouns_extracted(self) -> None:
-        text = "Lithos uses Tantivy for full-text search and ChromaDB for semantic."
-        entities = _extract_entities_from_text(text)
-        assert "Lithos" in entities
-        assert "Tantivy" in entities
-        assert "ChromaDB" in entities
-
-    def test_common_words_excluded(self) -> None:
-        text = "The system should handle these cases. However this is fine."
-        entities = _extract_entities_from_text(text)
-        assert "The" not in entities
-        assert "However" not in entities
-
-    def test_wiki_link_with_display_text(self) -> None:
-        text = "See [[target-doc|display name]] for details."
-        entities = _extract_entities_from_text(text)
-        assert "target-doc" in entities
-
-    def test_deduplicated_and_sorted(self) -> None:
-        text = "[[Alpha]] appears twice: [[Alpha]] and `Beta`."
-        entities = _extract_entities_from_text(text)
-        assert entities == sorted(set(entities))
-
-    def test_empty_text(self) -> None:
-        assert _extract_entities_from_text("") == []
-
-
 class TestExtractEntities:
     """Verify _extract_entities integration with KnowledgeManager."""
 
@@ -998,11 +952,177 @@ class TestExtractEntities:
 
         await worker._extract_entities(doc_id)
 
-        # Read back and verify entities were written
+        # Read back and verify entities were written, with extractor provenance
         doc, _ = await km.read(id=doc_id)
         assert len(doc.metadata.entities) > 0
         assert "NetworkX" in doc.metadata.entities
         assert "ChromaDB" in doc.metadata.entities
+        assert doc.metadata.entities_extractor == ENTITY_EXTRACTOR_VERSION
+
+    def _make_worker(
+        self,
+        km: KnowledgeManager,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> EnrichWorker:
+        return EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=mock_coordination,
+        )
+
+    async def test_stale_marker_entities_reextracted(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """Extractor-written entities with a stale version marker are re-extracted."""
+        km = KnowledgeManager(test_config)
+        result = await km.create(
+            title="Stale Marker Note",
+            content="Lithos uses [[NetworkX]] for graph operations.",
+            agent="test-agent",
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+        # Simulate output of an older, junk-prone extractor.
+        await km.update(
+            id=doc_id,
+            agent="lithos-enrich",
+            entities=["Summary", "Highly", "Notes"],
+            entities_extractor=1,
+        )
+
+        worker = self._make_worker(
+            km, lcma_config, event_bus, stats_store, edge_store, mock_coordination
+        )
+        await worker._extract_entities(doc_id)
+
+        doc, _ = await km.read(id=doc_id)
+        assert "NetworkX" in doc.metadata.entities
+        assert "Summary" not in doc.metadata.entities
+        assert doc.metadata.entities_extractor == ENTITY_EXTRACTOR_VERSION
+
+    async def test_current_marker_skipped(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """Entities written by the current extractor version are left alone."""
+        km = KnowledgeManager(test_config)
+        result = await km.create(
+            title="Current Marker Note",
+            content="Lithos uses [[NetworkX]] for graph operations.",
+            agent="test-agent",
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+        sentinel = ["SentinelEntity"]
+        await km.update(
+            id=doc_id,
+            agent="lithos-enrich",
+            entities=sentinel,
+            entities_extractor=ENTITY_EXTRACTOR_VERSION,
+        )
+
+        worker = self._make_worker(
+            km, lcma_config, event_bus, stats_store, edge_store, mock_coordination
+        )
+        await worker._extract_entities(doc_id)
+
+        doc, _ = await km.read(id=doc_id)
+        assert doc.metadata.entities == sentinel
+
+    async def test_stale_marker_with_no_extractable_entities_clears_junk(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """Re-extraction yielding nothing still clears stale junk entities."""
+        km = KnowledgeManager(test_config)
+        result = await km.create(
+            title="Junk Only Note",
+            content="plain lowercase prose with nothing extractable in it.",
+            agent="test-agent",
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+        await km.update(
+            id=doc_id,
+            agent="lithos-enrich",
+            entities=["Summary", "Notes"],
+            entities_extractor=1,
+        )
+
+        worker = self._make_worker(
+            km, lcma_config, event_bus, stats_store, edge_store, mock_coordination
+        )
+        await worker._extract_entities(doc_id)
+
+        doc, _ = await km.read(id=doc_id)
+        assert doc.metadata.entities == []
+        assert doc.metadata.entities_extractor == ENTITY_EXTRACTOR_VERSION
+
+    async def test_full_sweep_heals_stale_entities(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+    ) -> None:
+        """The periodic full sweep re-extracts stale-marker entities corpus-wide."""
+        from lithos.coordination import CoordinationService
+
+        coord = CoordinationService(test_config)
+        await coord.initialize()
+        km = KnowledgeManager(test_config)
+        result = await km.create(
+            title="Sweep Heal Note",
+            content="Lithos uses [[NetworkX]] for graph operations.",
+            agent="test-agent",
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+        await km.update(
+            id=doc_id,
+            agent="lithos-enrich",
+            entities=["Summary"],
+            entities_extractor=1,
+        )
+
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=coord,
+        )
+        await worker.full_sweep()
+
+        doc, _ = await km.read(id=doc_id)
+        assert "NetworkX" in doc.metadata.entities
+        assert "Summary" not in doc.metadata.entities
+        assert doc.metadata.entities_extractor == ENTITY_EXTRACTOR_VERSION
 
     async def test_agent_written_entities_not_overwritten(
         self,

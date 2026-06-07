@@ -158,6 +158,7 @@ _KNOWN_METADATA_KEYS = frozenset(
         "status",
         "summaries",
         "entities",
+        "entities_extractor",
     }
 )
 
@@ -411,6 +412,9 @@ class KnowledgeMetadata:
     status: str | None = None  # active | archived | quarantined
     summaries: dict | None = None  # {short: str, long: str}
     entities: list[str] = field(default_factory=list)
+    # Extractor version that wrote ``entities``; None means agent-curated
+    # (never auto-overwritten). See lithos.lcma.entities (#313).
+    entities_extractor: int | None = None
 
     @property
     def is_stale(self) -> bool:
@@ -461,6 +465,8 @@ class KnowledgeMetadata:
             result["summaries"] = self.summaries
         if self.entities:
             result["entities"] = self.entities
+        if self.entities_extractor is not None:
+            result["entities_extractor"] = self.entities_extractor
         # Merge unknown fields — known keys always take precedence.
         for key, value in self.extra.items():
             if key not in result:
@@ -512,6 +518,14 @@ class KnowledgeMetadata:
         if isinstance(summaries_raw, dict):
             summaries = summaries_raw
 
+        entities_extractor_raw = data.get("entities_extractor")
+        entities_extractor: int | None = None
+        if entities_extractor_raw is not None and not isinstance(entities_extractor_raw, bool):
+            try:
+                entities_extractor = int(entities_extractor_raw)
+            except (TypeError, ValueError):
+                entities_extractor = None
+
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             title=data.get("title", "Untitled"),
@@ -536,6 +550,7 @@ class KnowledgeMetadata:
             status=data.get("status"),
             summaries=summaries,
             entities=data.get("entities", []),
+            entities_extractor=entities_extractor,
         )
 
 
@@ -1567,9 +1582,16 @@ class KnowledgeManager:
         summaries: dict | None | _UnsetType = _UNSET,
         supersedes: str | None | _UnsetType = _UNSET,
         entities: list[str] | None | _UnsetType = _UNSET,
+        entities_extractor: int | None | _UnsetType = _UNSET,
         extra: dict | _UnsetType = _UNSET,
     ) -> WriteResult:
         """Update an existing document.
+
+        entities/entities_extractor semantics (#313):
+        - entities _UNSET: preserve both entities and extractor marker
+        - entities set with entities_extractor: extractor-written provenance
+        - entities set WITHOUT entities_extractor: agent-curated — the marker
+          is cleared so the enrichment worker never overwrites them
 
         tags semantics:
         - _UNSET (default): preserve existing tags
@@ -1801,6 +1823,11 @@ class KnowledgeManager:
                 doc.metadata.summaries = summaries
             if not isinstance(entities, _UnsetType):
                 doc.metadata.entities = entities if entities is not None else []
+                # Writing entities without extractor provenance marks them as
+                # agent-curated; the enrichment worker never overwrites those.
+                doc.metadata.entities_extractor = (
+                    None if isinstance(entities_extractor, _UnsetType) else entities_extractor
+                )
             if not isinstance(extra, _UnsetType):
                 # {} clears all metadata; a non-empty dict is an additive
                 # per-key merge into the existing extra (mirrors task metadata).

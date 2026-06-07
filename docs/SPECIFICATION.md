@@ -147,7 +147,8 @@ through their public surfaces while owning its own accumulated stats.
 ADRs under [`docs/adr/`](adr/): 0001 (reconcile lives on `KnowledgeManager`),
 0002 (`SearchEngine` hides Tantivy/Chroma), 0003 (`CorpusIntake`),
 0004 (`ProvenanceProjection`), 0005 (`CognitiveMemory`), 0006 (broaden Corpus
-to include asserted edges in `edges.db`), 0007 (`WatchIntake`).
+to include asserted edges in `edges.db`), 0007 (`WatchIntake`), 0008 (entity
+extraction: NER + extractor provenance).
 
 ### 2.3 Semantic Search: Chunking Strategy
 
@@ -285,8 +286,16 @@ summaries:                        # Optional: nested object with short/long summ
   short: <string>                 # Optional, agent-written
   long: <string>                  # Optional, agent-written
 entities:                         # Optional: extracted entity strings (advisory)
-  - <entity-1>                    # Reserved for the lithos-enrich worker;
-  - <entity-2>                    # may be empty or absent on agent-written notes.
+  - <entity-1>                    # Written by the lithos-enrich worker using spaCy NER
+  - <entity-2>                    # plus high-precision heuristics (wiki-links, backtick
+                                  # terms, mid-sentence-corroborated proper nouns).
+                                  # Markdown structure (headings, tables, bold labels)
+                                  # is never an entity source (#313).
+entities_extractor: <int>         # Optional: version of the extractor that wrote
+                                  # `entities`. Absent => entities are agent-curated and
+                                  # the enrichment worker never overwrites them; present
+                                  # and stale => the worker re-extracts on its next pass.
+                                  # Internal provenance — not settable via MCP tools.
 # --- Free-form metadata (#305) ---
 # Any frontmatter key NOT listed above is preserved as free-form metadata,
 # settable via lithos_write(metadata={...}) and returned by lithos_read /

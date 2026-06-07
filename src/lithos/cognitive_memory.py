@@ -30,6 +30,10 @@ from lithos.events import EDGE_UPSERTED, LithosEvent
 from lithos.intake import EdgeRequest
 from lithos.knowledge import _normalize_datetime
 from lithos.lcma.enrich import EnrichWorker
+
+# Re-exported for callers outside the lcma boundary (ADR-0005): the CLI
+# extract-entities command shares the enrichment worker's extractor (#313).
+from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION, extract_entities
 from lithos.lcma.stats import StatsStore
 from lithos.telemetry import get_tracer, lithos_metrics
 
@@ -45,7 +49,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CognitiveMemory", "NodeStats"]
+__all__ = ["ENTITY_EXTRACTOR_VERSION", "CognitiveMemory", "NodeStats", "extract_entities"]
 
 
 # Default values for ``node_stats`` columns. Used both when a node is

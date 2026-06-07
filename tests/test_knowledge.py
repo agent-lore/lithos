@@ -2188,6 +2188,79 @@ class TestConfidenceWriteValidation:
         assert isinstance(result.document.metadata.confidence, float)
 
 
+class TestEntitiesExtractorMarker:
+    """Provenance marker distinguishing extractor-written entities from
+    agent-curated ones (#313)."""
+
+    @pytest.mark.asyncio
+    async def test_marker_persisted_and_round_trips(self, knowledge_manager: KnowledgeManager):
+        doc = (
+            await knowledge_manager.create(title="Marked", content="Content.", agent="author")
+        ).document
+        assert doc is not None
+        result = await knowledge_manager.update(
+            id=doc.id, agent="lithos-enrich", entities=["Lithos"], entities_extractor=2
+        )
+        assert result.status == "updated"
+
+        reread, _ = await knowledge_manager.read(id=doc.id)
+        assert reread.metadata.entities == ["Lithos"]
+        assert reread.metadata.entities_extractor == 2
+        # And it survives a full disk round-trip through frontmatter.
+        raw = (knowledge_manager.config.storage.knowledge_path / reread.path).read_text()
+        assert "entities_extractor: 2" in raw
+
+    @pytest.mark.asyncio
+    async def test_agent_entity_write_clears_marker(self, knowledge_manager: KnowledgeManager):
+        """Setting entities without the marker makes them curated: marker cleared."""
+        doc = (
+            await knowledge_manager.create(title="Curated", content="Content.", agent="author")
+        ).document
+        assert doc is not None
+        await knowledge_manager.update(
+            id=doc.id, agent="lithos-enrich", entities=["Junk"], entities_extractor=1
+        )
+
+        result = await knowledge_manager.update(
+            id=doc.id, agent="some-agent", entities=["Kalman Filter"]
+        )
+        assert result.status == "updated"
+        reread, _ = await knowledge_manager.read(id=doc.id)
+        assert reread.metadata.entities == ["Kalman Filter"]
+        assert reread.metadata.entities_extractor is None
+
+    @pytest.mark.asyncio
+    async def test_marker_preserved_when_entities_untouched(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        doc = (
+            await knowledge_manager.create(title="Untouched", content="Content.", agent="author")
+        ).document
+        assert doc is not None
+        await knowledge_manager.update(
+            id=doc.id, agent="lithos-enrich", entities=["Lithos"], entities_extractor=2
+        )
+
+        await knowledge_manager.update(id=doc.id, agent="editor", content="New content.")
+        reread, _ = await knowledge_manager.read(id=doc.id)
+        assert reread.metadata.entities == ["Lithos"]
+        assert reread.metadata.entities_extractor == 2
+
+    def test_from_dict_parses_marker(self):
+        meta = KnowledgeMetadata.from_dict({"id": "x", "title": "t", "entities_extractor": 2})
+        assert meta.entities_extractor == 2
+
+    def test_from_dict_tolerates_non_int_marker(self):
+        meta = KnowledgeMetadata.from_dict(
+            {"id": "x", "title": "t", "entities_extractor": "garbage"}
+        )
+        assert meta.entities_extractor is None
+
+    def test_to_dict_omits_unset_marker(self):
+        meta = KnowledgeMetadata.from_dict({"id": "x", "title": "t"})
+        assert "entities_extractor" not in meta.to_dict()
+
+
 class TestDeleteRemovesUrl:
     """Tests for US-007: delete() cleans up dedup map."""
 

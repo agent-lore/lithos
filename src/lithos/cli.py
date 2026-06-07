@@ -524,6 +524,96 @@ def reconcile(ctx: click.Context, scope: str, dry_run: bool, json_output: bool) 
     asyncio.run(run())
 
 
+@cli.command(name="extract-entities")
+@click.option(
+    "--dry-run/--no-dry-run",
+    default=False,
+    help="Report what would change without writing (default: no)",
+)
+@click.option(
+    "--force/--no-force",
+    default=False,
+    help="Re-extract every document, ignoring curation markers (default: no)",
+)
+@click.pass_context
+def extract_entities_cmd(ctx: click.Context, dry_run: bool, force: bool) -> None:
+    """Re-extract entity frontmatter across the corpus (#313).
+
+    Unlike `reconcile`, this MUTATES markdown source files: it replaces the
+    `entities` list and stamps `entities_extractor` provenance.
+
+    Default mode honours the curation contract — only documents with no
+    entities or a stale extractor marker are touched; agent-curated entities
+    (no marker) are preserved. Use --force once to bootstrap a corpus written
+    before extractor provenance existed.
+    """
+    from lithos.cognitive_memory import ENTITY_EXTRACTOR_VERSION, extract_entities
+    from lithos.knowledge import KnowledgeManager
+
+    config: LithosConfig = ctx.obj["config"]
+    config.ensure_directories()
+    knowledge = KnowledgeManager(config)
+
+    async def run() -> None:
+        _, total = await knowledge.list_all(limit=0)
+        docs, _ = (await knowledge.list_all(limit=total)) if total else ([], 0)
+        click.echo(f"Scanning {len(docs)} documents (force={force}, dry_run={dry_run})")
+
+        updated = skipped_curated = skipped_current = unchanged = 0
+        before_count = after_count = 0
+        for i, doc in enumerate(docs, 1):
+            if i % 100 == 0:
+                click.echo(f"  {i}/{len(docs)}...")
+
+            marker = doc.metadata.entities_extractor
+            if not force and doc.metadata.entities:
+                if marker is None:
+                    skipped_curated += 1
+                    continue
+                if marker >= ENTITY_EXTRACTOR_VERSION:
+                    skipped_current += 1
+                    continue
+
+            extracted = extract_entities(doc.content)
+            # Barren note (nothing before, nothing extractable): leave the
+            # frontmatter pristine rather than stamping a marker — mirrors the
+            # enrichment worker's contract.
+            if not extracted and not doc.metadata.entities:
+                unchanged += 1
+                continue
+            if extracted == doc.metadata.entities and marker == ENTITY_EXTRACTOR_VERSION:
+                unchanged += 1
+                continue
+
+            before_count += len(doc.metadata.entities)
+            after_count += len(extracted)
+            updated += 1
+            if not dry_run:
+                result = await knowledge.update(
+                    id=doc.id,
+                    agent="lithos-enrich",
+                    entities=extracted,
+                    entities_extractor=ENTITY_EXTRACTOR_VERSION,
+                )
+                if result.status != "updated":
+                    click.echo(f"  failed to update {doc.id}: {result.message}", err=True)
+
+        label = "would update" if dry_run else "updated"
+        click.echo(f"\n{label}: {updated}")
+        click.echo(f"skipped (agent-curated): {skipped_curated}")
+        click.echo(f"skipped (current extractor): {skipped_current}")
+        click.echo(f"unchanged: {unchanged}")
+        if updated:
+            click.echo(
+                f"entities on touched docs: {before_count} -> {after_count}"
+                f" (mean {before_count / updated:.1f} -> {after_count / updated:.1f} per doc)"
+            )
+        if not dry_run and updated:
+            click.echo("\nNote: run `lithos reconcile` to refresh derived views.")
+
+    asyncio.run(run())
+
+
 @cli.group()
 def inspect() -> None:
     """Inspect agent state, tasks, documents, and backend health."""
