@@ -499,7 +499,7 @@ class EnrichWorker:
             if marker >= ENTITY_EXTRACTOR_VERSION:
                 return
 
-        extracted = extract_entities(doc.content)
+        extracted = extract_entities(doc.content, self._config.entity_max_per_doc)
         if not extracted and not doc.metadata.entities:
             return
 

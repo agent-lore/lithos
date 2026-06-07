@@ -25,3 +25,18 @@ The enrichment worker's rule-based entity extractor harvested Markdown section h
 - Worker contract (replacing skip-if-non-empty): empty → extract and stamp; stale marker → re-extract (an empty result still clears junk); no marker on non-empty entities → never touch; current marker → skip. `full_sweep` runs the same logic corpus-wide each cycle, so a version bump heals the corpus within one sweep interval.
 - One-shot bootstrap: `lithos extract-entities --force` re-extracts every note regardless of markers — required exactly once because the existing corpus predates the marker and would otherwise read as curated. This command mutates the corpus and is therefore not a Reconcile (see CONTEXT.md); operators run `lithos reconcile` afterwards to refresh derived views.
 - spaCy ≥3.8 and the pinned `en_core_web_sm` wheel are hard dependencies (`tool.hatch.metadata.allow-direct-references` enabled for the wheel URL). Extraction is degraded-but-functional without the model: author-asserted signals plus corroborated heuristics.
+
+## Amendment — extractor version 3 (#320)
+
+The first prod/staging sweeps (version 2) surfaced two residual precision failures on technical and academic notes:
+
+- **Inline code harvested as entities.** The backtick rule kept every `` `term` `` verbatim, so code-heavy notes produced junk like `merge_and_normalize()`, `note.created`, `scout_freshness`, `"guides"`, `foo.md`, `references/`, `min(0.1, days × 0.005)`. The assumption that backticks mark proper nouns holds for prose but not technical docs, where they mark code.
+- **Bibliography explosions.** spaCy NER harvested every cited author name in long papers — one staging doc reached 3,254 entities.
+
+Version 3 changes (all behind the existing `entities_extractor` marker, so a `--force` re-sweep heals the corpus):
+
+- **Single name-shape gate.** Every candidate from every path (backtick, NER, heuristic) must match `^[A-Za-z0-9]+(?:[ '&-][A-Za-z0-9]+)*$` — alphanumeric runs joined only by spaces, hyphens, apostrophes, or ampersands. This uniformly rejects code punctuation, dots (method calls / filenames), slashes, quotes, brackets, underscores, and operator/math symbols. Backtick terms now pass through the same `_clean_candidate` gate as everything else rather than being trusted verbatim. A bare lowercase single token (`node`, `task`, `guides`) is also rejected as code/jargon. Wiki-link targets remain lenient (explicit author intent, kept verbatim).
+- **Reference-section stripping.** Text from a `## References` / `Bibliography` / `Citations` heading onward is dropped before extraction — citation author names are not document entities.
+- **Per-document cap.** A configurable backstop (`lcma.entity_max_per_doc`, default 50; `0` disables); when exceeded, the most frequently mentioned candidates win (ties broken alphabetically for determinism), and author-asserted wiki-link targets are always kept. Bounds the worst case for inline-citation docs that lack a references heading.
+
+Measured on the prod corpus: mean 12.8 → 10.3, median 8 → 7 (prose notes barely move), max 122 → 46. The `agent-guide-to-using-lithos-via-mcp` note dropped from 213 entities (mostly code) to 33 real ones.

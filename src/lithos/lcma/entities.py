@@ -35,8 +35,10 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 # Bump on any quality-affecting change to extraction. Version 1 was the
-# heading-harvesting heuristic extractor removed by #313.
-ENTITY_EXTRACTOR_VERSION = 2
+# heading-harvesting heuristic extractor removed by #313. Version 3 added
+# strict name-shape validation (rejecting code/punctuation/filenames),
+# reference-section stripping, and a per-doc cap (#320).
+ENTITY_EXTRACTOR_VERSION = 3
 
 _MODEL_NAME = "en_core_web_sm"
 
@@ -66,12 +68,25 @@ _TABLE_LINE_RE = re.compile(r"^\s*\|.*\|\s*$", re.MULTILINE)
 # ``**Label:** value`` / ``- **Label**: value`` pseudo-heading prefixes
 _BOLD_LABEL_RE = re.compile(r"^(\s*(?:[-*+]\s+)?)\*\*([^*\n]{1,60})\*\*[:\s]", re.MULTILINE)
 _EMPHASIS_RE = re.compile(r"\*{1,2}|_{2}")
+# A reference/bibliography heading and everything after it — citation lists are
+# author-name soup, not document entities (#320).
+_REFERENCES_HEADING_RE = re.compile(
+    r"^#{1,6}\s*(?:references|bibliography|citations|works cited|sources)\s*:?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 # --- Candidate shapes ---
 _CAP_PHRASE_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
 _PROPER_NOUN_RE = re.compile(r"(?<!\w)([A-Z][a-zA-Z]{2,})(?!\w)")
 _POSSESSIVE_RE = re.compile(r"'s\b")
 _TRAILING_NUMERIC_RE = re.compile(r"^\d[\d.\-/:]*$")
+# A valid entity name: alphanumeric runs joined only by single spaces, hyphens,
+# apostrophes, or ampersands. Anything else — code punctuation, dots (method
+# calls / filenames), slashes, quotes, brackets, underscores, math/operator
+# symbols — disqualifies the candidate. This is the single gate every candidate
+# passes through, so inline code (`merge_and_normalize()`, `note.created`,
+# `"guides"`, `foo.md`, `references/`) never becomes an entity (#320).
+_ENTITY_NAME_RE = re.compile(r"^[A-Za-z0-9]+(?:[ '&-][A-Za-z0-9]+)*$")
 
 # Sentence-like headings carry real entities ("# Festo launches ..."); short
 # headings are template labels ("## Summary").
@@ -80,8 +95,11 @@ _LABEL_MAX_WORDS = 3
 _MAX_ENTITY_WORDS = 5
 _MAX_ENTITY_CHARS = 60
 _MIN_ENTITY_CHARS = 3
+# Backstop against citation/glossary explosions: keep the most frequent
+# entities when a single document yields more than this (#320).
+_MAX_ENTITIES_PER_DOC = 50
 
-_BAD_CHARS = frozenset("<>|=&#@{}[]/\\")
+_EDGE_STRIP = ".,;:!?\"'`()[]{}/\\—–- "  # noqa: RUF001
 
 # Calendar words are capitalized by convention, not entity-hood. spaCy's
 # STOP_WORDS (imported lazily below) covers ordinary function words (#174).
@@ -140,9 +158,15 @@ def _is_noise_word(word: str) -> bool:
 
 
 def _clean_candidate(raw: str) -> str | None:
-    """Normalize a candidate; return None when it cannot name an entity."""
+    """Normalize a candidate; return None when it cannot name an entity.
+
+    The single validation gate for every extraction path. Strips edge
+    punctuation and leading/trailing stop words, then requires the result to be
+    name-shaped (``_ENTITY_NAME_RE``) — so code, filenames, quoted strings, and
+    punctuation soup are rejected uniformly (#320).
+    """
     text = _POSSESSIVE_RE.sub("", raw)
-    words = text.strip().strip(".,;:!?\"'`()—–- ").split()  # noqa: RUF001
+    words = text.strip().strip(_EDGE_STRIP).split()
     while words and (_is_noise_word(words[0]) or words[0].isdigit()):
         words = words[1:]
     while words and (_is_noise_word(words[-1]) or _TRAILING_NUMERIC_RE.match(words[-1])):
@@ -152,9 +176,11 @@ def _clean_candidate(raw: str) -> str | None:
         return None
     if len(words) > _MAX_ENTITY_WORDS:
         return None
-    if any(c in _BAD_CHARS for c in text):
+    if not _ENTITY_NAME_RE.match(text):
         return None
-    if text[0].isdigit():
+    # A bare lowercase single token is code/jargon (`node`, `task`, `guides`),
+    # not a named entity — real names are capitalized or multi-word.
+    if len(words) == 1 and text.islower():
         return None
     return text
 
@@ -253,25 +279,60 @@ def _drop_subsumed_singles(entities: set[str]) -> set[str]:
     return kept
 
 
-def extract_entities(text: str) -> list[str]:
+def _cap_entities(entities: set[str], forced: set[str], text: str, cap: int) -> set[str]:
+    """Trim to ``cap`` entities by body frequency (#320).
+
+    ``forced`` (author-asserted wiki-link targets) are always kept; the
+    remaining slots go to the most frequently mentioned candidates, ties broken
+    alphabetically for deterministic output. ``cap <= 0`` disables trimming.
+    """
+    if cap <= 0 or len(entities) <= cap:
+        return entities
+    kept = set(forced & entities)
+    rest = entities - kept
+    counts = {e: len(re.findall(rf"(?<!\w){re.escape(e)}(?!\w)", text)) for e in rest}
+    for entity in sorted(rest, key=lambda e: (-counts[e], e)):
+        if len(kept) >= cap:
+            break
+        kept.add(entity)
+    return kept
+
+
+def extract_entities(text: str, max_per_doc: int = _MAX_ENTITIES_PER_DOC) -> list[str]:
     """Extract entity names from note content.
+
+    ``max_per_doc`` caps the result (the most frequently mentioned entities
+    win); ``0`` disables the cap. Defaults to ``_MAX_ENTITIES_PER_DOC`` so
+    callers without config still get the backstop.
 
     Returns a deduplicated, sorted list — deterministic so repeated
     extraction of unchanged content never churns frontmatter.
     """
     text = _CODE_FENCE_RE.sub("", text)
+    # Drop reference/bibliography sections — citation author names are not
+    # document entities (#320).
+    ref = _REFERENCES_HEADING_RE.search(text)
+    if ref:
+        text = text[: ref.start()]
 
     entities: set[str] = set()
+    # Wiki-link targets are explicit author intent; kept verbatim (only edge
+    # whitespace trimmed) and never dropped by the cap.
+    wiki_targets: set[str] = set()
     for match in _WIKI_LINK_RE.finditer(text):
         target = match.group(1).strip()
         if target:
+            wiki_targets.add(target)
             entities.add(target)
 
     # Inline wiki-link targets so surrounding sentences stay parseable.
     no_links = _WIKI_LINK_RE.sub(lambda m: m.group(1), text)
+    # Backtick terms pass the same name-shape gate as everything else, so inline
+    # code (`merge_and_normalize()`, `note.created`, `"guides"`, `foo.md`) is
+    # rejected rather than harvested as an entity.
     for match in _BACKTICK_RE.finditer(no_links):
-        term = match.group(1).strip()
-        if term and len(term) <= _MAX_ENTITY_CHARS:
+        term = _clean_candidate(match.group(1))
+        if term:
             entities.add(term)
 
     labels = _structural_labels(no_links)
@@ -295,4 +356,6 @@ def extract_entities(text: str) -> list[str]:
         ):
             continue
         entities.add(candidate)
+
+    entities = _cap_entities(entities, wiki_targets, no_links, max_per_doc)
     return sorted(_drop_subsumed_singles(entities))

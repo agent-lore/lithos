@@ -251,7 +251,121 @@ class TestHeuristicFallback:
         assert "ChromaDB" in entities
 
 
+class TestBacktickCodeRejection:
+    """Backtick spans in technical docs are code, not entities (#320)."""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "`merge_and_normalize()`",
+            "`min(0.1, days × 0.005)`",  # noqa: RUF001
+            "`asyncio.gather`",
+            "`surface_conflicts=True`",
+            "`note.created`",
+            "`scout_freshness`",
+            "`decay_inactive_days`",
+            '`["idea", "project:<slug>"]`',
+            "`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`",
+            "`temperature = 1 - coherence`",
+        ],
+    )
+    def test_code_span_not_extracted(self, no_ner: None, code: str) -> None:
+        text = f"The function {code} does something useful in the pipeline today.\n"
+        entities = extract_entities(text)
+        # Nothing code-shaped should survive.
+        assert all("(" not in e and "_" not in e and "=" not in e for e in entities)
+        assert all("." not in e and "[" not in e and '"' not in e for e in entities)
+
+    def test_quoted_string_rejected(self, no_ner: None) -> None:
+        text = 'Set the namespace to `"guides"` or `"influx"` as needed in config.\n'
+        entities = extract_entities(text)
+        assert not any('"' in e for e in entities)
+        assert "guides" not in entities  # bare lowercase code value
+
+    def test_filename_rejected(self, no_ner: None) -> None:
+        text = "Edit `forms.md` and `plugin.json` then commit the changes to disk.\n"
+        entities = extract_entities(text)
+        assert "forms.md" not in entities
+        assert "plugin.json" not in entities
+        assert not any(e.endswith(".md") or e.endswith(".json") for e in entities)
+
+    def test_trailing_slash_and_measurement_rejected(self, no_ner: None) -> None:
+        text = "Put files under `references/` — each is roughly `~1,000 tokens` long here.\n"
+        entities = extract_entities(text)
+        assert "references/" not in entities
+        assert not any("/" in e for e in entities)
+        assert not any("~" in e or "," in e for e in entities)
+
+    def test_name_shaped_backticks_survive(self, no_ner: None) -> None:
+        text = "We use `Tantivy` and `ChromaDB`; the `StatsStore` holds salience data.\n"
+        entities = extract_entities(text)
+        assert "Tantivy" in entities
+        assert "ChromaDB" in entities
+        assert "StatsStore" in entities
+
+    def test_bare_lowercase_word_rejected(self, no_ner: None) -> None:
+        text = "A `node` has a `task`; we `update` and `verify` it during the run.\n"
+        entities = extract_entities(text)
+        for junk in ["node", "task", "update", "verify"]:
+            assert junk not in entities
+
+
+class TestReferenceSectionStripping:
+    """Citation/bibliography sections are author-name soup, not entities (#320)."""
+
+    def test_references_section_excluded(self) -> None:
+        text = (
+            "# Neural Algorithmic Reasoning\n\n"
+            "This work studies graph algorithms with Petar Velickovic at DeepMind.\n\n"
+            "## References\n\n"
+            "- Battaglia, P. (2018). Relational inductive biases.\n"
+            "- Colmenarejo, S. (2020). Some other cited paper here.\n"
+            "- Cormen, T. (2009). Introduction to Algorithms.\n"
+        )
+        entities = extract_entities(text)
+        # Authors cited only in the reference list must not appear.
+        assert "Battaglia" not in entities
+        assert "Colmenarejo" not in entities
+        assert "Cormen" not in entities
+
+
+class TestPerDocCap:
+    """The per-doc cap trims by frequency, keeps forced, is configurable (#320)."""
+
+    def test_cap_trims_to_limit(self) -> None:
+        ents = {f"Name{i}" for i in range(80)}
+        text = " ".join(f"Name{i} appears." for i in range(80))
+        assert len(entities_mod._cap_entities(ents, set(), text, 10)) == 10
+
+    def test_cap_keeps_most_frequent(self) -> None:
+        ents = {"Rare", "Common", "Mid"}
+        text = "Common Common Common. Mid Mid. Rare."
+        kept = entities_mod._cap_entities(ents, set(), text, 2)
+        assert kept == {"Common", "Mid"}
+
+    def test_forced_always_kept(self) -> None:
+        ents = {"Wiki", "Common", "Mid"}
+        text = "Common Common. Mid Mid. Wiki."
+        kept = entities_mod._cap_entities(ents, {"Wiki"}, text, 1)
+        assert "Wiki" in kept and len(kept) == 1
+
+    def test_cap_zero_disables(self) -> None:
+        ents = {f"Name{i}" for i in range(80)}
+        assert entities_mod._cap_entities(ents, set(), "", 0) == ents
+
+    def test_cap_under_limit_unchanged(self) -> None:
+        ents = {"A", "B", "C"}
+        assert entities_mod._cap_entities(ents, set(), "", 50) == ents
+
+    def test_max_per_doc_param_threads_through(self) -> None:
+        # Wiki targets are forced, so a tiny cap still keeps all of them —
+        # this confirms the param reaches _cap_entities without relying on the
+        # NER/heuristic path producing a deterministic count.
+        text = "".join(f"[[Pinned {i}]] " for i in range(60))
+        assert len(extract_entities(text, max_per_doc=5)) == 60
+
+
 class TestExtractorVersion:
     def test_version_is_positive_int(self) -> None:
         assert isinstance(ENTITY_EXTRACTOR_VERSION, int)
-        assert ENTITY_EXTRACTOR_VERSION >= 2
+        assert ENTITY_EXTRACTOR_VERSION >= 3
