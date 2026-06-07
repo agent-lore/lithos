@@ -1494,6 +1494,7 @@ class LithosServer:
             threshold: float | None = None,
             seed_ids: list[str] | None = None,
             graph_depth: int = 2,
+            entities: list[str] | None = None,
             agent_id: str | None = None,
         ) -> dict[str, Any]:
             """Search across the knowledge base.
@@ -1523,6 +1524,10 @@ class LithosServer:
                 seed_ids: Starting document IDs for graph mode.  If omitted,
                           seeds are discovered via hybrid search.
                 graph_depth: BFS hop depth for graph mode (1-3, default: 2)
+                entities: Filter results to documents whose ``entities``
+                          frontmatter contains every named entity (exact
+                          match, AND). Applies to all modes; resolved via an
+                          inverted index and applied as a post-filter.
                 agent_id: Caller identity for audit logging (optional)
 
             Returns:
@@ -1549,6 +1554,13 @@ class LithosServer:
                         "message": f"Unknown search mode {mode!r}. Valid values: hybrid, fulltext, semantic, graph.",
                     }
 
+                # Entities are not a per-backend filter: resolve the candidate
+                # set once from the knowledge inverted index (#316) and
+                # post-filter every mode's hits. Over-fetch to compensate,
+                # mirroring the engine's own post-filter heuristic.
+                entity_candidates = self.knowledge.entities_candidate_ids(entities)
+                fetch_limit = limit * 5 if entity_candidates is not None else limit
+
                 def _build_result(r: Any, score_attr: str = "score") -> dict[str, Any]:
                     return {
                         "id": r.id,
@@ -1573,7 +1585,7 @@ class LithosServer:
                     ft_results = await asyncio.to_thread(
                         self.search.full_text_search,
                         query=query,
-                        limit=limit,
+                        limit=fetch_limit,
                         tags=tags,
                         author=author,
                         path_prefix=path_prefix,
@@ -1583,7 +1595,7 @@ class LithosServer:
                     sem_results = await asyncio.to_thread(
                         self.search.semantic_search,
                         query=query,
-                        limit=limit,
+                        limit=fetch_limit,
                         threshold=threshold,
                         tags=tags,
                         author=author,
@@ -1599,7 +1611,7 @@ class LithosServer:
                         graph=self.graph,
                         seed_ids=seed_ids,
                         depth=graph_depth,
-                        limit=limit,
+                        limit=fetch_limit,
                         tags=tags,
                         author=author,
                         path_prefix=path_prefix,
@@ -1611,13 +1623,18 @@ class LithosServer:
                     hybrid_results = await asyncio.to_thread(
                         self.search.hybrid_search,
                         query=query,
-                        limit=limit,
+                        limit=fetch_limit,
                         threshold=threshold,
                         tags=tags,
                         author=author,
                         path_prefix=path_prefix,
                     )
                     results_payload = [_build_result(r) for r in hybrid_results]
+
+                if entity_candidates is not None:
+                    results_payload = [r for r in results_payload if r["id"] in entity_candidates][
+                        :limit
+                    ]
 
                 span.set_attribute("lithos.result_count", len(results_payload))
                 logger.info("lithos_search mode=%s results=%d", mode, len(results_payload))
@@ -1918,6 +1935,7 @@ class LithosServer:
             title_contains: str | None = None,
             content_query: str | None = None,
             metadata_match: dict | None = None,
+            entities: list[str] | None = None,
         ) -> dict[str, Any]:
             """List knowledge documents with filters.
 
@@ -1929,6 +1947,9 @@ class LithosServer:
                 limit: Max results (default: 50)
                 offset: Pagination offset
                 title_contains: Filter by case-insensitive substring match on title
+                entities: Filter by entity names from the document's ``entities``
+                    frontmatter (AND across the list, exact match). Resolved via
+                    an inverted index (no full scan).
                 metadata_match: Filter by free-form metadata (AND across keys). For
                     each ``key: q`` a document matches when its stored metadata
                     value equals ``q`` or is a list containing ``q`` (so a note with
@@ -1999,9 +2020,12 @@ class LithosServer:
                     # only ever dropped if >1e6 docs match content_query — the
                     # same bound the other two post-filters already accept.
                     meta_candidates = self.knowledge.metadata_candidate_ids(metadata_match)
+                    entity_candidates = self.knowledge.entities_candidate_ids(entities)
                     matching_ids: list[str] = []
                     for r in fts_results:
                         if meta_candidates is not None and r.id not in meta_candidates:
+                            continue
+                        if entity_candidates is not None and r.id not in entity_candidates:
                             continue
                         cached = self.knowledge.get_cached_meta(r.id)
                         if cached is None:
@@ -2038,6 +2062,7 @@ class LithosServer:
                         author=author,
                         since=since_dt,
                         metadata_match=metadata_match,
+                        entities=entities,
                         limit=0,
                         offset=0,
                     )
@@ -2048,6 +2073,7 @@ class LithosServer:
                             author=author,
                             since=since_dt,
                             metadata_match=metadata_match,
+                            entities=entities,
                             limit=total_base,
                             offset=0,
                         )
@@ -2063,6 +2089,7 @@ class LithosServer:
                         author=author,
                         since=since_dt,
                         metadata_match=metadata_match,
+                        entities=entities,
                         limit=limit,
                         offset=offset,
                     )

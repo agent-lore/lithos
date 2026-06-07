@@ -2724,9 +2724,7 @@ class TestEntitiesFilterTool:
 
     async def _make_entity_doc(self, server: LithosServer, title: str, entities: list[str]) -> str:
         doc = (
-            await server.knowledge.create(
-                title=title, content=f"Body of {title}.", agent="agent"
-            )
+            await server.knowledge.create(title=title, content=f"Body of {title}.", agent="agent")
         ).document
         await server.knowledge.update(
             id=doc.id, agent="lithos-enrich", entities=entities, entities_extractor=2

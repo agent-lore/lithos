@@ -769,6 +769,9 @@ class _CachedMeta:
     note_type: str | None = None
     status: str | None = None
     source_url: str | None = None
+    # Extracted/curated entity names (#316) — kept here so the entities
+    # inverted index can be maintained without a disk read.
+    entities: list[str] = field(default_factory=list)
     # Free-form key/value metadata (#305) — kept here so equality filtering and
     # the inverted index (#306) work without a disk read.
     extra: dict = field(default_factory=dict)
@@ -835,6 +838,7 @@ class KnowledgeManager:
             path=str(doc.path),
             author=doc.metadata.author,
             tags=tuple(doc.metadata.tags),
+            entities=tuple(doc.metadata.entities),
             source_url=doc.metadata.source_url or "",
             updated_at=(doc.metadata.updated_at.isoformat() if doc.metadata.updated_at else ""),
             expires_at=(doc.metadata.expires_at.isoformat() if doc.metadata.expires_at else ""),
@@ -931,6 +935,7 @@ class KnowledgeManager:
         self._author_index: dict[str, set[str]] = {}
         self._status_index: dict[str, set[str]] = {}
         self._tag_index: dict[str, set[str]] = {}
+        self._entities_index: dict[str, set[str]] = {}
         self._metadata_index: dict[str, dict[str, set[str]]] = {}
         self._meta_seq: int = 0
         self._scan_existing()
@@ -947,6 +952,8 @@ class KnowledgeManager:
             self._status_index.setdefault(cached.status, set()).add(doc_id)
         for tag in cached.tags:
             self._tag_index.setdefault(tag, set()).add(doc_id)
+        for entity in cached.entities:
+            self._entities_index.setdefault(entity, set()).add(doc_id)
         for key, value in cached.extra.items():
             buckets = self._metadata_index.setdefault(key, {})
             # A list value is matched element-wise (contains); a scalar by value.
@@ -970,6 +977,8 @@ class KnowledgeManager:
         _discard(self._status_index, cached.status or None)
         for tag in cached.tags:
             _discard(self._tag_index, tag)
+        for entity in cached.entities:
+            _discard(self._entities_index, entity)
         for key, value in cached.extra.items():
             buckets = self._metadata_index.get(key)
             if buckets is None:
@@ -987,6 +996,7 @@ class KnowledgeManager:
         author: str | None,
         metadata_match: dict | None,
         exclude_status: list[str] | None,
+        entities: list[str] | None = None,
     ) -> set[str] | None:
         """Resolve equality filters to a candidate id set via the inverted index.
 
@@ -1001,6 +1011,9 @@ class KnowledgeManager:
         if tags:
             for tag in tags:
                 seed_sets.append(self._tag_index.get(tag, set()))
+        if entities:
+            for entity in entities:
+                seed_sets.append(self._entities_index.get(entity, set()))
         if metadata_match:
             for key, value in metadata_match.items():
                 bucket = self._metadata_index.get(key, {})
@@ -1043,6 +1056,7 @@ class KnowledgeManager:
         self._author_index.clear()
         self._status_index.clear()
         self._tag_index.clear()
+        self._entities_index.clear()
         self._metadata_index.clear()
         self._meta_seq = 0
         self.duplicate_url_count = 0
@@ -1112,6 +1126,7 @@ class KnowledgeManager:
                     raw_namespace: str | None = post.metadata.get("namespace")  # type: ignore[assignment]
                     raw_status: str | None = post.metadata.get("status")  # type: ignore[assignment]
                     raw_source_url: str | None = post.metadata.get("source_url")  # type: ignore[assignment]
+                    raw_entities: list[str] = post.metadata.get("entities", [])  # type: ignore[assignment]
                     cached_namespace = (
                         raw_namespace
                         if isinstance(raw_namespace, str) and raw_namespace
@@ -1132,6 +1147,7 @@ class KnowledgeManager:
                         note_type=raw_note_type if isinstance(raw_note_type, str) else None,
                         status=raw_status if isinstance(raw_status, str) else None,
                         source_url=raw_source_url if isinstance(raw_source_url, str) else None,
+                        entities=raw_entities if isinstance(raw_entities, list) else [],
                         extra=extract_extra(post.metadata),
                         seq=self._next_seq(),
                     )
@@ -1458,6 +1474,7 @@ class KnowledgeManager:
                 note_type=metadata.note_type,
                 status=metadata.status,
                 source_url=metadata.source_url,
+                entities=list(metadata.entities),
                 extra=dict(metadata.extra),
                 seq=self._next_seq(),
             )
@@ -1892,6 +1909,7 @@ class KnowledgeManager:
                 note_type=doc.metadata.note_type,
                 status=doc.metadata.status,
                 source_url=doc.metadata.source_url,
+                entities=list(doc.metadata.entities),
                 extra=dict(doc.metadata.extra),
                 seq=old_cached.seq if old_cached is not None else self._next_seq(),
             )
@@ -1980,6 +1998,7 @@ class KnowledgeManager:
         author: str | None = None,
         exclude_status: list[str] | None = None,
         metadata_match: dict | None = None,
+        entities: list[str] | None = None,
     ) -> tuple[list[KnowledgeDocument], int]:
         """List all documents with optional filtering.
 
@@ -1992,11 +2011,14 @@ class KnowledgeManager:
         ``metadata_match`` filters by free-form metadata (#306): each ``key: q``
         matches docs whose stored value equals ``q`` or is a list containing it.
 
-        Equality filters (``tags``, ``author``, ``metadata_match``) are resolved
-        through inverted indexes to a candidate set, so a filtered query never
-        scans the whole cache; ``path_prefix``/``since`` then refine only those
-        candidates. With no equality filter, falls back to a full scan (which is
-        unavoidable for unfiltered / prefix-only / since-only listings).
+        ``entities`` filters by entity name, AND across the list (#316).
+
+        Equality filters (``tags``, ``author``, ``metadata_match``,
+        ``entities``) are resolved through inverted indexes to a candidate
+        set, so a filtered query never scans the whole cache;
+        ``path_prefix``/``since`` then refine only those candidates. With no
+        equality filter, falls back to a full scan (which is unavoidable for
+        unfiltered / prefix-only / since-only listings).
         """
         normalized_since = _normalize_datetime(since) if since else None
         candidate_ids = self._candidate_ids(
@@ -2004,6 +2026,7 @@ class KnowledgeManager:
             author=author,
             metadata_match=metadata_match,
             exclude_status=exclude_status,
+            entities=entities,
         )
 
         if candidate_ids is None:
@@ -2066,6 +2089,20 @@ class KnowledgeManager:
             return None
         return self._candidate_ids(
             tags=None, author=None, metadata_match=metadata_match, exclude_status=None
+        )
+
+    def entities_candidate_ids(self, entities: list[str] | None) -> set[str] | None:
+        """Public wrapper: candidate ids for an ``entities`` filter (#316).
+
+        Returns ``None`` when ``entities`` is empty/None (no filtering),
+        otherwise the set of doc ids carrying every named entity (sub-linear,
+        index-based). Used by ``lithos_search`` to post-filter hits without
+        scanning the cache.
+        """
+        if not entities:
+            return None
+        return self._candidate_ids(
+            tags=None, author=None, metadata_match=None, exclude_status=None, entities=entities
         )
 
     async def get_all_tags(self) -> dict[str, int]:
@@ -2257,6 +2294,7 @@ class KnowledgeManager:
             note_type=metadata.note_type,
             status=metadata.status,
             source_url=metadata.source_url,
+            entities=list(metadata.entities),
             extra=dict(metadata.extra),
             seq=old_cached.seq if old_cached is not None else self._next_seq(),
         )

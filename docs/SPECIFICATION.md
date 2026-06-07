@@ -285,7 +285,7 @@ status: <enum>                    # Optional: active | archived | quarantined (d
 summaries:                        # Optional: nested object with short/long summaries
   short: <string>                 # Optional, agent-written
   long: <string>                  # Optional, agent-written
-entities:                         # Optional: extracted entity strings (advisory)
+entities:                         # Optional: extracted entity strings
   - <entity-1>                    # Written by the lithos-enrich worker using spaCy NER
   - <entity-2>                    # plus high-precision heuristics (wiki-links, backtick
                                   # terms, mid-sentence-corroborated proper nouns).
@@ -530,6 +530,7 @@ Unified search across the knowledge base.
 | `threshold` | float | No | Minimum similarity 0-1 for semantic/hybrid/graph (default: 0.5) |
 | `seed_ids` | string[] | No | Starting document IDs for `graph` mode. When omitted, seeds are discovered via a fast hybrid pass on `query`. |
 | `graph_depth` | int | No | BFS hop depth for `graph` mode, 1–3 (default: 2) |
+| `entities` | string[] | No | Filter results to documents whose `entities` frontmatter contains every named entity (exact match, AND). Applies to all modes; resolved via an inverted index and applied as a post-filter (#316). |
 | `agent_id` | string | No | Caller identity recorded in the read-access audit log |
 
 **Returns:** `{ results: [{ id, title, snippet, score, path, source_url, updated_at, is_stale, derived_from_ids }] }`
@@ -542,6 +543,7 @@ Unified search across the knowledge base.
 
 **Notes:**
 - Search operates on chunks internally but returns deduplicated documents.
+- Entity names are indexed as a Tantivy field and included in the default query fields, so query terms matching a document's entities boost its full-text ranking (and curated entities are findable even when absent from the body).
 - In `semantic` mode, the returned `score` is the semantic similarity value.
 - Invalid `mode` returns `{ status: "error", code: "invalid_mode", message }`.
 - Every returned document is recorded in the read-access audit log, batched per call. `agent_id` defaults to `"unknown"` when omitted.
@@ -619,6 +621,7 @@ List knowledge items with filters.
 | `title_contains` | string | No | Case-insensitive substring match on title |
 | `content_query` | string | No | Tantivy full-text query applied after the base filters |
 | `metadata_match` | object | No | Filter by free-form metadata (see Filter semantics) |
+| `entities` | string[] | No | Filter by entity names from the document's `entities` frontmatter (exact match, AND across the list). Resolved via an in-memory inverted index — no full scan (#316). |
 
 **Returns:** `{ items: [{ id, title, path, updated, tags, source_url, derived_from_ids, metadata }], total: int }`
 (`metadata` is the document's free-form key/value dict.)
@@ -628,6 +631,7 @@ List knowledge items with filters.
 - When `content_query` is present, Lithos runs Tantivy first (with `tags`, `author`, and `path_prefix` pushed into the search query), then applies the remaining filters (`since`, `title_contains`, `metadata_match`) before pagination.
 - `content_query` backend failures return `{ status: "error", code: "search_backend_error", message }`.
 - `metadata_match` is resolved through an in-memory inverted index, so a metadata-filtered list never scans the whole knowledge base.
+- `entities` is resolved through the same inverted-index machinery; with `content_query` it is applied as a candidate-set intersection after ranking.
 
 **Filter semantics (`metadata_match`, #306):**
 - AND across keys: a document must match every `key: q` pair.
