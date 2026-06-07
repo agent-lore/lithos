@@ -129,3 +129,38 @@ class TestExtractEntitiesCommand:
         from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION
 
         assert marker == ENTITY_EXTRACTOR_VERSION
+
+    def test_force_leaves_barren_notes_unstamped(self, test_config):
+        """A note with no entities and nothing extractable stays pristine
+        under --force — same contract as the enrichment worker."""
+        knowledge = KnowledgeManager(test_config)
+
+        async def _create():
+            doc = (
+                await knowledge.create(
+                    title="barren note",
+                    content="plain lowercase prose with nothing extractable in it.",
+                    agent="human",
+                )
+            ).document
+            return doc.id, doc.metadata.version
+
+        barren_id, version_before = asyncio.run(_create())
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--data-dir", str(test_config.storage.data_dir), "extract-entities", "--force"],
+        )
+        assert result.exit_code == 0
+
+        fresh = KnowledgeManager(test_config)
+
+        async def _read():
+            doc, _ = await fresh.read(id=barren_id)
+            return doc.metadata
+
+        meta = asyncio.run(_read())
+        assert meta.entities == []
+        assert meta.entities_extractor is None
+        assert meta.version == version_before

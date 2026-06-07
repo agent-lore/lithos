@@ -127,6 +127,18 @@ class TestJunkClasses:
         assert "Key" not in entities
         assert "Points" not in entities
 
+    def test_heading_matching_real_entity_survives(self, no_ner: None) -> None:
+        # A section headed by its subject must not suppress the entity when
+        # prose independently corroborates it.
+        text = "## Lithos\n\nWe use Lithos across the team. Everyone likes Lithos.\n"
+        assert "Lithos" in extract_entities(text)
+
+    def test_heading_matching_weak_mention_still_suppressed(self, no_ner: None) -> None:
+        # One mid-sentence mention of a heading label is not enough evidence —
+        # "see the Key Quotes section" style references stay structural.
+        text = "## Key Quotes\n\nDetails are in the Key Quotes section above somewhere.\n"
+        assert "Key Quotes" not in extract_entities(text)
+
     def test_heading_adjacent_runs_not_joined(self, no_ner: None) -> None:
         # "## Summary" followed by a capitalized sentence must not produce
         # "Summary Broadridge" style run-ons.

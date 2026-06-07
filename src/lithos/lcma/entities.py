@@ -277,11 +277,22 @@ def extract_entities(text: str) -> list[str]:
     labels = _structural_labels(no_links)
     cleaned_text = _strip_structure(no_links)
 
-    candidates = _ner_entities(cleaned_text)
+    ner_candidates = _ner_entities(cleaned_text)
 
     prose = _HEADING_RE.sub("", cleaned_text)
     prose = _EMPHASIS_RE.sub("", prose)
-    candidates |= _heuristic_entities(prose)
+    candidates = ner_candidates | _heuristic_entities(prose)
 
-    entities |= {c for c in candidates if c.lower() not in labels}
+    for candidate in candidates:
+        # A candidate matching a short heading/bold label is usually template
+        # structure ("Summary", "Key Quotes") — but a note may legitimately
+        # head a section with its subject ("## Lithos"). Demand independent
+        # evidence: NER confirmation or two mid-sentence occurrences in prose.
+        if (
+            candidate.lower() in labels
+            and candidate not in ner_candidates
+            and _mid_sentence_count(prose, candidate) < 2
+        ):
+            continue
+        entities.add(candidate)
     return sorted(_drop_subsumed_singles(entities))

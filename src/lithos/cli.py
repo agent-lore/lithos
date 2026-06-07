@@ -575,6 +575,12 @@ def extract_entities_cmd(ctx: click.Context, dry_run: bool, force: bool) -> None
                     continue
 
             extracted = extract_entities(doc.content)
+            # Barren note (nothing before, nothing extractable): leave the
+            # frontmatter pristine rather than stamping a marker — mirrors the
+            # enrichment worker's contract.
+            if not extracted and not doc.metadata.entities:
+                unchanged += 1
+                continue
             if extracted == doc.metadata.entities and marker == ENTITY_EXTRACTOR_VERSION:
                 unchanged += 1
                 continue
