@@ -1,0 +1,22 @@
+name: Publish Agent Skills
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agent-skills/**'
+
+permissions:
+  id-token: write   # Required for OIDC repo linking
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: tesslio/setup-tessl@v2
+        with:
+          tessl-token: ${{ secrets.TESSL_TOKEN }}
+      - name: Publish plugins
+        working-directory: agent-skills
+        run: tessl plugin publish
