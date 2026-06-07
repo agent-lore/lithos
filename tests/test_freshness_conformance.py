@@ -383,10 +383,13 @@ class TestOnDiskCompatibilityConformance:
 class TestSchemaConformance:
     """Conformance: schema version and rebuild."""
 
-    def test_schema_version_not_bumped(self):
-        """Phase 4 does not bump Tantivy SCHEMA_VERSION."""
-        # expires_at field already existed in the schema
-        assert TantivyIndex.SCHEMA_VERSION == "3"
+    def test_schema_version_pinned(self):
+        """Pin Tantivy SCHEMA_VERSION — bump this test only with a schema change.
+
+        History: "3" through the freshness phase (expires_at already existed);
+        "4" when #316 added the entities field.
+        """
+        assert TantivyIndex.SCHEMA_VERSION == "4"
 
     @pytest.mark.asyncio
     async def test_startup_rebuild_path(self, server: LithosServer, test_config):
