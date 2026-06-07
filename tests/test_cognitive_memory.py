@@ -1170,6 +1170,62 @@ class TestCacheLookupHitPath:
         assert result["hit"] is True
         assert result["document"]["id"] == doc.id
 
+    async def _write_poisoned_doc(
+        self,
+        real_memory: CognitiveMemory,
+        test_config: LithosConfig,
+        *,
+        confidence_yaml: str,
+    ) -> None:
+        """Write a raw .md with a poisoned confidence value, then load + index it.
+
+        Simulates a legacy doc persisted before write-side validation existed
+        (#312) — write validation cannot prevent these, so reads must heal them.
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        raw = textwrap.dedent(f"""\
+            ---
+            id: poisoned-doc
+            title: Quantum Computing Notes
+            author: lithos-enrich
+            created_at: '{now}'
+            updated_at: '{now}'
+            tags: [research]
+            confidence: {confidence_yaml}
+            ---
+
+            # Quantum Computing Notes
+
+            Information about quantum computing.
+            """)
+        path = Path("poisoned-doc.md")
+        (test_config.storage.knowledge_path / path).write_text(raw)
+        doc = await real_memory._knowledge.sync_from_disk(path)
+        real_memory._search.index(KnowledgeManager.to_indexable(doc))
+
+    async def test_null_confidence_frontmatter_does_not_crash_lookup(
+        self, real_memory: CognitiveMemory, test_config: LithosConfig
+    ) -> None:
+        """Regression for #312: a candidate doc with ``confidence: null`` must not
+        abort the lookup with TypeError; it heals to the default 1.0."""
+        await self._write_poisoned_doc(real_memory, test_config, confidence_yaml="null")
+
+        result = await real_memory.cache_lookup(query="quantum computing")
+        assert result["hit"] is True
+        assert result["document"]["confidence"] == 1.0
+
+    async def test_string_confidence_frontmatter_does_not_crash_lookup(
+        self, real_memory: CognitiveMemory, test_config: LithosConfig
+    ) -> None:
+        """Regression for #312: a non-numeric string confidence heals to 1.0."""
+        await self._write_poisoned_doc(real_memory, test_config, confidence_yaml="medium")
+
+        result = await real_memory.cache_lookup(query="quantum computing")
+        assert result["hit"] is True
+        assert result["document"]["confidence"] == 1.0
+
 
 class TestConflictResolve:
     """Routing and persistence checks for the migrated ``conflict_resolve``."""
