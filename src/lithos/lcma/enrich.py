@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -24,6 +23,7 @@ from lithos.events import (
     TASK_COMPLETED,
     LithosEvent,
 )
+from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION, extract_entities
 
 if TYPE_CHECKING:
     from lithos.config import LcmaConfig
@@ -44,163 +44,6 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-# --- Entity extraction patterns ---
-# [[wiki-link]] or [[wiki-link|display]]
-_WIKI_LINK_RE = re.compile(r"\[\[([^\]\[|]+?)(?:\|[^\]]+)?\]\]")
-# `backtick-enclosed terms` (single backtick, not code fences)
-_BACKTICK_RE = re.compile(r"(?<!`)``?([^`\n]+?)``?(?!`)")
-# Capitalized multi-word phrases (2+ words starting with uppercase)
-_CAP_PHRASE_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
-# Single capitalized words: proper nouns and PascalCase identifiers (3+ chars)
-_PROPER_NOUN_RE = re.compile(r"(?<!\w)([A-Z][a-zA-Z]{2,})(?!\w)")
-# Common English words to exclude from proper noun extraction
-_COMMON_WORDS = frozenset(
-    {
-        "The",
-        "This",
-        "That",
-        "These",
-        "Those",
-        "There",
-        "Their",
-        "They",
-        "What",
-        "When",
-        "Where",
-        "Which",
-        "While",
-        "With",
-        "Without",
-        "About",
-        "Above",
-        "After",
-        "Again",
-        "Against",
-        "Also",
-        "Always",
-        "Among",
-        "Any",
-        "Are",
-        "Because",
-        "Been",
-        "Before",
-        "Being",
-        "Between",
-        "Both",
-        "But",
-        "Can",
-        "Could",
-        "Did",
-        "Does",
-        "Each",
-        "Even",
-        "Every",
-        "For",
-        "From",
-        "Get",
-        "Got",
-        "Had",
-        "Has",
-        "Have",
-        "Her",
-        "Here",
-        "Him",
-        "His",
-        "How",
-        "However",
-        "Into",
-        "Its",
-        "Just",
-        "Let",
-        "Like",
-        "May",
-        "More",
-        "Most",
-        "Much",
-        "Must",
-        "New",
-        "Not",
-        "Now",
-        "Off",
-        "Old",
-        "One",
-        "Only",
-        "Other",
-        "Our",
-        "Out",
-        "Over",
-        "Own",
-        "Per",
-        "Same",
-        "She",
-        "Should",
-        "Some",
-        "Such",
-        "Than",
-        "Then",
-        "Too",
-        "Two",
-        "Under",
-        "Until",
-        "Use",
-        "Very",
-        "Was",
-        "Way",
-        "Were",
-        "Will",
-        "Would",
-        "Yet",
-        "You",
-        "Your",
-        "All",
-        "And",
-        "Few",
-        "Nor",
-        "See",
-        "Set",
-        "Try",
-        "Who",
-        "Why",
-        "Yes",
-        # Common sentence starters
-        "Note",
-        "Example",
-        "Given",
-        "Since",
-        "Although",
-        "Despite",
-        "Furthermore",
-        "Moreover",
-        "Therefore",
-        "Thus",
-        "Hence",
-        "Still",
-        "Already",
-        "Instead",
-        "Perhaps",
-        "Sometimes",
-        "Often",
-        "Usually",
-        "Typically",
-        "Generally",
-        "Basically",
-        "Finally",
-        "First",
-        "Second",
-        "Third",
-        "Next",
-        "Last",
-        "Several",
-        "Many",
-        "Another",
-        "Either",
-        "Neither",
-        "Rather",
-        "Whether",
-        "During",
-    }
-)
-
 _SUBSCRIBED_EVENT_TYPES = [
     NOTE_CREATED,
     NOTE_UPDATED,
@@ -209,55 +52,6 @@ _SUBSCRIBED_EVENT_TYPES = [
     FINDING_POSTED,
     EDGE_UPSERTED,
 ]
-
-
-_CODE_FENCE_RE = re.compile(r"```[\s\S]*?```")
-
-
-def _extract_entities_from_text(text: str) -> list[str]:
-    """Extract entity names from text using rule-based heuristics.
-
-    Extracts:
-    - ``[[wiki-link]]`` targets
-    - `` `backtick-enclosed` `` terms
-    - Capitalized multi-word phrases (e.g. "Knowledge Manager")
-    - Single proper nouns (filtered against common English words)
-
-    Returns a deduplicated, sorted list of entity names.
-    """
-    # Strip fenced code blocks to avoid extracting code identifiers as entities
-    text = _CODE_FENCE_RE.sub("", text)
-
-    entities: set[str] = set()
-
-    # 1. Wiki-links
-    for match in _WIKI_LINK_RE.finditer(text):
-        target = match.group(1).strip()
-        if target:
-            entities.add(target)
-
-    # 2. Backtick-enclosed terms
-    for match in _BACKTICK_RE.finditer(text):
-        term = match.group(1).strip()
-        if term and len(term) <= 60:
-            entities.add(term)
-
-    # 3. Capitalized multi-word phrases (strip leading common words)
-    for match in _CAP_PHRASE_RE.finditer(text):
-        words = match.group(1).strip().split()
-        # Strip leading common words (e.g. "The Knowledge Manager" -> "Knowledge Manager")
-        while words and words[0] in _COMMON_WORDS:
-            words = words[1:]
-        if len(words) >= 2:
-            entities.add(" ".join(words))
-
-    # 4. Single proper nouns and PascalCase identifiers (filtered)
-    for match in _PROPER_NOUN_RE.finditer(text):
-        word = match.group(1)
-        if word not in _COMMON_WORDS and not word.isupper():
-            entities.add(word)
-
-    return sorted(entities)
 
 
 def _resolve_node_id(
@@ -672,9 +466,13 @@ class EnrichWorker:
     async def _extract_entities(self, node_id: str) -> None:
         """Extract entities from note content and write to frontmatter.
 
-        Uses rule-based heuristics (wiki-links, backtick terms, capitalized
-        phrases).  Skips if the note already has a non-empty entities list
-        (agent-written entities are never overwritten).
+        Provenance-aware contract (#313):
+
+        - empty entities → extract and stamp ``entities_extractor``
+        - entities with a stale extractor marker → re-extract (the worker may
+          always overwrite its own output; an empty result still clears junk)
+        - entities without a marker → agent-curated, never touched
+        - entities with the current marker → up to date, skip
         """
         if not self._knowledge.has_document(node_id):
             return
@@ -684,16 +482,24 @@ class EnrichWorker:
         except FileNotFoundError:
             return
 
-        # Do not overwrite agent-written entities
+        marker = doc.metadata.entities_extractor
         if doc.metadata.entities:
-            logger.debug("Node %s already has entities, skipping extraction", node_id)
+            if marker is None:
+                logger.debug("Node %s has agent-curated entities, skipping extraction", node_id)
+                return
+            if marker >= ENTITY_EXTRACTOR_VERSION:
+                return
+
+        extracted = extract_entities(doc.content)
+        if not extracted and not doc.metadata.entities:
             return
 
-        extracted = _extract_entities_from_text(doc.content)
-        if not extracted:
-            return
-
-        await self._knowledge.update(id=node_id, agent="lithos-enrich", entities=extracted)
+        await self._knowledge.update(
+            id=node_id,
+            agent="lithos-enrich",
+            entities=extracted,
+            entities_extractor=ENTITY_EXTRACTOR_VERSION,
+        )
         logger.debug(
             "EnrichWorker: entity extraction complete",
             extra={"node_id": node_id, "entity_count": len(extracted)},
@@ -748,6 +554,17 @@ class EnrichWorker:
 
         # --- Reconcile provenance edges ---
         prov_counts = await _project_provenance_to_edges(self._edge_store, self._knowledge)
+
+        # --- Heal stale extractor-written entities (#313) ---
+        # _extract_entities short-circuits on current-marker and agent-curated
+        # docs, so an up-to-date corpus costs one read per note.
+        _, total = await self._knowledge.list_all(limit=0)
+        docs, _ = await self._knowledge.list_all(limit=total) if total else ([], 0)
+        for doc in docs:
+            try:
+                await self._extract_entities(doc.id)
+            except Exception:
+                logger.exception("EnrichWorker: entity heal failed for %s", doc.id)
 
         logger.info(
             "EnrichWorker: full sweep completed",

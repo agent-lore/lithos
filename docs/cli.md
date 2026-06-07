@@ -115,6 +115,28 @@ lithos validate --fix
 
 Checks for missing IDs, missing titles, missing authors, broken `[[wiki-links]]`, and ambiguous link targets.
 
+### `extract-entities` — Re-extract entity frontmatter
+
+```bash
+# Preview what would change
+lithos extract-entities --dry-run
+
+# Honour the curation contract (default): only documents with no entities
+# or a stale entities_extractor marker are re-extracted
+lithos extract-entities
+
+# Bootstrap a corpus written before extractor provenance existed:
+# re-extract every document, including ones with markerless entities
+lithos extract-entities --force --dry-run
+lithos extract-entities --force
+```
+
+Unlike `reconcile`, this command **mutates Markdown source files**: it replaces
+each document's `entities` list with the current extractor's output and stamps
+`entities_extractor` provenance. Entities without a marker are treated as
+agent-curated and skipped unless `--force` is given. Run `lithos reconcile`
+afterwards to refresh derived views.
+
 ## Specifying a Data Directory
 
 All commands accept `--data-dir` (or `-d`) to point at a non-default data location:

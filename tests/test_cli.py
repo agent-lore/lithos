@@ -57,9 +57,7 @@ class TestExtractEntitiesCommand:
                     agent="human",
                 )
             ).document
-            await knowledge.update(
-                id=curated.id, agent="human", entities=["Kalman Filter"]
-            )
+            await knowledge.update(id=curated.id, agent="human", entities=["Kalman Filter"])
             empty = (
                 await knowledge.create(
                     title="Empty Doc",
@@ -81,7 +79,7 @@ class TestExtractEntitiesCommand:
         return asyncio.run(_read())
 
     def test_dry_run_writes_nothing(self, test_config):
-        _, (stale_id, curated_id, empty_id) = self._setup_docs(test_config)
+        _, (stale_id, _curated_id, _empty_id) = self._setup_docs(test_config)
         runner = CliRunner()
         result = runner.invoke(
             cli,
@@ -117,7 +115,7 @@ class TestExtractEntitiesCommand:
         assert marker == ENTITY_EXTRACTOR_VERSION
 
     def test_force_replaces_everywhere(self, test_config):
-        _, (stale_id, curated_id, empty_id) = self._setup_docs(test_config)
+        _, (_stale_id, curated_id, _empty_id) = self._setup_docs(test_config)
         runner = CliRunner()
         result = runner.invoke(
             cli,

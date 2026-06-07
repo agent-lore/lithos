@@ -40,6 +40,10 @@ _Avoid_: ingestion, writer, pipeline, mutator.
 The agent-facing module that owns retrieval, learning, and the agent-asserted derived state. Built on top of the **Search engine**, the link graph, and the **Provenance projection**. Internally hosts the scouts, the parallel-terraced-scan retrieve orchestrator, the stats store (salience, retrieval counts, receipts, coactivation, working memory), reinforcement, and the in-process enrichment worker. Distinct from the **Provenance projection**, which is corpus-derived state with a drift condition; cognitive memory is accumulated agent state with no drift-from-corpus condition. The acronym _LCMA_ (Lithos Cognitive Memory Architecture) is acceptable in code and file paths, but design conversations use "cognitive memory".
 _Avoid_: LCMA (in design conversations), retrieval engine, working memory (which is a sub-concern, not the module).
 
+**Entity**:
+A named thing a note is about — a person, organisation, product, place, or technology — recorded as strings in the note's `entities` frontmatter. Entities come in two kinds with different ownership: **extracted** entities are written by the enrichment worker (spaCy NER plus high-precision heuristics) and stamped with an `entities_extractor` version marker — the worker may freely overwrite its own stale output; **curated** entities are written by an agent, carry no marker, and are never auto-overwritten. Markdown structure (headings, table cells, bold labels) is never an entity source. The one-shot `lithos extract-entities` CLI command re-extracts across the **Corpus** and, unlike **Reconcile**, mutates the corpus itself.
+_Avoid_: tags (a separate, agent-assigned field), keywords, terms.
+
 ## Relationships
 
 - The **Corpus** is the source of truth. The **Search engine**, the link graph, and the **Provenance projection** are derived views.
