@@ -50,7 +50,7 @@ lithos_task_create(
 | `github-issue` | Task originated from a GitHub issue |
 | `influx:inbox` | Task is an influx inbox submission |
 
-**Always set both tag and metadata**: `tags=["project:<slug>"]` + `metadata={"project": "<slug>"}`. Loom queries by `metadata.project`; Agent Zero queries by tag. Setting both ensures discoverability regardless of which agent created the task.
+**Always set both `tags=["project:<slug>"]` and `metadata={"project": "<slug>"}` on tasks.** Loom queries by `metadata.project`; Agent Zero queries by tag. Neither alone gives full coverage.
 
 ---
 
