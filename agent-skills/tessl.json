@@ -1,0 +1,12 @@
+{
+  "name": "agent-lore/lithos",
+  "mode": "vendored",
+  "dependencies": {
+    "local/lithos": {
+      "source": "file:plugins/lithos"
+    },
+    "local/influx-inbox": {
+      "source": "file:plugins/influx-inbox"
+    }
+  }
+}
