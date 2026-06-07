@@ -290,7 +290,7 @@ def _cap_entities(entities: set[str], forced: set[str], text: str, cap: int) -> 
         return entities
     kept = set(forced & entities)
     rest = entities - kept
-    counts = {e: len(re.findall(rf"(?<!\w){re.escape(e)}(?!\w)", text)) for e in rest}
+    counts = {e: sum(1 for _ in re.finditer(rf"(?<!\w){re.escape(e)}(?!\w)", text)) for e in rest}
     for entity in sorted(rest, key=lambda e: (-counts[e], e)):
         if len(kept) >= cap:
             break
@@ -301,9 +301,11 @@ def _cap_entities(entities: set[str], forced: set[str], text: str, cap: int) -> 
 def extract_entities(text: str, max_per_doc: int = _MAX_ENTITIES_PER_DOC) -> list[str]:
     """Extract entity names from note content.
 
-    ``max_per_doc`` caps the result (the most frequently mentioned entities
-    win); ``0`` disables the cap. Defaults to ``_MAX_ENTITIES_PER_DOC`` so
-    callers without config still get the backstop.
+    ``max_per_doc`` bounds the *derived* entities (NER + heuristic + backtick)
+    to the most frequently mentioned; ``0`` disables it. Author-asserted
+    wiki-link targets are always kept and are not counted against the bound, so
+    a doc with many wiki-links can exceed it. Defaults to
+    ``_MAX_ENTITIES_PER_DOC`` so callers without config still get the backstop.
 
     Returns a deduplicated, sorted list — deterministic so repeated
     extraction of unchanged content never churns frontmatter.

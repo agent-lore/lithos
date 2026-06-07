@@ -177,7 +177,7 @@ class LcmaConfig(BaseModel):
     llm_provider: str | None = None
     # Max entities the extractor keeps per document; backstop against
     # citation/glossary explosions (#320). 0 disables the cap.
-    entity_max_per_doc: int = 50
+    entity_max_per_doc: int = Field(default=50, ge=0)
 
     @model_validator(mode="before")
     @classmethod
