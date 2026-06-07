@@ -96,6 +96,7 @@ _CALENDAR_WORDS = frozenset(
 
 _NLP: Language | None = None
 _NER_UNAVAILABLE = False
+_STOP_WORDS: frozenset[str] | None = None
 
 
 def _load_model() -> Language:
@@ -125,9 +126,12 @@ def _get_nlp() -> Language | None:
 
 
 def _stop_words() -> frozenset[str]:
-    from spacy.lang.en.stop_words import STOP_WORDS
+    global _STOP_WORDS
+    if _STOP_WORDS is None:
+        from spacy.lang.en.stop_words import STOP_WORDS
 
-    return frozenset(STOP_WORDS)
+        _STOP_WORDS = frozenset(STOP_WORDS)
+    return _STOP_WORDS
 
 
 def _is_noise_word(word: str) -> bool:

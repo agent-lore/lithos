@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from lithos.config import LcmaConfig
     from lithos.coordination import CoordinationService
     from lithos.events import EventBus
-    from lithos.knowledge import KnowledgeManager
+    from lithos.knowledge import KnowledgeDocument, KnowledgeManager
     from lithos.lcma.stats import StatsStore
     from lithos.provenance import EdgeStore
     from lithos.telemetry import _LithosMetrics
@@ -463,7 +463,7 @@ class EnrichWorker:
         )
         return True
 
-    async def _extract_entities(self, node_id: str) -> None:
+    async def _extract_entities(self, node_id: str, doc: KnowledgeDocument | None = None) -> None:
         """Extract entities from note content and write to frontmatter.
 
         Provenance-aware contract (#313):
@@ -473,14 +473,23 @@ class EnrichWorker:
           always overwrite its own output; an empty result still clears junk)
         - entities without a marker → agent-curated, never touched
         - entities with the current marker → up to date, skip
+
+        A note with no entities and no extractable content is deliberately
+        left unwritten (re-checked on later passes): stamping it would mutate
+        pristine frontmatter — a version bump and contributor entry — just to
+        save a cheap re-extraction.
+
+        ``doc`` lets bulk callers (``full_sweep``) pass an already-loaded
+        document and skip the per-node re-read.
         """
         if not self._knowledge.has_document(node_id):
             return
 
-        try:
-            doc, _ = await self._knowledge.read(id=node_id)
-        except FileNotFoundError:
-            return
+        if doc is None:
+            try:
+                doc, _ = await self._knowledge.read(id=node_id)
+            except FileNotFoundError:
+                return
 
         marker = doc.metadata.entities_extractor
         if doc.metadata.entities:
@@ -556,13 +565,14 @@ class EnrichWorker:
         prov_counts = await _project_provenance_to_edges(self._edge_store, self._knowledge)
 
         # --- Heal stale extractor-written entities (#313) ---
+        # Passing the already-loaded doc avoids a second per-node disk read;
         # _extract_entities short-circuits on current-marker and agent-curated
-        # docs, so an up-to-date corpus costs one read per note.
+        # docs, so an up-to-date corpus costs one corpus scan.
         _, total = await self._knowledge.list_all(limit=0)
         docs, _ = await self._knowledge.list_all(limit=total) if total else ([], 0)
         for doc in docs:
             try:
-                await self._extract_entities(doc.id)
+                await self._extract_entities(doc.id, doc=doc)
             except Exception:
                 logger.exception("EnrichWorker: entity heal failed for %s", doc.id)
 
