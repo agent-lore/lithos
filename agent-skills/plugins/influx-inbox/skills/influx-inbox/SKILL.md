@@ -18,6 +18,14 @@ Load this skill when you need to:
 
 Do NOT use this skill for general Lithos knowledge or task work — load the `lithos` skill for that.
 
+## End-to-End Workflow
+
+1. **Create the inbox task** — use `lithos_task_create` with `tags=["influx:inbox"]` and required metadata (see templates below)
+2. **Capture the task ID** — store the returned `task_id` from the response
+3. **Poll until complete** — `lithos_task_get(task_id="<id>")` until `status == "completed"` or `"cancelled"`
+4. **Check the outcome** — read `outcome` (human-readable) and `metadata.inbox_result` (structured, per-profile scores and note IDs)
+5. **If failed** — check `metadata.inbox_result` for the error detail, fix the submission (e.g. bad URL scheme, wrong source_tag format), and resubmit
+
 ## Submitting a URL
 
 ```
@@ -52,52 +60,28 @@ lithos_task_create(
 )
 ```
 
-## Mandatory Fields
+## Mandatory Fields and Validation
 
-| Field | Required | Rules |
-|-------|----------|-------|
-| `tags` | Yes | Must include `"influx:inbox"` — this is how Influx discovers submissions |
-| `metadata.kind` | Yes | `"url"` or `"pdf"` only — anything else is a terminal error |
+| Field | Required | Validation |
+|-------|----------|------------|
+| `tags` includes `"influx:inbox"` | Yes | Missing tag = invisible to Influx |
+| `metadata.kind` | Yes | Must be exactly `"url"` or `"pdf"` — terminal error otherwise |
 | `metadata.url` | If kind=url | Must be `http://` or `https://` scheme |
 | `metadata.local_path` | If kind=pdf | Must resolve inside configured `pdf_root` |
 | `metadata.submitted_by` | Yes | Only `[A-Za-z0-9:._-]` kept, truncated to 64 chars |
 | `metadata.source_tag` | Yes | `^[a-z0-9][a-z0-9-]{0,31}$` — lowercase alphanumeric + hyphens, 1–32 chars |
 
-## Optional Fields
+Optional: `metadata.title` (title hint), `metadata.summary` (pre-fetched summary to assist profile scoring).
 
-| Field | Purpose |
-|-------|---------|
-| `metadata.title` | Title hint for ingestion |
-| `metadata.summary` | Pre-fetched summary to assist profile scoring |
-
-## Validation Rules
-
-1. `influx:inbox` tag is mandatory — submissions without it are invisible to Influx
-2. `kind` must be `"url"` or `"pdf"` — no other values accepted
-3. URLs must use `http://` or `https://` scheme
-4. PDF paths must resolve inside the configured `pdf_root`
-5. `source_tag` format: `^[a-z0-9][a-z0-9-]{0,31}$`
-6. All submissions must clear each profile's relevance threshold — no bypass
-7. Resubmitting the same URL is safe — deduplication scores only un-ingested profiles
-8. Rate limit: max 20 items processed per 5-minute tick (configurable)
-
-## Checking Ingestion Results
-
-After submission, poll the task until it completes:
-
-```
-lithos_task_get(task_id="<returned-task-id>")
-```
-
-When complete, check:
-- `outcome` — human-readable result string
-- `metadata.inbox_result` — structured JSON with per-profile scores and note IDs
-- The created/updated Lithos document IDs will appear in `inbox_result`
+**Other constraints:**
+- All submissions must clear each profile's relevance threshold — no bypass
+- Resubmitting the same URL is safe — deduplication scores only un-ingested profiles
+- Rate limit: max 20 items processed per 5-minute tick (configurable)
 
 ## Pitfalls
 
 - **Missing `influx:inbox` tag** — the single most common mistake. Without it, Influx never sees the task
-- **Wrong `kind` value** — must be exactly `"url"` or `"pdf"`, lowercase. Any other value is a terminal error and the task will not be processed
-- **`source_tag` format** — must match `^[a-z0-9][a-z0-9-]{0,31}$`. Uppercase, underscores, or spaces will fail validation
-- **PDF path outside `pdf_root`** — Influx will reject it. Confirm the path is within the configured root before submitting
-- **Resubmitting is safe** — if you're unsure whether something was ingested, resubmit. Deduplication handles it
+- **Wrong `kind` value** — must be exactly `"url"` or `"pdf"`, lowercase. Any other value is a terminal error
+- **`source_tag` format** — must match `^[a-z0-9][a-z0-9-]{0,31}$`. Uppercase, underscores, or spaces will fail
+- **PDF path outside `pdf_root`** — Influx will reject it. Confirm the path is within the configured root
+- **Resubmitting is safe** — if unsure whether something was ingested, resubmit; deduplication handles it

@@ -1,12 +1,12 @@
 ---
 name: lithos
 description: |
-  Use when working with Lithos via MCP to search or write knowledge, create or coordinate tasks, claim work before starting, post findings, or collaborate with other agents. Covers the full agent workflow: register, search-before-work, knowledge read/write, task lifecycle, project conventions, and tagging.
+  Use when working with Lithos via MCP for agent coordination, shared knowledge base access, or work queue management. Covers searching or writing knowledge, creating or coordinating tasks, claiming work before starting, posting findings, and multi-agent collaboration. Full workflow: register, search-before-work, knowledge read/write, task lifecycle, project conventions, and tagging.
 ---
 
 # Lithos
 
-Lithos is a shared knowledge base and task coordination system for multi-agent workflows. Agents interact with it exclusively through MCP tools prefixed `lithos_`. Think of it as "Obsidian for agents" — structured markdown with full-text and semantic search, task claiming, and provenance tracking.
+Lithos is a shared knowledge base and task coordination system for multi-agent workflows. Agents interact with it exclusively through MCP tools prefixed `lithos_`.
 
 ## Trigger Conditions
 
@@ -118,7 +118,7 @@ Lithos has no first-class project entity. Projects are represented through conve
 
 - **Project context doc**: `projects/<slug>/<slug>-project-context.md`, tagged `["project-context", "project:<slug>"]`, `note_type="concept"`
 - **Tag format**: `project:<slug>` (colon separator, e.g. `project:influx`)
-- **Metadata**: always also set `metadata={"project": "<slug>"}` on tasks
+- **Always set both tag and metadata on tasks** — see Create a New Task above
 
 Query patterns:
 ```
