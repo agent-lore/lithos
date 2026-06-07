@@ -1098,6 +1098,83 @@ class TestMetadataFiltering:
         assert counting.iter_count >= 1
 
 
+class TestEntitiesListFilter:
+    """Entities filter on list_all via the inverted index (#316)."""
+
+    async def _mk(self, km: KnowledgeManager, title: str, entities: list[str]) -> str:
+        doc_id = (await km.create(title=title, content="Body.", agent="agent")).document.id
+        await km.update(id=doc_id, agent="lithos-enrich", entities=entities, entities_extractor=2)
+        return doc_id
+
+    @pytest.mark.asyncio
+    async def test_single_entity_match(self, knowledge_manager: KnowledgeManager):
+        a = await self._mk(knowledge_manager, "A", ["NetworkX", "Lithos"])
+        await self._mk(knowledge_manager, "B", ["ChromaDB"])
+        docs, total = await knowledge_manager.list_all(entities=["NetworkX"])
+        assert total == 1
+        assert [d.id for d in docs] == [a]
+
+    @pytest.mark.asyncio
+    async def test_multi_entity_and(self, knowledge_manager: KnowledgeManager):
+        a = await self._mk(knowledge_manager, "A", ["NetworkX", "Lithos"])
+        await self._mk(knowledge_manager, "B", ["NetworkX"])
+        docs, total = await knowledge_manager.list_all(entities=["NetworkX", "Lithos"])
+        assert total == 1 and [d.id for d in docs] == [a]
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_empty(self, knowledge_manager: KnowledgeManager):
+        await self._mk(knowledge_manager, "A", ["Lithos"])
+        docs, total = await knowledge_manager.list_all(entities=["Nonexistent"])
+        assert total == 0 and docs == []
+
+    @pytest.mark.asyncio
+    async def test_update_moves_doc_between_buckets(self, knowledge_manager: KnowledgeManager):
+        a = await self._mk(knowledge_manager, "A", ["OldEntity"])
+        await knowledge_manager.update(
+            id=a, agent="lithos-enrich", entities=["NewEntity"], entities_extractor=2
+        )
+        _, old_total = await knowledge_manager.list_all(entities=["OldEntity"])
+        docs, new_total = await knowledge_manager.list_all(entities=["NewEntity"])
+        assert old_total == 0
+        assert new_total == 1 and [d.id for d in docs] == [a]
+
+    @pytest.mark.asyncio
+    async def test_delete_removes_from_bucket(self, knowledge_manager: KnowledgeManager):
+        a = await self._mk(knowledge_manager, "A", ["Lithos"])
+        await knowledge_manager.delete(id=a)
+        _, total = await knowledge_manager.list_all(entities=["Lithos"])
+        assert total == 0
+
+    @pytest.mark.asyncio
+    async def test_combines_with_tags(self, knowledge_manager: KnowledgeManager):
+        a = (
+            await knowledge_manager.create(
+                title="A", content="Body.", agent="agent", tags=["robotics"]
+            )
+        ).document.id
+        await knowledge_manager.update(
+            id=a, agent="lithos-enrich", entities=["Festo"], entities_extractor=2
+        )
+        b = (
+            await knowledge_manager.create(
+                title="B", content="Body.", agent="agent", tags=["finance"]
+            )
+        ).document.id
+        await knowledge_manager.update(
+            id=b, agent="lithos-enrich", entities=["Festo"], entities_extractor=2
+        )
+        docs, total = await knowledge_manager.list_all(entities=["Festo"], tags=["robotics"])
+        assert total == 1 and [d.id for d in docs] == [a]
+
+    @pytest.mark.asyncio
+    async def test_survives_reload_from_disk(self, knowledge_manager: KnowledgeManager):
+        """The entities index is rebuilt by the startup scan."""
+        a = await self._mk(knowledge_manager, "A", ["Persistent Entity"])
+        reloaded = KnowledgeManager(knowledge_manager.config)
+        docs, total = await reloaded.list_all(entities=["Persistent Entity"])
+        assert total == 1 and [d.id for d in docs] == [a]
+
+
 class TestDocumentPersistence:
     """Tests for document file persistence."""
 
