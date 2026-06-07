@@ -78,6 +78,11 @@ _REFERENCES_HEADING_RE = re.compile(
 # --- Candidate shapes ---
 _CAP_PHRASE_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
 _PROPER_NOUN_RE = re.compile(r"(?<!\w)([A-Z][a-zA-Z]{2,})(?!\w)")
+# Product/version tokens with internal dots, hyphens, or plus — ``Node.js``,
+# ``TensorFlow.js``, ``GPT-4.1``. NER recognises these inconsistently, so this
+# rule surfaces them from plain prose. The name-shape gate and the bare-
+# lowercase rule still reject lowercase code (`note.created`, `v1.2.3`).
+_PRODUCT_TOKEN_RE = re.compile(r"(?<![\w.])([A-Za-z][A-Za-z0-9]*(?:[.+-][A-Za-z0-9]+)+)(?!\w)")
 _POSSESSIVE_RE = re.compile(r"'s\b")
 _TRAILING_NUMERIC_RE = re.compile(r"^\d[\d.\-/:]*$")
 # A valid entity name: alphanumeric runs joined by spaces, hyphens, apostrophes,
@@ -260,15 +265,20 @@ def _ner_entities(text: str) -> set[str]:
 
 
 def _heuristic_entities(prose: str) -> set[str]:
-    """Capitalized phrases/proper nouns corroborated mid-sentence.
+    """Capitalized phrases / proper nouns / product tokens corroborated mid-sentence.
 
-    Phrases need one mid-sentence occurrence; single words need two (a single
+    A multi-word phrase or a punctuated product token (``Node.js``, ``GPT-4.1``)
+    needs one mid-sentence occurrence; a bare single word needs two (a single
     word capitalized once mid-sentence is too weak a signal on its own).
     """
     candidates: set[str] = set()
     for match in _CAP_PHRASE_RE.finditer(prose):
         cleaned = _clean_candidate(match.group(1))
         if cleaned and " " in cleaned:
+            candidates.add(cleaned)
+    for match in _PRODUCT_TOKEN_RE.finditer(prose):
+        cleaned = _clean_candidate(match.group(1))
+        if cleaned:
             candidates.add(cleaned)
     for match in _PROPER_NOUN_RE.finditer(prose):
         word = match.group(1)
@@ -279,7 +289,10 @@ def _heuristic_entities(prose: str) -> set[str]:
 
     confirmed: set[str] = set()
     for candidate in candidates:
-        required = 1 if " " in candidate else 2
+        # Multi-word phrases and punctuated product tokens are distinctive
+        # enough to trust on a single mid-sentence sighting; a bare word is not.
+        distinctive = any(c in candidate for c in " .+-")
+        required = 1 if distinctive else 2
         if _mid_sentence_count(prose, candidate) >= required:
             confirmed.add(candidate)
     return confirmed

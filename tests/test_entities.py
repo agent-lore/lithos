@@ -313,6 +313,17 @@ class TestBacktickCodeRejection:
         text = f"We adopted `{name}` last year and `{name}` is still our stack.\n"
         assert name in extract_entities(text)
 
+    @pytest.mark.parametrize("name", ["Node.js", "TensorFlow.js", "GPT-4.1"])
+    def test_dotted_product_names_surface_in_prose(self, no_ner: None, name: str) -> None:
+        # Plain prose (no backticks, no NER) must still surface these via the
+        # product-token rule — the gap from the follow-up review.
+        text = f"{name} is popular. We rely on {name} for production.\n"
+        assert name in extract_entities(text)
+
+    def test_lowercase_version_string_rejected(self, no_ner: None) -> None:
+        text = "Release v1.2.3 today. We tagged v1.2.3 and shipped v1.2.3 widely.\n"
+        assert "v1.2.3" not in extract_entities(text)
+
     def test_lowercase_dotted_code_still_rejected(self, no_ner: None) -> None:
         # The dot allowance must not let lowercase code/attributes/filenames in.
         text = "Watch `note.created`, call `asyncio.gather`, edit `metadata.project` today.\n"
