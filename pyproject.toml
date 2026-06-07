@@ -33,6 +33,9 @@ dependencies = [
     "aiosqlite>=0.17.0",
     "click>=8.0.0",
     "python-json-logger>=3.0",
+    "spacy>=3.8",
+    # Pinned NER model wheel; bump alongside the spacy minor version.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +56,10 @@ dev = [
     "ruff>=0.1.0",
     "pyright>=1.1.0",
 ]
+
+[tool.hatch.metadata]
+# Required for the en-core-web-sm direct wheel URL dependency.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lithos"]
