@@ -2000,6 +2000,194 @@ class TestUpdateTagsConfidenceSentinel:
         assert result.document.metadata.confidence == pytest.approx(0.9)
 
 
+class TestConfidenceParsing:
+    """Tests for issue #312: from_dict() heals missing/null/non-numeric confidence."""
+
+    def _meta(self, **extra_fields) -> KnowledgeMetadata:
+        data = {"id": "test-id", "title": "Test", "author": "agent", **extra_fields}
+        return KnowledgeMetadata.from_dict(data)
+
+    def test_from_dict_missing_confidence_defaults_to_one(self):
+        """Absent confidence key defaults to 1.0."""
+        meta = self._meta()
+        assert meta.confidence == 1.0
+
+    def test_from_dict_null_confidence_defaults_to_one(self):
+        """Present-but-null confidence (confidence: null in YAML) defaults to 1.0 (#312)."""
+        meta = self._meta(confidence=None)
+        assert meta.confidence == 1.0
+
+    def test_from_dict_string_confidence_defaults_to_one(self, caplog):
+        """Non-numeric string confidence falls back to 1.0 with a warning."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="lithos.knowledge"):
+            meta = self._meta(confidence="medium")
+        assert meta.confidence == 1.0
+        assert "confidence" in caplog.text
+
+    def test_from_dict_numeric_string_confidence_parses(self):
+        """Numeric string confidence parses to its float value."""
+        meta = self._meta(confidence="0.8")
+        assert meta.confidence == pytest.approx(0.8)
+
+    def test_from_dict_int_confidence_coerces_to_float(self):
+        """Integer confidence coerces to float."""
+        meta = self._meta(confidence=1)
+        assert meta.confidence == 1.0
+        assert isinstance(meta.confidence, float)
+
+    def test_from_dict_bool_confidence_defaults_to_one(self):
+        """Bool confidence is invalid, not coerced (False would silently become 0.0)."""
+        meta = self._meta(confidence=False)
+        assert meta.confidence == 1.0
+
+    def test_from_dict_out_of_range_confidence_clamped(self):
+        """Out-of-range finite floats clamp into [0.0, 1.0]."""
+        assert self._meta(confidence=1.5).confidence == 1.0
+        assert self._meta(confidence=-0.2).confidence == 0.0
+
+    def test_from_dict_nan_confidence_defaults_to_one(self):
+        """NaN confidence falls back to 1.0 (clamping cannot fix NaN)."""
+        meta = self._meta(confidence=float("nan"))
+        assert meta.confidence == 1.0
+
+
+class TestConfidenceWriteValidation:
+    """Tests for issue #312: create()/update() reject invalid confidence values."""
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_out_of_range_confidence(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """create() with out-of-range confidence returns invalid_input, writes nothing."""
+        result = await knowledge_manager.create(
+            title="Bad Confidence",
+            content="Content.",
+            agent="agent",
+            confidence=1.5,
+        )
+        assert result.status == "invalid_input"
+        assert "confidence" in result.message
+        assert not list(test_config.storage.knowledge_path.rglob("*.md"))
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_string_confidence(self, knowledge_manager: KnowledgeManager):
+        """create() with a string confidence returns invalid_input."""
+        result = await knowledge_manager.create(
+            title="String Confidence",
+            content="Content.",
+            agent="agent",
+            confidence="high",  # type: ignore[arg-type]
+        )
+        assert result.status == "invalid_input"
+        assert "confidence" in result.message
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_bool_confidence(self, knowledge_manager: KnowledgeManager):
+        """create() with a bool confidence returns invalid_input (bool is not a number here)."""
+        result = await knowledge_manager.create(
+            title="Bool Confidence",
+            content="Content.",
+            agent="agent",
+            confidence=True,
+        )
+        assert result.status == "invalid_input"
+        assert "confidence" in result.message
+
+    @pytest.mark.asyncio
+    async def test_create_accepts_int_confidence(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """create() accepts integer confidence and coerces it to float."""
+        import yaml
+
+        result = await knowledge_manager.create(
+            title="Int Confidence",
+            content="Content.",
+            agent="agent",
+            confidence=1,
+        )
+        assert result.status == "created"
+        assert result.document is not None
+        assert result.document.metadata.confidence == 1.0
+        assert isinstance(result.document.metadata.confidence, float)
+
+        # Raw frontmatter on disk serializes a number
+        file_path = test_config.storage.knowledge_path / result.document.path
+        parts = file_path.read_text().split("---", 2)
+        frontmatter_data = yaml.safe_load(parts[1])
+        assert isinstance(frontmatter_data["confidence"], (int, float))
+        assert not isinstance(frontmatter_data["confidence"], bool)
+
+    @pytest.mark.asyncio
+    async def test_create_none_confidence_applies_default(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """create() treats confidence=None as "not provided" → default 1.0.
+
+        MCP callers omit the field as null; before #312 the None was persisted
+        as ``confidence: null`` in frontmatter — the write-side origin of the
+        poisoned docs.
+        """
+        result = await knowledge_manager.create(
+            title="Omitted Confidence",
+            content="Content.",
+            agent="agent",
+            confidence=None,
+        )
+        assert result.status == "created"
+        assert result.document is not None
+        assert result.document.metadata.confidence == 1.0
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_none_confidence(self, knowledge_manager: KnowledgeManager):
+        """update() with confidence=None returns invalid_input (the historical poisoning path)."""
+        doc = (
+            await knowledge_manager.create(
+                title="Doc", content="Content.", agent="agent", confidence=0.7
+            )
+        ).document
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="editor",
+            confidence=None,  # type: ignore[arg-type]
+        )
+        assert result.status == "invalid_input"
+        assert "confidence" in result.message
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_out_of_range_confidence(
+        self, knowledge_manager: KnowledgeManager
+    ):
+        """update() with out-of-range confidence rejects without mutating the doc."""
+        doc = (
+            await knowledge_manager.create(
+                title="Doc 2", content="Content.", agent="agent", confidence=0.7
+            )
+        ).document
+        result = await knowledge_manager.update(id=doc.id, agent="editor", confidence=2.0)
+        assert result.status == "invalid_input"
+
+        reread, _ = await knowledge_manager.read(id=doc.id)
+        assert reread.metadata.confidence == pytest.approx(0.7)
+        assert reread.metadata.version == doc.metadata.version
+
+    @pytest.mark.asyncio
+    async def test_update_accepts_int_confidence(self, knowledge_manager: KnowledgeManager):
+        """update() accepts integer confidence and coerces it to float."""
+        doc = (
+            await knowledge_manager.create(
+                title="Doc 3", content="Content.", agent="agent", confidence=0.5
+            )
+        ).document
+        result = await knowledge_manager.update(id=doc.id, agent="editor", confidence=1)
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.confidence == 1.0
+        assert isinstance(result.document.metadata.confidence, float)
+
+
 class TestDeleteRemovesUrl:
     """Tests for US-007: delete() cleans up dedup map."""
 

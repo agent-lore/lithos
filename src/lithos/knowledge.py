@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -72,6 +73,46 @@ def _parse_version(value: object) -> int:
             parsed,
         )
         return 1
+    return parsed
+
+
+def _parse_confidence(value: object) -> float:
+    """Parse a confidence value from frontmatter, falling back to 1.0 on bad input (#312).
+
+    ``dict.get("confidence", 1.0)`` only applies the default when the key is
+    absent; a key present with ``null`` (or a string) would otherwise load as-is
+    and crash numeric comparisons downstream (e.g. ``cache_lookup``).
+    """
+    # bool is an int subclass: float(False) would silently become 0.0 and
+    # filter the doc out of every lookup, so treat it as non-numeric noise.
+    if isinstance(value, bool):
+        logger.warning(
+            "_parse_confidence: non-numeric confidence value %r in frontmatter; defaulting to 1.0",
+            value,
+        )
+        return 1.0
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        logger.warning(
+            "_parse_confidence: non-numeric confidence value %r in frontmatter; defaulting to 1.0",
+            value,
+        )
+        return 1.0
+    if math.isnan(parsed) or math.isinf(parsed):
+        logger.warning(
+            "_parse_confidence: non-finite confidence value %r in frontmatter; defaulting to 1.0",
+            value,
+        )
+        return 1.0
+    if not 0.0 <= parsed <= 1.0:
+        clamped = min(max(parsed, 0.0), 1.0)
+        logger.warning(
+            "_parse_confidence: out-of-range confidence value %r in frontmatter; clamping to %s",
+            parsed,
+            clamped,
+        )
+        return clamped
     return parsed
 
 
@@ -144,6 +185,25 @@ def validate_extra_metadata(extra: dict) -> None:
             f"metadata keys collide with reserved frontmatter fields: {reserved}. "
             "Choose different keys."
         )
+
+
+def validate_confidence(value: object) -> float:
+    """Validate a confidence value at the write boundary (#312).
+
+    Stricter than the read-side ``_parse_confidence``: writes fail fast with
+    ``ValueError`` instead of healing, so ``null``/string values can never be
+    persisted again. Integers are accepted and coerced (integer JSON over the
+    MCP wire); bool is rejected because it is an ``int`` subclass, not a score.
+
+    Raises:
+        ValueError: if ``value`` is not a finite number in [0.0, 1.0].
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"confidence must be a number between 0.0 and 1.0, got {value!r}")
+    parsed = float(value)
+    if math.isnan(parsed) or math.isinf(parsed) or not 0.0 <= parsed <= 1.0:
+        raise ValueError(f"confidence must be a number between 0.0 and 1.0, got {value!r}")
+    return parsed
 
 
 # Scalar JSON types accepted as metadata_match *query* values (#306).
@@ -460,7 +520,7 @@ class KnowledgeMetadata:
             updated_at=updated_at,
             tags=data.get("tags", []),
             aliases=data.get("aliases", []),
-            confidence=data.get("confidence", 1.0),
+            confidence=_parse_confidence(data.get("confidence", 1.0)),
             contributors=data.get("contributors", []),
             source=data.get("source"),
             source_url=data.get("source_url"),
@@ -1142,7 +1202,7 @@ class KnowledgeManager:
         content: str,
         agent: str,
         tags: list[str] | None = None,
-        confidence: float = 1.0,
+        confidence: float | None = None,
         path: str | None = None,
         source: str | None = None,
         source_url: str | None = None,
@@ -1158,6 +1218,12 @@ class KnowledgeManager:
     ) -> WriteResult:
         """Create a new knowledge document.
 
+        ``confidence=None`` means "not provided" and applies the default 1.0 —
+        MCP callers omit the field as ``null``. Anything else must be a finite
+        number in [0.0, 1.0] or the write is rejected (#312); previously a
+        ``None`` here was persisted as ``confidence: null`` in frontmatter,
+        which poisoned every later read.
+
         ``extra`` is free-form key/value metadata persisted into the
         document's frontmatter via ``KnowledgeMetadata.extra`` (#305).
 
@@ -1165,6 +1231,12 @@ class KnowledgeManager:
         """
         async with self._write_lock:
             lithos_metrics.knowledge_ops.add(1, {"op": "create"})
+
+            # Reject invalid confidence before anything is persisted (#312).
+            try:
+                confidence = 1.0 if confidence is None else validate_confidence(confidence)
+            except ValueError as e:
+                return WriteResult(status="invalid_input", message=str(e))
 
             # Validate and normalize source_url
             norm_url: str | None = None
@@ -1542,6 +1614,15 @@ class KnowledgeManager:
             if not isinstance(extra, _UnsetType) and extra:
                 try:
                     validate_extra_metadata(extra)
+                except ValueError as e:
+                    return WriteResult(status="invalid_input", message=str(e))
+
+            # Reject invalid confidence before any in-memory metadata mutation —
+            # update() mutates the cached doc, so a late rejection would leave a
+            # poisoned in-memory document (#312).
+            if not isinstance(confidence, _UnsetType):
+                try:
+                    confidence = validate_confidence(confidence)
                 except ValueError as e:
                     return WriteResult(status="invalid_input", message=str(e))
 

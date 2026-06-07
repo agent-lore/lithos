@@ -1042,7 +1042,9 @@ class LithosServer:
                     must not collide with reserved frontmatter fields (e.g. title,
                     tags, version) — such writes are rejected as invalid_input.
                 confidence: Confidence score 0-1 (default: 1.0 on create). On update:
-                    null/omit preserves existing; float sets new value.
+                    null/omit preserves existing; float sets new value. Integers
+                    are coerced to float; non-numeric or out-of-range values are
+                    rejected as invalid_input.
                 path: Where to store the note. Two accepted forms:
                     - Subdirectory (e.g., "procedures") — the filename is derived
                       from the title (slugified) and ".md" is appended.
