@@ -80,13 +80,14 @@ _CAP_PHRASE_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
 _PROPER_NOUN_RE = re.compile(r"(?<!\w)([A-Z][a-zA-Z]{2,})(?!\w)")
 _POSSESSIVE_RE = re.compile(r"'s\b")
 _TRAILING_NUMERIC_RE = re.compile(r"^\d[\d.\-/:]*$")
-# A valid entity name: alphanumeric runs joined only by single spaces, hyphens,
-# apostrophes, or ampersands. Anything else — code punctuation, dots (method
-# calls / filenames), slashes, quotes, brackets, underscores, math/operator
-# symbols — disqualifies the candidate. This is the single gate every candidate
-# passes through, so inline code (`merge_and_normalize()`, `note.created`,
-# `"guides"`, `foo.md`, `references/`) never becomes an entity (#320).
-_ENTITY_NAME_RE = re.compile(r"^[A-Za-z0-9]+(?:[ '&-][A-Za-z0-9]+)*$")
+# A valid entity name: alphanumeric runs joined by spaces, hyphens, apostrophes,
+# ampersands, dots, or plus/hash (for ``Node.js``, ``GPT-4.1``, ``C++``, ``C#``).
+# Slashes, quotes, brackets, underscores, equals, and other operators are still
+# rejected. The companion bare-lowercase rule in ``_clean_candidate`` rejects
+# all-lowercase dotted code (`note.created`, `asyncio.gather`, `foo.md`) while
+# keeping capitalized product names. This is the single gate every candidate
+# passes through (#320).
+_ENTITY_NAME_RE = re.compile(r"^[A-Za-z0-9]+(?:[ '&.+#-][A-Za-z0-9]*)*$")
 
 # Sentence-like headings carry real entities ("# Festo launches ..."); short
 # headings are template labels ("## Summary").
@@ -197,6 +198,24 @@ def _mid_sentence_count(text: str, candidate: str) -> int:
     return count
 
 
+def _strip_reference_section(text: str) -> str:
+    """Remove only the reference/bibliography *section*, not everything after it.
+
+    Strips from the first references-style heading up to the next heading at the
+    same or higher level (or end of document), so a later ``## Appendix`` or
+    postscript survives (#320).
+    """
+    match = _REFERENCES_HEADING_RE.search(text)
+    if not match:
+        return text
+    heading = match.group(0).lstrip()
+    level = len(heading) - len(heading.lstrip("#"))
+    for nxt in re.finditer(r"^(#{1,6})\s", text[match.end() :], re.MULTILINE):
+        if len(nxt.group(1)) <= level:
+            return text[: match.start()] + text[match.end() + nxt.start() :]
+    return text[: match.start()]
+
+
 def _structural_labels(text: str) -> set[str]:
     """Lowercased short heading/bold-label texts — template structure, not entities."""
     labels: set[str] = set()
@@ -266,13 +285,22 @@ def _heuristic_entities(prose: str) -> set[str]:
     return confirmed
 
 
+_SEPARATORS = " .-+#"
+
+
 def _drop_subsumed_singles(entities: set[str]) -> set[str]:
-    """Drop single words contained in a kept multi-word entity."""
-    phrases = [e for e in entities if " " in e]
+    """Drop a single token contained as a delimited part of a longer entity.
+
+    Treats space, dot, hyphen, plus, and hash as token separators, so ``Node``
+    is dropped when ``Node.js`` is kept, and ``Victor`` when ``Victor
+    Stormbeard`` is kept.
+    """
+    containers = [e for e in entities if any(c in e for c in _SEPARATORS)]
     kept: set[str] = set()
     for entity in entities:
-        if " " not in entity and any(
-            re.search(rf"(?<!\w){re.escape(entity)}(?!\w)", phrase) for phrase in phrases
+        is_single = not any(c in entity for c in _SEPARATORS)
+        if is_single and any(
+            re.search(rf"(?<!\w){re.escape(entity)}(?!\w)", c) for c in containers
         ):
             continue
         kept.add(entity)
@@ -311,11 +339,9 @@ def extract_entities(text: str, max_per_doc: int = _MAX_ENTITIES_PER_DOC) -> lis
     extraction of unchanged content never churns frontmatter.
     """
     text = _CODE_FENCE_RE.sub("", text)
-    # Drop reference/bibliography sections — citation author names are not
-    # document entities (#320).
-    ref = _REFERENCES_HEADING_RE.search(text)
-    if ref:
-        text = text[: ref.start()]
+    # Drop the reference/bibliography section — citation author names are not
+    # document entities — but keep any appendix that follows it (#320).
+    text = _strip_reference_section(text)
 
     entities: set[str] = set()
     # Wiki-link targets are explicit author intent; kept verbatim (only edge

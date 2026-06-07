@@ -303,6 +303,29 @@ class TestBacktickCodeRejection:
         assert "ChromaDB" in entities
         assert "StatsStore" in entities
 
+    @pytest.mark.parametrize(
+        "name",
+        ["Node.js", "TensorFlow.js", "GPT-4.1", "C++"],  # C#/Go fall below the 3-char floor
+    )
+    def test_dotted_and_symbol_product_names_kept(self, no_ner: None, name: str) -> None:
+        # Capitalized product names with dots/symbols are real entities, not
+        # code — they must survive (regression for the v3 name-shape gate).
+        text = f"We adopted `{name}` last year and `{name}` is still our stack.\n"
+        assert name in extract_entities(text)
+
+    def test_lowercase_dotted_code_still_rejected(self, no_ner: None) -> None:
+        # The dot allowance must not let lowercase code/attributes/filenames in.
+        text = "Watch `note.created`, call `asyncio.gather`, edit `metadata.project` today.\n"
+        entities = extract_entities(text)
+        for junk in ["note.created", "asyncio.gather", "metadata.project"]:
+            assert junk not in entities
+
+    def test_dotted_name_subsumes_bare_prefix(self, no_ner: None) -> None:
+        text = "We run `Node.js` here. The `Node.js` runtime scales; `Node.js` again.\n"
+        entities = extract_entities(text)
+        assert "Node.js" in entities
+        assert "Node" not in entities
+
     def test_bare_lowercase_word_rejected(self, no_ner: None) -> None:
         text = "A `node` has a `task`; we `update` and `verify` it during the run.\n"
         entities = extract_entities(text)
@@ -327,6 +350,30 @@ class TestReferenceSectionStripping:
         assert "Battaglia" not in entities
         assert "Colmenarejo" not in entities
         assert "Cormen" not in entities
+
+    def test_appendix_after_references_preserved(self) -> None:
+        # Only the reference section is stripped — a following same-level
+        # section survives.
+        text = (
+            "# Doc\n\nIntro mentioning Anthropic in prose.\n\n"
+            "## References\n\n- Smith, J. (2020). A cited paper here.\n\n"
+            "## Appendix\n\nOpenAI shipped a model. We tested OpenAI; OpenAI again.\n"
+        )
+        entities = extract_entities(text)
+        assert "OpenAI" in entities
+        assert "Smith" not in entities  # still excluded — inside references
+
+    def test_deeper_subsections_under_references_stripped(self) -> None:
+        text = (
+            "# Doc\n\nIntro about Anthropic in the body.\n\n"
+            "## References\n\n### Primary\n- Battaglia, P. (2018). Paper.\n\n"
+            "### Secondary\n- Cormen, T. (2009). Book.\n\n"
+            "## Conclusion\n\nDeepMind is mentioned here. We cite DeepMind, then DeepMind.\n"
+        )
+        entities = extract_entities(text)
+        assert "Battaglia" not in entities
+        assert "Cormen" not in entities
+        assert "DeepMind" in entities  # conclusion after the whole ref section
 
 
 class TestPerDocCap:
