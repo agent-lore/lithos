@@ -252,9 +252,10 @@ tags:                             # Optional: List of tags
   - <tag1>
   - <tag2>
 confidence: <float 0-1>           # Optional: Confidence score (default: 1.0).
-                                  # Normalized on read: non-numeric values
-                                  # (null, strings, bool) fall back to 1.0;
-                                  # out-of-range numbers clamp to [0.0, 1.0].
+                                  # Normalized on read: non-numeric (null,
+                                  # strings, bool) and non-finite (.nan/.inf)
+                                  # values fall back to 1.0; out-of-range
+                                  # finite numbers clamp to [0.0, 1.0].
 aliases:                          # Optional: Alternative names (Obsidian compatible)
   - <alias1>
 source: <string>                  # Optional: Task ID or provenance note
@@ -414,7 +415,7 @@ Parameters are flat at the MCP boundary but grouped below by role to aid discove
 | `id` | string | No | UUID to update existing; omit to create new |
 | `tags` | string[] | No | List of tags |
 | `metadata` | object | No | Free-form key/value metadata persisted to frontmatter (#305). Values may be arbitrary JSON-compatible values. On update: omit/`null` preserves; `{}` clears; a non-empty dict is an additive per-key merge (a key whose value is `null` deletes it). Keys must be strings and must not collide with reserved frontmatter fields, else `status="invalid_input"`. Returned by `lithos_read` (as `metadata.extra`) and `lithos_list` (as each item's `metadata`), and filterable via `lithos_list(metadata_match=...)`. |
-| `confidence` | float | No | Confidence score 0-1 (default: 1.0). Integers are accepted and coerced to float; non-numeric or out-of-range values return `status="invalid_input"`. |
+| `confidence` | float | No | Confidence score 0-1 (default: 1.0). Integers are accepted and coerced to float; anything else that is not a finite number in [0.0, 1.0] — non-numeric values, bool, NaN/inf, or out-of-range numbers — returns `status="invalid_input"`. |
 | `path` | string | No | Either a subdirectory (e.g. `"procedures"`) under which the filename is derived from `title` (slugified) and `.md` appended, OR a full relative file path ending in `.md` (e.g. `"procedures/my-doc.md"`) used verbatim as the filename. Intermediate path segments may not end in `.md` — such inputs return `status="invalid_input"`. Paths that resolve to an already-owned file return `status="path_collision"`. |
 
 *Provenance:*
