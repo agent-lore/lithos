@@ -85,6 +85,11 @@ _PROPER_NOUN_RE = re.compile(r"(?<!\w)([A-Z][a-zA-Z]{2,})(?!\w)")
 _PRODUCT_TOKEN_RE = re.compile(r"(?<![\w.])([A-Za-z][A-Za-z0-9]*(?:[.+-][A-Za-z0-9]+)+)(?!\w)")
 _POSSESSIVE_RE = re.compile(r"'s\b")
 _TRAILING_NUMERIC_RE = re.compile(r"^\d[\d.\-/:]*$")
+# A semver-style release token: ``v1.2.3`` (v + at least one dot) or ``1.2.3``
+# (three+ dotted parts). A candidate containing one is a release/version
+# artifact, not a named entity — but simple product-version numbers like ``11``
+# or ``3.5`` (``Windows 11``, ``Claude 3.5``, ``Python 3.11``) are NOT matched.
+_VERSION_TOKEN_RE = re.compile(r"^(?:v\d+\.\d[\d.]*|\d+\.\d+\.\d[\d.]*)$")
 # A valid entity name: alphanumeric runs joined by spaces, hyphens, apostrophes,
 # ampersands, dots, or plus/hash (for ``Node.js``, ``GPT-4.1``, ``C++``, ``C#``).
 # Slashes, quotes, brackets, underscores, equals, and other operators are still
@@ -173,6 +178,11 @@ def _clean_candidate(raw: str) -> str | None:
     """
     text = _POSSESSIVE_RE.sub("", raw)
     words = text.strip().strip(_EDGE_STRIP).split()
+    # A semver token anywhere (`v1.2.3`, `1.2.3`) marks the whole candidate as a
+    # release artifact — e.g. NER's "Release v1.2.3" / "Upgrade 1.2.3". Reject
+    # before the trailing-numeric strip would otherwise leave a bare verb.
+    if any(_VERSION_TOKEN_RE.match(w) for w in words):
+        return None
     while words and (_is_noise_word(words[0]) or words[0].isdigit()):
         words = words[1:]
     while words and (_is_noise_word(words[-1]) or _TRAILING_NUMERIC_RE.match(words[-1])):

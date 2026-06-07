@@ -324,6 +324,47 @@ class TestBacktickCodeRejection:
         text = "Release v1.2.3 today. We tagged v1.2.3 and shipped v1.2.3 widely.\n"
         assert "v1.2.3" not in extract_entities(text)
 
+
+class TestVersionTokenRejection:
+    """Verb+semver phrases (NER's "Release v1.2.3") are not entities.
+
+    The junk originates from nondeterministic NER, so the gate is tested
+    directly rather than through a full extract.
+    """
+
+    @pytest.mark.parametrize(
+        "candidate", ["Release v1.2.3", "Lithos v2.0.1", "Upgrade 1.2.3", "Ship v1.2"]
+    )
+    def test_semver_phrase_rejected(self, candidate: str) -> None:
+        assert entities_mod._clean_candidate(candidate) is None
+
+    @pytest.mark.parametrize(
+        ("candidate", "expected"),
+        [
+            ("Windows 11", "Windows"),  # simple version stripped, name kept
+            ("Claude 3.5", "Claude"),
+            ("Python 3.11", "Python"),
+            ("GPT-4.1", "GPT-4.1"),  # single product token, not a semver phrase
+        ],
+    )
+    def test_simple_product_versions_kept(self, candidate: str, expected: str) -> None:
+        assert entities_mod._clean_candidate(candidate) == expected
+
+    @pytest.mark.parametrize(
+        ("token", "is_version"),
+        [
+            ("v1.2.3", True),
+            ("1.2.3", True),
+            ("v1.2", True),
+            ("11", False),
+            ("3.5", False),
+            ("3.11", False),
+            ("2024", False),
+        ],
+    )
+    def test_version_token_contract(self, token: str, is_version: bool) -> None:
+        assert bool(entities_mod._VERSION_TOKEN_RE.match(token)) is is_version
+
     def test_lowercase_dotted_code_still_rejected(self, no_ner: None) -> None:
         # The dot allowance must not let lowercase code/attributes/filenames in.
         text = "Watch `note.created`, call `asyncio.gather`, edit `metadata.project` today.\n"
