@@ -1559,6 +1559,10 @@ class LithosServer:
                 # post-filter every mode's hits. Over-fetch to compensate,
                 # mirroring the engine's own post-filter heuristic.
                 entity_candidates = self.knowledge.entities_candidate_ids(entities)
+                if entity_candidates is not None and not entity_candidates:
+                    # No document carries every requested entity — skip the
+                    # backend search entirely.
+                    return {"results": []}
                 fetch_limit = limit * 5 if entity_candidates is not None else limit
 
                 def _build_result(r: Any, score_attr: str = "score") -> dict[str, Any]:
@@ -2021,6 +2025,12 @@ class LithosServer:
                     # same bound the other two post-filters already accept.
                     meta_candidates = self.knowledge.metadata_candidate_ids(metadata_match)
                     entity_candidates = self.knowledge.entities_candidate_ids(entities)
+                    if (meta_candidates is not None and not meta_candidates) or (
+                        entity_candidates is not None and not entity_candidates
+                    ):
+                        # An equality filter matched nothing — no point walking
+                        # the ranked window.
+                        fts_results = []
                     matching_ids: list[str] = []
                     for r in fts_results:
                         if meta_candidates is not None and r.id not in meta_candidates:
