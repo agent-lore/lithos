@@ -1,0 +1,19 @@
+name: Review Agent Skills
+
+on:
+  pull_request:
+    paths:
+      - 'agent-skills/**'
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: tesslio/setup-tessl@v2
+        with:
+          token: ${{ secrets.TESSL_TOKEN }}
+      - name: Review lithos skill
+        run: tessl skill review agent-skills/plugins/lithos/skills/lithos/SKILL.md
+      - name: Review influx-inbox skill
+        run: tessl skill review agent-skills/plugins/influx-inbox/skills/influx-inbox/SKILL.md
