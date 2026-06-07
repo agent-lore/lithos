@@ -131,3 +131,23 @@ async def test_search_remove_by_id(test_config: LithosConfig) -> None:
 
     results = engine.full_text_search("Body")
     assert not any(r.id == indexable.id for r in results)
+
+
+def test_to_indexable_includes_entities() -> None:
+    """Entities cross the seam as a tuple (#316)."""
+    doc = _make_doc()
+    doc.metadata.entities = ["Quetzalcoatl Systems", "Lithos"]
+    indexable = KnowledgeManager.to_indexable(doc)
+    assert indexable.entities == ("Quetzalcoatl Systems", "Lithos")
+
+
+@pytest.mark.asyncio
+async def test_curated_entity_matches_full_text_search(test_config: LithosConfig) -> None:
+    """A curated entity absent from the body is findable via the entities field (#316)."""
+    engine = await SearchEngine.create(test_config)
+    doc = _make_doc()
+    doc.metadata.entities = ["Quetzalcoatl"]
+    engine.index(KnowledgeManager.to_indexable(doc))
+
+    results = engine.full_text_search("Quetzalcoatl")
+    assert any(r.id == doc.id for r in results)

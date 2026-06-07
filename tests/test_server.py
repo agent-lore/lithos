@@ -2713,6 +2713,52 @@ class TestMetadataMatchFilterTool:
         assert res["status"] == "invalid_input"
 
 
+class TestEntitiesFilterTool:
+    """Tool-layer tests for the entities filter on lithos_list and lithos_search (#316)."""
+
+    async def _list(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_list")).fn(**kwargs)
+
+    async def _search(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_search")).fn(**kwargs)
+
+    async def _make_entity_doc(self, server: LithosServer, title: str, entities: list[str]) -> str:
+        doc = (
+            await server.knowledge.create(title=title, content=f"Body of {title}.", agent="agent")
+        ).document
+        await server.knowledge.update(
+            id=doc.id, agent="lithos-enrich", entities=entities, entities_extractor=2
+        )
+        refreshed, _ = await server.knowledge.read(id=doc.id)
+        server.search.index(server.knowledge.to_indexable(refreshed))
+        return doc.id
+
+    @pytest.mark.asyncio
+    async def test_list_entities_filter(self, server: LithosServer):
+        a = await self._make_entity_doc(server, "Robot note", ["Festo", "GripperAI"])
+        await self._make_entity_doc(server, "Finance note", ["Broadridge"])
+        res = await self._list(server, entities=["Festo"])
+        assert [i["id"] for i in res["items"]] == [a]
+        # AND semantics
+        res2 = await self._list(server, entities=["Festo", "Broadridge"])
+        assert res2["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_search_entities_filter(self, server: LithosServer):
+        a = await self._make_entity_doc(server, "Robot gripper note", ["Festo"])
+        await self._make_entity_doc(server, "Robot arm note", ["Broadridge"])
+        res = await self._search(server, query="Robot", mode="fulltext", entities=["Festo"])
+        ids = [r["id"] for r in res["results"]]
+        assert a in ids
+        assert len(ids) == 1
+
+    @pytest.mark.asyncio
+    async def test_search_entities_filter_no_match(self, server: LithosServer):
+        await self._make_entity_doc(server, "Robot gripper note", ["Festo"])
+        res = await self._search(server, query="Robot", mode="fulltext", entities=["Nonexistent"])
+        assert res["results"] == []
+
+
 class TestTaskMetadataTool:
     """Tests for metadata field in lithos_task_create, lithos_task_update, lithos_task_list, lithos_task_status (#215)."""
 

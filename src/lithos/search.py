@@ -97,6 +97,7 @@ class IndexableDocument:
     source_url: str
     updated_at: str
     expires_at: str
+    entities: tuple[str, ...] = ()
 
     @property
     def full_content(self) -> str:
@@ -304,7 +305,7 @@ def chunk_text(text: str, chunk_size: int = 500, chunk_max: int = 1000) -> list[
 class TantivyIndex:
     """Tantivy full-text search index."""
 
-    SCHEMA_VERSION = "3"
+    SCHEMA_VERSION = "4"
     """Bumped when fields are added/removed. Triggers automatic rebuild."""
 
     WRITER_RETRY_ATTEMPTS = 8
@@ -348,6 +349,7 @@ class TantivyIndex:
         builder.add_text_field("path", stored=True, tokenizer_name="raw")
         builder.add_text_field("author", stored=True, tokenizer_name="raw")
         builder.add_text_field("tags", stored=True, tokenizer_name="en_stem")
+        builder.add_text_field("entities", stored=True, tokenizer_name="en_stem")
         builder.add_text_field("source_url", stored=True, tokenizer_name="raw")
         builder.add_text_field("updated_at", stored=True, tokenizer_name="raw")
         builder.add_text_field("expires_at", stored=True, tokenizer_name="raw")
@@ -443,6 +445,7 @@ class TantivyIndex:
                     path=doc.path,
                     author=doc.author,
                     tags=" ".join(doc.tags),
+                    entities="\n".join(doc.entities),
                     source_url=doc.source_url,
                     updated_at=doc.updated_at,
                     expires_at=doc.expires_at,
@@ -472,6 +475,7 @@ class TantivyIndex:
                         path=doc.path,
                         author=doc.author,
                         tags=" ".join(doc.tags),
+                        entities="\n".join(doc.entities),
                         source_url=doc.source_url,
                         updated_at=doc.updated_at,
                         expires_at=doc.expires_at,
@@ -530,7 +534,7 @@ class TantivyIndex:
         effective_limit = limit * 5 if (tags or author or path_prefix) else limit
 
         try:
-            parsed_query = self.index.parse_query(full_query, ["title", "content"])
+            parsed_query = self.index.parse_query(full_query, ["title", "content", "entities"])
             results = searcher.search(parsed_query, effective_limit).hits
         except Exception as exc:
             logger.warning("Tantivy query parse/search failed: %s | query=%r", exc, full_query)

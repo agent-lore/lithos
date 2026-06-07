@@ -26,6 +26,14 @@ COPY src/ ./src/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install .
 
+# Bake the default sentence-transformers embedding model into the image so the
+# runtime never downloads it from HuggingFace at startup. Container startup was
+# failing in CI when HF rate-limited (HTTP 429) the shared runner IPs; baking
+# the model makes startup network-free and fast. The spaCy NER model already
+# ships as a wheel dependency, so only the embedding model needs this.
+ENV HF_HOME=/opt/hf-cache
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
 # Stage 2: Runtime image
 FROM python:3.11-slim AS runtime
 
@@ -34,10 +42,19 @@ WORKDIR /app
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv
 
+# Copy the pre-baked embedding model cache from the builder.
+COPY --from=builder /opt/hf-cache /opt/hf-cache
+
 # Set environment
 ENV VIRTUAL_ENV=/app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+# Load the embedding model from the baked cache and never reach out to
+# HuggingFace at runtime. Override HF_HUB_OFFLINE=0 if you configure a
+# non-default embedding model that must be downloaded.
+ENV HF_HOME=/opt/hf-cache
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
 
 # Install curl for HEALTHCHECK
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
@@ -46,7 +63,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 RUN groupadd --gid 1000 lithos \
     && useradd --uid 1000 --gid 1000 --create-home --home-dir /home/lithos --shell /usr/sbin/nologin lithos \
     && mkdir -p /data/knowledge /data/index /data/chroma /data/graph \
-    && chown -R 1000:1000 /data /home/lithos
+    && chown -R 1000:1000 /data /home/lithos /opt/hf-cache
 
 # Default environment variables
 ENV HOME=/home/lithos
