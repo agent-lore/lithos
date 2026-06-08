@@ -1,6 +1,6 @@
 {
   "name": "agent-lore/lithos",
-  "mode": "vendored",
+  "mode": "managed",
   "dependencies": {
     "agent-lore/lithos": {
       "source": "file:plugins/lithos"
