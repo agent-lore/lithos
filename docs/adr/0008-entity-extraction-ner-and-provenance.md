@@ -40,3 +40,12 @@ Version 3 changes (all behind the existing `entities_extractor` marker, so a `--
 - **Per-document cap.** A configurable backstop (`lcma.entity_max_per_doc`, default 50; `0` disables); when exceeded, the most frequently mentioned candidates win (ties broken alphabetically for determinism), and author-asserted wiki-link targets are always kept. Bounds the worst case for inline-citation docs that lack a references heading.
 
 Measured on the prod corpus: mean 12.8 → 10.3, median 8 → 7 (prose notes barely move), max 122 → 46. The `agent-guide-to-using-lithos-via-mcp` note dropped from 213 entities (mostly code) to 33 real ones.
+
+### Amendment — extractor version 4
+
+The v3 staging sweep surfaced two residual classes the gate still let through:
+
+- **Uppercase filenames** (`README.md`, `AGENTS.md`, `settings.json`) — the bare-lowercase rule only caught lowercase `foo.md`, and the product-token rule actively surfaced capitalized filenames from prose. v4 rejects any candidate whose tail is a known document/config/data/script extension, case-insensitively; `.js`/`.ts` are excluded so `Node.js`/`TensorFlow.js` survive.
+- **Junk wiki-link targets** (`[[\phi]]`, `[[IntegerPropertyFilter(...)]]`) — wiki-link targets were kept verbatim as author intent, bypassing every other gate. v4 still keeps them lenient but drops a target carrying code punctuation (`()[]{}=<>`), a leading backslash (LaTeX), or a filename extension. Real links (`[[Knowledge Graph]]`, `[[target-doc|display]]`) are unaffected.
+
+`ENTITY_EXTRACTOR_VERSION` → 4; the `--force` re-sweep heals the corpus via the marker contract.

@@ -385,6 +385,96 @@ class TestVersionTokenRejection:
             assert junk not in entities
 
 
+class TestFilenameRejection:
+    """Filenames are never entities, regardless of case (#320 v4)."""
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["README.md", "AGENTS.md", "CLAUDE.md", "settings.json", "config.yaml", "script.py"],
+    )
+    def test_filename_rejected(self, no_ner: None, filename: str) -> None:
+        text = f"The {filename} file matters. We read {filename} and edit {filename} often.\n"
+        assert filename not in extract_entities(text)
+
+    @pytest.mark.parametrize("product", ["Node.js", "TensorFlow.js"])
+    def test_js_product_names_not_treated_as_filenames(self, no_ner: None, product: str) -> None:
+        text = f"{product} is our stack. We rely on {product} and ship {product}.\n"
+        assert product in extract_entities(text)
+
+
+class TestWikiLinkGuard:
+    """Wiki-link targets are author-asserted but still reject obvious junk."""
+
+    def test_code_and_latex_targets_dropped(self) -> None:
+        text = "See [[\\phi]] and [[IntegerPropertyFilter(x=1)]] and [[Knowledge Graph]] here.\n"
+        entities = extract_entities(text)
+        assert "Knowledge Graph" in entities
+        assert "\\phi" not in entities
+        assert not any("(" in e for e in entities)
+
+    def test_filename_wiki_target_dropped(self) -> None:
+        entities = extract_entities("Refer to [[README.md]] and [[Knowledge Graph]] now.\n")
+        assert "README.md" not in entities
+        assert "Knowledge Graph" in entities
+
+    def test_normal_wiki_links_unaffected(self) -> None:
+        entities = extract_entities("Links to [[NetworkX]] and [[target-doc|display]] here.\n")
+        assert "NetworkX" in entities
+        assert "target-doc" in entities
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Mercury (planet)",
+            "Dune (novel)",
+            "C (programming language)",
+            "The C Programming Language (book)",
+        ],
+    )
+    def test_parenthetical_disambiguation_titles_kept(self, title: str) -> None:
+        # Disambiguated note titles are a common wiki pattern — a space before
+        # the paren marks disambiguation, not a function call.
+        assert title in extract_entities(f"See [[{title}]] for context here.\n")
+
+    def test_function_call_wiki_target_still_dropped(self) -> None:
+        # name( with no space is a function call, not disambiguation.
+        entities = extract_entities("See [[parse(x)]] and [[Knowledge Graph]] now.\n")
+        assert "Knowledge Graph" in entities
+        assert not any("(" in e for e in entities)
+
+    @pytest.mark.parametrize("junk", ["x)", "(foo)", "a)b", "parse(x)", "f(x"])
+    def test_stray_and_unbalanced_parens_dropped(self, junk: str) -> None:
+        # Parentheses outside a trailing " (qualifier)" disambiguation are junk.
+        entities = extract_entities(f"See [[{junk}]] and [[Knowledge Graph]] here.\n")
+        assert junk not in entities
+        assert "Knowledge Graph" in entities
+
+    def test_disambiguation_only_at_trailing_position(self) -> None:
+        # A leading/mid parenthetical is not disambiguation.
+        entities = extract_entities("See [[(planet) Mercury]] and [[Knowledge Graph]].\n")
+        assert "(planet) Mercury" not in entities
+        assert "Knowledge Graph" in entities
+
+    def test_rejected_target_text_not_mined_from_prose(self, no_ner: None) -> None:
+        # A rejected wiki target must not re-surface via heuristic mining of
+        # its inlined text.
+        entities = extract_entities("See [[(planet) Mercury]] and [[Knowledge Graph]].\n")
+        assert "Mercury" not in entities
+        assert "Knowledge Graph" in entities
+
+    def test_no_verb_entity_phrase_from_inlined_link(self, no_ner: None) -> None:
+        # Inlining must not glue a sentence-initial verb to the linked target.
+        entities = extract_entities("Compare [[Lithos]] with [[ChromaDB]] in notes.\n")
+        assert "Compare Lithos" not in entities
+        assert "Lithos" in entities
+        assert "ChromaDB" in entities
+
+    def test_no_verb_entity_phrase_with_disambiguation(self, no_ner: None) -> None:
+        entities = extract_entities("Compare [[Dune (novel)]] with [[Dune]] in notes.\n")
+        assert not any(e.startswith("Compare") for e in entities)
+        assert "Dune (novel)" in entities
+
+
 class TestReferenceSectionStripping:
     """Citation/bibliography sections are author-name soup, not entities (#320)."""
 

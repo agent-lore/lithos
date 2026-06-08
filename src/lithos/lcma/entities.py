@@ -37,8 +37,10 @@ logger = logging.getLogger(__name__)
 # Bump on any quality-affecting change to extraction. Version 1 was the
 # heading-harvesting heuristic extractor removed by #313. Version 3 added
 # strict name-shape validation (rejecting code/punctuation/filenames),
-# reference-section stripping, and a per-doc cap (#320).
-ENTITY_EXTRACTOR_VERSION = 3
+# reference-section stripping, and a per-doc cap (#320). Version 4 rejects
+# uppercase filenames (README.md) and guards wiki-link targets against code
+# punctuation / LaTeX.
+ENTITY_EXTRACTOR_VERSION = 4
 
 _MODEL_NAME = "en_core_web_sm"
 
@@ -90,6 +92,31 @@ _TRAILING_NUMERIC_RE = re.compile(r"^\d[\d.\-/:]*$")
 # artifact, not a named entity — but simple product-version numbers like ``11``
 # or ``3.5`` (``Windows 11``, ``Claude 3.5``, ``Python 3.11``) are NOT matched.
 _VERSION_TOKEN_RE = re.compile(r"^(?:v\d+\.\d[\d.]*|\d+\.\d+\.\d[\d.]*)$")
+# A document/config/data/script filename — its basename is not an entity,
+# regardless of case (``README.md``, ``AGENTS.md``, ``settings.json``). ``.js``
+# and ``.ts`` are deliberately excluded so ``Node.js`` / ``TensorFlow.js``
+# survive.
+_FILENAME_RE = re.compile(
+    r"(?i)\.(?:md|markdown|json|ya?ml|toml|cfg|ini|lock|csv|tsv|txt|rst|"
+    r"py|rb|go|rs|sh|bash|zsh|html?|xml|sql|png|jpe?g|gif|svg|pdf)$"
+)
+# Wiki-link target validation. A target may carry a single trailing
+# disambiguation `` (qualifier)`` (``Mercury (planet)``, ``Dune (novel)``);
+# stripping it, the remainder must be free of any code punctuation —
+# brackets, braces, operators, backslashes, or stray/standalone parentheses
+# (``[[parse(x)]]``, ``[[x)]]``, ``[[\phi]]`` are all rejected).
+_WIKI_DISAMBIG_RE = re.compile(r"\s\([^()]+\)$")
+_WIKI_CODE_RE = re.compile(r"[()\[\]{}=<>\\]")
+
+
+def _wiki_target_is_entity(target: str) -> bool:
+    """True when an author-asserted wiki-link target names an entity."""
+    if _FILENAME_RE.search(target):
+        return False
+    core = _WIKI_DISAMBIG_RE.sub("", target)
+    return not _WIKI_CODE_RE.search(core)
+
+
 # A valid entity name: alphanumeric runs joined by spaces, hyphens, apostrophes,
 # ampersands, dots, or plus/hash (for ``Node.js``, ``GPT-4.1``, ``C++``, ``C#``).
 # Slashes, quotes, brackets, underscores, equals, and other operators are still
@@ -193,6 +220,10 @@ def _clean_candidate(raw: str) -> str | None:
     if len(words) > _MAX_ENTITY_WORDS:
         return None
     if not _ENTITY_NAME_RE.match(text):
+        return None
+    # A filename basename is not an entity, whatever its case (`README.md`,
+    # `settings.json`). `.js`/`.ts` are excluded so Node.js/TensorFlow.js survive.
+    if _FILENAME_RE.search(text):
         return None
     # A bare lowercase single token is code/jargon (`node`, `task`, `guides`),
     # not a named entity — real names are capitalized or multi-word.
@@ -372,12 +403,18 @@ def extract_entities(text: str, max_per_doc: int = _MAX_ENTITIES_PER_DOC) -> lis
     wiki_targets: set[str] = set()
     for match in _WIKI_LINK_RE.finditer(text):
         target = match.group(1).strip()
-        if target:
+        # Kept verbatim (author intent), but a target carrying code punctuation,
+        # LaTeX, or a filename extension is not an entity.
+        if target and _wiki_target_is_entity(target):
             wiki_targets.add(target)
             entities.add(target)
 
-    # Inline wiki-link targets so surrounding sentences stay parseable.
-    no_links = _WIKI_LINK_RE.sub(lambda m: m.group(1), text)
+    # Remove wiki-links from the text the heuristics/NER mine. Accepted targets
+    # are already captured above; inlining their raw text would (a) re-surface a
+    # rejected target's fragment (`[[(planet) Mercury]]` → `Mercury`) and
+    # (b) glue a sentence-initial verb to the target (`Compare [[Lithos]]` →
+    # `Compare Lithos`). A space keeps the surrounding prose parseable.
+    no_links = _WIKI_LINK_RE.sub(" ", text)
     # Backtick terms pass the same name-shape gate as everything else, so inline
     # code (`merge_and_normalize()`, `note.created`, `"guides"`, `foo.md`) is
     # rejected rather than harvested as an entity.
