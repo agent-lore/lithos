@@ -32,13 +32,19 @@ class TestServerInitialization:
 
     def test_build_http_app_exposes_both_transports(self, server: LithosServer):
         """#304: the combined app serves StreamableHTTP (/mcp) and legacy SSE
-        (/sse + /messages) on one app, with custom routes present exactly once."""
+        (/sse + the message endpoint) on one app, with custom routes present
+        exactly once."""
         app = server.build_http_app()
-        paths = [getattr(route, "path", None) for route in app.router.routes]
+        routes = app.router.routes
+        paths = [getattr(route, "path", None) for route in routes]
 
         assert "/mcp" in paths, paths
         assert "/sse" in paths, paths
-        assert "/messages" in paths, paths
+        # The SSE message endpoint is a Mount. Starlette normalises its ``.path``
+        # to "/messages", but the prefix it actually serves — and the URL FastMCP
+        # advertises to SSE clients in the ``endpoint`` event — is "/messages/".
+        message_mount = next(r for r in routes if getattr(r, "path", None) == "/messages")
+        assert message_mount.path_format == "/messages/{path}", message_mount.path_format
         # Custom routes are registered once and must not be duplicated when the
         # SSE transport routes are merged into the StreamableHTTP base app.
         for custom in ("/events", "/health", "/audit"):
