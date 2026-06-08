@@ -31,8 +31,18 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # failing in CI when HF rate-limited (HTTP 429) the shared runner IPs; baking
 # the model makes startup network-free and fast. The spaCy NER model already
 # ships as a wheel dependency, so only the embedding model needs this.
+#
+# The download is retried with backoff: HuggingFace is intermittently
+# unreachable from shared CI IPs, and without retries a transient outage fails
+# the whole image build (and the PR's CI).
 ENV HF_HOME=/opt/hf-cache
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+RUN for attempt in 1 2 3 4 5; do \
+        python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')" && exit 0; \
+        echo "HuggingFace model download attempt ${attempt} failed; retrying in $((attempt * 10))s"; \
+        sleep $((attempt * 10)); \
+    done; \
+    echo "ERROR: HuggingFace model download failed after 5 attempts" >&2; \
+    exit 1
 
 # Stage 2: Runtime image
 FROM python:3.11-slim AS runtime
