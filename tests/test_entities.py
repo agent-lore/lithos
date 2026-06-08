@@ -385,6 +385,44 @@ class TestVersionTokenRejection:
             assert junk not in entities
 
 
+class TestFilenameRejection:
+    """Filenames are never entities, regardless of case (#320 v4)."""
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["README.md", "AGENTS.md", "CLAUDE.md", "settings.json", "config.yaml", "script.py"],
+    )
+    def test_filename_rejected(self, no_ner: None, filename: str) -> None:
+        text = f"The {filename} file matters. We read {filename} and edit {filename} often.\n"
+        assert filename not in extract_entities(text)
+
+    @pytest.mark.parametrize("product", ["Node.js", "TensorFlow.js"])
+    def test_js_product_names_not_treated_as_filenames(self, no_ner: None, product: str) -> None:
+        text = f"{product} is our stack. We rely on {product} and ship {product}.\n"
+        assert product in extract_entities(text)
+
+
+class TestWikiLinkGuard:
+    """Wiki-link targets are author-asserted but still reject obvious junk."""
+
+    def test_code_and_latex_targets_dropped(self) -> None:
+        text = "See [[\\phi]] and [[IntegerPropertyFilter(x=1)]] and [[Knowledge Graph]] here.\n"
+        entities = extract_entities(text)
+        assert "Knowledge Graph" in entities
+        assert "\\phi" not in entities
+        assert not any("(" in e for e in entities)
+
+    def test_filename_wiki_target_dropped(self) -> None:
+        entities = extract_entities("Refer to [[README.md]] and [[Knowledge Graph]] now.\n")
+        assert "README.md" not in entities
+        assert "Knowledge Graph" in entities
+
+    def test_normal_wiki_links_unaffected(self) -> None:
+        entities = extract_entities("Links to [[NetworkX]] and [[target-doc|display]] here.\n")
+        assert "NetworkX" in entities
+        assert "target-doc" in entities
+
+
 class TestReferenceSectionStripping:
     """Citation/bibliography sections are author-name soup, not entities (#320)."""
 
