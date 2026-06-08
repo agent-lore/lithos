@@ -422,6 +422,26 @@ class TestWikiLinkGuard:
         assert "NetworkX" in entities
         assert "target-doc" in entities
 
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Mercury (planet)",
+            "Dune (novel)",
+            "C (programming language)",
+            "The C Programming Language (book)",
+        ],
+    )
+    def test_parenthetical_disambiguation_titles_kept(self, title: str) -> None:
+        # Disambiguated note titles are a common wiki pattern — a space before
+        # the paren marks disambiguation, not a function call.
+        assert title in extract_entities(f"See [[{title}]] for context here.\n")
+
+    def test_function_call_wiki_target_still_dropped(self) -> None:
+        # name( with no space is a function call, not disambiguation.
+        entities = extract_entities("See [[parse(x)]] and [[Knowledge Graph]] now.\n")
+        assert "Knowledge Graph" in entities
+        assert not any("(" in e for e in entities)
+
 
 class TestReferenceSectionStripping:
     """Citation/bibliography sections are author-name soup, not entities (#320)."""

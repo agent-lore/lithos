@@ -101,8 +101,11 @@ _FILENAME_RE = re.compile(
     r"py|rb|go|rs|sh|bash|zsh|html?|xml|sql|png|jpe?g|gif|svg|pdf)$"
 )
 # Code-punctuation or LaTeX that disqualifies even an author-asserted wiki-link
-# target (``[[\phi]]``, ``[[IntegerPropertyFilter(...)]]``).
-_WIKI_JUNK_RE = re.compile(r"[()\[\]{}=<>\\]")
+# target. Rejects brackets/braces/operators/backslash always, plus a
+# function-call ``name(`` (a word immediately followed by a paren) — but allows
+# a parenthetical disambiguation like ``Mercury (planet)`` / ``Dune (novel)``,
+# which is a common note-title pattern.
+_WIKI_JUNK_RE = re.compile(r"[\[\]{}=<>\\]|\w\(")
 # A valid entity name: alphanumeric runs joined by spaces, hyphens, apostrophes,
 # ampersands, dots, or plus/hash (for ``Node.js``, ``GPT-4.1``, ``C++``, ``C#``).
 # Slashes, quotes, brackets, underscores, equals, and other operators are still
