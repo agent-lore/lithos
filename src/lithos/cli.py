@@ -574,7 +574,7 @@ def extract_entities_cmd(ctx: click.Context, dry_run: bool, force: bool) -> None
                     skipped_current += 1
                     continue
 
-            extracted = extract_entities(doc.content)
+            extracted = extract_entities(doc.content, config.lcma.entity_max_per_doc)
             # Barren note (nothing before, nothing extractable): leave the
             # frontmatter pristine rather than stamping a marker — mirrors the
             # enrichment worker's contract.

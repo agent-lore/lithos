@@ -289,8 +289,10 @@ entities:                         # Optional: extracted entity strings
   - <entity-1>                    # Written by the lithos-enrich worker using spaCy NER
   - <entity-2>                    # plus high-precision heuristics (wiki-links, backtick
                                   # terms, mid-sentence-corroborated proper nouns).
-                                  # Markdown structure (headings, tables, bold labels)
-                                  # is never an entity source (#313).
+                                  # Markdown structure (headings, tables, bold labels) and
+                                  # inline code/filenames/punctuation are never entity
+                                  # sources; reference sections are excluded and a per-doc
+                                  # cap bounds citation-heavy notes (#313, #320).
 entities_extractor: <int>         # Optional: version of the extractor that wrote
                                   # `entities`. Absent => entities are agent-curated and
                                   # the enrichment worker never overwrites them; present

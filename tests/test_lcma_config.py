@@ -18,6 +18,16 @@ class TestLcmaConfigDefaults:
         cfg = LcmaConfig()
         assert cfg.enabled is True
 
+    def test_default_entity_max_per_doc(self) -> None:
+        assert LcmaConfig().entity_max_per_doc == 50
+
+    def test_entity_max_per_doc_zero_allowed(self) -> None:
+        assert LcmaConfig(entity_max_per_doc=0).entity_max_per_doc == 0
+
+    def test_entity_max_per_doc_rejects_negative(self) -> None:
+        with pytest.raises(ValueError):
+            LcmaConfig(entity_max_per_doc=-1)
+
     def test_default_enrich_drain_interval(self) -> None:
         cfg = LcmaConfig()
         assert cfg.enrich_drain_interval_minutes == 5

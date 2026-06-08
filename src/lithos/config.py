@@ -175,6 +175,9 @@ class LcmaConfig(BaseModel):
     sweep_interval_hours: int = 24
     sweep_startup_delay_minutes: int = 10
     llm_provider: str | None = None
+    # Max entities the extractor keeps per document; backstop against
+    # citation/glossary explosions (#320). 0 disables the cap.
+    entity_max_per_doc: int = Field(default=50, ge=0)
 
     @model_validator(mode="before")
     @classmethod
