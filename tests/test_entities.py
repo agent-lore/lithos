@@ -442,6 +442,19 @@ class TestWikiLinkGuard:
         assert "Knowledge Graph" in entities
         assert not any("(" in e for e in entities)
 
+    @pytest.mark.parametrize("junk", ["x)", "(foo)", "a)b", "parse(x)", "f(x"])
+    def test_stray_and_unbalanced_parens_dropped(self, junk: str) -> None:
+        # Parentheses outside a trailing " (qualifier)" disambiguation are junk.
+        entities = extract_entities(f"See [[{junk}]] and [[Knowledge Graph]] here.\n")
+        assert junk not in entities
+        assert "Knowledge Graph" in entities
+
+    def test_disambiguation_only_at_trailing_position(self) -> None:
+        # A leading/mid parenthetical is not disambiguation.
+        entities = extract_entities("See [[(planet) Mercury]] and [[Knowledge Graph]].\n")
+        assert "(planet) Mercury" not in entities
+        assert "Knowledge Graph" in entities
+
 
 class TestReferenceSectionStripping:
     """Citation/bibliography sections are author-name soup, not entities (#320)."""

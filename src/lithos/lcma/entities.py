@@ -100,12 +100,23 @@ _FILENAME_RE = re.compile(
     r"(?i)\.(?:md|markdown|json|ya?ml|toml|cfg|ini|lock|csv|tsv|txt|rst|"
     r"py|rb|go|rs|sh|bash|zsh|html?|xml|sql|png|jpe?g|gif|svg|pdf)$"
 )
-# Code-punctuation or LaTeX that disqualifies even an author-asserted wiki-link
-# target. Rejects brackets/braces/operators/backslash always, plus a
-# function-call ``name(`` (a word immediately followed by a paren) — but allows
-# a parenthetical disambiguation like ``Mercury (planet)`` / ``Dune (novel)``,
-# which is a common note-title pattern.
-_WIKI_JUNK_RE = re.compile(r"[\[\]{}=<>\\]|\w\(")
+# Wiki-link target validation. A target may carry a single trailing
+# disambiguation `` (qualifier)`` (``Mercury (planet)``, ``Dune (novel)``);
+# stripping it, the remainder must be free of any code punctuation —
+# brackets, braces, operators, backslashes, or stray/standalone parentheses
+# (``[[parse(x)]]``, ``[[x)]]``, ``[[\phi]]`` are all rejected).
+_WIKI_DISAMBIG_RE = re.compile(r"\s\([^()]+\)$")
+_WIKI_CODE_RE = re.compile(r"[()\[\]{}=<>\\]")
+
+
+def _wiki_target_is_entity(target: str) -> bool:
+    """True when an author-asserted wiki-link target names an entity."""
+    if _FILENAME_RE.search(target):
+        return False
+    core = _WIKI_DISAMBIG_RE.sub("", target)
+    return not _WIKI_CODE_RE.search(core)
+
+
 # A valid entity name: alphanumeric runs joined by spaces, hyphens, apostrophes,
 # ampersands, dots, or plus/hash (for ``Node.js``, ``GPT-4.1``, ``C++``, ``C#``).
 # Slashes, quotes, brackets, underscores, equals, and other operators are still
@@ -394,7 +405,7 @@ def extract_entities(text: str, max_per_doc: int = _MAX_ENTITIES_PER_DOC) -> lis
         target = match.group(1).strip()
         # Kept verbatim (author intent), but a target carrying code punctuation,
         # LaTeX, or a filename extension is not an entity.
-        if target and not _WIKI_JUNK_RE.search(target) and not _FILENAME_RE.search(target):
+        if target and _wiki_target_is_entity(target):
             wiki_targets.add(target)
             entities.add(target)
 
