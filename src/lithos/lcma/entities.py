@@ -409,8 +409,12 @@ def extract_entities(text: str, max_per_doc: int = _MAX_ENTITIES_PER_DOC) -> lis
             wiki_targets.add(target)
             entities.add(target)
 
-    # Inline wiki-link targets so surrounding sentences stay parseable.
-    no_links = _WIKI_LINK_RE.sub(lambda m: m.group(1), text)
+    # Remove wiki-links from the text the heuristics/NER mine. Accepted targets
+    # are already captured above; inlining their raw text would (a) re-surface a
+    # rejected target's fragment (`[[(planet) Mercury]]` → `Mercury`) and
+    # (b) glue a sentence-initial verb to the target (`Compare [[Lithos]]` →
+    # `Compare Lithos`). A space keeps the surrounding prose parseable.
+    no_links = _WIKI_LINK_RE.sub(" ", text)
     # Backtick terms pass the same name-shape gate as everything else, so inline
     # code (`merge_and_normalize()`, `note.created`, `"guides"`, `foo.md`) is
     # rejected rather than harvested as an entity.

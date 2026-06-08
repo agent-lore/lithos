@@ -455,6 +455,25 @@ class TestWikiLinkGuard:
         assert "(planet) Mercury" not in entities
         assert "Knowledge Graph" in entities
 
+    def test_rejected_target_text_not_mined_from_prose(self, no_ner: None) -> None:
+        # A rejected wiki target must not re-surface via heuristic mining of
+        # its inlined text.
+        entities = extract_entities("See [[(planet) Mercury]] and [[Knowledge Graph]].\n")
+        assert "Mercury" not in entities
+        assert "Knowledge Graph" in entities
+
+    def test_no_verb_entity_phrase_from_inlined_link(self, no_ner: None) -> None:
+        # Inlining must not glue a sentence-initial verb to the linked target.
+        entities = extract_entities("Compare [[Lithos]] with [[ChromaDB]] in notes.\n")
+        assert "Compare Lithos" not in entities
+        assert "Lithos" in entities
+        assert "ChromaDB" in entities
+
+    def test_no_verb_entity_phrase_with_disambiguation(self, no_ner: None) -> None:
+        entities = extract_entities("Compare [[Dune (novel)]] with [[Dune]] in notes.\n")
+        assert not any(e.startswith("Compare") for e in entities)
+        assert "Dune (novel)" in entities
+
 
 class TestReferenceSectionStripping:
     """Citation/bibliography sections are author-name soup, not entities (#320)."""
