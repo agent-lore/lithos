@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'agent-skills/**'
+      - '.github/workflows/publish-agent-skills.yml'
+  workflow_dispatch:  # allow manual trigger from the GitHub UI
 
 permissions:
   id-token: write   # Required for OIDC repo linking
@@ -19,4 +21,6 @@ jobs:
           token: ${{ secrets.TESSL_TOKEN }}
       - name: Publish plugins
         working-directory: agent-skills
-        run: tessl plugin publish
+        run: |
+          tessl plugin publish ./plugins/lithos
+          tessl plugin publish ./plugins/influx-inbox
