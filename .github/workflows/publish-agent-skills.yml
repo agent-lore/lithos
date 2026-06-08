@@ -15,12 +15,12 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: tesslio/setup-tessl@v2
         with:
           token: ${{ secrets.TESSL_TOKEN }}
       - name: Publish plugins
         working-directory: agent-skills
         run: |
-          tessl plugin publish ./plugins/lithos
-          tessl plugin publish ./plugins/influx-inbox
+          tessl plugin publish ./plugins/lithos --bump patch
+          tessl plugin publish ./plugins/influx-inbox --bump patch

@@ -35,7 +35,7 @@ jobs:
           haskell: true
           large-packages: true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Extract version
         id: version
@@ -102,7 +102,7 @@ jobs:
     needs: build-and-push
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
