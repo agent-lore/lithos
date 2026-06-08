@@ -19,4 +19,6 @@ jobs:
           token: ${{ secrets.TESSL_TOKEN }}
       - name: Publish plugins
         working-directory: agent-skills
-        run: tessl plugin publish
+        run: |
+          tessl plugin publish ./plugins/lithos
+          tessl plugin publish ./plugins/influx-inbox
