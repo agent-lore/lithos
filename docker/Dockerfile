@@ -90,5 +90,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 USER 1000:1000
 
-# Default command: run SSE server
-CMD ["python", "-m", "lithos.cli", "serve", "--transport", "sse", "--host", "0.0.0.0", "--port", "8765"]
+# Default command: run the HTTP server (serves both /mcp and /sse)
+CMD ["python", "-m", "lithos.cli", "serve", "--transport", "http", "--host", "0.0.0.0", "--port", "8765"]

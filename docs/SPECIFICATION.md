@@ -1071,6 +1071,8 @@ surfacing a particular document, without having to query SQLite directly.
 
 These endpoints are standard HTTP routes mounted alongside the MCP transport. They are **not** MCP tools and do not appear in `tools/list`. The server mounts three: `GET /health`, `GET /events`, and `GET /audit`.
 
+When run with `--transport http`, the server exposes both MCP transport endpoints on the same port: `POST /mcp` (StreamableHTTP, MCP 2025-03-26+, stateless) and `GET /sse` + `POST /messages/` (legacy SSE). Any compliant MCP client can connect to whichever it supports, with no bridge or proxy. The three custom routes above are served on the same port.
+
 #### `GET /health`
 
 Lightweight health check for Docker `HEALTHCHECK`, load balancers, and monitoring.
@@ -1361,9 +1363,9 @@ Configuration is managed via `pydantic-settings` (`LithosConfig`). Values are re
 ```yaml
 # Server configuration
 server:
-  transport: stdio          # stdio | sse
+  transport: stdio          # stdio | http (http serves both /mcp and /sse)
   host: 127.0.0.1          # Default bind address
-  port: 8765               # For SSE transport
+  port: 8765               # For the HTTP transport
   watch_files: true         # Enable file watcher for index updates
 
 # Storage paths
@@ -1419,8 +1421,8 @@ events:
 # Run with stdio transport (for MCP)
 lithos --data-dir ./data serve --transport stdio
 
-# Run with SSE transport (for HTTP access)
-lithos --data-dir ./data serve --transport sse --host 0.0.0.0 --port 8765
+# Run with HTTP transport (serves both /mcp StreamableHTTP and /sse)
+lithos --data-dir ./data serve --transport http --host 0.0.0.0 --port 8765
 
 # Disable file watcher
 lithos --data-dir ./data serve --no-watch

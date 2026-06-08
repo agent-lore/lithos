@@ -30,6 +30,20 @@ class TestServerInitialization:
         assert server.graph is not None
         assert server.coordination is not None
 
+    def test_build_http_app_exposes_both_transports(self, server: LithosServer):
+        """#304: the combined app serves StreamableHTTP (/mcp) and legacy SSE
+        (/sse + /messages) on one app, with custom routes present exactly once."""
+        app = server.build_http_app()
+        paths = [getattr(route, "path", None) for route in app.router.routes]
+
+        assert "/mcp" in paths, paths
+        assert "/sse" in paths, paths
+        assert "/messages" in paths, paths
+        # Custom routes are registered once and must not be duplicated when the
+        # SSE transport routes are merged into the StreamableHTTP base app.
+        for custom in ("/events", "/health", "/audit"):
+            assert paths.count(custom) == 1, (custom, paths)
+
     @pytest.mark.asyncio
     async def test_agent_count_cache_primed_at_startup(self, server: LithosServer):
         """Regression for #181: _cached_agent_count must reflect reality

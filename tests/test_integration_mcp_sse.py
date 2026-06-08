@@ -1,4 +1,9 @@
-"""Integration test for MCP-over-SSE connectivity to a running server."""
+"""Integration tests for MCP HTTP connectivity to a running server.
+
+Lithos serves both transports on one port (#304): legacy SSE at ``/sse`` and
+StreamableHTTP at ``/mcp``. These tests exercise both against the real
+``LithosServer.serve_http`` boundary.
+"""
 
 import asyncio
 import json
@@ -15,6 +20,13 @@ from lithos.server import LithosServer
 mcp = pytest.importorskip("mcp", reason="mcp package is only installed in integration CI job")
 ClientSession = mcp.ClientSession
 sse_client = pytest.importorskip("mcp.client.sse").sse_client
+_streamable_http = pytest.importorskip("mcp.client.streamable_http")
+# ``streamable_http_client`` is the current name; older mcp releases only ship
+# the deprecated ``streamablehttp_client`` alias. Prefer the new name.
+streamablehttp_client = (
+    getattr(_streamable_http, "streamable_http_client", None)
+    or _streamable_http.streamablehttp_client
+)
 
 pytestmark = pytest.mark.integration
 
@@ -26,7 +38,8 @@ def _find_free_port() -> int:
 
 
 @asynccontextmanager
-async def _local_sse_endpoint(temp_dir: Path):
+async def _local_server(temp_dir: Path):
+    """Start a local Lithos HTTP server and yield its base URL (no path)."""
     config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
     config.ensure_directories()
     server = LithosServer(config)
@@ -34,29 +47,21 @@ async def _local_sse_endpoint(temp_dir: Path):
 
     host = "127.0.0.1"
     port = _find_free_port()
-    task = asyncio.create_task(
-        server.mcp.run_http_async(
-            transport="sse",
-            host=host,
-            port=port,
-            path="/sse",
-            show_banner=False,
-        )
-    )
+    task = asyncio.create_task(server.serve_http(host=host, port=port))
 
-    endpoint = f"http://{host}:{port}/sse"
+    base = f"http://{host}:{port}"
     try:
-        # Wait until endpoint is reachable.
+        # Wait until the SSE endpoint is reachable before yielding.
         for _ in range(100):
             try:
-                async with sse_client(endpoint):
+                async with sse_client(f"{base}/sse"):
                     break
             except Exception:
                 await asyncio.sleep(0.05)
         else:
-            raise AssertionError("Timed out waiting for local SSE endpoint to start")
+            raise AssertionError("Timed out waiting for local HTTP server to start")
 
-        yield endpoint
+        yield base
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -64,22 +69,51 @@ async def _local_sse_endpoint(temp_dir: Path):
 
 
 @asynccontextmanager
-async def _resolve_endpoint(temp_dir: Path):
+async def _resolve_base(temp_dir: Path):
+    """Yield the base server URL, honouring LITHOS_MCP_URL for CI.
+
+    ``LITHOS_MCP_URL`` may point at either the base URL or a transport path
+    (``/sse`` or ``/mcp``); the trailing transport segment is stripped so both
+    endpoints can be derived from the base.
+    """
     endpoint = os.environ.get("LITHOS_MCP_URL")
     if endpoint:
-        yield endpoint
+        base = endpoint.rstrip("/")
+        for suffix in ("/sse", "/mcp"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        yield base
         return
 
-    async with _local_sse_endpoint(temp_dir) as local_endpoint:
-        yield local_endpoint
+    async with _local_server(temp_dir) as base:
+        yield base
 
 
 @pytest.mark.asyncio
 async def test_mcp_sse_lists_tools(temp_dir):
     """Connect to Lithos MCP SSE endpoint and verify tool discovery."""
     async with (
-        _resolve_endpoint(temp_dir) as endpoint,
-        sse_client(endpoint) as (reader, writer),
+        _resolve_base(temp_dir) as base,
+        sse_client(f"{base}/sse") as (reader, writer),
+        ClientSession(reader, writer) as session,
+    ):
+        await asyncio.wait_for(session.initialize(), timeout=20)
+        tools = await asyncio.wait_for(session.list_tools(), timeout=20)
+
+    assert len(tools.tools) >= 20
+
+
+@pytest.mark.asyncio
+async def test_mcp_streamable_http_lists_tools(temp_dir):
+    """Connect to Lithos MCP StreamableHTTP endpoint (/mcp) and verify tools.
+
+    Guards the #304 acceptance criteria: POST /mcp speaks StreamableHTTP and
+    exposes the same tool set as /sse, with no proxy in between.
+    """
+    async with (
+        _resolve_base(temp_dir) as base,
+        streamablehttp_client(f"{base}/mcp") as (reader, writer, _get_session_id),
         ClientSession(reader, writer) as session,
     ):
         await asyncio.wait_for(session.initialize(), timeout=20)
@@ -100,8 +134,8 @@ def _decode_call_result(result) -> dict:
 async def test_mcp_sse_remote_tool_roundtrip(temp_dir):
     """Run an end-to-end tool workflow through the SSE MCP boundary."""
     async with (
-        _resolve_endpoint(temp_dir) as endpoint,
-        sse_client(endpoint) as (reader, writer),
+        _resolve_base(temp_dir) as base,
+        sse_client(f"{base}/sse") as (reader, writer),
         ClientSession(reader, writer) as session,
     ):
         await asyncio.wait_for(session.initialize(), timeout=20)

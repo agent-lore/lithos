@@ -74,6 +74,23 @@ Use `localhost` if running on the same machine as OpenClaw, otherwise the name o
 claude mcp add --transport sse lithos http://localhost:8765/sse
 ```
 
+### MCP endpoints
+
+The HTTP server (`lithos serve --transport http`, the Docker default) exposes
+**both** MCP transports on the same port, so any compliant client can connect
+without a bridge:
+
+| Endpoint | Transport | Use with |
+|---|---|---|
+| `GET http://localhost:8765/sse` | Legacy SSE | Agent Zero, OpenClaw, older clients |
+| `POST http://localhost:8765/mcp` | StreamableHTTP (MCP 2025-03-26+, stateless) | Claude Desktop, Hermes Agent, newer clients |
+
+Clients that speak StreamableHTTP should point at `/mcp`:
+
+```bash
+claude mcp add --transport http lithos http://localhost:8765/mcp
+```
+
 ## Documentation
 
 - [CLI Reference](docs/cli.md) — installing and using the `lithos` command-line tool
@@ -132,8 +149,8 @@ uv run ruff check --fix . && uv run ruff format src/ tests/
 # Start server (stdio)
 uv run lithos serve
 
-# Start server (SSE)
-uv run lithos serve --transport sse --port 8765
+# Start server (HTTP — serves both /mcp and /sse)
+uv run lithos serve --transport http --port 8765
 
 # Docker
 cd docker && docker compose up -d --build
