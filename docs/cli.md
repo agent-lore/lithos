@@ -47,8 +47,9 @@ Options:
 # stdio transport (default — for MCP clients like Claude Desktop)
 lithos serve
 
-# SSE transport (for network clients like Agent Zero)
-lithos serve --transport sse --host 0.0.0.0 --port 8765
+# HTTP transport — serves both /mcp (StreamableHTTP) and /sse (legacy SSE)
+# on the same port, for network clients like Agent Zero and Hermes Agent.
+lithos serve --transport http --host 0.0.0.0 --port 8765
 
 # Disable file watcher
 lithos serve --no-watch
@@ -56,9 +57,9 @@ lithos serve --no-watch
 
 | Option | Default | Description |
 |---|---|---|
-| `-t, --transport` | `stdio` | Transport type: `stdio` or `sse` |
-| `--host` | `127.0.0.1` | Host for SSE transport |
-| `-p, --port` | `8765` | Port for SSE transport |
+| `-t, --transport` | `stdio` | Transport type: `stdio` or `http` (`http` serves both `/mcp` and `/sse`) |
+| `--host` | `127.0.0.1` | Host for the HTTP transport |
+| `-p, --port` | `8765` | Port for the HTTP transport |
 | `--watch / --no-watch` | watch enabled | Watch for file changes |
 | `--telemetry-console` | off | Route OTEL metrics + spans to stdout (for local debugging without a collector) |
 

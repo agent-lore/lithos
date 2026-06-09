@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
@@ -191,6 +192,89 @@ class LithosServer:
     def config(self) -> LithosConfig:
         """Get configuration."""
         return self._config
+
+    def build_http_app(self) -> Starlette:
+        """Build a single ASGI app exposing both MCP HTTP transports (#304).
+
+        Lithos serves two transports on one port so any compliant MCP client
+        can connect without a bridge:
+
+        - ``POST /mcp`` — StreamableHTTP (MCP 2025-03-26+), stateless. All
+          Lithos state lives in the knowledge base (SQLite, ChromaDB,
+          Tantivy), never in the MCP session, so stateless mode is the right
+          fit — each request is independent.
+        - ``GET /sse`` + ``POST /messages/`` — legacy SSE, unchanged so
+          existing clients keep working.
+
+        The StreamableHTTP app is the base because its lifespan is a superset
+        of the SSE app's: both run FastMCP's ``_lifespan_manager`` (idempotent
+        — the second entry is a no-op), and the StreamableHTTP lifespan
+        additionally runs the session manager. The SSE transport needs nothing
+        beyond ``_lifespan_manager``, so its transport routes (``/sse`` and the
+        ``/messages`` mount) are appended to the base app and served under the
+        base lifespan. Custom routes (``/events``, ``/health``, ``/audit``) are
+        registered via ``custom_route`` and therefore appear in *both*
+        sub-apps; the SSE copies are filtered out by path to avoid duplicates.
+
+        Splicing the SSE routes into the StreamableHTTP app is sound only while
+        both apps carry the *same* app-level middleware — which they do today:
+        with no auth configured, FastMCP gives each app just
+        ``RequestContextMiddleware``, so the base app's stack covers the spliced
+        routes identically. Configuring FastMCP auth would diverge the two
+        stacks (per-transport auth routes + middleware), so this method refuses
+        to run under auth rather than silently serving the SSE routes without
+        their auth wiring — revisit the composition before enabling auth.
+        """
+        if self.mcp.auth is not None:
+            raise NotImplementedError(
+                "build_http_app composes the SSE and StreamableHTTP transports by "
+                "splicing routes under a shared middleware stack, which assumes no "
+                "per-transport auth wiring. FastMCP auth is configured — rework the "
+                "composition (e.g. mount each transport app with its own middleware) "
+                "before enabling it."
+            )
+
+        # ``transport="http"`` is FastMCP's alias for StreamableHTTP.
+        streamable_app = self.mcp.http_app(path="/mcp", transport="http", stateless_http=True)
+        sse_app = self.mcp.http_app(path="/sse", transport="sse")
+
+        existing_paths = {getattr(route, "path", None) for route in streamable_app.router.routes}
+        for route in sse_app.router.routes:
+            if getattr(route, "path", None) not in existing_paths:
+                streamable_app.router.routes.append(route)
+
+        return streamable_app
+
+    async def serve_http(
+        self, host: str, port: int, uvicorn_config: dict[str, Any] | None = None
+    ) -> None:
+        """Serve both MCP HTTP transports via uvicorn until cancelled.
+
+        Mirrors the uvicorn configuration FastMCP uses in ``run_http_async``
+        (graceful-shutdown disabled, ASGI lifespan enabled, sans-io
+        websockets). The app's own lifespan — enabled by ``lifespan="on"`` —
+        runs the FastMCP lifespan manager and the StreamableHTTP session
+        manager, so no extra wrapping is required.
+
+        Args:
+            host: Interface to bind.
+            port: TCP port to bind.
+            uvicorn_config: Extra uvicorn ``Config`` kwargs (e.g. ``log_config``)
+                merged over the defaults.
+        """
+        import uvicorn
+
+        app = self.build_http_app()
+        config_kwargs: dict[str, Any] = {
+            "timeout_graceful_shutdown": 0,
+            "lifespan": "on",
+            "ws": "websockets-sansio",
+        }
+        if uvicorn_config:
+            config_kwargs.update(uvicorn_config)
+
+        config = uvicorn.Config(app, host=host, port=port, **config_kwargs)
+        await uvicorn.Server(config).serve()
 
     async def _emit(self, event: LithosEvent) -> None:
         """Emit an event, logging any failure without propagating."""

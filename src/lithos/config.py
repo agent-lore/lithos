@@ -49,7 +49,7 @@ _DEFAULT_NOTE_TYPE_PRIORS: dict[str, float] = {
 class ServerConfig(BaseModel):
     """Server configuration."""
 
-    transport: Literal["stdio", "sse"] = "stdio"
+    transport: Literal["stdio", "http"] = "stdio"
     host: str = "127.0.0.1"
     port: int = 8765
     watch_files: bool = True

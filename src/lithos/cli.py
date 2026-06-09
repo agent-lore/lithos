@@ -47,21 +47,21 @@ def cli(ctx: click.Context, config: Path | None, data_dir: Path | None) -> None:
 @click.option(
     "--transport",
     "-t",
-    type=click.Choice(["stdio", "sse"]),
+    type=click.Choice(["stdio", "http"]),
     default="stdio",
-    help="Transport type (default: stdio)",
+    help="Transport type (default: stdio). 'http' serves both /mcp and /sse.",
 )
 @click.option(
     "--host",
     default="127.0.0.1",
-    help="Host for SSE transport (default: 127.0.0.1)",
+    help="Host for the HTTP transport (default: 127.0.0.1)",
 )
 @click.option(
     "--port",
     "-p",
     type=int,
     default=8765,
-    help="Port for SSE transport (default: 8765)",
+    help="Port for the HTTP transport (default: 8765)",
 )
 @click.option(
     "--watch/--no-watch",
@@ -133,17 +133,14 @@ def serve(
             # Run with stdio transport
             await server.mcp.run_stdio_async(show_banner=False)
         else:
-            # Run with SSE transport using run_http_async.
+            # Run the HTTP transport, which exposes both /mcp (StreamableHTTP)
+            # and /sse (legacy SSE) on the same port (#304).
             # Uvicorn loggers propagate to the root logger, which already has the
-            # JSON handler installed by setup_logging() below.  No separate
-            # uvicorn log_config is needed.
-            click.echo(f"Listening on http://{host}:{port}")
-            await server.mcp.run_http_async(
-                transport="sse",
+            # JSON handler installed by setup_logging() below.
+            click.echo(f"Listening on http://{host}:{port} (/mcp StreamableHTTP, /sse legacy)")
+            await server.serve_http(
                 host=host,
                 port=port,
-                path="/sse",
-                show_banner=False,
                 uvicorn_config={
                     "log_config": {
                         "version": 1,

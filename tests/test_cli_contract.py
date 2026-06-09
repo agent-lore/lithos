@@ -277,25 +277,18 @@ class TestCLIContracts:
         assert "Backend health" in unhealthy.output
         assert "search: unavailable: forced health failure" in unhealthy.output
 
-    def test_serve_stdio_and_sse_paths(self, temp_dir, monkeypatch):
+    def test_serve_stdio_and_http_paths(self, temp_dir, monkeypatch):
         config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
         config.ensure_directories()
         # set_config() needed for CLI commands invoked via Click's test runner (see
         # test_reindex_and_search_output_shape for the full explanation).
         set_config(config)
 
-        calls = {"watch_started": 0, "watch_stopped": 0, "stdio": 0, "sse": 0}
+        calls = {"watch_started": 0, "watch_stopped": 0, "stdio": 0, "http": 0}
 
         class _DummyMCP:
             async def run_stdio_async(self, show_banner=False):
                 calls["stdio"] += 1
-
-            async def run_http_async(self, **kwargs):
-                assert kwargs["transport"] == "sse"
-                assert kwargs["host"] == "127.0.0.1"
-                assert kwargs["port"] == 8766
-                assert kwargs["path"] == "/sse"
-                calls["sse"] += 1
 
         class _DummyWatchIntake:
             async def start(self, _loop):
@@ -312,6 +305,14 @@ class TestCLIContracts:
             async def initialize(self):
                 return None
 
+            async def serve_http(self, host, port, uvicorn_config=None):
+                assert host == "127.0.0.1"
+                assert port == 8766
+                # The HTTP transport serves both /mcp and /sse; the CLI no longer
+                # passes a transport/path — those are owned by serve_http itself.
+                assert uvicorn_config is not None
+                calls["http"] += 1
+
             async def shutdown(self):
                 calls["watch_stopped"] += 1
 
@@ -322,14 +323,14 @@ class TestCLIContracts:
         assert stdio.exit_code == 0, stdio.output
         assert "Starting MCP server (stdio transport)..." in stdio.output
 
-        sse = runner.invoke(
+        http = runner.invoke(
             cli,
             [
                 "--data-dir",
                 str(temp_dir),
                 "serve",
                 "--transport",
-                "sse",
+                "http",
                 "--host",
                 "127.0.0.1",
                 "--port",
@@ -337,11 +338,11 @@ class TestCLIContracts:
                 "--watch",
             ],
         )
-        assert sse.exit_code == 0, sse.output
-        assert "Listening on http://127.0.0.1:8766" in sse.output
+        assert http.exit_code == 0, http.output
+        assert "Listening on http://127.0.0.1:8766" in http.output
 
         assert calls["stdio"] == 1
-        assert calls["sse"] == 1
+        assert calls["http"] == 1
         assert calls["watch_started"] == 1
         assert calls["watch_stopped"] == 0
 

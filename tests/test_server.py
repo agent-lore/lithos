@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette.routing import Mount
 
 from lithos.config import LithosConfig
 from lithos.knowledge import KnowledgeManager
@@ -29,6 +30,27 @@ class TestServerInitialization:
         assert server.search is not None
         assert server.graph is not None
         assert server.coordination is not None
+
+    def test_build_http_app_exposes_both_transports(self, server: LithosServer):
+        """#304: the combined app serves StreamableHTTP (/mcp) and legacy SSE
+        (/sse + the message endpoint) on one app, with custom routes present
+        exactly once."""
+        app = server.build_http_app()
+        routes = app.router.routes
+        paths = [getattr(route, "path", None) for route in routes]
+
+        assert "/mcp" in paths, paths
+        assert "/sse" in paths, paths
+        # The SSE message endpoint is a Mount. Starlette normalises its ``.path``
+        # to "/messages", but the prefix it actually serves — and the URL FastMCP
+        # advertises to SSE clients in the ``endpoint`` event — is "/messages/".
+        message_mount = next(r for r in routes if getattr(r, "path", None) == "/messages")
+        assert isinstance(message_mount, Mount), type(message_mount)
+        assert message_mount.path_format == "/messages/{path}", message_mount.path_format
+        # Custom routes are registered once and must not be duplicated when the
+        # SSE transport routes are merged into the StreamableHTTP base app.
+        for custom in ("/events", "/health", "/audit"):
+            assert paths.count(custom) == 1, (custom, paths)
 
     @pytest.mark.asyncio
     async def test_agent_count_cache_primed_at_startup(self, server: LithosServer):
