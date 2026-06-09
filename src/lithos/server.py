@@ -215,7 +215,25 @@ class LithosServer:
         base lifespan. Custom routes (``/events``, ``/health``, ``/audit``) are
         registered via ``custom_route`` and therefore appear in *both*
         sub-apps; the SSE copies are filtered out by path to avoid duplicates.
+
+        Splicing the SSE routes into the StreamableHTTP app is sound only while
+        both apps carry the *same* app-level middleware — which they do today:
+        with no auth configured, FastMCP gives each app just
+        ``RequestContextMiddleware``, so the base app's stack covers the spliced
+        routes identically. Configuring FastMCP auth would diverge the two
+        stacks (per-transport auth routes + middleware), so this method refuses
+        to run under auth rather than silently serving the SSE routes without
+        their auth wiring — revisit the composition before enabling auth.
         """
+        if self.mcp.auth is not None:
+            raise NotImplementedError(
+                "build_http_app composes the SSE and StreamableHTTP transports by "
+                "splicing routes under a shared middleware stack, which assumes no "
+                "per-transport auth wiring. FastMCP auth is configured — rework the "
+                "composition (e.g. mount each transport app with its own middleware) "
+                "before enabling it."
+            )
+
         # ``transport="http"`` is FastMCP's alias for StreamableHTTP.
         streamable_app = self.mcp.http_app(path="/mcp", transport="http", stateless_http=True)
         sse_app = self.mcp.http_app(path="/sse", transport="sse")

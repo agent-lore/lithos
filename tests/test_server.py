@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette.routing import Mount
 
 from lithos.config import LithosConfig
 from lithos.knowledge import KnowledgeManager
@@ -44,6 +45,7 @@ class TestServerInitialization:
         # to "/messages", but the prefix it actually serves — and the URL FastMCP
         # advertises to SSE clients in the ``endpoint`` event — is "/messages/".
         message_mount = next(r for r in routes if getattr(r, "path", None) == "/messages")
+        assert isinstance(message_mount, Mount), type(message_mount)
         assert message_mount.path_format == "/messages/{path}", message_mount.path_format
         # Custom routes are registered once and must not be duplicated when the
         # SSE transport routes are merged into the StreamableHTTP base app.
