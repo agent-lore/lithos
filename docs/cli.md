@@ -142,9 +142,10 @@ afterwards to refresh derived views.
 > **not** a PyPI dependency (the model is distributed as a direct-URL wheel,
 > which PyPI rejects), so lithos **downloads it on first use** and caches it.
 > If the download fails (e.g. offline), extraction transparently falls back to
-> high-precision heuristic extraction — NER simply runs in degraded mode. To
-> pre-install it (or for fully offline use), run `python -m spacy download
-> en_core_web_sm`. The Docker image bakes it in at build time.
+> high-precision heuristic extraction — NER simply runs in degraded mode.
+> To pre-install it (or for fully offline use), run
+> `python -m spacy download en_core_web_sm`. The Docker image bakes it in at
+> build time.
 
 ## Specifying a Data Directory
 
