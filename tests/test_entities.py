@@ -251,6 +251,61 @@ class TestHeuristicFallback:
         assert "ChromaDB" in entities
 
 
+class TestModelAutoDownload:
+    """First-use download of the spaCy model.
+
+    en_core_web_sm is not a PyPI dependency (PyPI forbids direct-URL deps), so
+    lithos downloads it on first NER use and degrades to heuristics on failure.
+    """
+
+    def test_load_model_downloads_then_retries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import spacy
+
+        calls = {"load": 0, "download": 0}
+        sentinel = object()
+
+        def fake_load(name: str, disable: object = None) -> object:
+            calls["load"] += 1
+            if calls["load"] == 1:
+                raise OSError("[E050] Can't find model 'en_core_web_sm'")
+            return sentinel
+
+        monkeypatch.setattr(spacy, "load", fake_load)
+        monkeypatch.setattr(
+            entities_mod, "_download_model", lambda: calls.__setitem__("download", 1)
+        )
+
+        assert entities_mod._load_model() is sentinel
+        assert calls == {"load": 2, "download": 1}
+
+    def test_get_nlp_falls_back_when_download_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import spacy
+
+        def fake_load(name: str, disable: object = None) -> object:
+            raise OSError("[E050] Can't find model 'en_core_web_sm'")
+
+        def boom_download() -> None:
+            raise RuntimeError("no network")
+
+        monkeypatch.setattr(spacy, "load", fake_load)
+        monkeypatch.setattr(entities_mod, "_download_model", boom_download)
+        monkeypatch.setattr(entities_mod, "_NLP", None)
+        monkeypatch.setattr(entities_mod, "_NER_UNAVAILABLE", False)
+
+        assert entities_mod._get_nlp() is None
+        assert entities_mod._NER_UNAVAILABLE is True
+
+    def test_download_model_normalises_systemexit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import spacy.cli
+
+        def fake_download(*args: object, **kwargs: object) -> None:
+            raise SystemExit(1)
+
+        monkeypatch.setattr(spacy.cli, "download", fake_download)
+        with pytest.raises(RuntimeError):
+            entities_mod._download_model()
+
+
 class TestBacktickCodeRejection:
     """Backtick spans in technical docs are code, not entities (#320)."""
 
