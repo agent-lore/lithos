@@ -26,11 +26,25 @@ COPY src/ ./src/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install .
 
+# Bake the spaCy NER model into the image. It is NOT a package dependency —
+# en_core_web_sm is a direct-URL wheel, which PyPI rejects, so it lives in the
+# dev group (installed by `uv sync`, but the builder uses `--no-dev`). At
+# runtime lithos would download it on first NER use, but baking it here keeps
+# container startup network-free (matching the embedding model below). Retried
+# with backoff because the GitHub release host is intermittently rate-limited
+# from shared CI IPs.
+RUN for attempt in 1 2 3 4 5; do \
+        python -m spacy download en_core_web_sm && exit 0; \
+        echo "spaCy model download attempt ${attempt} failed; retrying in $((attempt * 10))s"; \
+        sleep $((attempt * 10)); \
+    done; \
+    echo "ERROR: spaCy model download failed after 5 attempts" >&2; \
+    exit 1
+
 # Bake the default sentence-transformers embedding model into the image so the
 # runtime never downloads it from HuggingFace at startup. Container startup was
 # failing in CI when HF rate-limited (HTTP 429) the shared runner IPs; baking
-# the model makes startup network-free and fast. The spaCy NER model already
-# ships as a wheel dependency, so only the embedding model needs this.
+# the model makes startup network-free and fast.
 #
 # The download is retried with backoff: HuggingFace is intermittently
 # unreachable from shared CI IPs, and without retries a transient outage fails

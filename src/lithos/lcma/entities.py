@@ -155,11 +155,40 @@ _NER_UNAVAILABLE = False
 _STOP_WORDS: frozenset[str] | None = None
 
 
+def _download_model() -> None:
+    """Download the spaCy NER model on demand.
+
+    ``en_core_web_sm`` is not on PyPI, and PyPI forbids direct-URL dependencies,
+    so the model cannot be a published package dependency — it is fetched the
+    first time NER runs. spaCy's downloader shells out to pip and may
+    ``sys.exit`` on failure; that ``SystemExit`` is normalised to a regular
+    exception so the caller's ``except Exception`` fallback path catches it.
+    """
+    # spaCy re-exports ``download`` from ``spacy.cli`` but doesn't list it in its
+    # type stubs' ``__all__``; the import is valid at runtime.
+    from spacy.cli import download  # pyright: ignore[reportPrivateImportUsage]
+
+    try:
+        download(_MODEL_NAME)
+    except SystemExit as exc:
+        raise RuntimeError(f"spaCy model download failed: {_MODEL_NAME}") from exc
+
+
 def _load_model() -> Language:
-    """Load the spaCy NER pipeline (separated for testability)."""
+    """Load the spaCy NER pipeline, downloading the model on first use.
+
+    Separated for testability. When the model is not installed, attempt a
+    one-time download and retry the load; any failure propagates to
+    :func:`_get_nlp`, which logs and falls back to heuristic extraction.
+    """
     import spacy
 
-    return spacy.load(_MODEL_NAME, disable=["lemmatizer"])
+    try:
+        return spacy.load(_MODEL_NAME, disable=["lemmatizer"])
+    except OSError:
+        logger.info("NER model %s not installed; attempting on-demand download", _MODEL_NAME)
+        _download_model()
+        return spacy.load(_MODEL_NAME, disable=["lemmatizer"])
 
 
 def _get_nlp() -> Language | None:
