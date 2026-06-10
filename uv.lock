@@ -1395,14 +1395,13 @@ wheels = [
 
 [[package]]
 name = "lithos-mcp"
-version = "0.3.2"
+version = "0.3.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
     { name = "aiosqlite" },
     { name = "chromadb" },
     { name = "click" },
-    { name = "en-core-web-sm" },
     { name = "fastmcp" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1424,6 +1423,7 @@ otel = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "en-core-web-sm" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1437,7 +1437,6 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.17.0" },
     { name = "chromadb", specifier = ">=0.4.0" },
     { name = "click", specifier = ">=8.0.0" },
-    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "networkx", specifier = ">=3.2" },
     { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.28.0" },
@@ -1455,6 +1454,7 @@ provides-extras = ["otel"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "pyright", specifier = ">=1.1.0" },
     { name = "pytest", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.21.0" },

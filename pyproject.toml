@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lithos-mcp"
-version = "0.3.2"
+version = "0.3.3"
 description = "Shared cognitive substrate for AI agents (local-first, Markdown-native, MCP)"
 readme = "README.md"
 license = "MIT"
@@ -34,8 +34,6 @@ dependencies = [
     "click>=8.0.0",
     "python-json-logger>=3.0",
     "spacy>=3.8",
-    # Pinned NER model wheel; bump alongside the spacy minor version.
-    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
@@ -55,10 +53,20 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "pyright>=1.1.0",
+    # spaCy NER model — kept OUT of [project.dependencies] because it is a
+    # direct-URL reference, which PyPI rejects on upload (`400 Can't have direct
+    # dependency`). It is not on PyPI. Here in the dev group, `uv sync` installs
+    # it for development/CI; production images install it explicitly (see
+    # docker/Dockerfile), and at runtime lithos downloads it on first NER use
+    # (lithos.lcma.entities), falling back to heuristic extraction if offline.
+    # Bump the pinned version alongside the spacy minor version.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
 ]
 
 [tool.hatch.metadata]
-# Required for the en-core-web-sm direct wheel URL dependency.
+# Allow the dev-group's direct wheel URL (en-core-web-sm) during local/editable
+# builds. The published distribution carries no direct-URL deps (PyPI forbids
+# them); this only affects local `uv sync`/editable installs.
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
