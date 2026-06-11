@@ -67,3 +67,20 @@ Lithos's multi-agent coordination features (task claiming with TTL, findings, ag
 - Retrieval latency under coordination load
 
 **Deferred because:** AgentRace integration requires a benchmark harness that doesn't exist yet. Natural fit after LCMA MVP 1 ships (retrieval is the most interesting thing to benchmark). Not a prerequisite for any active plan.
+
+---
+
+## 7. Task Graph Coordination Extension
+
+Lithos tasks are widely used with scheduling metadata conventions such as `metadata.depends_on`, `metadata.priority`, `metadata.parallelizable`, and `metadata.blocked_on`, but the coordination layer does not interpret them natively. This makes Lithos workable as a shared task registry, but weak as a ready-work scheduler.
+
+**Proposed path:** add a first-class task graph inside `coordination.db` with:
+
+- typed task edges (`blocks`, `parent_child`, `discovered_from`, `relates_to`, etc.)
+- ready/blocked queries
+- gate tasks for external waiting states
+- task spawning and parent/child traversal
+
+See `docs/plans/task-graph-coordination-extension.md`.
+
+**Deferred because:** The current roadmap has no active phase dedicated to extending the coordination surface beyond claim/findings semantics. This should become its own implementation plan when issue-tracker/scheduler behavior becomes a priority.
