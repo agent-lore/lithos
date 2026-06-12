@@ -146,7 +146,9 @@ Semantics:
 - `to_task_id` is the target task
 - `type` determines scheduling semantics
 
-MVP edge types (only these are accepted on write in Phase 1–2):
+MVP edge types. An edge type is only accepted on write once the phase that implements its readiness semantics has shipped — agents must never be able to write a blocking edge whose meaning is not yet implemented:
+
+Accepted from Phase 1:
 
 - `blocks`
   Meaning: `to_task_id` cannot be considered ready while `from_task_id` is open. Blocking.
@@ -154,8 +156,11 @@ MVP edge types (only these are accepted on write in Phase 1–2):
   Meaning: `from_task_id` is the parent; `to_task_id` is the child. Purely structural — it never blocks the child. Epic roll-up rules (e.g. a parent cannot close while children are open) operate in the reverse direction and are deferred to Phase 4.
 - `discovered_from`
   Meaning: `to_task_id` was discovered during execution of `from_task_id`. Non-blocking; exists to support `lithos_task_spawn` provenance.
+
+Accepted from Phase 3 (alongside gate readiness semantics):
+
 - `waits_on_gate`
-  Meaning: a task is blocked by a gate task. Blocking.
+  Meaning: `to_task_id` is blocked by the gate task `from_task_id` (same direction as `blocks`: `from_task_id` is the blocker). `to_task_id` cannot be ready until the gate is resolved — i.e. the gate task is closed, or for `timer` gates, `ready_at <= now` at query time. Blocking.
 
 Deferred edge types (add only when something concretely consumes them, since each carries implied semantics and validation — e.g. terminal-state behavior for duplicates):
 
@@ -224,7 +229,7 @@ Returns:
 Validation:
 
 - both tasks must exist
-- `type` must be one of the MVP edge types
+- `type` must be an edge type accepted in the current phase (§5.2); deferred types and not-yet-shipped types (e.g. `waits_on_gate` before Phase 3) are rejected
 - self-edges are rejected
 - cycles in blocking edges are rejected via a bounded traversal at write time
 
@@ -279,10 +284,12 @@ Returns:
 
 Blocker entries should include:
 
-- `kind`: `task | gate | external`
+- `kind`: `task | gate | cycle`
 - `task_id` or gate reference
 - `type`
 - `message`
+
+There is no `external` blocker kind: external waits are always represented as gate tasks (§5.3), so every blocker is either a task, a gate, or a cycle error from the backfill (§8). `cycle` blockers carry the task IDs forming the cycle in `message`.
 
 ### `lithos_task_spawn`
 
@@ -307,7 +314,9 @@ Returns:
 Behavior:
 
 - can inherit `metadata.project`, project tag, and selected scheduling metadata
-- creates the relation edge automatically
+- creates the relation edge automatically, always with the source task as `from_task_id` and the spawned task as `to_task_id`:
+  - `discovered_from`: source → spawned (the spawned task was discovered during the source task)
+  - `blocks`: source → spawned (the spawned task is blocked until the source task closes). Spawning a task that blocks its source is not supported; use `lithos_task_edge_upsert` explicitly for that.
 
 ### `lithos_task_children`
 
@@ -373,13 +382,13 @@ As part of the schema migration:
 3. Create canonical `blocks` edges (skipping references to nonexistent task IDs, which are logged)
 4. Record a migration marker in edge metadata:
    - `{"migrated_from": "metadata.depends_on"}`
-5. Cycles found during backfill are surfaced as explicit errors and the offending edges are excluded from ready computation until repaired (see §8)
+5. Cycles found during backfill are surfaced as explicit errors; the **tasks participating in the cycle** are excluded from `ready` results and reported as blocked with a cycle error until the cycle is repaired (see §8). The cyclic edges themselves are kept, never silently dropped — ignoring them would make the cycle's tasks incorrectly appear ready.
 
 This makes existing projects that already use dependency metadata immediately scheduler-aware.
 
 ## 7.2 After the Backfill
 
-- `metadata.depends_on` and `metadata.blocked_on` are no longer read by anything. They may remain in old task rows as inert data but new writes should use `depends_on` on `lithos_task_create` (which creates edges) or `lithos_task_edge_upsert`.
+- `metadata.depends_on` and `metadata.blocked_on` are no longer read by anything, and the write path is closed too: once edges are canonical, `lithos_task_create` and `lithos_task_update` **reject metadata writes containing those keys** with an error directing the caller to `depends_on` on `lithos_task_create` (which creates edges) or `lithos_task_edge_upsert`. Without this, the additive metadata write path would let agents keep recreating misleading stale scheduling state. Old task rows may retain the keys as inert data.
 - `metadata.priority` remains the priority convention in MVP (see §9); it is advisory, not structural, so it stays metadata until Phase 4.
 - `metadata.parallelizable` likewise remains advisory metadata.
 
@@ -407,7 +416,7 @@ A task is blocked when:
 Cycle policy:
 
 - cycles in blocking edges are rejected on write, using a bounded traversal over the `task_edges` indexes (never a full-table walk)
-- cycles found during the one-time backfill are surfaced as explicit errors and excluded from ready computation until repaired
+- for cycles found during the one-time backfill, the tasks participating in the cycle are excluded from `ready` results and surfaced via `lithos_task_blocked` with a cycle-error blocker until the cycle is repaired; the cyclic edges are retained so the blocked state remains visible
 
 ---
 
@@ -502,6 +511,7 @@ Exit criteria:
 ## Phase 3: Gates
 
 - add `gate` task type semantics
+- add `waits_on_gate` to the accepted edge types in `lithos_task_edge_upsert` (it is rejected before this phase)
 - add unresolved-gate support in readiness (`waits_on_gate` edges, query-time `timer` evaluation)
 
 Exit criteria:
@@ -540,6 +550,7 @@ Risk:
 Mitigation:
 
 - the scheduler reads only `task_edges`; this is stated in the spec and tool descriptions
+- new metadata writes containing `depends_on`/`blocked_on` are rejected (see §7.2), so stale state cannot be recreated through the additive metadata write path
 - migration markers on backfilled edges make origin explicit
 - (the previously identified dual-source ambiguity risk is eliminated by having no read-compatibility layer at all — see §7)
 
@@ -568,10 +579,12 @@ Mitigation:
 - tests covering:
   - ready queue
   - blocked queue with blocker explanations
-  - one-time backfill from `metadata.depends_on` (including dangling IDs and cycles)
+  - one-time backfill from `metadata.depends_on` (including dangling IDs)
+  - backfill cycles: participating tasks excluded from ready and reported as `cycle` blockers
   - cycle rejection on write
-  - gate blocking, including query-time `timer` resolution
-  - rejection of non-MVP edge types
+  - gate blocking, including query-time `timer` resolution (Phase 3)
+  - rejection of edge types not yet accepted (deferred types always; `waits_on_gate` before Phase 3)
+  - rejection of `metadata.depends_on` / `metadata.blocked_on` on `lithos_task_create` / `lithos_task_update`
   - parent/child listing and non-blocking `parent_child` semantics
 
 ---
