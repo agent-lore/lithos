@@ -76,7 +76,7 @@ Lithos tasks are widely used with scheduling metadata conventions such as `metad
 
 **Proposed path:** add a first-class task graph inside `coordination.db` with:
 
-- typed task edges (`blocks`, `parent_child`, `discovered_from`, `relates_to`, etc.)
+- typed task edges (`blocks`, `parent_child`, `discovered_from`, `waits_on_gate`; further types deferred)
 - ready/blocked queries
 - gate tasks for external waiting states
 - task spawning and parent/child traversal

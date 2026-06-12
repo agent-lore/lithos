@@ -1,6 +1,6 @@
 # Task Graph Coordination Extension
 
-Status: Proposal
+Status: Proposal (revised after review of PR #339 — trimmed MVP edge types, removed dual-source migration compatibility, made `parent_child` purely structural, made gate resolution explicit, deduplicated the tool surface)
 
 Audience: Lithos maintainers and agent-tooling implementers
 
@@ -45,7 +45,7 @@ The extension makes those patterns first-class, queryable, and consistent across
 1. **First-class dependency tracking** for tasks, not just ad hoc metadata.
 2. **Deterministic ready-work selection** so agents can resume after session loss without reparsing prose.
 3. **Project-local issue graph semantics** without introducing a separate issue tracker product.
-4. **Backward-compatible migration path** from today's task metadata conventions.
+4. **Clean one-time migration** from today's task metadata conventions, with no ongoing compatibility layer.
 5. **Knowledge-aware scheduling** that remains integrated with Lithos retrieval and findings.
 
 ### 2.2 Non-Goals
@@ -108,12 +108,13 @@ Allowed values:
 - `epic` — parent roll-up container
 - `subtask` — child task under a parent
 - `gate` — external wait condition
-- `message` — optional future async coordination artifact
 
-Storage options:
+(`message`, an async coordination artifact, was considered and deferred until a concrete use case exists.)
 
-- Preferred: new nullable `task_type TEXT NOT NULL DEFAULT 'task'` column on `tasks`
-- Transitional compatibility: continue accepting `metadata.task_type` on reads until migration is complete
+Storage:
+
+- new `task_type TEXT NOT NULL DEFAULT 'task'` column on `tasks`, added by schema migration
+- the column is the only source of truth; `metadata.task_type` is not read
 
 ## 5.2 Task Edges
 
@@ -132,7 +133,12 @@ CREATE TABLE task_edges (
     FOREIGN KEY (to_task_id) REFERENCES tasks(id),
     UNIQUE(from_task_id, to_task_id, type)
 );
+
+CREATE INDEX idx_task_edges_from ON task_edges(from_task_id, type);
+CREATE INDEX idx_task_edges_to ON task_edges(to_task_id, type);
 ```
+
+The indexes are required, not optional: ready/blocked queries join `task_edges` against open tasks and must stay sub-linear. Cycle detection on write must also use a bounded traversal over these indexes.
 
 Semantics:
 
@@ -140,41 +146,26 @@ Semantics:
 - `to_task_id` is the target task
 - `type` determines scheduling semantics
 
-Initial edge types:
+MVP edge types (only these are accepted on write in Phase 1–2):
 
 - `blocks`
-  Meaning: `to_task_id` cannot be considered ready while `from_task_id` is open
+  Meaning: `to_task_id` cannot be considered ready while `from_task_id` is open. Blocking.
 - `parent_child`
-  Meaning: `from_task_id` is the parent; `to_task_id` is the child
+  Meaning: `from_task_id` is the parent; `to_task_id` is the child. Purely structural — it never blocks the child. Epic roll-up rules (e.g. a parent cannot close while children are open) operate in the reverse direction and are deferred to Phase 4.
 - `discovered_from`
-  Meaning: `to_task_id` was discovered during execution of `from_task_id`
-- `caused_by`
-  Meaning: `to_task_id` exists because `from_task_id` is a root cause or precursor
-- `validates`
-  Meaning: `from_task_id` is a verification task for `to_task_id`
-- `relates_to`
-  Meaning: informational, non-blocking link
-- `duplicate_of`
-  Meaning: source task is a duplicate of target task
-- `superseded_by`
-  Meaning: source task has been replaced by target task
+  Meaning: `to_task_id` was discovered during execution of `from_task_id`. Non-blocking; exists to support `lithos_task_spawn` provenance.
 - `waits_on_gate`
-  Meaning: a task is blocked by a gate task
+  Meaning: a task is blocked by a gate task. Blocking.
 
-Blocking edge types in MVP:
+Deferred edge types (add only when something concretely consumes them, since each carries implied semantics and validation — e.g. terminal-state behavior for duplicates):
 
-- `blocks`
-- `parent_child` only when parent is itself blocked or explicitly configured to block children
-- `waits_on_gate`
-
-Non-blocking edge types in MVP:
-
-- `discovered_from`
 - `caused_by`
 - `validates`
 - `relates_to`
 - `duplicate_of`
 - `superseded_by`
+
+Because `type` is a plain TEXT column, adding these later is a validation-list change, not a schema migration.
 
 ## 5.3 Gates
 
@@ -197,6 +188,15 @@ Why gates as tasks:
 - fits current task lifecycle
 - reuses claiming, status, and findings
 - keeps scheduling state inspectable through existing task tools
+
+### Gate resolution model
+
+**Lithos never polls external systems.** It is a passive MCP server; gates are resolved as follows:
+
+- `timer` gates are evaluated at query time: the gate is considered resolved when `ready_at <= now`. No state change is required.
+- All other gate types (`human`, `ci`, `pr`, `external_task`) are resolved by an agent (or a hook/script acting as one) completing the gate task via `lithos_task_complete` when it observes the external condition is met.
+
+The gate metadata (`provider`, `run_id`, `pr_number`, etc.) exists so that the resolving agent knows what to check — it does not imply Lithos watches those systems. Anything that polls CI or PR state lives outside Lithos.
 
 ---
 
@@ -224,8 +224,9 @@ Returns:
 Validation:
 
 - both tasks must exist
-- cycles in blocking edges must be rejected
-- `duplicate_of` and `superseded_by` must not point to self
+- `type` must be one of the MVP edge types
+- self-edges are rejected
+- cycles in blocking edges are rejected via a bounded traversal at write time
 
 ### `lithos_task_edge_list`
 
@@ -293,7 +294,7 @@ Arguments:
 - `title: str`
 - `agent: str`
 - `description: str | None = None`
-- `relation_type: "discovered_from" | "caused_by" | "blocks" | "relates_to"`
+- `relation_type: "discovered_from" | "blocks" = "discovered_from"`
 - `inherit_project: bool = True`
 - `inherit_tags: bool = True`
 - `inherit_context: bool = True`
@@ -322,25 +323,9 @@ Returns:
 
 - `{ tasks: [...] }`
 
-### `lithos_task_prime`
+### Considered and deferred: `lithos_task_prime`
 
-Return a compact task handoff/context payload for an agent beginning work.
-
-Arguments:
-
-- `task_id: str`
-- `agent_id: str | None = None`
-
-Returns a combined view of:
-
-- task record
-- active claims
-- parent/child edges
-- blockers
-- recent findings
-- optionally recent cited knowledge or retrieval context
-
-This is the scheduling-side equivalent of a task bootstrap envelope.
+An earlier draft proposed a `lithos_task_prime` tool returning a combined handoff payload (task record, claims, edges, blockers, recent findings, retrieval context). It is deferred: it largely composes data already reachable via `lithos_task_get`-style reads, edge listing, and retrieval, and every MCP tool costs context in each agent's window. Revisit in Phase 4 if agents demonstrably need a single bootstrap envelope.
 
 ## 6.2 Existing Tool Enhancements
 
@@ -361,56 +346,42 @@ Behavior:
 
 Enhancements:
 
-- if task is marked duplicate or superseded, enforce consistent terminal behavior
 - optionally emit newly unblocked tasks in response payload
+
+(Duplicate/supersession terminal-state behavior is deferred along with those edge types.)
 
 ### `lithos_task_list`
 
 Enhancements:
 
-- optional `task_type`
-- optional `ready_only`
-- optional `blocked_only`
+- optional `task_type` filter
 
-These should be implemented by delegating to the edge model, not by scanning metadata.
+Ready/blocked filtering deliberately does **not** get `ready_only`/`blocked_only` flags here: `lithos_task_ready` and `lithos_task_blocked` are the single surface for readiness queries (the blocked view returns a different shape, with blocker explanations). One surface per question keeps the tool contract unambiguous.
 
 ---
 
 ## 7. Migration Strategy
 
-## 7.1 Read Compatibility
+**Single source of truth from day one.** Lithos is local-first; there is no fleet of remote deployments that needs a compatibility window. The migration is therefore a one-time backfill performed as part of the schema migration that creates `task_edges`, after which `task_edges` is the only thing the scheduler reads. There is no transition period, no virtual-edge projection from metadata, and no precedence rules between old and new representations.
 
-For a transition period, Lithos should understand today's metadata conventions:
+## 7.1 One-Time Backfill
 
-- `metadata.depends_on`
-- `metadata.priority`
-- `metadata.parallelizable`
-- `metadata.blocked_on`
-
-Read behavior during transition:
-
-- `depends_on` can be projected into virtual blocking edges for ready/blocked queries if no canonical edges exist yet
-- canonical `task_edges` takes precedence when present
-
-## 7.2 One-Time Backfill
-
-Provide a migration/backfill command or internal admin routine:
+As part of the schema migration:
 
 1. Scan open tasks
-2. Read `metadata.depends_on`
-3. Create canonical `blocks` edges
-4. Optionally record migration marker in edge metadata:
+2. Read `metadata.depends_on` and `metadata.blocked_on`
+3. Create canonical `blocks` edges (skipping references to nonexistent task IDs, which are logged)
+4. Record a migration marker in edge metadata:
    - `{"migrated_from": "metadata.depends_on"}`
+5. Cycles found during backfill are surfaced as explicit errors and the offending edges are excluded from ready computation until repaired (see §8)
 
-This lets current projects such as those already using dependency metadata become immediately scheduler-aware.
+This makes existing projects that already use dependency metadata immediately scheduler-aware.
 
-## 7.3 Metadata Convergence
+## 7.2 After the Backfill
 
-After backfill:
-
-- `metadata.depends_on` becomes deprecated
-- `metadata.priority` may remain supported, but should gain a first-class mirror if scheduling relies on it heavily
-- `metadata.parallelizable` can remain metadata in MVP, since it is advisory rather than structural
+- `metadata.depends_on` and `metadata.blocked_on` are no longer read by anything. They may remain in old task rows as inert data but new writes should use `depends_on` on `lithos_task_create` (which creates edges) or `lithos_task_edge_upsert`.
+- `metadata.priority` remains the priority convention in MVP (see §9); it is advisory, not structural, so it stays metadata until Phase 4.
+- `metadata.parallelizable` likewise remains advisory metadata.
 
 ---
 
@@ -435,8 +406,8 @@ A task is blocked when:
 
 Cycle policy:
 
-- cycles in blocking edges are rejected on write
-- existing cycles found during migration are surfaced as explicit errors and excluded from ready computation until repaired
+- cycles in blocking edges are rejected on write, using a bounded traversal over the `task_edges` indexes (never a full-table walk)
+- cycles found during the one-time backfill are surfaced as explicit errors and excluded from ready computation until repaired
 
 ---
 
@@ -450,7 +421,7 @@ Instead:
 - clients sort by existing priority conventions
 - a later phase may add canonical ranking rules
 
-Recommended first-class priority field in Phase 2 of this work:
+Recommended first-class priority field in Phase 4 of this work:
 
 - `priority TEXT CHECK(priority IN ('highest','high','medium','low','lowest'))`
 
@@ -480,11 +451,13 @@ The new task graph complements findings; it does not replace them.
 
 ### 10.2 Retrieval
 
-`lithos_task_prime` should be able to include:
+Agents beginning work on a ready task compose their own context from existing surfaces:
 
-- recent findings
+- recent findings via existing task/finding reads
 - relevant knowledge IDs linked via prior task completion feedback
 - optional `lithos_retrieve(..., task_id=...)` context for active tasks
+
+If composing these proves to be a recurring friction point, the deferred `lithos_task_prime` bootstrap tool (§6.1) is the answer — but it should be motivated by observed need, not anticipated need.
 
 ### 10.3 Projects
 
@@ -504,12 +477,12 @@ The new task graph should respect those conventions in filters and inherited con
 ## Phase 1: Task Graph Foundation
 
 - add `task_type`
-- add `task_edges`
+- add `task_edges` with indexes
 - add `lithos_task_edge_upsert`
 - add `lithos_task_edge_list`
 - add `lithos_task_ready`
 - add `lithos_task_blocked`
-- backfill `metadata.depends_on`
+- one-time backfill of `metadata.depends_on` / `metadata.blocked_on` in the same migration
 
 Exit criteria:
 
@@ -526,21 +499,22 @@ Exit criteria:
 
 - agents can decompose and extend work without losing parent/child relationships
 
-## Phase 3: Gates and Bootstrap
+## Phase 3: Gates
 
 - add `gate` task type semantics
-- add unresolved-gate support in readiness
-- add `lithos_task_prime`
+- add unresolved-gate support in readiness (`waits_on_gate` edges, query-time `timer` evaluation)
 
 Exit criteria:
 
-- waiting states are explicit and agents can resume from a compact handoff surface
+- waiting states are explicit, and agents can resolve gates by completing gate tasks
 
-## Phase 4: Scheduling Refinements
+## Phase 4: Scheduling Refinements (all optional, motivated by observed need)
 
-- optionally add first-class priority column
-- optionally add duplicate/supersession auto-close rules
-- optionally add richer ranking/order semantics for ready work
+- first-class priority column
+- deferred edge types (`relates_to`, `duplicate_of`, `superseded_by`, `caused_by`, `validates`) plus their terminal-state rules
+- epic roll-up close rules for `parent_child`
+- richer ranking/order semantics for ready work
+- `lithos_task_prime` bootstrap envelope
 
 ---
 
@@ -557,17 +531,17 @@ Mitigation:
 - keep task edges scoped strictly to coordination
 - keep knowledge/provenance/semantic relationships in `edges.db`
 
-## 12.2 Partial Migration Complexity
+## 12.2 Stale Scheduling Metadata
 
 Risk:
 
-- mixed old metadata and new canonical edges may create ambiguity
+- old task rows retain inert `metadata.depends_on` values that an agent might mistake for live scheduling state
 
 Mitigation:
 
-- canonical `task_edges` always wins
-- migration markers make origin explicit
-- deprecate but do not immediately reject `metadata.depends_on`
+- the scheduler reads only `task_edges`; this is stated in the spec and tool descriptions
+- migration markers on backfilled edges make origin explicit
+- (the previously identified dual-source ambiguity risk is eliminated by having no read-compatibility layer at all — see §7)
 
 ## 12.3 Scheduler Expectations
 
@@ -585,18 +559,20 @@ Mitigation:
 ## 13. Minimal Implementation Checklist
 
 - schema migration for `tasks.task_type`
-- schema migration for `task_edges`
-- cycle detection for blocking edges
-- coordination service methods for edge CRUD and ready/blocked computation
+- schema migration for `task_edges` including `(from_task_id, type)` and `(to_task_id, type)` indexes
+- one-time `metadata.depends_on` / `metadata.blocked_on` backfill inside the same migration
+- bounded-traversal cycle detection for blocking edges
+- coordination service methods for edge CRUD and ready/blocked computation (indexed SQL, no metadata scans)
 - MCP tool exposure in `server.py`
 - spec updates in `docs/SPECIFICATION.md`
 - tests covering:
   - ready queue
-  - blocked queue
-  - migration from `metadata.depends_on`
-  - cycle rejection
-  - gate blocking
-  - parent/child listing
+  - blocked queue with blocker explanations
+  - one-time backfill from `metadata.depends_on` (including dangling IDs and cycles)
+  - cycle rejection on write
+  - gate blocking, including query-time `timer` resolution
+  - rejection of non-MVP edge types
+  - parent/child listing and non-blocking `parent_child` semantics
 
 ---
 
