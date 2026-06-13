@@ -151,7 +151,7 @@ MVP edge types. An edge type is only accepted on write once the phase that imple
 Accepted from Phase 1:
 
 - `blocks`
-  Meaning: `to_task_id` cannot be considered ready while `from_task_id` is open. Blocking.
+  Meaning: `to_task_id` cannot be considered ready until `from_task_id` reaches `completed`. A blocker that ends in a **non-`completed` terminal state** (`cancelled`) does **not** satisfy the edge — `to_task_id` stays blocked (surfaced via `lithos_task_blocked` as `blocker_unsatisfiable`; see §6.1, §8), because the work the dependent was waiting on never happened. Resolving readiness on "predecessor is merely not `open`" would instead let a cancelled blocker spuriously ready its dependents — a correctness bug for strict-sequential chains (see §12.4). Blocking.
 - `parent_child`
   Meaning: `from_task_id` is the parent; `to_task_id` is the child. Purely structural — it never blocks the child. Epic roll-up rules (e.g. a parent cannot close while children are open) operate in the reverse direction and are deferred to Phase 4.
 - `discovered_from`
@@ -249,7 +249,7 @@ Returns:
 
 ### `lithos_task_ready`
 
-Return open tasks with no active blocking edges and no unresolved gates.
+Return open tasks with no unsatisfied blocking edges (every blocking predecessor `completed`) and no unresolved gates.
 
 Arguments:
 
@@ -266,7 +266,7 @@ Returns:
 Behavior:
 
 - only `status='open'`
-- excludes tasks blocked by open blocking predecessors
+- excludes tasks with an unsatisfied blocking predecessor — one not yet `completed` (still `open`, or terminal-but-not-completed i.e. `cancelled`; see §8)
 - excludes tasks blocked by unresolved gates
 - optionally excludes already-claimed tasks unless requested otherwise
 
@@ -284,12 +284,13 @@ Returns:
 
 Blocker entries should include:
 
-- `kind`: `task | gate | cycle`
+- `kind`: `task | gate | cycle | blocker_unsatisfiable`
 - `task_id` or gate reference
 - `type`
+- `status` — for `task` and `blocker_unsatisfiable` kinds, the blocking predecessor's current status (`open` / `cancelled`), so a client can distinguish a still-running blocker ("not yet") from a permanently-failed one ("needs intervention")
 - `message`
 
-There is no `external` blocker kind: external waits are always represented as gate tasks (§5.3), so every blocker is either a task, a gate, or a cycle error from the backfill (§8). `cycle` blockers carry the task IDs forming the cycle in `message`.
+There is no `external` blocker kind: external waits are always represented as gate tasks (§5.3). Every blocker is therefore a `task` (an `open` predecessor — the dependent is merely waiting on in-progress work), a `blocker_unsatisfiable` (a predecessor that ended `cancelled`, so the dependent can never become ready without intervention — see §8 and §12.4), a `gate`, or a `cycle` error from the backfill (§8). `cycle` blockers carry the task IDs forming the cycle in `message`; a `blocker_unsatisfiable` blocker carries the cancelled predecessor in `task_id` (with its `status`), keeping `message` human-readable.
 
 ### `lithos_task_spawn`
 
@@ -316,7 +317,7 @@ Behavior:
 - can inherit `metadata.project`, project tag, and selected scheduling metadata
 - creates the relation edge automatically, always with the source task as `from_task_id` and the spawned task as `to_task_id`:
   - `discovered_from`: source → spawned (the spawned task was discovered during the source task)
-  - `blocks`: source → spawned (the spawned task is blocked until the source task closes). Spawning a task that blocks its source is not supported; use `lithos_task_edge_upsert` explicitly for that.
+  - `blocks`: source → spawned (the spawned task is blocked until the source task is `completed`; a `cancelled` source leaves it `blocker_unsatisfiable` — see §8). Spawning a task that blocks its source is not supported; use `lithos_task_edge_upsert` explicitly for that.
 
 ### `lithos_task_children`
 
@@ -402,7 +403,7 @@ A task is ready when all of the following are true:
 
 1. `status == "open"`
 2. the task itself is not a `gate`
-3. it has no unresolved incoming blocking edges
+3. every incoming blocking edge is **satisfied** — for a `blocks` edge that means the predecessor is `completed` (a predecessor still `open`, or terminal-but-not-`completed` i.e. `cancelled`, leaves the edge unsatisfied; see the blocker-failure policy below)
 4. it is not blocked by an unresolved gate
 5. if filtering excludes claimed tasks, it has no active conflicting claims
 
@@ -411,7 +412,12 @@ MVP blocked rule:
 A task is blocked when:
 
 - it is open
-- and at least one unresolved blocking predecessor or gate applies
+- and at least one blocking predecessor is unsatisfied (still `open`, or `cancelled` — see below), or an unresolved gate applies
+
+Blocker-failure policy:
+
+- a `blocks` predecessor that ends `cancelled` (terminal but not `completed`) leaves every dependent **permanently** blocked — the awaited work will never complete. Such dependents are excluded from `ready` and surfaced via `lithos_task_blocked` with a `blocker_unsatisfiable` blocker carrying the cancelled predecessor's id + status, so an agent can decide to re-open/re-route the predecessor or cancel the stranded subtree. The edge is retained (never silently dropped) — exactly as for backfill cycles below — because dropping it would make the dependent spuriously `ready`.
+- this keeps Lithos **passive**: it does not auto-cancel or auto-reroute the stranded dependents; it refuses to call them ready and explains why, leaving the policy decision to the agent/orchestrator.
 
 Cycle policy:
 
@@ -565,6 +571,20 @@ Mitigation:
 - define MVP as "ready-work computation", not "workflow engine"
 - keep ranking and execution policy mostly client-driven at first
 
+## 12.4 Cancelled Blockers Spuriously Readying Dependents
+
+Risk:
+
+- the §5.2 `blocks` semantics, if read as "`to_task_id` cannot be ready *while `from_task_id` is open*", resolve the edge the moment the predecessor leaves `open` — **including when it ends `cancelled`**. A dependent in a strict-sequential chain would then become `ready` even though the work it depends on was abandoned. This silently regresses the pre-extension convention, which required a blocker be `completed` before its dependents run (e.g. a metadata-`depends_on` consumer that gates on `status == "completed"` and fails downstream work when a blocker is cancelled). Any client that switches from that convention to trusting `lithos_task_ready` would start running stories whose predecessor was cancelled — for a decomposed PRD, that means story N+1 building on the abandoned work of story N.
+
+Mitigation (folded into §5.2, §8, §6.1):
+
+- readiness requires every blocking predecessor be `completed`, not merely non-`open`;
+- a predecessor that ends `cancelled` leaves its dependents blocked with a `blocker_unsatisfiable` reason (carrying the predecessor id + status) — the same "retain the edge, surface the block, exclude from ready" treatment the backfill applies to cycles;
+- Lithos stays passive: it does not auto-cancel or auto-reroute the stranded dependents; the orchestrator decides whether to re-open the blocker, re-route, or cancel the subtree.
+
+This is a semantics clarification, not new machinery: it changes the readiness predicate from "predecessor not open" to "predecessor completed" and adds one blocker kind (`blocker_unsatisfiable`).
+
 ---
 
 ## 13. Minimal Implementation Checklist
@@ -582,6 +602,7 @@ Mitigation:
   - one-time backfill from `metadata.depends_on` (including dangling IDs)
   - backfill cycles: participating tasks excluded from ready and reported as `cycle` blockers
   - cycle rejection on write
+  - cancelled blocker: a dependent of a `cancelled` `blocks` predecessor is excluded from `ready` and reported as a `blocker_unsatisfiable` blocker (not spuriously ready) — §8, §12.4
   - gate blocking, including query-time `timer` resolution (Phase 3)
   - rejection of edge types not yet accepted (deferred types always; `waits_on_gate` before Phase 3)
   - rejection of `metadata.depends_on` / `metadata.blocked_on` on `lithos_task_create` / `lithos_task_update`
