@@ -2510,6 +2510,7 @@ class LithosServer:
             metadata: dict[str, Any] | None = None,
             task_type: str = "task",
             depends_on: list[str] | None = None,
+            parent_task_id: str | None = None,
         ) -> dict[str, Any]:
             """Create a new coordination task.
 
@@ -2521,11 +2522,14 @@ class LithosServer:
                 metadata: Arbitrary JSON metadata dict (optional). Must NOT contain
                     ``depends_on``/``blocked_on`` — dependencies are first-class task
                     edges now; pass ``depends_on`` instead.
-                task_type: First-class task type. Only ``task`` is accepted in this
-                    phase (``epic``/``gate`` arrive in later phases).
+                task_type: First-class task type: ``task`` or ``epic`` (``gate``
+                    arrives in a later phase).
                 depends_on: Predecessor task IDs. Each creates a ``blocks`` edge so
                     this task is not ready until that predecessor is completed.
                     Predecessors must already exist.
+                parent_task_id: Optional parent. Creates a ``parent_child`` edge
+                    ``parent -> this task``. The parent must exist; it may be any
+                    task type (an ``epic`` or a plain ``task``).
 
             Returns:
                 Dict with task_id, or an error envelope on validation failure.
@@ -2544,6 +2548,7 @@ class LithosServer:
                         metadata=metadata,
                         task_type=task_type,
                         depends_on=depends_on,
+                        parent_task_id=parent_task_id,
                     )
                 except CoordinationError as exc:
                     span.set_attribute("lithos.success", False)
@@ -3251,6 +3256,119 @@ class LithosServer:
                 )
                 span.set_attribute("lithos.blocked_count", len(tasks))
                 return {"tasks": tasks}
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_task_children(
+            task_id: str,
+            recursive: bool = False,
+            include_closed: bool = False,
+        ) -> dict[str, list[dict[str, Any]]]:
+            """Return the child tasks of a parent/epic (via ``parent_child`` edges).
+
+            Args:
+                task_id: Parent (or epic) whose children to list.
+                recursive: Walk the full descendant subtree, not just direct
+                    children (default False).
+                include_closed: Include completed/cancelled children in the
+                    result (default False = open children only). The subtree is
+                    traversed in full regardless, so an open grandchild under a
+                    closed child is still surfaced.
+
+            Returns:
+                Dict with a ``tasks`` list (task records, same shape as
+                ``lithos_task_list``).
+            """
+            logger.info(
+                "lithos_task_children task=%s recursive=%s include_closed=%s",
+                task_id,
+                recursive,
+                include_closed,
+            )
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_children") as span:
+                span.set_attribute("lithos.tool", "lithos_task_children")
+                span.set_attribute("lithos.task_id", task_id)
+                tasks = await self.coordination.list_children(
+                    task_id=task_id,
+                    recursive=recursive,
+                    include_closed=include_closed,
+                )
+                span.set_attribute("lithos.children_count", len(tasks))
+                return {"tasks": tasks}
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_task_spawn(
+            source_task_id: str,
+            title: str,
+            agent: str,
+            description: str | None = None,
+            relation_type: str = "discovered_from",
+            inherit_project: bool = True,
+            inherit_tags: bool = True,
+            inherit_context: bool = True,
+            metadata: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            """Create a follow-on task linked to an existing source task.
+
+            The relation edge is always ``source -> spawned``:
+            ``discovered_from`` records that the spawned task was found while
+            executing the source (non-blocking); ``blocks`` makes the spawned task
+            wait until the source is ``completed``.
+
+            Args:
+                source_task_id: The task this follow-on came from.
+                title: Title for the spawned task.
+                agent: Spawning agent identifier.
+                description: Optional description for the spawned task.
+                relation_type: ``discovered_from`` (default) or ``blocks``.
+                inherit_project: Copy ``metadata.project`` from the source.
+                inherit_tags: Copy the source's tags.
+                inherit_context: Copy scheduling-convention metadata (priority,
+                    parallelizable, phase) from the source.
+                metadata: Extra metadata; overrides inherited keys. Must NOT
+                    contain ``depends_on``/``blocked_on``.
+
+            Returns:
+                Dict with task_id, or an error envelope (unknown source, invalid
+                relation_type, or forbidden metadata key).
+            """
+            logger.info(
+                "lithos_task_spawn source=%s agent=%s relation=%s",
+                source_task_id,
+                agent,
+                relation_type,
+            )
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_spawn") as span:
+                span.set_attribute("lithos.tool", "lithos_task_spawn")
+                span.set_attribute("lithos.agent", agent)
+                span.set_attribute("lithos.relation_type", relation_type)
+                try:
+                    task_id = await self.coordination.spawn_task(
+                        source_task_id=source_task_id,
+                        title=title,
+                        agent=agent,
+                        description=description,
+                        relation_type=relation_type,
+                        inherit_project=inherit_project,
+                        inherit_tags=inherit_tags,
+                        inherit_context=inherit_context,
+                        metadata=metadata,
+                    )
+                except CoordinationError as exc:
+                    span.set_attribute("lithos.success", False)
+                    return {"status": "error", "code": exc.code, "message": exc.message}
+                span.set_attribute("lithos.task_id", task_id)
+                await self._emit(
+                    LithosEvent(
+                        type=TASK_CREATED,
+                        agent=agent,
+                        payload={"task_id": task_id, "title": title},
+                    )
+                )
+                return {"task_id": task_id}
 
         @self.mcp.tool()
         @tool_metrics()

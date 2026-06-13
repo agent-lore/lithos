@@ -154,7 +154,7 @@ Accepted from Phase 1:
 - `blocks`
   Meaning: `to_task_id` cannot be considered ready until `from_task_id` reaches `completed`. A blocker that ends in a **non-`completed` terminal state** (`cancelled`) does **not** satisfy the edge — `to_task_id` stays blocked (surfaced via `lithos_task_blocked` as `blocker_unsatisfiable`; see §6.1, §8), because the work the dependent was waiting on never happened. Resolving readiness on "predecessor is merely not `open`" would instead let a cancelled blocker spuriously ready its dependents — a correctness bug for strict-sequential chains (see §12.4). Blocking.
 - `parent_child`
-  Meaning: `from_task_id` is the parent; `to_task_id` is the child. Purely structural — it never blocks the child. Epic roll-up rules (e.g. a parent cannot close while children are open) operate in the reverse direction and are deferred to Phase 4.
+  Meaning: `from_task_id` is the parent; `to_task_id` is the child. Purely structural — it never blocks the child. The hierarchy is a **forest**: a task has at most one parent (a second `parent_child` edge to the same child, from a different parent, is rejected with `parent_exists`), and it is kept acyclic (an edge making a task its own ancestor is rejected with `cycle` — same bounded traversal as `blocks`, in the descendant direction). Epic roll-up *close* rules (e.g. a parent cannot close while children are open) operate in the reverse direction and are deferred to Phase 4.
 - `discovered_from`
   Meaning: `to_task_id` was discovered during execution of `from_task_id`. Non-blocking; exists to support `lithos_task_spawn` provenance.
 
@@ -315,7 +315,7 @@ Returns:
 
 Behavior:
 
-- can inherit `metadata.project`, project tag, and selected scheduling metadata
+- inheritance flags copy from the source: `inherit_project` → `metadata.project`; `inherit_tags` → the source's tags; `inherit_context` → a fixed allow-list of scheduling-convention metadata keys (`priority`, `parallelizable`, `phase`). Forbidden keys (`depends_on`/`blocked_on`) are never inherited, and an explicit `metadata` arg overrides inherited values. The spawned task is always `task_type='task'`.
 - creates the relation edge automatically, always with the source task as `from_task_id` and the spawned task as `to_task_id`:
   - `discovered_from`: source → spawned (the spawned task was discovered during the source task)
   - `blocks`: source → spawned (the spawned task is blocked until the source task is `completed`; a `cancelled` source leaves it `blocker_unsatisfiable` — see §8). Spawning a task that blocks its source is not supported; use `lithos_task_edge_upsert` explicitly for that.
@@ -507,10 +507,13 @@ Exit criteria:
 
 ## Phase 2: Hierarchy and Spawn
 
-- add `parent_task_id` convenience support
+- accept `epic` on write (already excluded from `ready` via the forward-compatible guard)
+- add `parent_task_id` convenience support (creates a `parent_child` edge)
 - add `lithos_task_children`
 - add `lithos_task_spawn`
-- add epic roll-up helpers
+- reject `parent_child` cycles on write
+
+Phase 2 is **structural only**: no dedicated roll-up helper (`lithos_task_children` already returns each child's status, so progress is computable) and no epic close-rule enforcement — those roll-up close rules stay in Phase 4 (see §5.2).
 
 Exit criteria:
 

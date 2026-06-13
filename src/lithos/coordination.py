@@ -4,6 +4,7 @@ import contextlib
 import logging
 import sqlite3
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,17 +31,24 @@ ACCEPTED_EDGE_TYPES: frozenset[str] = frozenset({"blocks", "parent_child", "disc
 # in Phase 3.
 BLOCKING_EDGE_TYPES: frozenset[str] = frozenset({"blocks"})
 
+# Hierarchy edges. Purely structural (never block readiness), but must stay
+# acyclic — a task cannot be its own ancestor — so cycles are rejected on write.
+HIERARCHY_EDGE_TYPES: frozenset[str] = frozenset({"parent_child"})
+
 # Task types accepted on write this phase (see ACCEPTED_EDGE_TYPES rationale).
-# ``epic`` is accepted from Phase 2, ``gate`` from Phase 3. The column itself
-# defaults to 'task' and physically holds any string; only the write-validation
-# set is phase-gated.
-ACCEPTED_TASK_TYPES: frozenset[str] = frozenset({"task"})
+# ``gate`` is accepted from Phase 3. The column itself defaults to 'task' and
+# physically holds any string; only the write-validation set is phase-gated.
+ACCEPTED_TASK_TYPES: frozenset[str] = frozenset({"task", "epic"})
 
 # Task types that are never directly workable units and so are excluded from the
 # ready frontier. ``epic`` is a roll-up container (you execute its children, not
-# the epic); ``gate`` is an external wait. Neither can be written yet in Phase 1,
-# but the readiness guard names them now so the predicate is forward-compatible.
+# the epic); ``gate`` is an external wait.
 NON_WORKABLE_TASK_TYPES: tuple[str, ...] = ("gate", "epic")
+
+# Scheduling-convention metadata keys that ``lithos_task_spawn`` copies from the
+# source task when ``inherit_context`` is set, so follow-on work keeps its place
+# in the schedule. Forbidden keys (FORBIDDEN_METADATA_KEYS) are never inherited.
+INHERITABLE_CONTEXT_KEYS: tuple[str, ...] = ("priority", "parallelizable", "phase")
 
 # metadata keys whose scheduling meaning is now owned by task_edges. Writing them
 # is rejected so stale, scheduler-invisible dependency state cannot be recreated
@@ -854,6 +862,7 @@ class CoordinationService:
         metadata: dict[str, Any] | None = None,
         task_type: str = "task",
         depends_on: list[str] | None = None,
+        parent_task_id: str | None = None,
     ) -> str:
         """Create a new task.
 
@@ -864,16 +873,19 @@ class CoordinationService:
             tags: Task tags
             metadata: Arbitrary JSON metadata dict (optional). Must not contain
                 ``depends_on``/``blocked_on`` — dependencies are task edges now.
-            task_type: First-class task type. Phase 1 accepts only ``task``.
+            task_type: First-class task type (``task`` or ``epic``).
             depends_on: Predecessor task ids. Each creates a ``blocks`` edge
                 ``predecessor -> this task``. Predecessors must already exist.
+            parent_task_id: Optional parent. Creates a ``parent_child`` edge
+                ``parent -> this task``. The parent must already exist; it may be
+                any task type (it need not be an ``epic``).
 
         Returns:
             Task ID
 
         Raises:
             CoordinationError: invalid task_type, forbidden metadata key, or a
-                ``depends_on`` reference to a nonexistent task.
+                ``depends_on``/``parent_task_id`` reference to a nonexistent task.
         """
         import json
 
@@ -893,22 +905,30 @@ class CoordinationService:
         metadata_json = json.dumps(metadata) if metadata is not None else None
         now = _format_datetime(datetime.now(timezone.utc))
         # Dedupe and drop a self-reference; a brand-new task has no outgoing
-        # edges, so depends_on can never form a cycle (nothing depends on it yet).
+        # edges, so depends_on/parent_task_id can never form a cycle (nothing
+        # depends on or descends from it yet).
         predecessors = [p for p in dict.fromkeys(depends_on or []) if p != task_id]
+        parent = parent_task_id if parent_task_id != task_id else None
 
         async with aiosqlite.connect(self.db_path) as db:
-            if predecessors:
-                placeholders = ",".join("?" for _ in predecessors)
+            referenced = {*predecessors, *([parent] if parent else [])}
+            if referenced:
+                placeholders = ",".join("?" for _ in referenced)
                 cursor = await db.execute(
                     f"SELECT id FROM tasks WHERE id IN ({placeholders})",
-                    predecessors,
+                    tuple(referenced),
                 )
                 found = {row[0] for row in await cursor.fetchall()}
-                missing = [p for p in predecessors if p not in found]
-                if missing:
+                missing_deps = [p for p in predecessors if p not in found]
+                if missing_deps:
                     raise CoordinationError(
                         "task_not_found",
-                        f"depends_on references nonexistent task(s): {missing}",
+                        f"depends_on references nonexistent task(s): {missing_deps}",
+                    )
+                if parent and parent not in found:
+                    raise CoordinationError(
+                        "task_not_found",
+                        f"parent_task_id references nonexistent task: {parent}",
                     )
 
             await db.execute(
@@ -929,14 +949,24 @@ class CoordinationService:
                     """,
                     (pred, task_id, agent, now),
                 )
+            if parent:
+                await db.execute(
+                    """
+                    INSERT OR IGNORE INTO task_edges
+                        (from_task_id, to_task_id, type, created_by, created_at)
+                    VALUES (?, ?, 'parent_child', ?, ?)
+                    """,
+                    (parent, task_id, agent, now),
+                )
             await db.commit()
 
         logger.info(
-            "Task created: task_id=%s agent=%s task_type=%s depends_on=%d",
+            "Task created: task_id=%s agent=%s task_type=%s depends_on=%d parent=%s",
             task_id,
             agent,
             task_type,
             len(predecessors),
+            parent,
         )
         return task_id
 
@@ -1769,13 +1799,45 @@ class CoordinationService:
                 )
 
             if edge_type in BLOCKING_EDGE_TYPES:
-                cycle = await self._find_dependency_path(db, from_task_id, to_task_id)
+                # Adding from->to means "to depends on from"; reject if from
+                # already depends on to (reverse = up the depends-on chain).
+                cycle = await self._find_edge_path(
+                    db, from_task_id, to_task_id, BLOCKING_EDGE_TYPES, reverse=True
+                )
                 if cycle is not None:
                     raise CoordinationError(
                         "cycle",
                         "blocking edge "
                         f"{from_task_id} -> {to_task_id} would create a dependency cycle: "
                         f"{' -> '.join(cycle)} -> {from_task_id}",
+                    )
+            elif edge_type in HIERARCHY_EDGE_TYPES:
+                # Forest invariant: at most one parent per task. Reject a second,
+                # *different* parent; re-upserting the same parent->child edge is
+                # fine (it just updates metadata via ON CONFLICT below).
+                cursor = await db.execute(
+                    "SELECT from_task_id FROM task_edges WHERE to_task_id = ? AND type = ?",
+                    (to_task_id, edge_type),
+                )
+                other_parents = {row[0] for row in await cursor.fetchall()} - {from_task_id}
+                if other_parents:
+                    raise CoordinationError(
+                        "parent_exists",
+                        f"task {to_task_id} already has a parent ({next(iter(other_parents))}); a "
+                        "task may have at most one parent. Remove the existing parent_child edge "
+                        "before re-parenting.",
+                    )
+                # Adding parent(from)->child(to) is a cycle if the parent is
+                # already a descendant of the child (reverse=False = down the
+                # hierarchy from the child).
+                cycle = await self._find_edge_path(
+                    db, to_task_id, from_task_id, HIERARCHY_EDGE_TYPES, reverse=False
+                )
+                if cycle is not None:
+                    raise CoordinationError(
+                        "cycle",
+                        f"parent_child edge {from_task_id} -> {to_task_id} would create a "
+                        f"hierarchy cycle: {' -> '.join(cycle)} -> {to_task_id}",
                     )
 
             await db.execute(
@@ -1848,37 +1910,47 @@ class CoordinationService:
             "created_at": row["created_at"],
         }
 
-    async def _find_dependency_path(
+    async def _find_edge_path(
         self,
         db: aiosqlite.Connection,
         start: str,
         target: str,
+        edge_types: frozenset[str],
+        reverse: bool = True,
     ) -> list[str] | None:
-        """Return a dependency path ``[start, ..., target]`` or None.
+        """Return a path ``[start, ..., target]`` over ``edge_types`` or None.
 
-        Follows the *depends-on* relation: the blockers of ``X`` are the
-        ``from_task_id`` of incoming blocking edges (``to_task_id = X``), read via
-        idx_task_edges_to. Bounded by the reachable blocking subgraph with a
-        visited-set — never a full-table walk. Used both to reject cycles on
-        write (does ``start`` already depend on ``target``?) and to classify a
-        cycle blocker in :meth:`list_blocked`.
+        ``reverse=True`` follows edges *up* — the neighbours of ``X`` are the
+        ``from_task_id`` of incoming edges (``to_task_id = X``), via
+        idx_task_edges_to. This is the *depends-on* / *ancestor* direction used
+        for blocking-cycle detection ("does ``start`` already depend on
+        ``target``?") and cycle classification in :meth:`list_blocked`.
+
+        ``reverse=False`` follows edges *down* — the neighbours of ``X`` are the
+        ``to_task_id`` of outgoing edges (``from_task_id = X``), via
+        idx_task_edges_from. This is the *descendant* direction used for
+        parent_child cycle detection ("is ``target`` a descendant of ``start``?").
+
+        Bounded by the reachable subgraph with a visited-set — never a
+        full-table walk.
         """
-        types = tuple(BLOCKING_EDGE_TYPES)
+        types = tuple(edge_types)
         placeholders = ",".join("?" for _ in types)
+        if reverse:
+            sql = f"SELECT from_task_id FROM task_edges WHERE to_task_id = ? AND type IN ({placeholders})"
+        else:
+            sql = f"SELECT to_task_id FROM task_edges WHERE from_task_id = ? AND type IN ({placeholders})"
         visited = {start}
         parent: dict[str, str] = {}
         stack = [start]
         while stack:
             node = stack.pop()
-            cursor = await db.execute(
-                f"SELECT from_task_id FROM task_edges WHERE to_task_id = ? AND type IN ({placeholders})",
-                (node, *types),
-            )
-            for (blocker,) in await cursor.fetchall():
-                if blocker in visited:
+            cursor = await db.execute(sql, (node, *types))
+            for (neighbour,) in await cursor.fetchall():
+                if neighbour in visited:
                     continue
-                parent[blocker] = node
-                if blocker == target:
+                parent[neighbour] = node
+                if neighbour == target:
                     path = [target]
                     cur = node
                     while cur != start:
@@ -1887,8 +1959,8 @@ class CoordinationService:
                     path.append(start)
                     path.reverse()
                     return path
-                visited.add(blocker)
-                stack.append(blocker)
+                visited.add(neighbour)
+                stack.append(neighbour)
         return None
 
     async def _is_task_ready(self, db: aiosqlite.Connection, task_id: str) -> bool:
@@ -2076,7 +2148,9 @@ class CoordinationService:
                 )
                 continue
             # predecessor is open: distinguish a genuine wait from a dependency cycle
-            cycle = await self._find_dependency_path(db, pred_id, task_id)
+            cycle = await self._find_edge_path(
+                db, pred_id, task_id, BLOCKING_EDGE_TYPES, reverse=True
+            )
             if cycle is not None:
                 blockers.append(
                     {
@@ -2118,6 +2192,114 @@ class CoordinationService:
             )
             candidates = [row[0] for row in await cursor.fetchall()]
             return [c for c in candidates if await self._is_task_ready(db, c)]
+
+    @traced("lithos.coordination.list_children")
+    async def list_children(
+        self,
+        task_id: str,
+        recursive: bool = False,
+        include_closed: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return child tasks of ``task_id`` via outgoing ``parent_child`` edges.
+
+        ``recursive`` walks the full descendant subtree; a visited-set bounds the
+        traversal (defence in depth — write-time cycle rejection already keeps the
+        hierarchy acyclic). ``include_closed=False`` filters the *returned* rows to
+        non-terminal (``open``) tasks while still traversing the whole subtree, so
+        an open grandchild under a closed child is still surfaced. Order is by
+        ``created_at`` within each parent's children.
+        """
+        hierarchy = tuple(HIERARCHY_EDGE_TYPES)
+        placeholders = ",".join("?" for _ in hierarchy)
+        results: list[dict[str, Any]] = []
+        seen: set[str] = {task_id}
+        frontier: deque[str] = deque([task_id])
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            while frontier:
+                parent = frontier.popleft()
+                cursor = await db.execute(
+                    f"""
+                    SELECT t.* FROM task_edges e JOIN tasks t ON t.id = e.to_task_id
+                    WHERE e.from_task_id = ? AND e.type IN ({placeholders})
+                    ORDER BY t.created_at ASC
+                    """,
+                    (parent, *hierarchy),
+                )
+                for row in await cursor.fetchall():
+                    child = _task_row_to_dict(row)
+                    if child["id"] in seen:
+                        continue
+                    seen.add(child["id"])
+                    if include_closed or child["status"] == "open":
+                        results.append(child)
+                    if recursive:
+                        frontier.append(child["id"])
+        return results
+
+    @traced("lithos.coordination.spawn_task")
+    async def spawn_task(
+        self,
+        source_task_id: str,
+        title: str,
+        agent: str,
+        description: str | None = None,
+        relation_type: str = "discovered_from",
+        inherit_project: bool = True,
+        inherit_tags: bool = True,
+        inherit_context: bool = True,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Create a follow-on task linked to ``source_task_id``.
+
+        Composes the existing validated primitives: resolve inherited fields from
+        the source, ``create_task`` the follow-on (always ``task_type='task'``),
+        then ``upsert_task_edge`` the relation ``source -> spawned``. ``blocks`` is
+        cycle-safe because the spawned task is brand-new.
+
+        Raises:
+            CoordinationError: unknown source, invalid ``relation_type``, or a
+                forbidden metadata key (surfaced by ``create_task``).
+        """
+        if relation_type not in ("discovered_from", "blocks"):
+            raise CoordinationError(
+                "invalid_relation_type",
+                f"relation_type must be 'discovered_from' or 'blocks', got '{relation_type}'.",
+            )
+        _reject_scheduling_metadata(metadata)
+
+        source = await self.get_task(source_task_id)
+        if source is None:
+            raise CoordinationError("task_not_found", f"source task '{source_task_id}' not found.")
+
+        # Inherited fields first, explicit args override.
+        inherited_meta: dict[str, Any] = {}
+        if inherit_project and "project" in source.metadata:
+            inherited_meta["project"] = source.metadata["project"]
+        if inherit_context:
+            for key in INHERITABLE_CONTEXT_KEYS:
+                if key in source.metadata:
+                    inherited_meta[key] = source.metadata[key]
+        merged_meta = {**inherited_meta, **(metadata or {})}
+        spawned_tags = list(source.tags) if inherit_tags else None
+
+        new_id = await self.create_task(
+            title=title,
+            agent=agent,
+            description=description,
+            tags=spawned_tags,
+            metadata=merged_meta or None,
+            task_type="task",
+        )
+        await self.upsert_task_edge(source_task_id, new_id, relation_type, agent)
+        logger.info(
+            "Task spawned: task_id=%s source=%s relation=%s agent=%s",
+            new_id,
+            source_task_id,
+            relation_type,
+            agent,
+        )
+        return new_id
 
     # ==================== Statistics ====================
 
