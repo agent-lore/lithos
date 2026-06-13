@@ -86,7 +86,7 @@ class TestTaskEdges:
             await coordination_service.upsert_task_edge(a, "ghost", "blocks", "a")
         assert exc.value.code == "task_not_found"
 
-    @pytest.mark.parametrize("bad_type", ["waits_on_gate", "duplicate_of", "relates_to", "nope"])
+    @pytest.mark.parametrize("bad_type", ["duplicate_of", "relates_to", "superseded_by", "nope"])
     async def test_unaccepted_edge_types_rejected(
         self, coordination_service: CoordinationService, bad_type: str
     ):
@@ -296,8 +296,8 @@ class TestCreateConvenience:
         assert exc.value.code == "task_not_found"
 
     async def test_invalid_task_type_rejected(self, coordination_service: CoordinationService):
-        # 'gate' is Phase 3; 'subtask' was dropped entirely. ('epic' is accepted in Phase 2.)
-        for bad in ("gate", "subtask"):
+        # task/epic/gate are accepted; 'subtask' was dropped, others are nonsense.
+        for bad in ("subtask", "nonsense"):
             with pytest.raises(CoordinationError) as exc:
                 await coordination_service.create_task(title="T", agent="a", task_type=bad)
             assert exc.value.code == "invalid_task_type"
@@ -387,11 +387,6 @@ class TestEpicAndHierarchy:
         # but it is a real task, filterable by type
         epics = await coordination_service.list_tasks(task_type="epic")
         assert [t["id"] for t in epics] == [epic]
-
-    async def test_gate_type_still_rejected(self, coordination_service: CoordinationService):
-        with pytest.raises(CoordinationError) as exc:
-            await coordination_service.create_task(title="G", agent="a", task_type="gate")
-        assert exc.value.code == "invalid_task_type"
 
     async def test_parent_task_id_creates_parent_child_edge(
         self, coordination_service: CoordinationService
@@ -558,6 +553,145 @@ class TestSpawn:
         assert exc.value.code == "invalid_metadata_key"
 
 
+# ==================== Gates (Phase 3) ====================
+
+PAST = "2000-01-01T00:00:00+00:00"
+FUTURE = "2999-01-01T00:00:00+00:00"
+
+
+async def _gate(service: CoordinationService, gate_type: str, **md: Any) -> str:
+    """Create a gate task of the given gate_type and return its id."""
+    return await service.create_task(
+        title=f"{gate_type} gate",
+        agent="a",
+        task_type="gate",
+        metadata={"gate_type": gate_type, **md},
+    )
+
+
+class TestGates:
+    async def test_gate_accepted_and_excluded_from_ready(
+        self, coordination_service: CoordinationService
+    ):
+        gate = await _gate(coordination_service, "human")
+        task = await _mk(coordination_service, "Task")
+        ready_ids = _ids(await coordination_service.list_ready())
+        assert task in ready_ids
+        assert gate not in ready_ids  # a gate is not directly workable
+
+    async def test_gate_validation(self, coordination_service: CoordinationService):
+        # missing gate_type
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.create_task(title="G", agent="a", task_type="gate")
+        assert exc.value.code == "invalid_input"
+        # invalid gate_type
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.create_task(
+                title="G", agent="a", task_type="gate", metadata={"gate_type": "bogus"}
+            )
+        assert exc.value.code == "invalid_input"
+        # timer without ready_at
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.create_task(
+                title="G", agent="a", task_type="gate", metadata={"gate_type": "timer"}
+            )
+        assert exc.value.code == "invalid_input"
+        # timer with unparseable ready_at
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.create_task(
+                title="G",
+                agent="a",
+                task_type="gate",
+                metadata={"gate_type": "timer", "ready_at": "not-a-date"},
+            )
+        assert exc.value.code == "invalid_input"
+
+    async def test_timer_ready_at_normalized_to_utc(
+        self, coordination_service: CoordinationService
+    ):
+        gate = await _gate(coordination_service, "timer", ready_at="2030-06-01T12:00:00+02:00")
+        row = await coordination_service.get_task(gate)
+        assert row is not None
+        # +02:00 12:00 -> 10:00Z, second-precision, canonical UTC offset
+        assert row.metadata["ready_at"] == "2030-06-01T10:00:00+00:00"
+
+    async def test_waits_on_gate_blocks_until_completed(
+        self, coordination_service: CoordinationService
+    ):
+        gate = await _gate(coordination_service, "human")
+        task = await _mk(coordination_service, "Task")
+        await coordination_service.upsert_task_edge(gate, task, "waits_on_gate", "a")
+
+        assert task not in _ids(await coordination_service.list_ready())
+        blocked = await coordination_service.list_blocked()
+        b_row = next(t for t in blocked if t["id"] == task)
+        assert b_row["blockers"][0]["kind"] == "gate"
+        assert b_row["blockers"][0]["task_id"] == gate
+
+        # resolving the gate (completion) readies the waiter and surfaces it
+        unblocked = await coordination_service.newly_unblocked_by(gate)
+        assert unblocked == []  # not yet completed
+        await coordination_service.complete_task(gate, "a")
+        assert task in _ids(await coordination_service.list_ready())
+        assert await coordination_service.newly_unblocked_by(gate) == [task]
+
+    async def test_cancelled_gate_is_unsatisfiable(self, coordination_service: CoordinationService):
+        gate = await _gate(coordination_service, "ci", provider="gha", run_id="1")
+        task = await _mk(coordination_service, "Task")
+        await coordination_service.upsert_task_edge(gate, task, "waits_on_gate", "a")
+        await coordination_service.cancel_task(gate, "a")
+
+        assert task not in _ids(await coordination_service.list_ready())
+        blocked = await coordination_service.list_blocked()
+        b_row = next(t for t in blocked if t["id"] == task)
+        assert b_row["blockers"][0]["kind"] == "blocker_unsatisfiable"
+        assert b_row["blockers"][0]["status"] == "cancelled"
+
+    async def test_timer_gate_past_ready_at_auto_resolves(
+        self, coordination_service: CoordinationService
+    ):
+        gate = await _gate(coordination_service, "timer", ready_at=PAST)
+        task = await _mk(coordination_service, "Task")
+        await coordination_service.upsert_task_edge(gate, task, "waits_on_gate", "a")
+        # past ready_at -> resolved at query time, no completion needed
+        assert task in _ids(await coordination_service.list_ready())
+        assert task not in _ids(await coordination_service.list_blocked())
+
+    async def test_timer_gate_future_ready_at_blocks(
+        self, coordination_service: CoordinationService
+    ):
+        gate = await _gate(coordination_service, "timer", ready_at=FUTURE)
+        task = await _mk(coordination_service, "Task")
+        await coordination_service.upsert_task_edge(gate, task, "waits_on_gate", "a")
+        assert task not in _ids(await coordination_service.list_ready())
+        b_row = next(t for t in await coordination_service.list_blocked() if t["id"] == task)
+        assert b_row["blockers"][0]["kind"] == "gate"
+
+    async def test_cancelled_timer_past_ready_at_still_unsatisfiable(
+        self, coordination_service: CoordinationService
+    ):
+        # cancelled wins over the timer: a cancelled timer gate past ready_at does
+        # NOT resolve its waiter.
+        gate = await _gate(coordination_service, "timer", ready_at=PAST)
+        task = await _mk(coordination_service, "Task")
+        await coordination_service.upsert_task_edge(gate, task, "waits_on_gate", "a")
+        await coordination_service.cancel_task(gate, "a")
+        assert task not in _ids(await coordination_service.list_ready())
+        b_row = next(t for t in await coordination_service.list_blocked() if t["id"] == task)
+        assert b_row["blockers"][0]["kind"] == "blocker_unsatisfiable"
+
+    async def test_mixed_blocks_gate_cycle_rejected(
+        self, coordination_service: CoordinationService
+    ):
+        # A blocks G, G waits_on_gate A  ->  A depends on G and G depends on A.
+        a = await _mk(coordination_service, "A")
+        g = await _gate(coordination_service, "human")
+        await coordination_service.upsert_task_edge(a, g, "blocks", "a")
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.upsert_task_edge(g, a, "waits_on_gate", "a")
+        assert exc.value.code == "cycle"
+
+
 # ==================== Backfill + migration ====================
 
 
@@ -693,8 +827,8 @@ class TestServerTaskGraphTools:
         assert res["unblocked"] == [b]
 
     async def test_create_bad_task_type_error_envelope(self, server: LithosServer):
-        # 'gate' is not accepted until Phase 3 ('epic' is now accepted in Phase 2)
-        res = await _call(server, "lithos_task_create", title="T", agent="a", task_type="gate")
+        # task/epic/gate are accepted; 'subtask' was dropped entirely
+        res = await _call(server, "lithos_task_create", title="T", agent="a", task_type="subtask")
         assert res["status"] == "error"
         assert res["code"] == "invalid_task_type"
 
@@ -740,3 +874,35 @@ class TestServerTaskGraphTools:
         )
         assert bad["status"] == "error"
         assert bad["code"] == "invalid_relation_type"
+
+    async def test_gate_create_validation_and_blocked_kind(self, server: LithosServer):
+        # invalid gate (no gate_type) -> error envelope
+        bad = await _call(server, "lithos_task_create", title="G", agent="a", task_type="gate")
+        assert bad["status"] == "error"
+        assert bad["code"] == "invalid_input"
+
+        # valid gate + waits_on_gate edge -> waiter shows up blocked with kind 'gate'
+        gate = await _call(
+            server,
+            "lithos_task_create",
+            title="Approval",
+            agent="a",
+            task_type="gate",
+            metadata={"gate_type": "human"},
+        )
+        gate_id = gate["task_id"]
+        task = await server.coordination.create_task(title="Task", agent="a")
+        await _call(
+            server,
+            "lithos_task_edge_upsert",
+            from_task_id=gate_id,
+            to_task_id=task,
+            type="waits_on_gate",
+            agent="a",
+        )
+        blocked = await _call(server, "lithos_task_blocked")
+        b_row = next(t for t in blocked["tasks"] if t["id"] == task)
+        assert b_row["blockers"][0]["kind"] == "gate"
+        # completing the gate reports the waiter as unblocked
+        done = await _call(server, "lithos_task_complete", task_id=gate_id, agent="a")
+        assert done["unblocked"] == [task]

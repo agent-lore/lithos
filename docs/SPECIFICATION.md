@@ -751,7 +751,7 @@ Create a coordination task.
 | `tags` | string[] | No | Task tags |
 | `agent` | string | Yes | Creating agent identifier |
 | `metadata` | object | No | Arbitrary JSON metadata dict persisted on the task row at insert time. Omitted (or `null`) creates a task with empty metadata. This is an **initial set**, not a merge — the row does not yet exist, so there is nothing to merge into. Subsequent mutations go through `lithos_task_update`, which applies an additive per-key merge (see that tool's **Behavior** for the contract). Must **not** contain `depends_on`/`blocked_on` — dependencies are first-class task edges now (use `depends_on` below or `lithos_task_edge_upsert`); a write containing those keys is rejected with `invalid_metadata_key`. |
-| `task_type` | string | No | First-class task type: `task` or `epic` (`gate` arrives in Phase 3); any other value is rejected with `invalid_task_type`. Defaults to `task`. An `epic` is a roll-up container and is excluded from `lithos_task_ready`. |
+| `task_type` | string | No | First-class task type: `task`, `epic`, or `gate`; any other value is rejected with `invalid_task_type`. Defaults to `task`. An `epic` (roll-up container) and a `gate` (external wait) are both excluded from `lithos_task_ready`. A `gate` requires gate metadata (see Gates below) — invalid gate metadata is rejected with `invalid_input`. |
 | `depends_on` | string[] | No | Predecessor task IDs. Each creates a `blocks` edge `predecessor -> this task`, so this task is not ready until every predecessor is `completed`. Predecessors must already exist (else `task_not_found`). A brand-new task has no outgoing edges, so `depends_on` can never form a cycle. |
 | `parent_task_id` | string | No | Optional parent. Creates a `parent_child` edge `parent -> this task` (purely structural; never blocks the child). The parent must exist (else `task_not_found`) and may be any task type. |
 
@@ -892,7 +892,7 @@ Fetch a single task by ID. Returns the full task record without claims; use `lit
 
 #### Task Graph (Phase 1)
 
-The task graph makes dependencies first-class via a `task_edges` table (see §7) and a `task_type` column. Lithos remains **passive**: readiness is computed at query time from edges and task status; nothing polls external systems. The accepted edge types grow per delivery phase — Phase 1 ships `blocks` (blocking), `parent_child` (structural, non-blocking), and `discovered_from` (provenance, non-blocking); `waits_on_gate` and deferred relational types are rejected until later phases.
+The task graph makes dependencies first-class via a `task_edges` table (see §7) and a `task_type` column. Lithos remains **passive**: readiness is computed at query time from edges and task status; nothing polls external systems. The accepted edge types grow per delivery phase — Phase 1 ships `blocks` (blocking), `parent_child` (structural, non-blocking), and `discovered_from` (provenance, non-blocking); Phase 3 adds `waits_on_gate` (blocking, gate-resolved); deferred relational types are still rejected.
 
 **Readiness predicate.** A task is *ready* when it is `open`, is not a `gate`/`epic`, has no incoming blocking edge whose predecessor is unsatisfied (a `blocks` predecessor must be `completed` — a predecessor still `open`, or terminal-but-cancelled, leaves the edge unsatisfied), and is not held by an unresolved gate. A predecessor that ends `cancelled` leaves its dependents **permanently** blocked (`blocker_unsatisfiable`) rather than spuriously ready — Lithos refuses to call them ready and explains why, leaving re-open/re-route/cancel to the orchestrator.
 
@@ -941,7 +941,7 @@ Return open tasks that are not ready, each with structured blocker reasons.
 
 **Arguments:** same filter surface as `lithos_task_ready` (no `with_claims`).
 
-**Returns:** `{ tasks: [{ ..., blockers: [{ kind, task_id, type, status, message }] }] }`. `kind` is one of `task` (predecessor still `open` — just waiting), `blocker_unsatisfiable` (predecessor `cancelled` — needs intervention), or `cycle` (the blocking chain forms a dependency cycle; `message` names the members). Gate blocker kinds arrive in Phase 3.
+**Returns:** `{ tasks: [{ ..., blockers: [{ kind, task_id, type, status, message }] }] }`. `kind` is one of `task` (predecessor still `open` — just waiting), `gate` (waiting on an unresolved gate — see Gates below), `blocker_unsatisfiable` (predecessor or gate `cancelled` — needs intervention), or `cycle` (the blocking chain forms a dependency cycle; `message` names the members).
 
 #### Hierarchy & Spawn (Phase 2)
 
@@ -976,6 +976,26 @@ Create a follow-on task linked to an existing source task.
 | `metadata` | object | No | Extra metadata; overrides inherited keys. Must not contain `depends_on`/`blocked_on`. |
 
 **Returns:** `{ task_id: string }`, or `{ status: "error", code, message }` (codes: `invalid_relation_type`, `task_not_found`, `invalid_metadata_key`). The spawned task is always `task_type='task'`.
+
+#### Gates (Phase 3)
+
+A **gate** is an external wait modelled as an ordinary task with `task_type='gate'`. It is created via `lithos_task_create` (no dedicated tool) and a task waits on it via a `waits_on_gate` edge (`gate -> task`). Gates are excluded from `lithos_task_ready`.
+
+**Gate metadata** (validated at creation; invalid → `invalid_input`):
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `gate_type` | Yes | One of `human`, `timer`, `ci`, `pr`, `external_task` |
+| `ready_at` | `timer` only | ISO datetime; the gate auto-resolves once `ready_at <= now`. Normalized to a canonical UTC, second-precision ISO string at creation (a naive value is read as UTC). |
+
+Other type-specific keys (`approval_required_from`, `provider`, `run_id`, `repo`, `pr_number`, `external_id`, `required_state`, …) are advisory — they tell the resolving agent what to check; Lithos does not read them.
+
+**Resolution model — Lithos never polls.** A `waits_on_gate` edge blocks its waiter until the gate is **resolved**:
+
+- the gate task is `completed` (an agent observed the condition and completed it), **or**
+- the gate is an `open` `timer` gate whose `ready_at` has passed (evaluated at query time; no state change).
+
+A **cancelled** gate is **unsatisfiable** — its waiter is excluded from `ready` and surfaced in `lithos_task_blocked` with `kind="blocker_unsatisfiable"` (the awaited condition will not be met). "Proceed anyway" is expressed by *completing* the gate or removing the edge, not by cancelling it. An open, not-yet-resolved gate surfaces as a `kind="gate"` blocker. This mirrors `blocks` (`completed` = satisfied, `cancelled` = unsatisfiable) plus the `timer` auto-resolve. Completing a gate reports its newly-ready waiters in the completion's `unblocked` list.
 
 #### `lithos_finding_post`
 Post a finding to a task.
@@ -1700,7 +1720,7 @@ These are explicitly not part of the initial implementation but may be considere
 | LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
 | HTTP | `GET /health`, `GET /events`, `GET /audit` (not MCP tools; see §5.7 and §8.7) |
 
-**Total: 35 MCP tools + 3 HTTP endpoints** (task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
+**Total: 35 MCP tools + 3 HTTP endpoints** (task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
 
 ---
 

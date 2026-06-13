@@ -2522,8 +2522,13 @@ class LithosServer:
                 metadata: Arbitrary JSON metadata dict (optional). Must NOT contain
                     ``depends_on``/``blocked_on`` — dependencies are first-class task
                     edges now; pass ``depends_on`` instead.
-                task_type: First-class task type: ``task`` or ``epic`` (``gate``
-                    arrives in a later phase).
+                task_type: First-class task type: ``task``, ``epic``, or ``gate``.
+                    A ``gate`` is an external wait and requires
+                    ``metadata.gate_type`` in human/timer/ci/pr/external_task; a
+                    ``timer`` gate also requires a parseable ``metadata.ready_at``
+                    (ISO datetime). Link a task to a gate with a ``waits_on_gate``
+                    edge; resolve a gate by completing it (``timer`` gates resolve
+                    on their own once ``ready_at`` passes).
                 depends_on: Predecessor task IDs. Each creates a ``blocks`` edge so
                     this task is not ready until that predecessor is completed.
                     Predecessors must already exist.
@@ -3070,8 +3075,12 @@ class LithosServer:
 
             Edge types accepted in this phase: ``blocks`` (to_task is not ready
             until from_task is completed), ``parent_child`` (from_task is the
-            parent; purely structural, never blocks), and ``discovered_from``
-            (to_task was discovered while executing from_task; non-blocking).
+            parent; purely structural, never blocks), ``discovered_from`` (to_task
+            was discovered while executing from_task; non-blocking), and
+            ``waits_on_gate`` (to_task is not ready until the gate from_task is
+            resolved — the gate is completed, or a ``timer`` gate whose
+            ``ready_at`` has passed; a cancelled gate makes the waiter
+            unsatisfiable).
 
             Args:
                 from_task_id: Source task (blocker / parent / source).
@@ -3221,7 +3230,8 @@ class LithosServer:
             Same filter surface as ``lithos_task_ready``. Each returned task carries
             a ``blockers`` list; each blocker has ``kind``:
             ``task`` (predecessor still open — just waiting),
-            ``blocker_unsatisfiable`` (predecessor was cancelled — needs
+            ``gate`` (waiting on an unresolved gate),
+            ``blocker_unsatisfiable`` (predecessor or gate was cancelled — needs
             intervention), or ``cycle`` (the dependency chain forms a cycle).
 
             Args:

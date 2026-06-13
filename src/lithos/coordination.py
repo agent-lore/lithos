@@ -24,21 +24,33 @@ logger = logging.getLogger(__name__)
 # implemented. Phase 1 ships blocks/parent_child/discovered_from. Phase 3 adds
 # ``waits_on_gate``. Deferred types (caused_by, validates, relates_to,
 # duplicate_of, superseded_by) are added only when something consumes them.
-ACCEPTED_EDGE_TYPES: frozenset[str] = frozenset({"blocks", "parent_child", "discovered_from"})
+ACCEPTED_EDGE_TYPES: frozenset[str] = frozenset(
+    {"blocks", "parent_child", "discovered_from", "waits_on_gate"}
+)
 
-# Edge types that gate readiness. A task is not ready while it has an incoming
-# blocking edge whose predecessor is not ``completed``. Gains ``waits_on_gate``
-# in Phase 3.
+# Edge types resolved by predecessor ``completed`` status. A task is not ready
+# while it has an incoming ``blocks`` edge whose predecessor is not ``completed``.
 BLOCKING_EDGE_TYPES: frozenset[str] = frozenset({"blocks"})
+
+# Gate edges. A ``waits_on_gate`` edge blocks the dependent until the gate task
+# (the ``from`` end) is resolved — see _unsatisfied_blocker_sql for the rule.
+GATE_EDGE_TYPES: frozenset[str] = frozenset({"waits_on_gate"})
+
+# The full "X waits on Y" dependency graph (blocks + gates). Readiness and cycle
+# detection operate over this combined set so mixed cycles are rejected.
+DEPENDENCY_EDGE_TYPES: frozenset[str] = BLOCKING_EDGE_TYPES | GATE_EDGE_TYPES
 
 # Hierarchy edges. Purely structural (never block readiness), but must stay
 # acyclic — a task cannot be its own ancestor — so cycles are rejected on write.
 HIERARCHY_EDGE_TYPES: frozenset[str] = frozenset({"parent_child"})
 
 # Task types accepted on write this phase (see ACCEPTED_EDGE_TYPES rationale).
-# ``gate`` is accepted from Phase 3. The column itself defaults to 'task' and
-# physically holds any string; only the write-validation set is phase-gated.
-ACCEPTED_TASK_TYPES: frozenset[str] = frozenset({"task", "epic"})
+# The column defaults to 'task' and physically holds any string; only the
+# write-validation set is phase-gated.
+ACCEPTED_TASK_TYPES: frozenset[str] = frozenset({"task", "epic", "gate"})
+
+# Valid ``gate_type`` values for a ``task_type='gate'`` task.
+GATE_TYPES: frozenset[str] = frozenset({"human", "timer", "ci", "pr", "external_task"})
 
 # Task types that are never directly workable units and so are excluded from the
 # ready frontier. ``epic`` is a roll-up container (you execute its children, not
@@ -87,6 +99,37 @@ def _reject_scheduling_metadata(metadata: dict[str, Any] | None) -> None:
             "first-class task edges. Use depends_on on lithos_task_create, or "
             "lithos_task_edge_upsert.",
         )
+
+
+def _validate_gate_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Validate + normalize the metadata of a ``task_type='gate'`` task.
+
+    Requires a valid ``gate_type``; ``timer`` gates require a parseable
+    ``ready_at``, which is rewritten to a canonical UTC second-precision ISO
+    string (a naive value is interpreted as UTC) so the ready/blocked timer
+    comparison is one consistent lexicographic check. Returns a new metadata dict
+    (the input is not mutated). Raises CoordinationError(invalid_input) on any
+    violation.
+    """
+    md = dict(metadata or {})
+    gate_type = md.get("gate_type")
+    if gate_type not in GATE_TYPES:
+        raise CoordinationError(
+            "invalid_input",
+            f"a gate task requires metadata.gate_type in {sorted(GATE_TYPES)}, got {gate_type!r}.",
+        )
+    if gate_type == "timer":
+        raw = md.get("ready_at")
+        parsed = _parse_datetime(raw) if raw is not None else None
+        if parsed is None:
+            raise CoordinationError(
+                "invalid_input",
+                f"a 'timer' gate requires a parseable metadata.ready_at (ISO datetime), got {raw!r}.",
+            )
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        md["ready_at"] = parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+    return md
 
 
 # SQL Schema
@@ -873,7 +916,10 @@ class CoordinationService:
             tags: Task tags
             metadata: Arbitrary JSON metadata dict (optional). Must not contain
                 ``depends_on``/``blocked_on`` — dependencies are task edges now.
-            task_type: First-class task type (``task`` or ``epic``).
+            task_type: First-class task type (``task``, ``epic`` or ``gate``). A
+                ``gate`` requires ``metadata.gate_type`` (human/timer/ci/pr/
+                external_task); a ``timer`` gate also requires a parseable
+                ``metadata.ready_at``.
             depends_on: Predecessor task ids. Each creates a ``blocks`` edge
                 ``predecessor -> this task``. Predecessors must already exist.
             parent_task_id: Optional parent. Creates a ``parent_child`` edge
@@ -884,8 +930,9 @@ class CoordinationService:
             Task ID
 
         Raises:
-            CoordinationError: invalid task_type, forbidden metadata key, or a
-                ``depends_on``/``parent_task_id`` reference to a nonexistent task.
+            CoordinationError: invalid task_type, forbidden metadata key, invalid
+                gate metadata, or a ``depends_on``/``parent_task_id`` reference to
+                a nonexistent task.
         """
         import json
 
@@ -896,6 +943,8 @@ class CoordinationService:
                 f"task_type '{task_type}' is not accepted in this phase "
                 f"(accepted: {sorted(ACCEPTED_TASK_TYPES)}).",
             )
+        if task_type == "gate":
+            metadata = _validate_gate_metadata(metadata)
 
         lithos_metrics.coordination_ops.add(1, {"op": "create_task"})
         await self.ensure_agent_known(agent)
@@ -1798,16 +1847,18 @@ class CoordinationService:
                     "task_not_found", f"edge references nonexistent task(s): {missing}"
                 )
 
-            if edge_type in BLOCKING_EDGE_TYPES:
+            if edge_type in DEPENDENCY_EDGE_TYPES:
                 # Adding from->to means "to depends on from"; reject if from
                 # already depends on to (reverse = up the depends-on chain).
+                # Traverses the whole dependency graph (blocks + waits_on_gate) so
+                # mixed cycles are caught.
                 cycle = await self._find_edge_path(
-                    db, from_task_id, to_task_id, BLOCKING_EDGE_TYPES, reverse=True
+                    db, from_task_id, to_task_id, DEPENDENCY_EDGE_TYPES, reverse=True
                 )
                 if cycle is not None:
                     raise CoordinationError(
                         "cycle",
-                        "blocking edge "
+                        f"{edge_type} edge "
                         f"{from_task_id} -> {to_task_id} would create a dependency cycle: "
                         f"{' -> '.join(cycle)} -> {from_task_id}",
                     )
@@ -1963,21 +2014,49 @@ class CoordinationService:
                 stack.append(neighbour)
         return None
 
+    @staticmethod
+    def _now_iso() -> str:
+        """Canonical UTC second-precision ISO 'now' — matches the normalized
+        ``ready_at`` stored on timer gates, so the comparison is exact."""
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+    @staticmethod
+    def _unsatisfied_blocker_sql(now: str) -> tuple[str, list[Any]]:
+        """SQL fragment + params for "incoming edge ``e`` (predecessor ``p``) is
+        an unsatisfied blocker", the single source of truth for readiness.
+
+        A ``blocks`` edge is unsatisfied while its predecessor is not ``completed``.
+        A ``waits_on_gate`` edge is unsatisfied while the gate is not resolved —
+        resolved means the gate is ``completed``, or it is an ``open`` ``timer``
+        gate whose ``ready_at <= now``. A ``cancelled`` gate is therefore
+        unsatisfied (cancelled wins over a timer), surfaced as ``blocker_unsatisfiable``.
+        """
+        blocking = tuple(BLOCKING_EDGE_TYPES)
+        gate = tuple(GATE_EDGE_TYPES)
+        bph = ",".join("?" for _ in blocking)
+        gph = ",".join("?" for _ in gate)
+        fragment = (
+            f"( (e.type IN ({bph}) AND p.status != 'completed')"
+            f" OR (e.type IN ({gph}) AND p.status != 'completed'"
+            "      AND NOT (p.status = 'open'"
+            "               AND json_extract(p.metadata, '$.gate_type') = 'timer'"
+            "               AND json_extract(p.metadata, '$.ready_at') <= ?)) )"
+        )
+        return fragment, [*blocking, *gate, now]
+
     async def _is_task_ready(self, db: aiosqlite.Connection, task_id: str) -> bool:
         """Whether a single task currently satisfies the readiness predicate."""
-        blocking = tuple(BLOCKING_EDGE_TYPES)
-        placeholders = ",".join("?" for _ in blocking)
         non_workable = ",".join("?" for _ in NON_WORKABLE_TASK_TYPES)
+        frag, fparams = self._unsatisfied_blocker_sql(self._now_iso())
         cursor = await db.execute(
             f"""
             SELECT 1 FROM tasks t
             WHERE t.id = ? AND t.status = 'open' AND t.task_type NOT IN ({non_workable})
               AND NOT EXISTS (
                 SELECT 1 FROM task_edges e JOIN tasks p ON p.id = e.from_task_id
-                WHERE e.to_task_id = t.id AND e.type IN ({placeholders})
-                  AND p.status != 'completed')
+                WHERE e.to_task_id = t.id AND {frag})
             """,
-            (task_id, *NON_WORKABLE_TASK_TYPES, *blocking),
+            (task_id, *NON_WORKABLE_TASK_TYPES, *fparams),
         )
         return await cursor.fetchone() is not None
 
@@ -2066,19 +2145,18 @@ class CoordinationService:
             effective_match["project"] = project
         md_clause, md_params = _metadata_match_clause(effective_match or None, column="t.metadata")
 
-        blocking = tuple(BLOCKING_EDGE_TYPES)
-        bph = ",".join("?" for _ in blocking)
         non_workable = ",".join("?" for _ in NON_WORKABLE_TASK_TYPES)
+        frag, fparams = self._unsatisfied_blocker_sql(self._now_iso())
         exists_kw = "NOT EXISTS" if ready else "EXISTS"
         query = (
             "SELECT t.* FROM tasks t "
             f"WHERE t.status = 'open' AND t.task_type NOT IN ({non_workable}) "
             f"AND {exists_kw} ("
             "  SELECT 1 FROM task_edges e JOIN tasks p ON p.id = e.from_task_id"
-            f"  WHERE e.to_task_id = t.id AND e.type IN ({bph}) AND p.status != 'completed')"
+            f"  WHERE e.to_task_id = t.id AND {frag})"
             f"{md_clause} ORDER BY t.created_at DESC"
         )
-        params = [*NON_WORKABLE_TASK_TYPES, *blocking, *md_params]
+        params = [*NON_WORKABLE_TASK_TYPES, *fparams, *md_params]
         if sql_limit is not None:
             query += " LIMIT ?"
             params.append(sql_limit)
@@ -2117,22 +2195,27 @@ class CoordinationService:
         db: aiosqlite.Connection,
         task_id: str,
     ) -> list[dict[str, Any]]:
-        """Explain why ``task_id`` is blocked: one entry per unsatisfied predecessor."""
-        blocking = tuple(BLOCKING_EDGE_TYPES)
-        placeholders = ",".join("?" for _ in blocking)
+        """Explain why ``task_id`` is blocked: one entry per unsatisfied predecessor.
+
+        Uses the same ``_unsatisfied_blocker_sql`` predicate as readiness (one
+        source of truth), so only genuinely-unsatisfied edges are returned and a
+        timer-resolved gate never appears here. Each row is then classified.
+        """
+        frag, fparams = self._unsatisfied_blocker_sql(self._now_iso())
         cursor = await db.execute(
             f"""
-            SELECT e.from_task_id, e.type, p.status
+            SELECT e.from_task_id, e.type, p.status, p.metadata
             FROM task_edges e JOIN tasks p ON p.id = e.from_task_id
-            WHERE e.to_task_id = ? AND e.type IN ({placeholders})
+            WHERE e.to_task_id = ? AND {frag}
             """,
-            (task_id, *blocking),
+            (task_id, *fparams),
         )
         blockers: list[dict[str, Any]] = []
-        for pred_id, edge_type, pred_status in await cursor.fetchall():
-            if pred_status == "completed":
-                continue
+        for pred_id, edge_type, pred_status, pred_metadata in await cursor.fetchall():
+            is_gate = edge_type in GATE_EDGE_TYPES
             if pred_status == "cancelled":
+                noun = "Gate" if is_gate else "Blocking predecessor"
+                what = "gate" if is_gate else "predecessor"
                 blockers.append(
                     {
                         "kind": "blocker_unsatisfiable",
@@ -2140,14 +2223,28 @@ class CoordinationService:
                         "type": edge_type,
                         "status": "cancelled",
                         "message": (
-                            f"Blocking predecessor {pred_id} was cancelled; this task can "
-                            "never become ready without intervention (re-open or re-route "
-                            "the predecessor, or cancel this subtree)."
+                            f"{noun} {pred_id} was cancelled; this task can never become ready "
+                            f"without intervention (complete/re-open the {what}, re-route, or "
+                            "cancel this subtree)."
                         ),
                     }
                 )
                 continue
-            # predecessor is open: distinguish a genuine wait from a dependency cycle
+            if is_gate:
+                md = _decode_metadata(pred_metadata)
+                gate_type = md.get("gate_type")
+                detail = f" (ready_at={md.get('ready_at')})" if gate_type == "timer" else ""
+                blockers.append(
+                    {
+                        "kind": "gate",
+                        "task_id": pred_id,
+                        "type": edge_type,
+                        "status": pred_status,
+                        "message": f"Waiting on {gate_type} gate {pred_id}{detail}.",
+                    }
+                )
+                continue
+            # blocks edge, predecessor open: distinguish a genuine wait from a cycle
             cycle = await self._find_edge_path(
                 db, pred_id, task_id, BLOCKING_EDGE_TYPES, reverse=True
             )
@@ -2178,17 +2275,17 @@ class CoordinationService:
         """Return ids of tasks that ``task_id`` blocked and that are now ready.
 
         Called by the MCP layer right after a successful completion. Each
-        candidate is a ``blocks`` dependent of ``task_id``; it is reported only if
-        it now satisfies the readiness predicate (this completion may have cleared
-        its last blocker).
+        candidate is a ``blocks`` dependent or ``waits_on_gate`` waiter of
+        ``task_id`` (so completing a gate surfaces its now-ready waiters); it is
+        reported only if it now satisfies the readiness predicate.
         """
-        blocking = tuple(BLOCKING_EDGE_TYPES)
-        placeholders = ",".join("?" for _ in blocking)
+        dependency = tuple(DEPENDENCY_EDGE_TYPES)
+        placeholders = ",".join("?" for _ in dependency)
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 f"SELECT DISTINCT to_task_id FROM task_edges "
                 f"WHERE from_task_id = ? AND type IN ({placeholders})",
-                (task_id, *blocking),
+                (task_id, *dependency),
             )
             candidates = [row[0] for row in await cursor.fetchall()]
             return [c for c in candidates if await self._is_task_ready(db, c)]
