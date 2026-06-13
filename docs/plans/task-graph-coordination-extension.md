@@ -249,7 +249,7 @@ Returns:
 
 ### `lithos_task_ready`
 
-Return open tasks with no active blocking edges and no unresolved gates.
+Return open tasks with no unsatisfied blocking edges (every blocking predecessor `completed`) and no unresolved gates.
 
 Arguments:
 
@@ -266,7 +266,7 @@ Returns:
 Behavior:
 
 - only `status='open'`
-- excludes tasks blocked by open blocking predecessors
+- excludes tasks with an unsatisfied blocking predecessor — one not yet `completed` (still `open`, or terminal-but-not-completed i.e. `cancelled`; see §8)
 - excludes tasks blocked by unresolved gates
 - optionally excludes already-claimed tasks unless requested otherwise
 
@@ -290,7 +290,7 @@ Blocker entries should include:
 - `status` — for `task` and `blocker_unsatisfiable` kinds, the blocking predecessor's current status (`open` / `cancelled`), so a client can distinguish a still-running blocker ("not yet") from a permanently-failed one ("needs intervention")
 - `message`
 
-There is no `external` blocker kind: external waits are always represented as gate tasks (§5.3). Every blocker is therefore a `task` (an `open` predecessor — the dependent is merely waiting on in-progress work), a `blocker_unsatisfiable` (a predecessor that ended `cancelled`, so the dependent can never become ready without intervention — see §8 and §12.4), a `gate`, or a `cycle` error from the backfill (§8). `cycle` blockers carry the task IDs forming the cycle in `message`; `blocker_unsatisfiable` blockers carry the cancelled predecessor's id in `message`.
+There is no `external` blocker kind: external waits are always represented as gate tasks (§5.3). Every blocker is therefore a `task` (an `open` predecessor — the dependent is merely waiting on in-progress work), a `blocker_unsatisfiable` (a predecessor that ended `cancelled`, so the dependent can never become ready without intervention — see §8 and §12.4), a `gate`, or a `cycle` error from the backfill (§8). `cycle` blockers carry the task IDs forming the cycle in `message`; a `blocker_unsatisfiable` blocker carries the cancelled predecessor in `task_id` (with its `status`), keeping `message` human-readable.
 
 ### `lithos_task_spawn`
 
@@ -317,7 +317,7 @@ Behavior:
 - can inherit `metadata.project`, project tag, and selected scheduling metadata
 - creates the relation edge automatically, always with the source task as `from_task_id` and the spawned task as `to_task_id`:
   - `discovered_from`: source → spawned (the spawned task was discovered during the source task)
-  - `blocks`: source → spawned (the spawned task is blocked until the source task closes). Spawning a task that blocks its source is not supported; use `lithos_task_edge_upsert` explicitly for that.
+  - `blocks`: source → spawned (the spawned task is blocked until the source task is `completed`; a `cancelled` source leaves it `blocker_unsatisfiable` — see §8). Spawning a task that blocks its source is not supported; use `lithos_task_edge_upsert` explicitly for that.
 
 ### `lithos_task_children`
 
