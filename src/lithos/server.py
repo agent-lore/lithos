@@ -3111,7 +3111,7 @@ class LithosServer:
             task_id: str,
             direction: str = "both",
             types: list[str] | None = None,
-        ) -> dict[str, list[dict[str, Any]]]:
+        ) -> dict[str, Any]:
             """List edges touching a task.
 
             Args:
@@ -3128,9 +3128,18 @@ class LithosServer:
             with tracer.start_as_current_span("lithos.tool.task_edge_list") as span:
                 span.set_attribute("lithos.tool", "lithos_task_edge_list")
                 span.set_attribute("lithos.task_id", task_id)
+                if direction not in ("incoming", "outgoing", "both"):
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": (
+                            f"direction must be 'incoming', 'outgoing', or 'both', got "
+                            f"{direction!r}."
+                        ),
+                    }
                 edges = await self.coordination.list_task_edges(
                     task_id=task_id,
-                    direction=direction,  # type: ignore[arg-type]
+                    direction=direction,
                     types=types,
                 )
                 return {"edges": edges}

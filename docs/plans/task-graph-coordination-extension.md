@@ -406,7 +406,8 @@ A task is ready when all of the following are true:
 2. the task is a directly-workable unit — i.e. not a `gate` (and, once Phase 2 ships the `epic` type, not an `epic`: you execute an epic's children, not the epic itself). The readiness predicate uses a forward-compatible `task_type NOT IN ('gate', 'epic')` guard from Phase 1; the excluded types simply cannot be created yet until their phase lands.
 3. every incoming blocking edge is **satisfied** — for a `blocks` edge that means the predecessor is `completed` (a predecessor still `open`, or terminal-but-not-`completed` i.e. `cancelled`, leaves the edge unsatisfied; see the blocker-failure policy below)
 4. it is not blocked by an unresolved gate
-5. if filtering excludes claimed tasks, it has no active conflicting claims
+
+Claims do **not** enter the readiness predicate: a claimed task is still ready. `lithos_task_ready` *attaches* active claims (when `with_claims`) but never excludes by them — see §6.1 for why (atomic-claim correctness + per-aspect claims).
 
 MVP blocked rule:
 

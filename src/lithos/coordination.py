@@ -1927,7 +1927,12 @@ class CoordinationService:
         but never used to exclude a task — collision-correctness lives in the
         atomic claim, and claims are per-aspect.
         """
-        rows = await self._frontier_rows(ready=True, project=project, metadata_match=metadata_match)
+        rows = await self._frontier_rows(
+            ready=True,
+            project=project,
+            metadata_match=metadata_match,
+            sql_limit=None if tags else limit,
+        )
         results = self._apply_tags_and_limit(rows, tags, limit)
         if with_claims and results:
             async with aiosqlite.connect(self.db_path) as db:
@@ -1952,7 +1957,10 @@ class CoordinationService:
         ``task``/``blocker_unsatisfiable``/``cycle`` (gate kinds arrive in Phase 3).
         """
         rows = await self._frontier_rows(
-            ready=False, project=project, metadata_match=metadata_match
+            ready=False,
+            project=project,
+            metadata_match=metadata_match,
+            sql_limit=None if tags else limit,
         )
         results = self._apply_tags_and_limit(rows, tags, limit)
         async with aiosqlite.connect(self.db_path) as db:
@@ -1965,12 +1973,17 @@ class CoordinationService:
         ready: bool,
         project: str | None,
         metadata_match: dict | None,
+        sql_limit: int | None = None,
     ) -> list[Any]:
         """Fetch open workable rows partitioned by the readiness anti-join.
 
         ``ready=True`` selects tasks with no unsatisfied blocking predecessor;
         ``ready=False`` selects those with at least one. Both ride on the indexed
         ``status='open'`` frontier and the task_edges indexes.
+
+        ``sql_limit`` pushes ``LIMIT`` into SQL so the engine stops early. Callers
+        pass it only when no Python-side ``tags`` post-scan follows (a tag filter
+        would otherwise drop rows after the cap and under-fill the result).
         """
         effective_match = dict(metadata_match) if metadata_match else {}
         if project is not None:
@@ -1990,6 +2003,9 @@ class CoordinationService:
             f"{md_clause} ORDER BY t.created_at DESC"
         )
         params = [*NON_WORKABLE_TASK_TYPES, *blocking, *md_params]
+        if sql_limit is not None:
+            query += " LIMIT ?"
+            params.append(sql_limit)
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(query, params)

@@ -190,6 +190,20 @@ class TestReadyBlocked:
         ready = await coordination_service.list_ready(limit=3)
         assert len(ready) == 3
 
+    async def test_ready_limit_with_tags_post_scan(
+        self, coordination_service: CoordinationService
+    ):
+        # With a tag filter the limit is applied AFTER the Python post-scan, so a
+        # SQL LIMIT must NOT be pushed down (it would under-fill). Create more
+        # tagged-matching tasks than the limit and confirm we still get `limit`.
+        for i in range(5):
+            await _mk(coordination_service, f"T{i}", tags=["x"])
+        for i in range(3):
+            await _mk(coordination_service, f"U{i}", tags=["other"])
+        ready = await coordination_service.list_ready(tags=["x"], limit=2)
+        assert len(ready) == 2
+        assert all("x" in t["tags"] for t in ready)
+
 
 # ==================== Cycles ====================
 
@@ -447,3 +461,9 @@ class TestServerTaskGraphTools:
         res = await _call(server, "lithos_task_create", title="T", agent="a", task_type="epic")
         assert res["status"] == "error"
         assert res["code"] == "invalid_task_type"
+
+    async def test_edge_list_invalid_direction_rejected(self, server: LithosServer):
+        a = await server.coordination.create_task(title="A", agent="a")
+        res = await _call(server, "lithos_task_edge_list", task_id=a, direction="sideways")
+        assert res["status"] == "error"
+        assert res["code"] == "invalid_input"
