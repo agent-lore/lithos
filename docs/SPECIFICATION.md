@@ -751,8 +751,9 @@ Create a coordination task.
 | `tags` | string[] | No | Task tags |
 | `agent` | string | Yes | Creating agent identifier |
 | `metadata` | object | No | Arbitrary JSON metadata dict persisted on the task row at insert time. Omitted (or `null`) creates a task with empty metadata. This is an **initial set**, not a merge — the row does not yet exist, so there is nothing to merge into. Subsequent mutations go through `lithos_task_update`, which applies an additive per-key merge (see that tool's **Behavior** for the contract). Must **not** contain `depends_on`/`blocked_on` — dependencies are first-class task edges now (use `depends_on` below or `lithos_task_edge_upsert`); a write containing those keys is rejected with `invalid_metadata_key`. |
-| `task_type` | string | No | First-class task type. Only `task` is accepted in this phase (`epic` arrives in Phase 2, `gate` in Phase 3); any other value is rejected with `invalid_task_type`. Defaults to `task`. |
+| `task_type` | string | No | First-class task type: `task` or `epic` (`gate` arrives in Phase 3); any other value is rejected with `invalid_task_type`. Defaults to `task`. An `epic` is a roll-up container and is excluded from `lithos_task_ready`. |
 | `depends_on` | string[] | No | Predecessor task IDs. Each creates a `blocks` edge `predecessor -> this task`, so this task is not ready until every predecessor is `completed`. Predecessors must already exist (else `task_not_found`). A brand-new task has no outgoing edges, so `depends_on` can never form a cycle. |
+| `parent_task_id` | string | No | Optional parent. Creates a `parent_child` edge `parent -> this task` (purely structural; never blocks the child). The parent must exist (else `task_not_found`) and may be any task type. |
 
 **Returns:** `{ task_id: string }` on success, or `{ status: "error", code, message }` on validation failure (codes: `invalid_metadata_key`, `invalid_task_type`, `task_not_found`).
 
@@ -941,6 +942,40 @@ Return open tasks that are not ready, each with structured blocker reasons.
 **Arguments:** same filter surface as `lithos_task_ready` (no `with_claims`).
 
 **Returns:** `{ tasks: [{ ..., blockers: [{ kind, task_id, type, status, message }] }] }`. `kind` is one of `task` (predecessor still `open` — just waiting), `blocker_unsatisfiable` (predecessor `cancelled` — needs intervention), or `cycle` (the blocking chain forms a dependency cycle; `message` names the members). Gate blocker kinds arrive in Phase 3.
+
+#### Hierarchy & Spawn (Phase 2)
+
+Hierarchy uses the `parent_child` edge (purely structural — never blocks the child); `epic` is a roll-up container task type (creatable from Phase 2, excluded from `ready`). Hierarchy is kept acyclic: a `parent_child` edge that would make a task its own ancestor is rejected on write with `cycle` (the same bounded-traversal check `blocks` edges use). There are **no epic close rules yet** (an epic may still complete with open children — deferred to Phase 4).
+
+#### `lithos_task_children`
+Return the child tasks of a parent/epic.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `task_id` | string | Yes | Parent whose children to list |
+| `recursive` | boolean | No | Walk the full descendant subtree (default `false`) |
+| `include_closed` | boolean | No | Include completed/cancelled children (default `false` = open only). The subtree is traversed in full regardless, so an open grandchild under a closed child is still surfaced. |
+
+**Returns:** `{ tasks: [...] }` — task records (same shape as `lithos_task_list`), child tasks via outgoing `parent_child` edges, ordered by `created_at` within each parent.
+
+#### `lithos_task_spawn`
+Create a follow-on task linked to an existing source task.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `source_task_id` | string | Yes | The task this follow-on came from |
+| `title` | string | Yes | Title for the spawned task |
+| `agent` | string | Yes | Spawning agent identifier |
+| `description` | string | No | Description for the spawned task |
+| `relation_type` | string | No | `discovered_from` (default; non-blocking provenance) or `blocks` (spawned waits until source is `completed`). The edge is always `source -> spawned`. |
+| `inherit_project` | boolean | No | Copy `metadata.project` from the source (default `true`) |
+| `inherit_tags` | boolean | No | Copy the source's tags (default `true`) |
+| `inherit_context` | boolean | No | Copy scheduling-convention metadata (`priority`, `parallelizable`, `phase`) from the source (default `true`). Forbidden keys are never inherited. |
+| `metadata` | object | No | Extra metadata; overrides inherited keys. Must not contain `depends_on`/`blocked_on`. |
+
+**Returns:** `{ task_id: string }`, or `{ status: "error", code, message }` (codes: `invalid_relation_type`, `task_not_found`, `invalid_metadata_key`). The spawned task is always `task_type='task'`.
 
 #### `lithos_finding_post`
 Post a finding to a task.
@@ -1660,12 +1695,12 @@ These are explicitly not part of the initial implementation but may be considere
 | Graph | `lithos_tags`, `lithos_related` |
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`, `lithos_task_get`, `lithos_finding_post`, `lithos_finding_list` |
-| Task Graph | `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, `lithos_task_blocked` |
+| Task Graph | `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, `lithos_task_blocked`, `lithos_task_children`, `lithos_task_spawn` |
 | System | `lithos_stats` |
 | LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
 | HTTP | `GET /health`, `GET /events`, `GET /audit` (not MCP tools; see §5.7 and §8.7) |
 
-**Total: 33 MCP tools + 3 HTTP endpoints** (Phase 1 of the task graph added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
+**Total: 35 MCP tools + 3 HTTP endpoints** (task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
 
 ---
 
