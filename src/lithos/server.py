@@ -3152,7 +3152,7 @@ class LithosServer:
             metadata_match: dict | None = None,
             limit: int = 50,
             with_claims: bool = True,
-        ) -> dict[str, list[dict[str, Any]]]:
+        ) -> dict[str, Any]:
             """Return open tasks that are ready to work.
 
             A task is ready when it is open, not a gate/epic, has no incoming
@@ -3182,6 +3182,12 @@ class LithosServer:
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.task_ready") as span:
                 span.set_attribute("lithos.tool", "lithos_task_ready")
+                if limit < 1:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"limit must be >= 1, got {limit}.",
+                    }
                 if metadata_match is not None:
                     try:
                         validate_metadata_match(metadata_match)
@@ -3204,7 +3210,7 @@ class LithosServer:
             tags: list[str] | None = None,
             metadata_match: dict | None = None,
             limit: int = 50,
-        ) -> dict[str, list[dict[str, Any]]]:
+        ) -> dict[str, Any]:
             """Return open tasks that are NOT ready, with structured blocker reasons.
 
             Same filter surface as ``lithos_task_ready``. Each returned task carries
@@ -3226,6 +3232,12 @@ class LithosServer:
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.task_blocked") as span:
                 span.set_attribute("lithos.tool", "lithos_task_blocked")
+                if limit < 1:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"limit must be >= 1, got {limit}.",
+                    }
                 if metadata_match is not None:
                     try:
                         validate_metadata_match(metadata_match)

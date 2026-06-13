@@ -190,9 +190,7 @@ class TestReadyBlocked:
         ready = await coordination_service.list_ready(limit=3)
         assert len(ready) == 3
 
-    async def test_ready_limit_with_tags_post_scan(
-        self, coordination_service: CoordinationService
-    ):
+    async def test_ready_limit_with_tags_post_scan(self, coordination_service: CoordinationService):
         # With a tag filter the limit is applied AFTER the Python post-scan, so a
         # SQL LIMIT must NOT be pushed down (it would under-fill). Create more
         # tagged-matching tasks than the limit and confirm we still get `limit`.
@@ -203,6 +201,19 @@ class TestReadyBlocked:
         ready = await coordination_service.list_ready(tags=["x"], limit=2)
         assert len(ready) == 2
         assert all("x" in t["tags"] for t in ready)
+
+    async def test_non_positive_limit_returns_empty(
+        self, coordination_service: CoordinationService
+    ):
+        # Non-positive limits must yield no tasks, consistently across the SQL
+        # (no-tags) and Python (tags) paths — not one task via append-then-check,
+        # and not "all rows" via SQL LIMIT -1.
+        for i in range(3):
+            await _mk(coordination_service, f"T{i}", tags=["x"])
+        assert await coordination_service.list_ready(limit=0) == []
+        assert await coordination_service.list_ready(limit=-1) == []
+        assert await coordination_service.list_ready(tags=["x"], limit=0) == []
+        assert await coordination_service.list_blocked(limit=0) == []
 
 
 # ==================== Cycles ====================
@@ -467,3 +478,10 @@ class TestServerTaskGraphTools:
         res = await _call(server, "lithos_task_edge_list", task_id=a, direction="sideways")
         assert res["status"] == "error"
         assert res["code"] == "invalid_input"
+
+    async def test_ready_blocked_reject_non_positive_limit(self, server: LithosServer):
+        await server.coordination.create_task(title="A", agent="a")
+        for tool in ("lithos_task_ready", "lithos_task_blocked"):
+            res = await _call(server, tool, limit=0)
+            assert res["status"] == "error", tool
+            assert res["code"] == "invalid_input", tool

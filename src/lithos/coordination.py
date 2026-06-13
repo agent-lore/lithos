@@ -1927,6 +1927,8 @@ class CoordinationService:
         but never used to exclude a task — collision-correctness lives in the
         atomic claim, and claims are per-aspect.
         """
+        if limit <= 0:
+            return []
         rows = await self._frontier_rows(
             ready=True,
             project=project,
@@ -1956,6 +1958,8 @@ class CoordinationService:
         ``blockers`` list whose entries have ``kind`` in
         ``task``/``blocker_unsatisfiable``/``cycle`` (gate kinds arrive in Phase 3).
         """
+        if limit <= 0:
+            return []
         rows = await self._frontier_rows(
             ready=False,
             project=project,
@@ -2017,8 +2021,16 @@ class CoordinationService:
         tags: list[str] | None,
         limit: int,
     ) -> list[dict[str, Any]]:
-        """Tag-filter (post-scan over the open frontier) and cap to ``limit``."""
+        """Tag-filter (post-scan over the open frontier) and cap to ``limit``.
+
+        A non-positive ``limit`` yields no tasks (the append-then-check loop would
+        otherwise return one). The MCP layer rejects ``limit < 1`` outright; this
+        guard keeps direct service callers consistent — and consistent with the
+        SQL ``LIMIT 0`` path — rather than off-by-one.
+        """
         results: list[dict[str, Any]] = []
+        if limit <= 0:
+            return results
         for row in rows:
             task = _task_row_to_dict(row)
             if tags and not all(t in task["tags"] for t in tags):
