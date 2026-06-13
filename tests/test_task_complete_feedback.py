@@ -85,7 +85,7 @@ class TestTaskCompleteNoFeedback:
     async def test_no_feedback_params_existing_behaviour(self, srv: LithosServer) -> None:
         task_id = await _create_task(srv)
         result = await _call(srv, "lithos_task_complete", task_id=task_id, agent="test-agent")
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
     @pytest.mark.asyncio
     async def test_cited_none_misleading_none_no_learning(self, srv: LithosServer) -> None:
@@ -102,7 +102,7 @@ class TestTaskCompleteNoFeedback:
             cited_nodes=None,
             misleading_nodes=None,
         )
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
         # Verify no stats changes -- ignored_count should be 0
         for nid in node_ids:
@@ -136,7 +136,7 @@ class TestReceiptValidation:
                 misleading_nodes=[],
             )
 
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
         assert any("dropping all feedback" in r.message.lower() for r in caplog.records)
 
         # Verify no reinforcement applied
@@ -160,7 +160,7 @@ class TestReceiptValidation:
             cited_nodes=[node_ids[0]],
             receipt_id="rcpt-exact",
         )
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
         stats = await srv.memory._stats_store.get_node_stats(node_ids[0])
         assert stats is not None
@@ -208,7 +208,7 @@ class TestReceiptValidation:
 
         # The task should still be open -- a second complete call should succeed
         result2 = await _call(srv, "lithos_task_complete", task_id=task_id, agent="test-agent")
-        assert result2 == {"success": True}
+        assert result2 == {"success": True, "unblocked": []}
 
 
 # -- Feedback intersection ------------------------------------------------
@@ -232,7 +232,7 @@ class TestFeedbackIntersection:
             agent="test-agent",
             cited_nodes=[node_ids[0], node_ids[2]],  # node_ids[2] not in receipt
         )
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
         # node_ids[0] was cited (in receipt)
         stats0 = await srv.memory._stats_store.get_node_stats(node_ids[0])
@@ -258,7 +258,7 @@ class TestFeedbackIntersection:
             agent="test-agent",
             misleading_nodes=[node_ids[1], node_ids[2]],  # node_ids[2] not in receipt
         )
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
         # node_ids[1] was penalized (in receipt)
         stats1 = await srv.memory._stats_store.get_node_stats(node_ids[1])
@@ -287,7 +287,7 @@ class TestFeedbackIntersection:
             agent="test-agent",
             cited_nodes=node_ids,
         )
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
         # node_ids[0] still exists -- should be cited
         stats0 = await srv.memory._stats_store.get_node_stats(node_ids[0])
@@ -322,7 +322,7 @@ class TestIgnoredPenalization:
             cited_nodes=[],
             misleading_nodes=[],
         )
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
         # All receipt nodes should have ignored_count incremented
         for nid in node_ids:
@@ -351,7 +351,7 @@ class TestReinforcementApplication:
             agent="test-agent",
             cited_nodes=node_ids,
         )
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
         for nid in node_ids:
             stats = await srv.memory._stats_store.get_node_stats(nid)
@@ -376,7 +376,7 @@ class TestReinforcementApplication:
             agent="test-agent",
             misleading_nodes=node_ids,
         )
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
         for nid in node_ids:
             stats = await srv.memory._stats_store.get_node_stats(nid)
@@ -481,7 +481,7 @@ class TestFullReinforcementCycle:
             misleading_nodes=[misleading_id],
             receipt_id=receipt_id,
         )
-        assert result == {"success": True}
+        assert result == {"success": True, "unblocked": []}
 
         # cited node: cited_count=1, salience ~0.52, spaced_rep_strength ~0.05
         stats_cited = await srv.memory._stats_store.get_node_stats(cited_id)

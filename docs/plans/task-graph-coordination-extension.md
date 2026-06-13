@@ -106,15 +106,16 @@ Allowed values:
 
 - `task` — default discrete unit of work
 - `epic` — parent roll-up container
-- `subtask` — child task under a parent
 - `gate` — external wait condition
 
-(`message`, an async coordination artifact, was considered and deferred until a concrete use case exists.)
+There is deliberately **no `subtask` type**. "Child" is a purely relational property, so it lives on the `parent_child` edge (§5.2), not on the node: a child is any task that is the `to` end of a `parent_child` edge. Encoding the relationship as a node attribute as well would create two sources of truth that can drift. (`message`, an async coordination artifact, was likewise considered and deferred until a concrete use case exists.)
 
 Storage:
 
 - new `task_type TEXT NOT NULL DEFAULT 'task'` column on `tasks`, added by schema migration
 - the column is the only source of truth; `metadata.task_type` is not read
+
+**Write-validation is phase-gated, mirroring the edge-type rule in §5.2.** The column defaults to `'task'` and physically holds any string, but a value is only *accepted on write* once the phase implementing its semantics has shipped: Phase 1 accepts only `task`; `epic` is accepted from Phase 2 (when roll-up and ready-exclusion semantics land); `gate` from Phase 3. This stops agents creating a `gate` that gates nothing, or an `epic` that `ready` would wrongly surface as workable.
 
 ## 5.2 Task Edges
 
@@ -257,7 +258,7 @@ Arguments:
 - `tags: list[str] | None = None`
 - `metadata_match: dict | None = None`
 - `limit: int = 50`
-- `include_claims: bool = True`
+- `with_claims: bool = True`
 
 Returns:
 
@@ -268,7 +269,7 @@ Behavior:
 - only `status='open'`
 - excludes tasks with an unsatisfied blocking predecessor — one not yet `completed` (still `open`, or terminal-but-not-completed i.e. `cancelled`; see §8)
 - excludes tasks blocked by unresolved gates
-- optionally excludes already-claimed tasks unless requested otherwise
+- **never excludes by claim.** When `with_claims` (default), each task's active claims are *attached* inline; the tool does not filter claimed tasks out. Collision-correctness already comes from the atomic claim in `claim_task`, and claims are per-aspect (a task can have one aspect claimed while another is free), so a task-level "claimed" exclusion would both be ill-defined and hide legitimately-available parallel work. The picking agent decides what "taken" means. (The parameter is named `with_claims` to match `lithos_task_list`.)
 
 ### `lithos_task_blocked`
 
@@ -402,10 +403,11 @@ MVP readiness rule:
 A task is ready when all of the following are true:
 
 1. `status == "open"`
-2. the task itself is not a `gate`
+2. the task is a directly-workable unit — i.e. not a `gate` (and, once Phase 2 ships the `epic` type, not an `epic`: you execute an epic's children, not the epic itself). The readiness predicate uses a forward-compatible `task_type NOT IN ('gate', 'epic')` guard from Phase 1; the excluded types simply cannot be created yet until their phase lands.
 3. every incoming blocking edge is **satisfied** — for a `blocks` edge that means the predecessor is `completed` (a predecessor still `open`, or terminal-but-not-`completed` i.e. `cancelled`, leaves the edge unsatisfied; see the blocker-failure policy below)
 4. it is not blocked by an unresolved gate
-5. if filtering excludes claimed tasks, it has no active conflicting claims
+
+Claims do **not** enter the readiness predicate: a claimed task is still ready. `lithos_task_ready` *attaches* active claims (when `with_claims`) but never excludes by them — see §6.1 for why (atomic-claim correctness + per-aspect claims).
 
 MVP blocked rule:
 

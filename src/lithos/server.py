@@ -20,7 +20,7 @@ from starlette.responses import Response, StreamingResponse
 
 from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig, get_config, set_config
-from lithos.coordination import CoordinationService, Task, TaskStatus
+from lithos.coordination import CoordinationError, CoordinationService, Task, TaskStatus
 from lithos.edge_store import EdgeStore
 from lithos.errors import SearchBackendError
 from lithos.events import (
@@ -89,6 +89,7 @@ def _serialize_task_record(task: Task | TaskStatus) -> dict[str, Any]:
         "title": task.title,
         "description": task.description,
         "status": task.status,
+        "task_type": task.task_type,
         "created_by": task.created_by,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "resolved_at": task.resolved_at.isoformat() if task.resolved_at else None,
@@ -2507,7 +2508,9 @@ class LithosServer:
             description: str | None = None,
             tags: list[str] | None = None,
             metadata: dict[str, Any] | None = None,
-        ) -> dict[str, str]:
+            task_type: str = "task",
+            depends_on: list[str] | None = None,
+        ) -> dict[str, Any]:
             """Create a new coordination task.
 
             Args:
@@ -2515,23 +2518,36 @@ class LithosServer:
                 agent: Creating agent identifier
                 description: Task description
                 tags: Task tags
-                metadata: Arbitrary JSON metadata dict (optional)
+                metadata: Arbitrary JSON metadata dict (optional). Must NOT contain
+                    ``depends_on``/``blocked_on`` — dependencies are first-class task
+                    edges now; pass ``depends_on`` instead.
+                task_type: First-class task type. Only ``task`` is accepted in this
+                    phase (``epic``/``gate`` arrive in later phases).
+                depends_on: Predecessor task IDs. Each creates a ``blocks`` edge so
+                    this task is not ready until that predecessor is completed.
+                    Predecessors must already exist.
 
             Returns:
-                Dict with task_id
+                Dict with task_id, or an error envelope on validation failure.
             """
             logger.info("lithos_task_create agent=%s title=%r", agent, title)
             tracer = get_tracer()
             with tracer.start_as_current_span("lithos.tool.task_create") as span:
                 span.set_attribute("lithos.tool", "lithos_task_create")
                 span.set_attribute("lithos.agent", agent)
-                task_id = await self.coordination.create_task(
-                    title=title,
-                    agent=agent,
-                    description=description,
-                    tags=tags,
-                    metadata=metadata,
-                )
+                try:
+                    task_id = await self.coordination.create_task(
+                        title=title,
+                        agent=agent,
+                        description=description,
+                        tags=tags,
+                        metadata=metadata,
+                        task_type=task_type,
+                        depends_on=depends_on,
+                    )
+                except CoordinationError as exc:
+                    span.set_attribute("lithos.success", False)
+                    return {"status": "error", "code": exc.code, "message": exc.message}
                 span.set_attribute("lithos.task_id", task_id)
 
                 await self._emit(
@@ -2590,14 +2606,18 @@ class LithosServer:
                 span.set_attribute("lithos.tool", "lithos_task_update")
                 span.set_attribute("lithos.agent", agent)
                 span.set_attribute("lithos.task_id", task_id)
-                updated = await self.coordination.update_task(
-                    task_id=task_id,
-                    agent=agent,
-                    title=title,
-                    description=description,
-                    tags=tags,
-                    metadata=metadata,
-                )
+                try:
+                    updated = await self.coordination.update_task(
+                        task_id=task_id,
+                        agent=agent,
+                        title=title,
+                        description=description,
+                        tags=tags,
+                        metadata=metadata,
+                    )
+                except CoordinationError as exc:
+                    span.set_attribute("lithos.success", False)
+                    return {"status": "error", "code": exc.code, "message": exc.message}
                 span.set_attribute("lithos.success", updated)
 
                 if updated:
@@ -2877,7 +2897,12 @@ class LithosServer:
                     )
                 )
 
-                return {"success": True}
+                # Surface tasks this completion just made ready (their last
+                # blocking predecessor is now satisfied) so an orchestrator can
+                # pick them up without re-polling lithos_task_ready.
+                unblocked = await self.coordination.newly_unblocked_by(task_id)
+                span.set_attribute("lithos.unblocked_count", len(unblocked))
+                return {"success": True, "unblocked": unblocked}
 
         @self.mcp.tool()
         @tool_metrics()
@@ -2959,12 +2984,14 @@ class LithosServer:
             resolved_since: str | None = None,
             with_claims: bool = False,
             metadata_match: dict | None = None,
+            task_type: str | None = None,
         ) -> dict[str, list[dict[str, Any]]]:
             """List tasks with optional filters.
 
             Args:
                 agent: Filter by creating agent
                 status: Filter by status: "open", "completed", or "cancelled" (None = all)
+                task_type: Filter by first-class task type (task/epic/gate)
                 tags: Filter by tags (task must have all specified tags)
                 metadata_match: Filter by metadata (AND across keys). For each
                     ``key: q`` a task matches when its stored metadata value
@@ -3021,7 +3048,208 @@ class LithosServer:
                     resolved_since=resolved_since,
                     with_claims=with_claims,
                     metadata_match=metadata_match,
+                    task_type=task_type,
                 )
+                return {"tasks": tasks}
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_task_edge_upsert(
+            from_task_id: str,
+            to_task_id: str,
+            type: str,
+            agent: str,
+            metadata: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            """Create or update a typed relation between two tasks.
+
+            Edge types accepted in this phase: ``blocks`` (to_task is not ready
+            until from_task is completed), ``parent_child`` (from_task is the
+            parent; purely structural, never blocks), and ``discovered_from``
+            (to_task was discovered while executing from_task; non-blocking).
+
+            Args:
+                from_task_id: Source task (blocker / parent / source).
+                to_task_id: Target task (blocked / child / discovered).
+                type: Edge type (see above).
+                agent: Agent creating the edge.
+                metadata: Optional edge metadata.
+
+            Returns:
+                ``{"success": true}`` or an error envelope (unaccepted type,
+                self-edge, missing task, or a blocking edge that would create a
+                dependency cycle).
+            """
+            logger.info(
+                "lithos_task_edge_upsert from=%s to=%s type=%s agent=%s",
+                from_task_id,
+                to_task_id,
+                type,
+                agent,
+            )
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_edge_upsert") as span:
+                span.set_attribute("lithos.tool", "lithos_task_edge_upsert")
+                span.set_attribute("lithos.agent", agent)
+                span.set_attribute("lithos.edge_type", type)
+                try:
+                    await self.coordination.upsert_task_edge(
+                        from_task_id=from_task_id,
+                        to_task_id=to_task_id,
+                        edge_type=type,
+                        agent=agent,
+                        metadata=metadata,
+                    )
+                except CoordinationError as exc:
+                    span.set_attribute("lithos.success", False)
+                    return {"status": "error", "code": exc.code, "message": exc.message}
+                return {"success": True}
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_task_edge_list(
+            task_id: str,
+            direction: str = "both",
+            types: list[str] | None = None,
+        ) -> dict[str, Any]:
+            """List edges touching a task.
+
+            Args:
+                task_id: Task whose edges to list.
+                direction: "incoming", "outgoing", or "both" (default).
+                types: Optional edge-type filter.
+
+            Returns:
+                ``{"edges": [...]}`` — each edge carries from/to/type, its
+                ``direction`` relative to ``task_id``, metadata, and provenance.
+            """
+            logger.info("lithos_task_edge_list task=%s direction=%s", task_id, direction)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_edge_list") as span:
+                span.set_attribute("lithos.tool", "lithos_task_edge_list")
+                span.set_attribute("lithos.task_id", task_id)
+                if direction not in ("incoming", "outgoing", "both"):
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": (
+                            f"direction must be 'incoming', 'outgoing', or 'both', got "
+                            f"{direction!r}."
+                        ),
+                    }
+                edges = await self.coordination.list_task_edges(
+                    task_id=task_id,
+                    direction=direction,
+                    types=types,
+                )
+                return {"edges": edges}
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_task_ready(
+            project: str | None = None,
+            tags: list[str] | None = None,
+            metadata_match: dict | None = None,
+            limit: int = 50,
+            with_claims: bool = True,
+        ) -> dict[str, Any]:
+            """Return open tasks that are ready to work.
+
+            A task is ready when it is open, not a gate/epic, has no incoming
+            blocking edge whose predecessor is unsatisfied (every ``blocks``
+            predecessor must be ``completed``), and is not blocked by a gate.
+            Active claims are *attached* when ``with_claims`` but never used to
+            exclude a task — claims are per-aspect and collision-safety comes
+            from the atomic claim, so the picking agent decides what "taken" means.
+
+            Args:
+                project: Shorthand for ``metadata.project == project``.
+                tags: Filter by tags (task must have all specified tags).
+                metadata_match: Metadata filter (AND across keys); scalars only.
+                limit: Maximum tasks to return.
+                with_claims: Attach each task's active claims inline (default True).
+
+            Returns:
+                Dict with a ``tasks`` list (the feasible frontier).
+            """
+            logger.info(
+                "lithos_task_ready project=%s tags=%s limit=%s with_claims=%s",
+                project,
+                tags,
+                limit,
+                with_claims,
+            )
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_ready") as span:
+                span.set_attribute("lithos.tool", "lithos_task_ready")
+                if limit < 1:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"limit must be >= 1, got {limit}.",
+                    }
+                if metadata_match is not None:
+                    try:
+                        validate_metadata_match(metadata_match)
+                    except ValueError as e:
+                        return {"status": "invalid_input", "message": str(e), "warnings": []}  # type: ignore[return-value]
+                tasks = await self.coordination.list_ready(
+                    project=project,
+                    tags=tags,
+                    metadata_match=metadata_match,
+                    limit=limit,
+                    with_claims=with_claims,
+                )
+                span.set_attribute("lithos.ready_count", len(tasks))
+                return {"tasks": tasks}
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_task_blocked(
+            project: str | None = None,
+            tags: list[str] | None = None,
+            metadata_match: dict | None = None,
+            limit: int = 50,
+        ) -> dict[str, Any]:
+            """Return open tasks that are NOT ready, with structured blocker reasons.
+
+            Same filter surface as ``lithos_task_ready``. Each returned task carries
+            a ``blockers`` list; each blocker has ``kind``:
+            ``task`` (predecessor still open — just waiting),
+            ``blocker_unsatisfiable`` (predecessor was cancelled — needs
+            intervention), or ``cycle`` (the dependency chain forms a cycle).
+
+            Args:
+                project: Shorthand for ``metadata.project == project``.
+                tags: Filter by tags (task must have all specified tags).
+                metadata_match: Metadata filter (AND across keys); scalars only.
+                limit: Maximum tasks to return.
+
+            Returns:
+                Dict with a ``tasks`` list, each task including its ``blockers``.
+            """
+            logger.info("lithos_task_blocked project=%s tags=%s limit=%s", project, tags, limit)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_blocked") as span:
+                span.set_attribute("lithos.tool", "lithos_task_blocked")
+                if limit < 1:
+                    return {
+                        "status": "error",
+                        "code": "invalid_input",
+                        "message": f"limit must be >= 1, got {limit}.",
+                    }
+                if metadata_match is not None:
+                    try:
+                        validate_metadata_match(metadata_match)
+                    except ValueError as e:
+                        return {"status": "invalid_input", "message": str(e), "warnings": []}  # type: ignore[return-value]
+                tasks = await self.coordination.list_blocked(
+                    project=project,
+                    tags=tags,
+                    metadata_match=metadata_match,
+                    limit=limit,
+                )
+                span.set_attribute("lithos.blocked_count", len(tasks))
                 return {"tasks": tasks}
 
         @self.mcp.tool()

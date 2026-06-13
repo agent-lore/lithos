@@ -17,6 +17,70 @@ from lithos.telemetry import lithos_metrics, traced
 
 logger = logging.getLogger(__name__)
 
+# Edge types accepted on write. The set grows per delivery phase: an edge type
+# is only accepted once the phase implementing its readiness semantics has
+# shipped, so agents can never write a blocking edge whose meaning is not yet
+# implemented. Phase 1 ships blocks/parent_child/discovered_from. Phase 3 adds
+# ``waits_on_gate``. Deferred types (caused_by, validates, relates_to,
+# duplicate_of, superseded_by) are added only when something consumes them.
+ACCEPTED_EDGE_TYPES: frozenset[str] = frozenset({"blocks", "parent_child", "discovered_from"})
+
+# Edge types that gate readiness. A task is not ready while it has an incoming
+# blocking edge whose predecessor is not ``completed``. Gains ``waits_on_gate``
+# in Phase 3.
+BLOCKING_EDGE_TYPES: frozenset[str] = frozenset({"blocks"})
+
+# Task types accepted on write this phase (see ACCEPTED_EDGE_TYPES rationale).
+# ``epic`` is accepted from Phase 2, ``gate`` from Phase 3. The column itself
+# defaults to 'task' and physically holds any string; only the write-validation
+# set is phase-gated.
+ACCEPTED_TASK_TYPES: frozenset[str] = frozenset({"task"})
+
+# Task types that are never directly workable units and so are excluded from the
+# ready frontier. ``epic`` is a roll-up container (you execute its children, not
+# the epic); ``gate`` is an external wait. Neither can be written yet in Phase 1,
+# but the readiness guard names them now so the predicate is forward-compatible.
+NON_WORKABLE_TASK_TYPES: tuple[str, ...] = ("gate", "epic")
+
+# metadata keys whose scheduling meaning is now owned by task_edges. Writing them
+# is rejected so stale, scheduler-invisible dependency state cannot be recreated
+# through the additive metadata write path (see SPECIFICATION migration notes).
+FORBIDDEN_METADATA_KEYS: tuple[str, ...] = ("depends_on", "blocked_on")
+
+
+class CoordinationError(Exception):
+    """A coordination operation failed validation.
+
+    Carries a stable ``code`` and human ``message`` so the MCP layer can map it
+    onto the standard ``{"status": "error", "code", "message"}`` envelope without
+    re-deriving the reason.
+    """
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+def _reject_scheduling_metadata(metadata: dict[str, Any] | None) -> None:
+    """Raise if ``metadata`` carries a now-forbidden scheduling key.
+
+    Rejects any presence of ``depends_on``/``blocked_on`` (including a ``None``
+    delete), because even a delete implies the caller still treats metadata as
+    the source of dependency truth. Dependencies are first-class edges now.
+    """
+    if not metadata:
+        return
+    present = [k for k in FORBIDDEN_METADATA_KEYS if k in metadata]
+    if present:
+        raise CoordinationError(
+            "invalid_metadata_key",
+            f"metadata key(s) {present} are no longer accepted: task dependencies are "
+            "first-class task edges. Use depends_on on lithos_task_create, or "
+            "lithos_task_edge_upsert.",
+        )
+
+
 # SQL Schema
 SCHEMA = """
 -- Agent registry
@@ -35,12 +99,27 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     description TEXT,
     status TEXT DEFAULT 'open',
+    task_type TEXT NOT NULL DEFAULT 'task',
     created_by TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     tags JSON,
     outcome TEXT,
     resolved_at TIMESTAMP,
     metadata JSON
+);
+
+-- Typed task-graph edges (ordering, hierarchy, provenance)
+CREATE TABLE IF NOT EXISTS task_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_task_id TEXT NOT NULL,
+    to_task_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    metadata JSON,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (from_task_id) REFERENCES tasks(id),
+    FOREIGN KEY (to_task_id) REFERENCES tasks(id),
+    UNIQUE(from_task_id, to_task_id, type)
 );
 
 -- Claims (with automatic expiry)
@@ -77,6 +156,10 @@ CREATE TABLE IF NOT EXISTS access_log (
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+-- Ready/blocked queries join task_edges against open tasks; both directions
+-- must stay index-driven (sub-linear). Cycle detection also traverses these.
+CREATE INDEX IF NOT EXISTS idx_task_edges_from ON task_edges(from_task_id, type);
+CREATE INDEX IF NOT EXISTS idx_task_edges_to ON task_edges(to_task_id, type);
 CREATE INDEX IF NOT EXISTS idx_claims_task_id ON claims(task_id);
 CREATE INDEX IF NOT EXISTS idx_claims_expires_at ON claims(expires_at);
 CREATE INDEX IF NOT EXISTS idx_findings_task_id ON findings(task_id);
@@ -106,12 +189,25 @@ class Task:
     title: str
     description: str | None = None
     status: Literal["open", "completed", "cancelled"] = "open"
+    task_type: str = "task"
     created_by: str = ""
     created_at: datetime | None = None
     tags: list[str] = field(default_factory=list)
     outcome: str | None = None
     resolved_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TaskEdge:
+    """A typed relation between two tasks in the task graph."""
+
+    from_task_id: str
+    to_task_id: str
+    type: str
+    created_by: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime | None = None
 
 
 @dataclass
@@ -160,6 +256,7 @@ class TaskStatus:
     claims: list[Claim]
     metadata: dict[str, Any] = field(default_factory=dict)
     description: str | None = None
+    task_type: str = "task"
     created_by: str = ""
     created_at: datetime | None = None
     tags: list[str] = field(default_factory=list)
@@ -275,6 +372,66 @@ def _decode_metadata(raw: Any) -> dict[str, Any]:
     return decoded
 
 
+def _task_row_to_dict(row: Any) -> dict[str, Any]:
+    """Build the standard task payload dict from a ``tasks`` row.
+
+    Shared by ``list_tasks``/``list_ready``/``list_blocked`` so every surface
+    emits the same shape, including ``task_type``. ``created_at``/``resolved_at``
+    are returned as the raw stored strings (callers that need parsed datetimes
+    use the dataclass surfaces). Columns absent on legacy rows degrade to safe
+    defaults.
+    """
+    import json
+
+    row_keys = row.keys()
+    tags: list[str] = []
+    if row["tags"]:
+        with contextlib.suppress(json.JSONDecodeError):
+            tags = json.loads(row["tags"])
+    metadata = _decode_metadata(row["metadata"]) if "metadata" in row_keys else {}
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "description": row["description"],
+        "status": row["status"],
+        "task_type": row["task_type"] if "task_type" in row_keys else "task",
+        "created_by": row["created_by"],
+        "created_at": row["created_at"],
+        "resolved_at": row["resolved_at"] if "resolved_at" in row_keys else None,
+        "tags": tags,
+        "metadata": metadata,
+        "outcome": row["outcome"] if "outcome" in row_keys else None,
+    }
+
+
+def _metadata_match_clause(
+    metadata_match: dict[str, Any] | None,
+    column: str = "metadata",
+) -> tuple[str, list[Any]]:
+    """Build a type-sensitive ``metadata_match`` SQL fragment + bound params (#306).
+
+    For each ``key: q`` the task matches when its stored value equals ``q`` or is
+    an element of a JSON *array* at that key. ``column`` lets callers qualify the
+    column (e.g. ``t.metadata``) when the query joins multiple tables. ``column``
+    is an internal constant, never user input, so it cannot inject SQL; the JSON
+    path and value are bound parameters.
+    """
+    if not metadata_match:
+        return "", []
+    clause = ""
+    params: list[Any] = []
+    for key, value in metadata_match.items():
+        path = _json_path_for_key(key)
+        jtype = _json_type_label(value)
+        clause += (
+            f" AND ( (json_type({column}, ?) = ? AND json_extract({column}, ?) = ?)"
+            f" OR (json_type({column}, ?) = 'array' AND EXISTS"
+            f" (SELECT 1 FROM json_each({column}, ?) WHERE type = ? AND value = ?)) )"
+        )
+        params.extend([path, jtype, path, value, path, path, jtype, value])
+    return clause, params
+
+
 class CoordinationService:
     """SQLite-based coordination service."""
 
@@ -319,6 +476,7 @@ class CoordinationService:
             await self._migrate_tasks_add_outcome(db)
             await self._migrate_tasks_ensure_resolved_at(db)
             await self._migrate_tasks_add_metadata(db)
+            await self._migrate_tasks_add_task_type(db)
             await db.commit()
         logger.info("coordination service initialized: db_path=%s", self.db_path)
 
@@ -432,6 +590,84 @@ class CoordinationService:
         if "metadata" not in columns:
             await db.execute("ALTER TABLE tasks ADD COLUMN metadata JSON")
             logger.info("coordination.db migration applied: added tasks.metadata")
+
+    @staticmethod
+    async def _migrate_tasks_add_task_type(db: aiosqlite.Connection) -> None:
+        """Add tasks.task_type and run the one-time metadata->edges backfill.
+
+        The backfill is tied to the column-addition branch so it runs exactly
+        once with no separate version table: an old DB lacks the column, gets it
+        added, and is backfilled in the same migration; a fresh DB already has
+        the column (from SCHEMA) and has no legacy dependency metadata, so both
+        steps are skipped. ``initialize`` commits all migrations together, so the
+        column add and the backfill are atomic — a mid-migration crash redoes
+        both on the next start rather than leaving the column without its edges.
+        """
+        cursor = await db.execute("PRAGMA table_info(tasks)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "task_type" in columns:
+            return
+        await db.execute("ALTER TABLE tasks ADD COLUMN task_type TEXT NOT NULL DEFAULT 'task'")
+        backfilled = await CoordinationService._backfill_task_edges_from_metadata(db)
+        logger.info(
+            "coordination.db migration applied: added tasks.task_type and backfilled "
+            "%d blocks edge(s) from task metadata",
+            backfilled,
+        )
+
+    @staticmethod
+    async def _backfill_task_edges_from_metadata(db: aiosqlite.Connection) -> int:
+        """One-time backfill of ``blocks`` edges from legacy dependency metadata.
+
+        Scans ``open`` tasks, reads ``metadata.depends_on`` / ``metadata.blocked_on``
+        (each a task id or list of ids), and creates a canonical ``blocks`` edge
+        ``predecessor -> task`` for every reference to an existing task. References
+        to nonexistent task ids are logged and skipped. Uses ``INSERT OR IGNORE``
+        against the ``UNIQUE(from,to,type)`` constraint so it is idempotent.
+
+        Edges are retained even when they form a cycle (never silently dropped):
+        cycle members are excluded from ``ready`` automatically (mutual open
+        blockers) and surfaced as ``cycle`` blockers by ``list_blocked``.
+        """
+        import json
+
+        cursor = await db.execute("SELECT id FROM tasks")
+        existing_ids = {row[0] for row in await cursor.fetchall()}
+
+        cursor = await db.execute("SELECT id, metadata FROM tasks WHERE status = 'open'")
+        rows = await cursor.fetchall()
+        now = _format_datetime(datetime.now(timezone.utc))
+        created = 0
+        for task_id, metadata_raw in rows:
+            md = _decode_metadata(metadata_raw)
+            for key in FORBIDDEN_METADATA_KEYS:
+                preds = md.get(key)
+                if preds is None:
+                    continue
+                pred_list = preds if isinstance(preds, list) else [preds]
+                for pred in pred_list:
+                    if not isinstance(pred, str) or pred == task_id:
+                        continue
+                    if pred not in existing_ids:
+                        logger.warning(
+                            "coordination.db backfill: task %s metadata.%s references "
+                            "nonexistent task %s; skipping",
+                            task_id,
+                            key,
+                            pred,
+                        )
+                        continue
+                    edge_metadata = json.dumps({"migrated_from": f"metadata.{key}"})
+                    edge_cursor = await db.execute(
+                        """
+                        INSERT OR IGNORE INTO task_edges
+                            (from_task_id, to_task_id, type, metadata, created_by, created_at)
+                        VALUES (?, ?, 'blocks', ?, 'migration', ?)
+                        """,
+                        (pred, task_id, edge_metadata, now),
+                    )
+                    created += edge_cursor.rowcount
+        return created
 
     async def _get_db(self) -> aiosqlite.Connection:
         """Get database connection."""
@@ -616,6 +852,8 @@ class CoordinationService:
         description: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        task_type: str = "task",
+        depends_on: list[str] | None = None,
     ) -> str:
         """Create a new task.
 
@@ -624,12 +862,28 @@ class CoordinationService:
             agent: Creating agent identifier
             description: Task description
             tags: Task tags
-            metadata: Arbitrary JSON metadata dict (optional)
+            metadata: Arbitrary JSON metadata dict (optional). Must not contain
+                ``depends_on``/``blocked_on`` — dependencies are task edges now.
+            task_type: First-class task type. Phase 1 accepts only ``task``.
+            depends_on: Predecessor task ids. Each creates a ``blocks`` edge
+                ``predecessor -> this task``. Predecessors must already exist.
 
         Returns:
             Task ID
+
+        Raises:
+            CoordinationError: invalid task_type, forbidden metadata key, or a
+                ``depends_on`` reference to a nonexistent task.
         """
         import json
+
+        _reject_scheduling_metadata(metadata)
+        if task_type not in ACCEPTED_TASK_TYPES:
+            raise CoordinationError(
+                "invalid_task_type",
+                f"task_type '{task_type}' is not accepted in this phase "
+                f"(accepted: {sorted(ACCEPTED_TASK_TYPES)}).",
+            )
 
         lithos_metrics.coordination_ops.add(1, {"op": "create_task"})
         await self.ensure_agent_known(agent)
@@ -638,18 +892,52 @@ class CoordinationService:
         tags_json = json.dumps(tags) if tags else None
         metadata_json = json.dumps(metadata) if metadata is not None else None
         now = _format_datetime(datetime.now(timezone.utc))
+        # Dedupe and drop a self-reference; a brand-new task has no outgoing
+        # edges, so depends_on can never form a cycle (nothing depends on it yet).
+        predecessors = [p for p in dict.fromkeys(depends_on or []) if p != task_id]
 
         async with aiosqlite.connect(self.db_path) as db:
+            if predecessors:
+                placeholders = ",".join("?" for _ in predecessors)
+                cursor = await db.execute(
+                    f"SELECT id FROM tasks WHERE id IN ({placeholders})",
+                    predecessors,
+                )
+                found = {row[0] for row in await cursor.fetchall()}
+                missing = [p for p in predecessors if p not in found]
+                if missing:
+                    raise CoordinationError(
+                        "task_not_found",
+                        f"depends_on references nonexistent task(s): {missing}",
+                    )
+
             await db.execute(
                 """
-                INSERT INTO tasks (id, title, description, created_by, tags, created_at, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO tasks
+                    (id, title, description, status, task_type, created_by, tags,
+                     created_at, metadata)
+                VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)
                 """,
-                (task_id, title, description, agent, tags_json, now, metadata_json),
+                (task_id, title, description, task_type, agent, tags_json, now, metadata_json),
             )
+            for pred in predecessors:
+                await db.execute(
+                    """
+                    INSERT OR IGNORE INTO task_edges
+                        (from_task_id, to_task_id, type, created_by, created_at)
+                    VALUES (?, ?, 'blocks', ?, ?)
+                    """,
+                    (pred, task_id, agent, now),
+                )
             await db.commit()
 
-        logger.info("Task created: task_id=%s agent=%s", task_id, agent)
+        logger.info(
+            "Task created: task_id=%s agent=%s task_type=%s depends_on=%d",
+            task_id,
+            agent,
+            task_type,
+            len(predecessors),
+        )
         return task_id
 
     @traced("lithos.coordination.get_task")
@@ -688,6 +976,7 @@ class CoordinationService:
                 title=row["title"],
                 description=row["description"],
                 status=row["status"],
+                task_type=row["task_type"] if "task_type" in row_keys else "task",
                 created_by=row["created_by"],
                 created_at=_parse_datetime(row["created_at"]),
                 tags=tags,
@@ -719,9 +1008,14 @@ class CoordinationService:
 
         Returns:
             True if task was found, is open, and was updated; False otherwise
+
+        Raises:
+            CoordinationError: ``metadata`` contains a forbidden scheduling key
+                (``depends_on``/``blocked_on``).
         """
         import json
 
+        _reject_scheduling_metadata(metadata)
         lithos_metrics.coordination_ops.add(1, {"op": "update_task"})
         await self.ensure_agent_known(agent)
 
@@ -952,6 +1246,7 @@ class CoordinationService:
         resolved_since: str | None = None,
         with_claims: bool = False,
         metadata_match: dict | None = None,
+        task_type: str | None = None,
     ) -> list[dict[str, Any]]:
         """List tasks with optional filters.
 
@@ -975,14 +1270,13 @@ class CoordinationService:
                 claims inline as a ``claims`` array. Defaults to False to
                 preserve the lightweight payload for callers that don't need
                 them.
+            task_type: Filter by first-class task type (task/epic/gate).
 
         Returns:
-            List of task dicts with id, title, description, status, created_by,
-            created_at, resolved_at, tags, metadata, outcome, and (when
-            with_claims) claims.
+            List of task dicts with id, title, description, status, task_type,
+            created_by, created_at, resolved_at, tags, metadata, outcome, and
+            (when with_claims) claims.
         """
-        import json
-
         query = "SELECT * FROM tasks WHERE 1=1"
         params: list[Any] = []
 
@@ -994,6 +1288,10 @@ class CoordinationService:
             query += " AND status = ?"
             params.append(status)
 
+        if task_type:
+            query += " AND task_type = ?"
+            params.append(task_type)
+
         if since:
             query += " AND created_at >= ?"
             params.append(since)
@@ -1002,25 +1300,9 @@ class CoordinationService:
             query += " AND resolved_at >= ?"
             params.append(resolved_since)
 
-        # Metadata equality/contains filter (#306), pushed into SQL so the
-        # engine evaluates it (no full-table load into Python). For each key the
-        # task matches when the stored value equals the query OR is an element of
-        # a JSON *array* at that key. Matching is type-sensitive to mirror the
-        # knowledge side: ``json_type`` is checked so a JSON boolean (stored as
-        # 1/0 by SQLite) never matches an integer query, and the array branch is
-        # gated on ``json_type(...) = 'array'`` so JSON objects are not iterated.
-        # The JSON path and value are bound parameters, so caller keys cannot
-        # inject SQL.
-        if metadata_match:
-            for key, value in metadata_match.items():
-                path = _json_path_for_key(key)
-                jtype = _json_type_label(value)
-                query += (
-                    " AND ( (json_type(metadata, ?) = ? AND json_extract(metadata, ?) = ?)"
-                    " OR (json_type(metadata, ?) = 'array' AND EXISTS"
-                    " (SELECT 1 FROM json_each(metadata, ?) WHERE type = ? AND value = ?)) )"
-                )
-                params.extend([path, jtype, path, value, path, path, jtype, value])
+        md_clause, md_params = _metadata_match_clause(metadata_match)
+        query += md_clause
+        params.extend(md_params)
 
         query += " ORDER BY created_at DESC"
 
@@ -1030,50 +1312,12 @@ class CoordinationService:
             rows = await cursor.fetchall()
 
             results: list[dict[str, Any]] = []
-            row_keys: list[str] | None = None
             for row in rows:
-                if row_keys is None:
-                    row_keys = list(row.keys())
-
-                task_tags: list[str] = []
-                if row["tags"]:
-                    with contextlib.suppress(json.JSONDecodeError):
-                        task_tags = json.loads(row["tags"])
-
+                task = _task_row_to_dict(row)
                 # Filter by tags: task must contain all requested tags
-                if tags and not all(t in task_tags for t in tags):
+                if tags and not all(t in task["tags"] for t in tags):
                     continue
-
-                # Route metadata decode through _decode_metadata for parity
-                # with get_task / get_task_status. Raw json.loads accepted
-                # legacy/corrupt rows whose JSON parses to non-objects
-                # (`null`, arrays, scalars), causing list_tasks to return a
-                # non-dict metadata payload while the other surfaces regularised
-                # it back to {}.
-                task_metadata: dict[str, Any] = {}
-                if "metadata" in row_keys:
-                    task_metadata = _decode_metadata(row["metadata"])
-
-                resolved_at = (
-                    row["resolved_at"]
-                    if row_keys is not None and "resolved_at" in row_keys
-                    else None
-                )
-                outcome = row["outcome"] if row_keys is not None and "outcome" in row_keys else None
-                results.append(
-                    {
-                        "id": row["id"],
-                        "title": row["title"],
-                        "description": row["description"],
-                        "status": row["status"],
-                        "created_by": row["created_by"],
-                        "created_at": row["created_at"],
-                        "resolved_at": resolved_at,
-                        "tags": task_tags,
-                        "metadata": task_metadata,
-                        "outcome": outcome,
-                    }
-                )
+                results.append(task)
 
             if with_claims and results:
                 claims_by_task = await self._fetch_active_claims_for(db, [r["id"] for r in results])
@@ -1199,6 +1443,7 @@ class CoordinationService:
                         claims=claims,
                         metadata=task_metadata,
                         description=task["description"],
+                        task_type=task["task_type"] if "task_type" in task_row_keys else "task",
                         created_by=task["created_by"],
                         created_at=_parse_datetime(task["created_at"]),
                         tags=task_tags,
@@ -1466,6 +1711,413 @@ class CoordinationService:
                 )
                 for row in rows
             ]
+
+    # ==================== Task Graph Operations ====================
+
+    @traced("lithos.coordination.upsert_task_edge")
+    async def upsert_task_edge(
+        self,
+        from_task_id: str,
+        to_task_id: str,
+        edge_type: str,
+        agent: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Create or update a typed relation between two tasks.
+
+        Args:
+            from_task_id: Source task (e.g. the blocker / parent / source).
+            to_task_id: Target task (e.g. the blocked / child / discovered task).
+            edge_type: One of the edge types accepted this phase
+                (:data:`ACCEPTED_EDGE_TYPES`).
+            agent: Agent creating the edge.
+            metadata: Optional edge metadata (merged-by-replace on conflict).
+
+        Returns:
+            True on success.
+
+        Raises:
+            CoordinationError: unaccepted edge type, self-edge, missing task, or a
+                blocking edge that would close a dependency cycle.
+        """
+        import json
+
+        if edge_type not in ACCEPTED_EDGE_TYPES:
+            raise CoordinationError(
+                "invalid_edge_type",
+                f"edge type '{edge_type}' is not accepted in this phase "
+                f"(accepted: {sorted(ACCEPTED_EDGE_TYPES)}).",
+            )
+        if from_task_id == to_task_id:
+            raise CoordinationError("self_edge", "An edge cannot connect a task to itself.")
+
+        lithos_metrics.coordination_ops.add(1, {"op": "upsert_task_edge"})
+        await self.ensure_agent_known(agent)
+        now = _format_datetime(datetime.now(timezone.utc))
+        metadata_json = json.dumps(metadata) if metadata is not None else None
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT id FROM tasks WHERE id IN (?, ?)",
+                (from_task_id, to_task_id),
+            )
+            found = {row[0] for row in await cursor.fetchall()}
+            missing = [t for t in (from_task_id, to_task_id) if t not in found]
+            if missing:
+                raise CoordinationError(
+                    "task_not_found", f"edge references nonexistent task(s): {missing}"
+                )
+
+            if edge_type in BLOCKING_EDGE_TYPES:
+                cycle = await self._find_dependency_path(db, from_task_id, to_task_id)
+                if cycle is not None:
+                    raise CoordinationError(
+                        "cycle",
+                        "blocking edge "
+                        f"{from_task_id} -> {to_task_id} would create a dependency cycle: "
+                        f"{' -> '.join(cycle)} -> {from_task_id}",
+                    )
+
+            await db.execute(
+                """
+                INSERT INTO task_edges
+                    (from_task_id, to_task_id, type, metadata, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(from_task_id, to_task_id, type)
+                    DO UPDATE SET metadata = excluded.metadata
+                """,
+                (from_task_id, to_task_id, edge_type, metadata_json, agent, now),
+            )
+            await db.commit()
+
+        logger.info(
+            "Task edge upserted: from=%s to=%s type=%s agent=%s",
+            from_task_id,
+            to_task_id,
+            edge_type,
+            agent,
+        )
+        return True
+
+    @traced("lithos.coordination.list_task_edges")
+    async def list_task_edges(
+        self,
+        task_id: str,
+        direction: Literal["incoming", "outgoing", "both"] = "both",
+        types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """List edges touching ``task_id``.
+
+        Each returned edge dict carries ``direction`` ("incoming" / "outgoing")
+        relative to ``task_id``. Index-driven via idx_task_edges_from/to.
+        """
+        type_clause = ""
+        type_params: list[Any] = []
+        if types:
+            placeholders = ",".join("?" for _ in types)
+            type_clause = f" AND type IN ({placeholders})"
+            type_params = list(types)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            edges: list[dict[str, Any]] = []
+            if direction in ("outgoing", "both"):
+                cursor = await db.execute(
+                    f"SELECT * FROM task_edges WHERE from_task_id = ?{type_clause}",
+                    (task_id, *type_params),
+                )
+                edges.extend(self._edge_row_to_dict(r, "outgoing") for r in await cursor.fetchall())
+            if direction in ("incoming", "both"):
+                cursor = await db.execute(
+                    f"SELECT * FROM task_edges WHERE to_task_id = ?{type_clause}",
+                    (task_id, *type_params),
+                )
+                edges.extend(self._edge_row_to_dict(r, "incoming") for r in await cursor.fetchall())
+            return edges
+
+    @staticmethod
+    def _edge_row_to_dict(row: Any, direction: str) -> dict[str, Any]:
+        """Build an edge payload dict from a ``task_edges`` row."""
+        return {
+            "from_task_id": row["from_task_id"],
+            "to_task_id": row["to_task_id"],
+            "type": row["type"],
+            "direction": direction,
+            "metadata": _decode_metadata(row["metadata"]),
+            "created_by": row["created_by"],
+            "created_at": row["created_at"],
+        }
+
+    async def _find_dependency_path(
+        self,
+        db: aiosqlite.Connection,
+        start: str,
+        target: str,
+    ) -> list[str] | None:
+        """Return a dependency path ``[start, ..., target]`` or None.
+
+        Follows the *depends-on* relation: the blockers of ``X`` are the
+        ``from_task_id`` of incoming blocking edges (``to_task_id = X``), read via
+        idx_task_edges_to. Bounded by the reachable blocking subgraph with a
+        visited-set — never a full-table walk. Used both to reject cycles on
+        write (does ``start`` already depend on ``target``?) and to classify a
+        cycle blocker in :meth:`list_blocked`.
+        """
+        types = tuple(BLOCKING_EDGE_TYPES)
+        placeholders = ",".join("?" for _ in types)
+        visited = {start}
+        parent: dict[str, str] = {}
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            cursor = await db.execute(
+                f"SELECT from_task_id FROM task_edges WHERE to_task_id = ? AND type IN ({placeholders})",
+                (node, *types),
+            )
+            for (blocker,) in await cursor.fetchall():
+                if blocker in visited:
+                    continue
+                parent[blocker] = node
+                if blocker == target:
+                    path = [target]
+                    cur = node
+                    while cur != start:
+                        path.append(cur)
+                        cur = parent[cur]
+                    path.append(start)
+                    path.reverse()
+                    return path
+                visited.add(blocker)
+                stack.append(blocker)
+        return None
+
+    async def _is_task_ready(self, db: aiosqlite.Connection, task_id: str) -> bool:
+        """Whether a single task currently satisfies the readiness predicate."""
+        blocking = tuple(BLOCKING_EDGE_TYPES)
+        placeholders = ",".join("?" for _ in blocking)
+        non_workable = ",".join("?" for _ in NON_WORKABLE_TASK_TYPES)
+        cursor = await db.execute(
+            f"""
+            SELECT 1 FROM tasks t
+            WHERE t.id = ? AND t.status = 'open' AND t.task_type NOT IN ({non_workable})
+              AND NOT EXISTS (
+                SELECT 1 FROM task_edges e JOIN tasks p ON p.id = e.from_task_id
+                WHERE e.to_task_id = t.id AND e.type IN ({placeholders})
+                  AND p.status != 'completed')
+            """,
+            (task_id, *NON_WORKABLE_TASK_TYPES, *blocking),
+        )
+        return await cursor.fetchone() is not None
+
+    @traced("lithos.coordination.list_ready")
+    async def list_ready(
+        self,
+        project: str | None = None,
+        tags: list[str] | None = None,
+        metadata_match: dict | None = None,
+        limit: int = 50,
+        with_claims: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Return open tasks whose blocking predecessors are all ``completed``.
+
+        Restricts to the indexed ``status='open'`` frontier first, then applies an
+        index-driven anti-join over blocking edges, so cost scales with the open
+        frontier (not total task count). ``project`` is shorthand for
+        ``metadata.project == project``. Claims are *attached* when ``with_claims``
+        but never used to exclude a task — collision-correctness lives in the
+        atomic claim, and claims are per-aspect.
+        """
+        if limit <= 0:
+            return []
+        rows = await self._frontier_rows(
+            ready=True,
+            project=project,
+            metadata_match=metadata_match,
+            sql_limit=None if tags else limit,
+        )
+        results = self._apply_tags_and_limit(rows, tags, limit)
+        if with_claims and results:
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                claims_by_task = await self._fetch_active_claims_for(db, [r["id"] for r in results])
+            for task in results:
+                task["claims"] = claims_by_task.get(task["id"], [])
+        return results
+
+    @traced("lithos.coordination.list_blocked")
+    async def list_blocked(
+        self,
+        project: str | None = None,
+        tags: list[str] | None = None,
+        metadata_match: dict | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return open tasks that are not ready, each with structured blockers.
+
+        Same filter surface as :meth:`list_ready`. Each task carries a
+        ``blockers`` list whose entries have ``kind`` in
+        ``task``/``blocker_unsatisfiable``/``cycle`` (gate kinds arrive in Phase 3).
+        """
+        if limit <= 0:
+            return []
+        rows = await self._frontier_rows(
+            ready=False,
+            project=project,
+            metadata_match=metadata_match,
+            sql_limit=None if tags else limit,
+        )
+        results = self._apply_tags_and_limit(rows, tags, limit)
+        async with aiosqlite.connect(self.db_path) as db:
+            for task in results:
+                task["blockers"] = await self._compute_blockers(db, task["id"])
+        return results
+
+    async def _frontier_rows(
+        self,
+        ready: bool,
+        project: str | None,
+        metadata_match: dict | None,
+        sql_limit: int | None = None,
+    ) -> list[Any]:
+        """Fetch open workable rows partitioned by the readiness anti-join.
+
+        ``ready=True`` selects tasks with no unsatisfied blocking predecessor;
+        ``ready=False`` selects those with at least one. Both ride on the indexed
+        ``status='open'`` frontier and the task_edges indexes.
+
+        ``sql_limit`` pushes ``LIMIT`` into SQL so the engine stops early. Callers
+        pass it only when no Python-side ``tags`` post-scan follows (a tag filter
+        would otherwise drop rows after the cap and under-fill the result).
+        """
+        effective_match = dict(metadata_match) if metadata_match else {}
+        if project is not None:
+            effective_match["project"] = project
+        md_clause, md_params = _metadata_match_clause(effective_match or None, column="t.metadata")
+
+        blocking = tuple(BLOCKING_EDGE_TYPES)
+        bph = ",".join("?" for _ in blocking)
+        non_workable = ",".join("?" for _ in NON_WORKABLE_TASK_TYPES)
+        exists_kw = "NOT EXISTS" if ready else "EXISTS"
+        query = (
+            "SELECT t.* FROM tasks t "
+            f"WHERE t.status = 'open' AND t.task_type NOT IN ({non_workable}) "
+            f"AND {exists_kw} ("
+            "  SELECT 1 FROM task_edges e JOIN tasks p ON p.id = e.from_task_id"
+            f"  WHERE e.to_task_id = t.id AND e.type IN ({bph}) AND p.status != 'completed')"
+            f"{md_clause} ORDER BY t.created_at DESC"
+        )
+        params = [*NON_WORKABLE_TASK_TYPES, *blocking, *md_params]
+        if sql_limit is not None:
+            query += " LIMIT ?"
+            params.append(sql_limit)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(query, params)
+            return list(await cursor.fetchall())
+
+    @staticmethod
+    def _apply_tags_and_limit(
+        rows: list[Any],
+        tags: list[str] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Tag-filter (post-scan over the open frontier) and cap to ``limit``.
+
+        A non-positive ``limit`` yields no tasks (the append-then-check loop would
+        otherwise return one). The MCP layer rejects ``limit < 1`` outright; this
+        guard keeps direct service callers consistent — and consistent with the
+        SQL ``LIMIT 0`` path — rather than off-by-one.
+        """
+        results: list[dict[str, Any]] = []
+        if limit <= 0:
+            return results
+        for row in rows:
+            task = _task_row_to_dict(row)
+            if tags and not all(t in task["tags"] for t in tags):
+                continue
+            results.append(task)
+            if len(results) >= limit:
+                break
+        return results
+
+    async def _compute_blockers(
+        self,
+        db: aiosqlite.Connection,
+        task_id: str,
+    ) -> list[dict[str, Any]]:
+        """Explain why ``task_id`` is blocked: one entry per unsatisfied predecessor."""
+        blocking = tuple(BLOCKING_EDGE_TYPES)
+        placeholders = ",".join("?" for _ in blocking)
+        cursor = await db.execute(
+            f"""
+            SELECT e.from_task_id, e.type, p.status
+            FROM task_edges e JOIN tasks p ON p.id = e.from_task_id
+            WHERE e.to_task_id = ? AND e.type IN ({placeholders})
+            """,
+            (task_id, *blocking),
+        )
+        blockers: list[dict[str, Any]] = []
+        for pred_id, edge_type, pred_status in await cursor.fetchall():
+            if pred_status == "completed":
+                continue
+            if pred_status == "cancelled":
+                blockers.append(
+                    {
+                        "kind": "blocker_unsatisfiable",
+                        "task_id": pred_id,
+                        "type": edge_type,
+                        "status": "cancelled",
+                        "message": (
+                            f"Blocking predecessor {pred_id} was cancelled; this task can "
+                            "never become ready without intervention (re-open or re-route "
+                            "the predecessor, or cancel this subtree)."
+                        ),
+                    }
+                )
+                continue
+            # predecessor is open: distinguish a genuine wait from a dependency cycle
+            cycle = await self._find_dependency_path(db, pred_id, task_id)
+            if cycle is not None:
+                blockers.append(
+                    {
+                        "kind": "cycle",
+                        "task_id": pred_id,
+                        "type": edge_type,
+                        "status": "open",
+                        "message": "dependency cycle: " + " -> ".join(cycle) + f" -> {pred_id}",
+                    }
+                )
+            else:
+                blockers.append(
+                    {
+                        "kind": "task",
+                        "task_id": pred_id,
+                        "type": edge_type,
+                        "status": "open",
+                        "message": f"Waiting on predecessor {pred_id} to complete.",
+                    }
+                )
+        return blockers
+
+    @traced("lithos.coordination.newly_unblocked_by")
+    async def newly_unblocked_by(self, task_id: str) -> list[str]:
+        """Return ids of tasks that ``task_id`` blocked and that are now ready.
+
+        Called by the MCP layer right after a successful completion. Each
+        candidate is a ``blocks`` dependent of ``task_id``; it is reported only if
+        it now satisfies the readiness predicate (this completion may have cleared
+        its last blocker).
+        """
+        blocking = tuple(BLOCKING_EDGE_TYPES)
+        placeholders = ",".join("?" for _ in blocking)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"SELECT DISTINCT to_task_id FROM task_edges "
+                f"WHERE from_task_id = ? AND type IN ({placeholders})",
+                (task_id, *blocking),
+            )
+            candidates = [row[0] for row in await cursor.fetchall()]
+            return [c for c in candidates if await self._is_task_ready(db, c)]
 
     # ==================== Statistics ====================
 
