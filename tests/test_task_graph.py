@@ -404,6 +404,33 @@ class TestEpicAndHierarchy:
         # parent_child is non-blocking: the child is still ready
         assert child in _ids(await coordination_service.list_ready())
 
+    async def test_single_parent_enforced(self, coordination_service: CoordinationService):
+        # Forest invariant: a child may have at most one parent. Adding a second,
+        # different parent_child edge to the same child is rejected.
+        p1 = await _mk(coordination_service, "P1")
+        p2 = await _mk(coordination_service, "P2")
+        child = await _mk(coordination_service, "Child", parent_task_id=p1)
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.upsert_task_edge(p2, child, "parent_child", "a")
+        assert exc.value.code == "parent_exists"
+        # the child still has exactly its original parent
+        incoming = await coordination_service.list_task_edges(child, direction="incoming")
+        assert [e["from_task_id"] for e in incoming] == [p1]
+
+    async def test_reparent_same_parent_is_idempotent(
+        self, coordination_service: CoordinationService
+    ):
+        # Re-upserting the SAME parent->child edge is allowed (metadata update),
+        # not a multi-parent violation.
+        p1 = await _mk(coordination_service, "P1")
+        child = await _mk(coordination_service, "Child", parent_task_id=p1)
+        await coordination_service.upsert_task_edge(
+            p1, child, "parent_child", "a", metadata={"note": "x"}
+        )
+        incoming = await coordination_service.list_task_edges(child, direction="incoming")
+        assert len(incoming) == 1
+        assert incoming[0]["metadata"]["note"] == "x"
+
     async def test_parent_may_be_plain_task_unchanged(
         self, coordination_service: CoordinationService
     ):

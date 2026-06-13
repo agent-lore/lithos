@@ -945,7 +945,7 @@ Return open tasks that are not ready, each with structured blocker reasons.
 
 #### Hierarchy & Spawn (Phase 2)
 
-Hierarchy uses the `parent_child` edge (purely structural — never blocks the child); `epic` is a roll-up container task type (creatable from Phase 2, excluded from `ready`). Hierarchy is kept acyclic: a `parent_child` edge that would make a task its own ancestor is rejected on write with `cycle` (the same bounded-traversal check `blocks` edges use). There are **no epic close rules yet** (an epic may still complete with open children — deferred to Phase 4).
+Hierarchy uses the `parent_child` edge (purely structural — never blocks the child); `epic` is a roll-up container task type (creatable from Phase 2, excluded from `ready`). Hierarchy is a **forest**: a task has at most one parent — a `parent_child` edge to a child that already has a different parent is rejected with `parent_exists` (re-parenting requires removing the existing edge first). It is also kept acyclic: an edge that would make a task its own ancestor is rejected with `cycle` (the same bounded-traversal check `blocks` edges use). There are **no epic close rules yet** (an epic may still complete with open children — deferred to Phase 4).
 
 #### `lithos_task_children`
 Return the child tasks of a parent/epic.

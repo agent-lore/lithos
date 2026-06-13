@@ -4,6 +4,7 @@ import contextlib
 import logging
 import sqlite3
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1811,6 +1812,21 @@ class CoordinationService:
                         f"{' -> '.join(cycle)} -> {from_task_id}",
                     )
             elif edge_type in HIERARCHY_EDGE_TYPES:
+                # Forest invariant: at most one parent per task. Reject a second,
+                # *different* parent; re-upserting the same parent->child edge is
+                # fine (it just updates metadata via ON CONFLICT below).
+                cursor = await db.execute(
+                    "SELECT from_task_id FROM task_edges WHERE to_task_id = ? AND type = ?",
+                    (to_task_id, edge_type),
+                )
+                other_parents = {row[0] for row in await cursor.fetchall()} - {from_task_id}
+                if other_parents:
+                    raise CoordinationError(
+                        "parent_exists",
+                        f"task {to_task_id} already has a parent ({next(iter(other_parents))}); a "
+                        "task may have at most one parent. Remove the existing parent_child edge "
+                        "before re-parenting.",
+                    )
                 # Adding parent(from)->child(to) is a cycle if the parent is
                 # already a descendant of the child (reverse=False = down the
                 # hierarchy from the child).
@@ -2197,11 +2213,11 @@ class CoordinationService:
         placeholders = ",".join("?" for _ in hierarchy)
         results: list[dict[str, Any]] = []
         seen: set[str] = {task_id}
-        frontier = [task_id]
+        frontier: deque[str] = deque([task_id])
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             while frontier:
-                parent = frontier.pop(0)
+                parent = frontier.popleft()
                 cursor = await db.execute(
                     f"""
                     SELECT t.* FROM task_edges e JOIN tasks t ON t.id = e.to_task_id
