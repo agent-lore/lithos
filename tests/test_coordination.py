@@ -7,7 +7,7 @@ import aiosqlite
 import pytest
 
 from lithos.config import LithosConfig, StorageConfig
-from lithos.coordination import CoordinationService
+from lithos.coordination import CoordinationError, CoordinationService
 
 
 class TestAgentRegistry:
@@ -303,6 +303,80 @@ class TestTaskLifecycle:
         # slack to absorb clock skew under heavy CI load.
         after = datetime.now(timezone.utc)
         assert before - timedelta(seconds=5) <= task.resolved_at <= after + timedelta(seconds=5)
+
+    @pytest.mark.asyncio
+    async def test_reopen_completed_task(self, coordination_service: CoordinationService):
+        """reopen_task moves completed -> open, clearing resolved_at + outcome."""
+        task_id = await coordination_service.create_task(title="Done", agent="agent")
+        await coordination_service.complete_task(task_id, "agent", outcome="shipped")
+
+        prior_status, prior_outcome = await coordination_service.reopen_task(task_id, "agent")
+        assert prior_status == "completed"
+        assert prior_outcome == "shipped"
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.status == "open"
+        assert task.resolved_at is None
+        assert task.outcome is None
+
+    @pytest.mark.asyncio
+    async def test_reopen_cancelled_task(self, coordination_service: CoordinationService):
+        task_id = await coordination_service.create_task(title="Gone", agent="agent")
+        await coordination_service.cancel_task(task_id, "agent")
+        prior_status, _ = await coordination_service.reopen_task(task_id, "agent")
+        assert prior_status == "cancelled"
+        task = await coordination_service.get_task(task_id)
+        assert task is not None and task.status == "open" and task.resolved_at is None
+
+    @pytest.mark.asyncio
+    async def test_reopen_open_task_rejected(self, coordination_service: CoordinationService):
+        task_id = await coordination_service.create_task(title="Still open", agent="agent")
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.reopen_task(task_id, "agent")
+        assert exc.value.code == "task_not_resolved"
+
+    @pytest.mark.asyncio
+    async def test_reopen_missing_task_rejected(self, coordination_service: CoordinationService):
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.reopen_task("ghost", "agent")
+        assert exc.value.code == "task_not_found"
+
+    @pytest.mark.asyncio
+    async def test_update_works_on_terminal_tasks(self, coordination_service: CoordinationService):
+        """#303: task_update accepts completed/cancelled tasks (metadata + fields)."""
+        done = await coordination_service.create_task(
+            title="Done", agent="agent", metadata={"a": 1}
+        )
+        await coordination_service.complete_task(done, "agent")
+        ok = await coordination_service.update_task(
+            done, "agent", title="Done (renamed)", metadata={"b": 2}
+        )
+        assert ok is True
+        task = await coordination_service.get_task(done)
+        assert task is not None
+        assert task.title == "Done (renamed)"
+        assert task.metadata == {"a": 1, "b": 2}  # additive merge survives terminal state
+
+        cancelled = await coordination_service.create_task(title="Gone", agent="agent")
+        await coordination_service.cancel_task(cancelled, "agent")
+        assert await coordination_service.update_task(cancelled, "agent", metadata={"x": 1}) is True
+
+    @pytest.mark.asyncio
+    async def test_update_terminal_still_rejects_forbidden_metadata(
+        self, coordination_service: CoordinationService
+    ):
+        done = await coordination_service.create_task(title="Done", agent="agent")
+        await coordination_service.complete_task(done, "agent")
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.update_task(done, "agent", metadata={"depends_on": ["x"]})
+        assert exc.value.code == "invalid_metadata_key"
+
+    @pytest.mark.asyncio
+    async def test_update_missing_task_returns_false(
+        self, coordination_service: CoordinationService
+    ):
+        assert await coordination_service.update_task("ghost", "agent", title="x") is False
 
     @pytest.mark.asyncio
     async def test_get_task_status(self, coordination_service: CoordinationService):
@@ -1849,10 +1923,8 @@ class TestTaskUpdateMetadataMerge:
         assert task.metadata == {"a": 1}
 
     @pytest.mark.asyncio
-    async def test_merge_on_completed_task_returns_false(
-        self, coordination_service: CoordinationService
-    ):
-        """Completed tasks are treated as not-found; metadata is not mutated."""
+    async def test_merge_on_completed_task_merges(self, coordination_service: CoordinationService):
+        """#303: completed tasks are now updatable; the metadata merge applies."""
         task_id = await coordination_service.create_task(
             title="Completed Task",
             agent="agent",
@@ -1863,11 +1935,12 @@ class TestTaskUpdateMetadataMerge:
         updated = await coordination_service.update_task(
             task_id=task_id, agent="agent", metadata={"b": 2}
         )
-        assert updated is False
+        assert updated is True
 
         task = await coordination_service.get_task(task_id)
         assert task is not None
-        assert task.metadata == {"a": 1}
+        assert task.metadata == {"a": 1, "b": 2}
+        assert task.status == "completed"  # annotated, not revived
 
     @pytest.mark.asyncio
     async def test_merge_preserves_other_columns(self, coordination_service: CoordinationService):

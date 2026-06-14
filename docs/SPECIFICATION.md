@@ -775,7 +775,7 @@ Update mutable task fields.
 **Behavior:**
 - At least one of `title`, `description`, `tags`, or `metadata` must be provided.
 - A `metadata` patch containing `depends_on`/`blocked_on` (any value, including a `null` delete) is rejected — those keys are no longer read, and closing the write path prevents stale scheduler-invisible dependency state being recreated.
-- Only `open` tasks can be updated. Completed and cancelled tasks are treated as not found at the MCP boundary.
+- **Terminal tasks are updatable (#303).** `task_update` works on `completed`/`cancelled` tasks too — useful for annotating an archived task (e.g. a `metadata` snapshot) without reviving it. `task_not_found` now means the task genuinely does not exist. To bring a task back to active work, use `lithos_task_reopen`.
 - `metadata` is applied as an **additive per-key merge**: keys with non-null values overwrite the existing value, keys whose value is `null` are deleted from the existing metadata, and keys not mentioned are preserved. `metadata={}` is a no-op (preserves all existing keys); there is no wholesale-clear affordance. To clear a specific key, pass `{"key": null}`. The merge is performed atomically (single `BEGIN IMMEDIATE` transaction) so concurrent writers updating different keys never clobber each other.
 
 #### `lithos_task_claim`
@@ -848,6 +848,19 @@ Cancel a task and release all claims.
 **Returns:** `{ success: true }` on success, or `{ status: "error", code: "task_not_found", message }` on failure.
 
 **Behavior:** Marks an open task as `cancelled`, persists `resolved_at = now` (dual-write with `lithos_task_complete` so both terminal transitions populate the same timestamp), and deletes all claims on that task. The optional `reason` is accepted by the MCP surface but is not persisted in SQLite.
+
+#### `lithos_task_reopen`
+Move a terminal (`completed`/`cancelled`) task back to `open` — the inverse of complete/cancel.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `task_id` | string | Yes | Task ID to reopen |
+| `agent` | string | Yes | Agent performing the reopen |
+
+**Returns:** `{ success: true, reblocked: string[] }` on success, or `{ status: "error", code, message }` on failure (codes: `task_not_found`, `task_not_resolved` — the task is already `open`).
+
+**Behavior:** Sets `status` back to `open`, clears `resolved_at` and `outcome`, posts a durable `[Reopened]` finding recording the prior terminal status, and emits a `task.reopened` event. Claims were already released on complete/cancel, so none are restored. `reblocked` lists the open dependents this reopen put back under the task's block (via `blocks`/`waits_on_gate` edges) — non-empty only when reopening a **completed** blocker/gate (a dependent that was ready is blocked again); reopening a **cancelled** blocker/gate instead *un-strands* its dependents (`blocker_unsatisfiable` → waiting) and re-blocks no one, so `reblocked` is `[]`. This is the remediation for dependents stranded by a cancelled blocker/gate (see Gates / readiness).
 
 #### `lithos_task_list`
 List tasks with optional filters.
@@ -1420,6 +1433,7 @@ Lithos includes an in-memory event bus that emits `LithosEvent` on all write, de
 | `task.released` | `lithos_task_release` | `task_id`, `agent`, `aspect` |
 | `task.completed` | `lithos_task_complete` | `task_id`, `agent`, `outcome`, `cited_nodes`, `misleading_nodes`, `receipt_id` |
 | `task.cancelled` | `lithos_task_cancel` | `task_id`, `agent`, `reason` |
+| `task.reopened` | `lithos_task_reopen` | `task_id`, `agent`, `prior_status`, `prior_outcome` |
 | `finding.posted` | `lithos_finding_post` | `finding_id`, `task_id`, `agent` |
 | `agent.registered` | `lithos_agent_register` | `agent_id`, `name` |
 
@@ -1623,7 +1637,9 @@ Tools indicate routine domain failures through return values, and unexpected bac
 | Claim release with no matching claim | `lithos_task_release` returns `{ status: "error", code: "claim_not_found" }` |
 | Completing unknown or non-open task | `lithos_task_complete` returns `{ status: "error", code: "task_not_found" }` |
 | Updating task with no fields provided | `lithos_task_update` returns `{ status: "error", code: "invalid_input" }` |
-| Updating or cancelling unknown/closed task | `lithos_task_update` / `lithos_task_cancel` returns `{ status: "error", code: "task_not_found" }` |
+| Updating an unknown task | `lithos_task_update` returns `{ status: "error", code: "task_not_found" }` (terminal tasks are updatable — #303; only genuinely-missing ids error) |
+| Cancelling unknown/closed task | `lithos_task_cancel` returns `{ status: "error", code: "task_not_found" }` |
+| Reopening unknown task / already-open task | `lithos_task_reopen` returns `{ status: "error", code: "task_not_found" }` / `{ code: "task_not_resolved" }` |
 | Fetching unknown task via `lithos_task_get` | Returns `{ status: "error", code: "task_not_found" }` |
 | Invalid arguments | FastMCP validation rejects the call |
 | Ambiguous wiki-link | Link treated as unresolved (no error raised) |
@@ -1716,13 +1732,13 @@ These are explicitly not part of the initial implementation but may be considere
 | Knowledge | `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup` |
 | Graph | `lithos_tags`, `lithos_related` |
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
-| Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_list`, `lithos_task_status`, `lithos_task_get`, `lithos_finding_post`, `lithos_finding_list` |
+| Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_reopen`, `lithos_task_list`, `lithos_task_status`, `lithos_task_get`, `lithos_finding_post`, `lithos_finding_list` |
 | Task Graph | `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, `lithos_task_blocked`, `lithos_task_children`, `lithos_task_spawn` |
 | System | `lithos_stats` |
 | LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
 | HTTP | `GET /health`, `GET /events`, `GET /audit` (not MCP tools; see §5.7 and §8.7) |
 
-**Total: 35 MCP tools + 3 HTTP endpoints** (task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
+**Total: 36 MCP tools + 3 HTTP endpoints** (task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_reopen` completes the lifecycle (terminal → open, the remediation for stranded dependents) and `lithos_task_update` now accepts terminal tasks (#303); `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
 
 ---
 

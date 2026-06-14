@@ -31,6 +31,7 @@ from lithos.events import (
     TASK_COMPLETED,
     TASK_CREATED,
     TASK_RELEASED,
+    TASK_REOPENED,
     TASK_UPDATED,
     EventBus,
     LithosEvent,
@@ -2583,6 +2584,10 @@ class LithosServer:
             """Update mutable task fields (title, description, tags, metadata).
 
             At least one of title, description, tags, or metadata must be provided.
+            Works on terminal (completed/cancelled) tasks too — useful for annotating
+            an archived task (e.g. a metadata snapshot) without reviving it; use
+            ``lithos_task_reopen`` to bring a task back to active work. ``task_not_found``
+            now means the task genuinely does not exist.
 
             ``metadata`` is applied as an additive per-key merge: keys with non-null
             values overwrite the existing value, keys whose value is ``None`` are
@@ -2959,6 +2964,69 @@ class LithosServer:
                     "code": "task_not_found",
                     "message": f"Task {task_id} not found or already closed",
                 }
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_task_reopen(
+            task_id: str,
+            agent: str,
+        ) -> dict[str, Any]:
+            """Reopen a terminal (completed/cancelled) task back to ``open``.
+
+            The inverse of complete/cancel — use it to revive a task to active work
+            (e.g. an accidental completion) and to remediate dependents stranded as
+            ``blocker_unsatisfiable`` by a cancelled blocker/gate: reopening that
+            blocker/gate returns its dependents to a waiting state. Clears
+            ``resolved_at``/``outcome``, records the reopen as a ``[Reopened]``
+            finding, and emits a ``task.reopened`` event.
+
+            Args:
+                task_id: Task ID to reopen
+                agent: Agent performing the reopen
+
+            Returns:
+                ``{"success": true, "reblocked": [...]}`` — ``reblocked`` lists open
+                dependents this reopen put back under the task's block (non-empty
+                only when reopening a *completed* blocker/gate; a cancelled-task
+                reopen un-strands dependents and re-blocks no one). On failure,
+                ``{"status": "error", "code": "task_not_found" | "task_not_resolved",
+                "message": ...}``.
+            """
+            logger.info("lithos_task_reopen task=%s agent=%s", task_id, agent)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.task_reopen") as span:
+                span.set_attribute("lithos.tool", "lithos_task_reopen")
+                span.set_attribute("lithos.agent", agent)
+                span.set_attribute("lithos.task_id", task_id)
+                try:
+                    prior_status, prior_outcome = await self.coordination.reopen_task(
+                        task_id=task_id, agent=agent
+                    )
+                except CoordinationError as exc:
+                    span.set_attribute("lithos.success", False)
+                    return {"status": "error", "code": exc.code, "message": exc.message}
+
+                # Durable audit: a queryable finding recording the prior terminal state.
+                summary = f"[Reopened] task reopened (was {prior_status})"
+                if prior_outcome:
+                    summary += f"; prior outcome: {prior_outcome}"
+                await self.coordination.post_finding(task_id=task_id, agent=agent, summary=summary)
+
+                await self._emit(
+                    LithosEvent(
+                        type=TASK_REOPENED,
+                        agent=agent,
+                        payload={
+                            "task_id": task_id,
+                            "agent": agent,
+                            "prior_status": prior_status,
+                            "prior_outcome": prior_outcome,
+                        },
+                    )
+                )
+                reblocked = await self.coordination.newly_reblocked_by(task_id, prior_status)
+                span.set_attribute("lithos.reblocked_count", len(reblocked))
+                return {"success": True, "reblocked": reblocked}
 
         @self.mcp.tool()
         @tool_metrics()
