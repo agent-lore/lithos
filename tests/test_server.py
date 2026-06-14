@@ -2321,8 +2321,8 @@ class TestTaskUpdateTool:
         assert "nonexistent-task-id" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_update_completed_task_returns_error(self, server: LithosServer):
-        """lithos_task_update: returns error envelope for completed tasks (status guard)."""
+    async def test_update_completed_task_succeeds(self, server: LithosServer):
+        """#303: lithos_task_update now works on terminal tasks (annotate, don't revive)."""
         task_id = await server.coordination.create_task(
             title="Will Complete",
             agent="test-agent",
@@ -2333,11 +2333,14 @@ class TestTaskUpdateTool:
             server,
             task_id=task_id,
             agent="test-agent",
-            title="Too Late",
+            title="Archived title",
         )
 
-        assert result["status"] == "error"
-        assert result["code"] == "task_not_found"
+        assert result.get("success") is True
+        task = await server.coordination.get_task(task_id)
+        assert task is not None
+        assert task.title == "Archived title"
+        assert task.status == "completed"  # updated in place, not revived
 
     @pytest.mark.asyncio
     async def test_update_task_no_fields_returns_error(self, server: LithosServer):

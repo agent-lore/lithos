@@ -1077,8 +1077,9 @@ class CoordinationService:
         """Update mutable task metadata.
 
         Only updates fields that are not None (partial update pattern).
-        Only open tasks can be updated; completed or cancelled tasks are
-        treated as not found (consistent with complete_task behaviour).
+        Terminal tasks (completed/cancelled) are updatable too (#303) — useful for
+        annotating an archived task (e.g. a metadata snapshot) without reviving it;
+        use ``lithos_task_reopen`` to bring a task back to active work.
 
         ``metadata`` is applied as an additive per-key merge: keys with
         non-null values overwrite, keys whose value is ``None`` are deleted,
@@ -1086,7 +1087,7 @@ class CoordinationService:
         There is no wholesale-clear affordance (#290).
 
         Returns:
-            True if task was found, is open, and was updated; False otherwise
+            True if task was found and updated; False if no such task exists
 
         Raises:
             CoordinationError: ``metadata`` contains a forbidden scheduling key
@@ -1130,20 +1131,18 @@ class CoordinationService:
 
         Single UPDATE, no SELECT needed. When ``sets`` is empty the caller
         passed only no-op arguments — we still return True/False based on
-        whether the task exists and is open, matching the contract of the
-        merge path.
+        whether the task exists, matching the contract of the merge path.
+        Terminal tasks (completed/cancelled) are updatable too (#303).
         """
         if not sets:
             async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute(
-                    "SELECT id FROM tasks WHERE id = ? AND status = 'open'", (task_id,)
-                )
+                cursor = await db.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
                 return await cursor.fetchone() is not None
 
         params_with_id = [*params, task_id]
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                f"UPDATE tasks SET {', '.join(sets)} WHERE id = ? AND status = 'open'",
+                f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
                 params_with_id,
             )
             await db.commit()
@@ -1181,7 +1180,7 @@ class CoordinationService:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 cursor = await db.execute(
-                    "SELECT task_type, metadata FROM tasks WHERE id = ? AND status = 'open'",
+                    "SELECT task_type, metadata FROM tasks WHERE id = ?",
                     (task_id,),
                 )
                 row = await cursor.fetchone()
@@ -1201,7 +1200,7 @@ class CoordinationService:
                 sets = [*non_metadata_sets, "metadata = ?"]
                 params = [*non_metadata_params, merged_json, task_id]
                 await db.execute(
-                    f"UPDATE tasks SET {', '.join(sets)} WHERE id = ? AND status = 'open'",
+                    f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
                     params,
                 )
                 await db.commit()
@@ -1320,6 +1319,81 @@ class CoordinationService:
                 extra={"task_id": task_id, "agent": agent, "reason": reason},
             )
             return True
+
+    @traced("lithos.coordination.reopen_task")
+    async def reopen_task(self, task_id: str, agent: str) -> tuple[str, str | None]:
+        """Move a terminal task back to ``open`` (the inverse of complete/cancel).
+
+        Clears ``resolved_at`` and ``outcome`` — a reopened task is no longer
+        resolved. Claims were already released on complete/cancel, so there is
+        nothing to restore. Returns ``(prior_status, prior_outcome)`` so the
+        caller can record the reopen in an event/finding.
+
+        Raises:
+            CoordinationError: ``task_not_found`` (unknown id) or
+                ``task_not_resolved`` (the task is already ``open``).
+        """
+        lithos_metrics.coordination_ops.add(1, {"op": "reopen"})
+        await self.ensure_agent_known(agent)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT status, outcome FROM tasks WHERE id = ?",
+                (task_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise CoordinationError("task_not_found", f"Task '{task_id}' not found.")
+            prior_status, prior_outcome = row[0], row[1]
+            if prior_status == "open":
+                raise CoordinationError(
+                    "task_not_resolved", f"Task '{task_id}' is already open; nothing to reopen."
+                )
+            await db.execute(
+                "UPDATE tasks SET status = 'open', resolved_at = NULL, outcome = NULL WHERE id = ?",
+                (task_id,),
+            )
+            await db.commit()
+
+        logger.info(
+            "Task reopened: task_id=%s agent=%s prior_status=%s",
+            task_id,
+            agent,
+            prior_status,
+            extra={"task_id": task_id, "agent": agent, "prior_status": prior_status},
+        )
+        return prior_status, prior_outcome
+
+    @traced("lithos.coordination.newly_reblocked_by")
+    async def newly_reblocked_by(self, task_id: str, prior_status: str) -> list[str]:
+        """Return ids of open dependents this reopen just put back under a block.
+
+        The inverse of :meth:`newly_unblocked_by`. Only a ``completed``-task
+        reopen newly blocks anyone: a ``cancelled``-task reopen *un-strands* its
+        dependents (``blocker_unsatisfiable`` -> waiting) without newly blocking
+        them, so it returns ``[]``. For a completed reopen, a dependent is
+        reported iff its *only* current blocker is the reopened task (it was ready
+        before and is now blocked solely by this), so the report stays honest and
+        does not include dependents that were already blocked by something else.
+        """
+        if prior_status != "completed":
+            return []
+        dependency = tuple(DEPENDENCY_EDGE_TYPES)
+        placeholders = ",".join("?" for _ in dependency)
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"SELECT DISTINCT to_task_id FROM task_edges "
+                f"WHERE from_task_id = ? AND type IN ({placeholders})",
+                (task_id, *dependency),
+            )
+            candidates = [row[0] for row in await cursor.fetchall()]
+            reblocked: list[str] = []
+            for cand in candidates:
+                blockers = await self._compute_blockers(db, cand)
+                if blockers and all(b["task_id"] == task_id for b in blockers):
+                    reblocked.append(cand)
+            return reblocked
 
     async def list_tasks(
         self,

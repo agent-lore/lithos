@@ -749,6 +749,77 @@ class TestGates:
         assert b_row["blockers"][0]["kind"] == "gate"
 
 
+# ==================== Reopen + cascade (#243) ====================
+
+
+def _blocker(rows, tid):
+    row = next((t for t in rows if t["id"] == tid), None)
+    return row["blockers"][0] if row and row.get("blockers") else None
+
+
+class TestReopen:
+    async def test_reopen_completed_blocker_reblocks_dependent(
+        self, coordination_service: CoordinationService
+    ):
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B", depends_on=[a])
+        await coordination_service.complete_task(a, "a")
+        assert b in _ids(await coordination_service.list_ready())  # A done -> B ready
+
+        prior, _ = await coordination_service.reopen_task(a, "a")
+        assert prior == "completed"
+        reblocked = await coordination_service.newly_reblocked_by(a, prior)
+        assert reblocked == [b]
+        assert b not in _ids(await coordination_service.list_ready())  # B blocked again
+        assert _blocker(await coordination_service.list_blocked(), b)["kind"] == "task"
+
+    async def test_reopen_cancelled_blocker_unstrands_without_reblock(
+        self, coordination_service: CoordinationService
+    ):
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B", depends_on=[a])
+        await coordination_service.cancel_task(a, "a")
+        # B is stranded: blocker_unsatisfiable
+        assert (
+            _blocker(await coordination_service.list_blocked(), b)["kind"]
+            == "blocker_unsatisfiable"
+        )
+
+        prior, _ = await coordination_service.reopen_task(a, "a")
+        assert prior == "cancelled"
+        # cancelled-reopen newly-blocks no one (B was already blocked)
+        assert await coordination_service.newly_reblocked_by(a, prior) == []
+        # but B is now recoverable: blocker_unsatisfiable -> waiting (kind=task), still not ready
+        assert b not in _ids(await coordination_service.list_ready())
+        assert _blocker(await coordination_service.list_blocked(), b)["kind"] == "task"
+
+    async def test_reopen_completed_gate_reblocks_waiter(
+        self, coordination_service: CoordinationService
+    ):
+        gate = await _gate(coordination_service, "human")
+        w = await _mk(coordination_service, "W")
+        await coordination_service.upsert_task_edge(gate, w, "waits_on_gate", "a")
+        await coordination_service.complete_task(gate, "a")
+        assert w in _ids(await coordination_service.list_ready())
+
+        prior, _ = await coordination_service.reopen_task(gate, "a")
+        assert await coordination_service.newly_reblocked_by(gate, prior) == [w]
+        assert _blocker(await coordination_service.list_blocked(), w)["kind"] == "gate"
+
+    async def test_reblocked_excludes_dependent_with_other_blocker(
+        self, coordination_service: CoordinationService
+    ):
+        # B depends on both A and X. Completing only A never readied B, so reopening
+        # A must NOT report B as reblocked (B was already blocked by X).
+        a = await _mk(coordination_service, "A")
+        x = await _mk(coordination_service, "X")
+        b = await _mk(coordination_service, "B", depends_on=[a, x])
+        await coordination_service.complete_task(a, "a")
+        assert b not in _ids(await coordination_service.list_ready())  # X still blocks
+        prior, _ = await coordination_service.reopen_task(a, "a")
+        assert await coordination_service.newly_reblocked_by(a, prior) == []
+
+
 # ==================== Backfill + migration ====================
 
 
@@ -963,3 +1034,37 @@ class TestServerTaskGraphTools:
         # completing the gate reports the waiter as unblocked
         done = await _call(server, "lithos_task_complete", task_id=gate_id, agent="a")
         assert done["unblocked"] == [task]
+
+    async def test_reopen_tool_envelope_finding_and_reblocked(self, server: LithosServer):
+        a = await server.coordination.create_task(title="A", agent="a")
+        b = await server.coordination.create_task(title="B", agent="a", depends_on=[a])
+        await server.coordination.complete_task(a, "a", outcome="done")
+
+        res = await _call(server, "lithos_task_reopen", task_id=a, agent="a")
+        assert res["success"] is True
+        assert res["reblocked"] == [b]  # reopening completed A re-blocks B
+
+        # durable [Reopened] finding records the prior terminal status
+        findings = await _call(server, "lithos_finding_list", task_id=a)
+        assert any(
+            "[Reopened]" in fnd["summary"] and "completed" in fnd["summary"]
+            for fnd in findings["findings"]
+        )
+        # A is open again, off the resolved surface
+        got = await _call(server, "lithos_task_get", task_id=a)
+        assert got["task"]["status"] == "open" and got["task"]["resolved_at"] is None
+
+    async def test_reopen_tool_error_envelopes(self, server: LithosServer):
+        missing = await _call(server, "lithos_task_reopen", task_id="ghost", agent="a")
+        assert missing["code"] == "task_not_found"
+        open_task = await server.coordination.create_task(title="Open", agent="a")
+        already = await _call(server, "lithos_task_reopen", task_id=open_task, agent="a")
+        assert already["code"] == "task_not_resolved"
+
+    async def test_update_tool_works_on_terminal_task(self, server: LithosServer):
+        t = await server.coordination.create_task(title="T", agent="a")
+        await server.coordination.complete_task(t, "a")
+        res = await _call(server, "lithos_task_update", task_id=t, agent="a", metadata={"k": "v"})
+        assert res.get("success") is True
+        got = await _call(server, "lithos_task_get", task_id=t)
+        assert got["task"]["metadata"]["k"] == "v" and got["task"]["status"] == "completed"

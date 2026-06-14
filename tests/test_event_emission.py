@@ -15,6 +15,7 @@ from lithos.events import (
     TASK_COMPLETED,
     TASK_CREATED,
     TASK_RELEASED,
+    TASK_REOPENED,
     TASK_UPDATED,
     LithosEvent,
 )
@@ -242,6 +243,22 @@ class TestTaskEventEmission:
         assert event.payload["task_id"] == task_id
         # outcome is surfaced in the event payload; None when not supplied.
         assert event.payload["outcome"] is None
+        server.event_bus.unsubscribe(queue)
+
+    @pytest.mark.asyncio
+    async def test_lithos_task_reopen_emits_task_reopened(self, server: LithosServer) -> None:
+        result = await _call_tool(server, "lithos_task_create", {"title": "T", "agent": "a"})
+        task_id = result["task_id"]
+        await _call_tool(server, "lithos_task_complete", {"task_id": task_id, "agent": "a"})
+
+        queue = server.event_bus.subscribe(event_types=[TASK_REOPENED])
+        reopen = await _call_tool(server, "lithos_task_reopen", {"task_id": task_id, "agent": "a"})
+        assert reopen["success"] is True
+
+        event = queue.get_nowait()
+        assert event.type == TASK_REOPENED
+        assert event.payload["task_id"] == task_id
+        assert event.payload["prior_status"] == "completed"
         server.event_bus.unsubscribe(queue)
 
     @pytest.mark.asyncio

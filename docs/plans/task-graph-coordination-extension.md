@@ -421,7 +421,7 @@ A task is blocked when:
 Blocker-failure policy:
 
 - a `blocks` predecessor that ends `cancelled` (terminal but not `completed`) leaves every dependent **permanently** blocked — the awaited work will never complete. Such dependents are excluded from `ready` and surfaced via `lithos_task_blocked` with a `blocker_unsatisfiable` blocker carrying the cancelled predecessor's id + status, so an agent can decide to re-open/re-route the predecessor or cancel the stranded subtree. The edge is retained (never silently dropped) — exactly as for backfill cycles below — because dropping it would make the dependent spuriously `ready`.
-- this keeps Lithos **passive**: it does not auto-cancel or auto-reroute the stranded dependents; it refuses to call them ready and explains why, leaving the policy decision to the agent/orchestrator.
+- this keeps Lithos **passive**: it does not auto-cancel or auto-reroute the stranded dependents; it refuses to call them ready and explains why, leaving the policy decision to the agent/orchestrator. The concrete remediation is `lithos_task_reopen` (#243): reopening the cancelled blocker/gate moves its dependents from `blocker_unsatisfiable` back to a waiting state (`task`/`gate`) without spuriously readying them.
 
 Cycle policy:
 
