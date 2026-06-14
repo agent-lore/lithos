@@ -161,7 +161,7 @@ Accepted from Phase 1:
 Accepted from Phase 3 (alongside gate readiness semantics):
 
 - `waits_on_gate`
-  Meaning: `to_task_id` is blocked by the gate task `from_task_id` (same direction as `blocks`: `from_task_id` is the blocker). `to_task_id` cannot be ready until the gate is resolved — i.e. the gate task is closed, or for `timer` gates, `ready_at <= now` at query time. Blocking.
+  Meaning: `to_task_id` is blocked by the gate task `from_task_id` (same direction as `blocks`: `from_task_id` is the blocker). `to_task_id` cannot be ready until the gate is resolved — i.e. the gate is `completed`, or for an `open` `timer` gate, `ready_at <= now` at query time. A **cancelled** gate is *unsatisfiable* (it never resolves; the waiter is surfaced as `blocker_unsatisfiable`), mirroring the cancelled-`blocks` rule (§8/§12.4) — "proceed anyway" is expressed by *completing* the gate, not cancelling it. Blocking.
 
 Deferred edge types (add only when something concretely consumes them, since each carries implied semantics and validation — e.g. terminal-state behavior for duplicates):
 
@@ -199,10 +199,11 @@ Why gates as tasks:
 
 **Lithos never polls external systems.** It is a passive MCP server; gates are resolved as follows:
 
-- `timer` gates are evaluated at query time: the gate is considered resolved when `ready_at <= now`. No state change is required.
-- All other gate types (`human`, `ci`, `pr`, `external_task`) are resolved by an agent (or a hook/script acting as one) completing the gate task via `lithos_task_complete` when it observes the external condition is met.
+- An `open` `timer` gate is evaluated at query time: resolved once `ready_at <= now`. No state change is required. `ready_at` is validated and normalized to a canonical UTC second-precision ISO string at creation so the ready and blocked queries compare it identically.
+- All gate types are resolved by an agent (or a hook/script acting as one) **completing** the gate task via `lithos_task_complete` when it observes the external condition is met.
+- **Cancelling** a gate means the awaited condition will *not* be met: the gate is unsatisfiable and its waiters become `blocker_unsatisfiable` (not readied). complete = condition met → release; cancel = condition won't be met → intervene.
 
-The gate metadata (`provider`, `run_id`, `pr_number`, etc.) exists so that the resolving agent knows what to check — it does not imply Lithos watches those systems. Anything that polls CI or PR state lives outside Lithos.
+`gate_type ∈ {human, timer, ci, pr, external_task}` is required at creation (strict validation). The other gate metadata (`provider`, `run_id`, `pr_number`, etc.) exists so the resolving agent knows what to check — it does not imply Lithos watches those systems. Anything that polls CI or PR state lives outside Lithos.
 
 ---
 
@@ -232,7 +233,8 @@ Validation:
 - both tasks must exist
 - `type` must be an edge type accepted in the current phase (§5.2); deferred types and not-yet-shipped types (e.g. `waits_on_gate` before Phase 3) are rejected
 - self-edges are rejected
-- cycles in blocking edges are rejected via a bounded traversal at write time
+- a `waits_on_gate` edge requires its `from_task` to be a `gate` task (else `not_a_gate`) — the readiness predicate keys on gate metadata, so the blocker must actually be a gate
+- cycles in the dependency graph (`blocks` + `waits_on_gate`) are rejected via a bounded traversal at write time
 
 ### `lithos_task_edge_list`
 
@@ -405,7 +407,7 @@ A task is ready when all of the following are true:
 1. `status == "open"`
 2. the task is a directly-workable unit — i.e. not a `gate` (and, once Phase 2 ships the `epic` type, not an `epic`: you execute an epic's children, not the epic itself). The readiness predicate uses a forward-compatible `task_type NOT IN ('gate', 'epic')` guard from Phase 1; the excluded types simply cannot be created yet until their phase lands.
 3. every incoming blocking edge is **satisfied** — for a `blocks` edge that means the predecessor is `completed` (a predecessor still `open`, or terminal-but-not-`completed` i.e. `cancelled`, leaves the edge unsatisfied; see the blocker-failure policy below)
-4. it is not blocked by an unresolved gate
+4. every incoming `waits_on_gate` edge is **satisfied** — the gate is `completed`, or an `open` `timer` gate whose `ready_at <= now`. A `cancelled` gate (cancelled wins over any timer) leaves the edge unsatisfied → `blocker_unsatisfiable`. (Conditions 3 and 4 are one SQL predicate — see the implementation; `blocks` and `waits_on_gate` are the unified dependency set.)
 
 Claims do **not** enter the readiness predicate: a claimed task is still ready. `lithos_task_ready` *attaches* active claims (when `with_claims`) but never excludes by them — see §6.1 for why (atomic-claim correctness + per-aspect claims).
 
@@ -519,15 +521,16 @@ Exit criteria:
 
 - agents can decompose and extend work without losing parent/child relationships
 
-## Phase 3: Gates
+## Phase 3: Gates (delivered)
 
-- add `gate` task type semantics
-- add `waits_on_gate` to the accepted edge types in `lithos_task_edge_upsert` (it is rejected before this phase)
-- add unresolved-gate support in readiness (`waits_on_gate` edges, query-time `timer` evaluation)
+- accept `gate` task type with strict metadata validation (`gate_type`; `timer` requires a normalized `ready_at`)
+- accept `waits_on_gate` in `lithos_task_edge_upsert` (rejected before this phase); cycle detection spans the unified `blocks`+`waits_on_gate` dependency graph
+- gate-aware readiness via a single `_unsatisfied_blocker_sql` predicate shared by ready/blocked/`_is_task_ready` (completion + query-time `timer`; cancelled = unsatisfiable); `newly_unblocked_by` widened to gate waiters
+- **no new MCP tools** — gates are created via `lithos_task_create(task_type='gate')` and resolved via `lithos_task_complete`
 
 Exit criteria:
 
-- waiting states are explicit, and agents can resolve gates by completing gate tasks
+- waiting states are explicit; agents resolve gates by completing them (or `timer` gates auto-resolve at query time)
 
 ## Phase 4: Scheduling Refinements (all optional, motivated by observed need)
 
