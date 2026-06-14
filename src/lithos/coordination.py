@@ -1181,7 +1181,7 @@ class CoordinationService:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 cursor = await db.execute(
-                    "SELECT metadata FROM tasks WHERE id = ? AND status = 'open'",
+                    "SELECT task_type, metadata FROM tasks WHERE id = ? AND status = 'open'",
                     (task_id,),
                 )
                 row = await cursor.fetchone()
@@ -1189,8 +1189,13 @@ class CoordinationService:
                     await db.execute("ROLLBACK")
                     return False
 
-                existing = _decode_metadata(row[0])
+                existing = _decode_metadata(row[1])
                 merged = merge_metadata(existing, metadata_patch)
+                # A gate's metadata must stay valid: revalidate (and re-normalize a
+                # timer ready_at) so a patch like {"gate_type": None} can't strip
+                # the gate invariants and spuriously ready its waiters.
+                if row[0] == "gate":
+                    merged = _validate_gate_metadata(merged)
                 merged_json = json.dumps(merged)
 
                 sets = [*non_metadata_sets, "metadata = ?"]
@@ -1837,14 +1842,24 @@ class CoordinationService:
 
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT id FROM tasks WHERE id IN (?, ?)",
+                "SELECT id, task_type FROM tasks WHERE id IN (?, ?)",
                 (from_task_id, to_task_id),
             )
-            found = {row[0] for row in await cursor.fetchall()}
-            missing = [t for t in (from_task_id, to_task_id) if t not in found]
+            type_by_id = {row[0]: row[1] for row in await cursor.fetchall()}
+            missing = [t for t in (from_task_id, to_task_id) if t not in type_by_id]
             if missing:
                 raise CoordinationError(
                     "task_not_found", f"edge references nonexistent task(s): {missing}"
+                )
+
+            if edge_type in GATE_EDGE_TYPES and type_by_id.get(from_task_id) != "gate":
+                # A waits_on_gate blocker must be a gate task — otherwise the
+                # readiness predicate (which keys on gate metadata) cannot reason
+                # about it and the waiter would never be released correctly.
+                raise CoordinationError(
+                    "not_a_gate",
+                    f"a {edge_type} edge requires the from_task ({from_task_id}) to be a "
+                    f"'gate' task, got task_type={type_by_id.get(from_task_id)!r}.",
                 )
 
             if edge_type in DEPENDENCY_EDGE_TYPES:
@@ -2030,6 +2045,13 @@ class CoordinationService:
         resolved means the gate is ``completed``, or it is an ``open`` ``timer``
         gate whose ``ready_at <= now``. A ``cancelled`` gate is therefore
         unsatisfied (cancelled wins over a timer), surfaced as ``blocker_unsatisfiable``.
+
+        The timer auto-resolve is wrapped in ``COALESCE(..., 0)`` so that a
+        predecessor with absent/invalid gate metadata (NULL ``json_extract``)
+        defaults to **0 = not auto-resolved**, i.e. the dependent stays blocked
+        rather than falling through as ready on SQLite NULL semantics. Combined
+        with the write-time rule that a ``waits_on_gate`` blocker must be a gate,
+        an unknown gate state never spuriously readies its waiter.
         """
         blocking = tuple(BLOCKING_EDGE_TYPES)
         gate = tuple(GATE_EDGE_TYPES)
@@ -2038,9 +2060,9 @@ class CoordinationService:
         fragment = (
             f"( (e.type IN ({bph}) AND p.status != 'completed')"
             f" OR (e.type IN ({gph}) AND p.status != 'completed'"
-            "      AND NOT (p.status = 'open'"
+            "      AND NOT COALESCE((p.status = 'open'"
             "               AND json_extract(p.metadata, '$.gate_type') = 'timer'"
-            "               AND json_extract(p.metadata, '$.ready_at') <= ?)) )"
+            "               AND json_extract(p.metadata, '$.ready_at') <= ?), 0)) )"
         )
         return fragment, [*blocking, *gate, now]
 

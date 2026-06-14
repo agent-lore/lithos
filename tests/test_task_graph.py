@@ -691,6 +691,63 @@ class TestGates:
             await coordination_service.upsert_task_edge(g, a, "waits_on_gate", "a")
         assert exc.value.code == "cycle"
 
+    async def test_waits_on_gate_requires_a_gate_blocker(
+        self, coordination_service: CoordinationService
+    ):
+        # The blocker (from) of a waits_on_gate edge must be a gate task, else the
+        # readiness predicate can't reason about it and the waiter would leak ready.
+        plain = await _mk(coordination_service, "Plain")
+        waiter = await _mk(coordination_service, "Waiter")
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.upsert_task_edge(plain, waiter, "waits_on_gate", "a")
+        assert exc.value.code == "not_a_gate"
+
+    async def test_update_cannot_strip_gate_invariants(
+        self, coordination_service: CoordinationService
+    ):
+        gate = await _gate(coordination_service, "human")
+        task = await _mk(coordination_service, "Task")
+        await coordination_service.upsert_task_edge(gate, task, "waits_on_gate", "a")
+        assert task not in _ids(await coordination_service.list_ready())
+
+        # deleting gate_type via update is rejected; the waiter stays blocked
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.update_task(gate, "a", metadata={"gate_type": None})
+        assert exc.value.code == "invalid_input"
+        assert task not in _ids(await coordination_service.list_ready())
+
+        # a valid gate metadata update still works (and normalizes a timer ready_at)
+        timer = await _gate(coordination_service, "timer", ready_at=FUTURE)
+        ok = await coordination_service.update_task(
+            timer, "a", metadata={"ready_at": "2031-01-01T00:00:00Z"}
+        )
+        assert ok is True
+        row = await coordination_service.get_task(timer)
+        assert row is not None
+        assert row.metadata["ready_at"] == "2031-01-01T00:00:00+00:00"
+
+    async def test_corrupted_gate_metadata_defaults_to_blocked(
+        self, coordination_service: CoordinationService
+    ):
+        # Defense in depth: even if a gate ends up with no gate_type (e.g. a
+        # legacy/hand-edited row), the NULL-safe predicate keeps the waiter
+        # BLOCKED rather than letting it fall through as ready.
+        waiter = await _mk(coordination_service, "Waiter")
+        async with aiosqlite.connect(coordination_service.db_path) as db:
+            await db.execute(
+                "INSERT INTO tasks (id, title, status, task_type, created_by, metadata) "
+                "VALUES ('corrupt-gate', 'Corrupt', 'open', 'gate', 'a', '{}')",
+            )
+            await db.execute(
+                "INSERT INTO task_edges (from_task_id, to_task_id, type, created_by) "
+                "VALUES ('corrupt-gate', ?, 'waits_on_gate', 'a')",
+                (waiter,),
+            )
+            await db.commit()
+        assert waiter not in _ids(await coordination_service.list_ready())
+        b_row = next(t for t in await coordination_service.list_blocked() if t["id"] == waiter)
+        assert b_row["blockers"][0]["kind"] == "gate"
+
 
 # ==================== Backfill + migration ====================
 

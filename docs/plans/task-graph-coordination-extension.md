@@ -233,7 +233,8 @@ Validation:
 - both tasks must exist
 - `type` must be an edge type accepted in the current phase (§5.2); deferred types and not-yet-shipped types (e.g. `waits_on_gate` before Phase 3) are rejected
 - self-edges are rejected
-- cycles in blocking edges are rejected via a bounded traversal at write time
+- a `waits_on_gate` edge requires its `from_task` to be a `gate` task (else `not_a_gate`) — the readiness predicate keys on gate metadata, so the blocker must actually be a gate
+- cycles in the dependency graph (`blocks` + `waits_on_gate`) are rejected via a bounded traversal at write time
 
 ### `lithos_task_edge_list`
 

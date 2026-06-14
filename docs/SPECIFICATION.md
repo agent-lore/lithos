@@ -908,7 +908,7 @@ Create or update a typed relation between two tasks.
 | `agent` | string | Yes | Agent creating the edge |
 | `metadata` | object | No | Optional edge metadata (replaced on conflict) |
 
-**Returns:** `{ success: true }`, or `{ status: "error", code, message }` (codes: `invalid_edge_type`, `self_edge`, `task_not_found`, `cycle`). Cycles in blocking edges are rejected on write via a bounded traversal over the `task_edges` indexes (never a full-table walk).
+**Returns:** `{ success: true }`, or `{ status: "error", code, message }` (codes: `invalid_edge_type`, `self_edge`, `task_not_found`, `cycle`, `not_a_gate`). Cycles in blocking edges are rejected on write via a bounded traversal over the `task_edges` indexes (never a full-table walk). A `waits_on_gate` edge requires its `from_task` to be a `gate` task (else `not_a_gate`).
 
 #### `lithos_task_edge_list`
 List edges touching a task.
@@ -996,6 +996,8 @@ Other type-specific keys (`approval_required_from`, `provider`, `run_id`, `repo`
 - the gate is an `open` `timer` gate whose `ready_at` has passed (evaluated at query time; no state change).
 
 A **cancelled** gate is **unsatisfiable** — its waiter is excluded from `ready` and surfaced in `lithos_task_blocked` with `kind="blocker_unsatisfiable"` (the awaited condition will not be met). "Proceed anyway" is expressed by *completing* the gate or removing the edge, not by cancelling it. An open, not-yet-resolved gate surfaces as a `kind="gate"` blocker. This mirrors `blocks` (`completed` = satisfied, `cancelled` = unsatisfiable) plus the `timer` auto-resolve. Completing a gate reports its newly-ready waiters in the completion's `unblocked` list.
+
+Two invariants keep this sound: a `waits_on_gate` blocker must be a `gate` task (enforced on edge write — `not_a_gate`), and a gate's metadata is re-validated on `lithos_task_update` so it can't be mutated invalid. The readiness predicate is additionally NULL-safe, so an unknown/missing gate state defaults to *blocked*, never spuriously ready.
 
 #### `lithos_finding_post`
 Post a finding to a task.
