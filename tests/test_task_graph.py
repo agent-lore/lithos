@@ -819,6 +819,19 @@ class TestReopen:
         prior, _ = await coordination_service.reopen_task(a, "a")
         assert await coordination_service.newly_reblocked_by(a, prior) == []
 
+    async def test_reblocked_excludes_terminal_dependent(
+        self, coordination_service: CoordinationService
+    ):
+        # A blocks B; both complete; reopen A. B is terminal (completed), not active
+        # work, so it must NOT appear in reblocked even though A is its only blocker.
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B", depends_on=[a])
+        await coordination_service.complete_task(a, "a")
+        await coordination_service.complete_task(b, "b")
+        prior, _ = await coordination_service.reopen_task(a, "a")
+        assert prior == "completed"
+        assert await coordination_service.newly_reblocked_by(a, prior) == []
+
 
 # ==================== Backfill + migration ====================
 

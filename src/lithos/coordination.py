@@ -1382,9 +1382,15 @@ class CoordinationService:
         placeholders = ",".join("?" for _ in dependency)
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
+            # Restrict to *open* dependents: a terminal dependent is not active work
+            # and was never "ready", so reporting it as reblocked would mislead an
+            # orchestrator (the reopened task can be the sole blocker of a long-since
+            # completed dependent — _compute_blockers ignores the dependent's status).
             cursor = await db.execute(
-                f"SELECT DISTINCT to_task_id FROM task_edges "
-                f"WHERE from_task_id = ? AND type IN ({placeholders})",
+                f"SELECT DISTINCT e.to_task_id FROM task_edges e "
+                f"JOIN tasks t ON t.id = e.to_task_id "
+                f"WHERE e.from_task_id = ? AND e.type IN ({placeholders}) "
+                f"AND t.status = 'open'",
                 (task_id, *dependency),
             )
             candidates = [row[0] for row in await cursor.fetchall()]
