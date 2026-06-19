@@ -1499,9 +1499,11 @@ class LithosServer:
                     frontmatter metadata. A key whose value is null deletes it;
                     other keys are set; keys not mentioned are preserved. As with
                     ``lithos_task_update`` there is no wholesale-clear affordance —
-                    ``metadata={}`` is a no-op. Keys must be strings and must not
-                    collide with reserved frontmatter fields (e.g. title, tags,
-                    version) — such patches are rejected as invalid_input.
+                    ``metadata={}`` makes no metadata change (and, with no other
+                    field set, is rejected as invalid_input). Keys must be strings
+                    and must not collide with reserved frontmatter fields (e.g.
+                    title, tags, version) — such patches are rejected as
+                    invalid_input.
                 expected_version: If provided, reject with version_conflict when
                     the note's current version differs. Omit to skip the check.
 
@@ -1510,10 +1512,15 @@ class LithosServer:
                 invalid_input / version_conflict / slug_collision / duplicate /
                 error (with code ``note_not_found`` for an unknown id).
             """
-            if title is None and tags is None and status is None and metadata is None:
+            # An empty metadata dict carries no change (it maps to _UNSET below),
+            # so it does not count as a provided field — `metadata={}` alone is
+            # rejected rather than producing a version-bumping, event-emitting no-op.
+            has_metadata_change = metadata is not None and metadata != {}
+            if title is None and tags is None and status is None and not has_metadata_change:
                 return {
                     "status": "invalid_input",
-                    "message": "At least one of title, tags, status, or metadata must be provided.",
+                    "message": "At least one of title, tags, status, or metadata must be provided "
+                    "(an empty metadata dict makes no change).",
                     "warnings": [],
                 }
 

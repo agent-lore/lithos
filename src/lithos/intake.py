@@ -114,8 +114,9 @@ class NoteUpdateRequest:
     ``_UNSET`` means preserve, ``None`` means clear (for fields that support
     clearing), and a value means set. ``metadata`` is an additive per-key
     merge (a key whose value is ``None`` deletes it); unlike ``lithos_write``
-    there is no wholesale-clear affordance — ``metadata={}`` is a no-op,
-    matching ``lithos_task_update``.
+    there is no wholesale-clear affordance — ``metadata={}`` carries no change,
+    matching ``lithos_task_update`` (the boundary rejects it when no other
+    field is set rather than writing a no-op revision).
     """
 
     id: str

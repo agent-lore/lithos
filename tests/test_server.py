@@ -1581,8 +1581,10 @@ class TestNoteUpdateTool:
         assert updated.metadata.extra == {"b": 2}
 
     @pytest.mark.asyncio
-    async def test_empty_metadata_dict_is_noop(self, server: LithosServer):
-        """metadata={} is a no-op preserve, mirroring lithos_task_update."""
+    async def test_empty_metadata_dict_with_other_field_preserves_metadata(
+        self, server: LithosServer
+    ):
+        """metadata={} alongside another field makes no metadata change (preserve)."""
         doc = (
             await server.knowledge.create(
                 title="Keepable",
@@ -1599,6 +1601,21 @@ class TestNoteUpdateTool:
         assert result["status"] == "updated"
         updated = (await server.knowledge.read(id=doc.id))[0]
         assert updated.metadata.extra == {"keep": "this"}
+
+    @pytest.mark.asyncio
+    async def test_empty_metadata_dict_alone_is_invalid_input(self, server: LithosServer):
+        """metadata={} with no other field is rejected — not a version-bumping no-op."""
+        doc = (
+            await server.knowledge.create(title="NoNoop", content="Body.", agent="agent")
+        ).document
+        assert doc is not None
+        v0 = doc.metadata.version
+
+        result = await self._call_note_update(server, id=doc.id, agent="editor", metadata={})
+        assert result["status"] == "invalid_input"
+        # No revision was written: version is unchanged.
+        unchanged = (await server.knowledge.read(id=doc.id))[0]
+        assert unchanged.metadata.version == v0
 
     @pytest.mark.asyncio
     async def test_tags_and_status_and_title(self, server: LithosServer):
