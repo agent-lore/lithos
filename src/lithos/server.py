@@ -37,7 +37,7 @@ from lithos.events import (
     LithosEvent,
 )
 from lithos.graph import KnowledgeGraph
-from lithos.intake import CorpusIntake, DeleteRequest, WriteRequest
+from lithos.intake import CorpusIntake, DeleteRequest, NoteUpdateRequest, WriteRequest
 from lithos.knowledge import (
     _UNSET,
     VALID_ACCESS_SCOPES,
@@ -1455,6 +1455,173 @@ class LithosServer:
                 if outcome.warnings:
                     span.set_attribute("lithos.provenance.warning_count", len(outcome.warnings))
                 logger.info("lithos_write completed doc_id=%s status=%s", doc.id, outcome.status)
+                return {
+                    "status": outcome.status,
+                    "id": doc.id,
+                    "path": str(doc.path),
+                    "version": doc.metadata.version,
+                    "warnings": list(outcome.warnings),
+                }
+
+        @self.mcp.tool()
+        @tool_metrics()
+        async def lithos_note_update(
+            id: str,
+            agent: str,
+            title: str | None = None,
+            tags: list[str] | None = None,
+            status: str | None = None,
+            metadata: dict | None = None,
+            expected_version: int | None = None,
+        ) -> dict[str, Any]:
+            """Patch a note's frontmatter (tags/metadata/title/status) without resending its body.
+
+            The note counterpart to ``lithos_task_update``: a per-field patch
+            that leaves the markdown body untouched. Use this instead of
+            ``lithos_write`` whenever you only need to change frontmatter — it
+            removes the read → reconstruct-body → write round-trip (and the
+            lost-update risk that comes with reproducing the body), since the
+            body is never read into the request at all.
+
+            At least one of ``title``, ``tags``, ``status``, or ``metadata`` must
+            be provided.
+
+            Args:
+                id: UUID of the note to patch.
+                agent: Your agent identifier.
+                title: New title. null/omit preserves existing. Renaming may
+                    change the note's slug; a collision with another note's
+                    slug is rejected as ``slug_collision``.
+                tags: null/omit preserves existing; ``[]`` clears all tags; a
+                    non-empty list replaces them.
+                status: active|archived|quarantined. null/omit preserves existing.
+                metadata: Additive per-key merge into the note's existing
+                    frontmatter metadata. A key whose value is null deletes it;
+                    other keys are set; keys not mentioned are preserved. As with
+                    ``lithos_task_update`` there is no wholesale-clear affordance —
+                    ``metadata={}`` makes no metadata change (and, with no other
+                    field set, is rejected as invalid_input). Keys must be strings
+                    and must not collide with reserved frontmatter fields (e.g.
+                    title, tags, version) — such patches are rejected as
+                    invalid_input.
+                expected_version: If provided, reject with version_conflict when
+                    the note's current version differs. Omit to skip the check.
+
+            Returns:
+                Dict with status envelope: updated on success; otherwise
+                invalid_input / version_conflict / slug_collision / duplicate /
+                error (with code ``note_not_found`` for an unknown id).
+            """
+            # An empty metadata dict carries no change (it maps to _UNSET below),
+            # so it does not count as a provided field — `metadata={}` alone is
+            # rejected rather than producing a version-bumping, event-emitting no-op.
+            has_metadata_change = metadata is not None and metadata != {}
+            if title is None and tags is None and status is None and not has_metadata_change:
+                return {
+                    "status": "invalid_input",
+                    "message": "At least one of title, tags, status, or metadata must be provided "
+                    "(an empty metadata dict makes no change).",
+                    "warnings": [],
+                }
+
+            logger.info("lithos_note_update agent=%s id=%s", agent, id)
+            tracer = get_tracer()
+            with tracer.start_as_current_span("lithos.tool.note_update") as span:
+                span.set_attribute("lithos.tool", "lithos_note_update")
+                span.set_attribute("lithos.agent", agent)
+                span.set_attribute("lithos.doc_id", id)
+
+                # Validate status enum at the boundary for a fast, clean envelope.
+                if status is not None and status not in VALID_STATUSES:
+                    return {
+                        "status": "invalid_input",
+                        "message": f"Invalid status: {status!r}. "
+                        f"Must be one of {sorted(VALID_STATUSES)}",
+                        "warnings": [],
+                    }
+
+                # Validate metadata shape at the boundary. The same rule is
+                # enforced in KnowledgeManager so the invariant holds for every
+                # caller; checking here gives a fast, clean envelope.
+                if metadata is not None:
+                    try:
+                        validate_extra_metadata(metadata)
+                    except ValueError as e:
+                        return {
+                            "status": "invalid_input",
+                            "message": str(e),
+                            "warnings": [],
+                        }
+
+                # Translate the MCP wire shape into KnowledgeManager semantics:
+                #   None (omitted) → _UNSET (preserve)
+                #   tags=[]        → clear all tags
+                #   metadata={}    → _UNSET (no-op, mirroring lithos_task_update)
+                tags_arg: list[str] | _UnsetType = _UNSET if tags is None else tags
+                st_arg: str | None | _UnsetType = _UNSET if status is None else status
+                meta_arg: dict | _UnsetType = (
+                    _UNSET if metadata is None or metadata == {} else metadata
+                )
+
+                request = NoteUpdateRequest(
+                    id=id,
+                    title=title,
+                    tags=tags_arg,
+                    lcma_status=st_arg,
+                    metadata=meta_arg,
+                    expected_version=expected_version,
+                )
+
+                try:
+                    outcome = await self.intake.note_update(agent, request)
+                except FileNotFoundError:
+                    span.set_attribute("lithos.write_status", "note_not_found")
+                    return {
+                        "status": "error",
+                        "code": "note_not_found",
+                        "message": f"Note {id} not found",
+                    }
+
+                if outcome.status == "slug_collision":
+                    span.set_attribute("lithos.write_status", "slug_collision")
+                    return {
+                        "status": "slug_collision",
+                        "message": outcome.message,
+                        "existing_id": outcome.slug_collision_existing_id,
+                        "warnings": [],
+                    }
+                if outcome.status == "duplicate":
+                    span.set_attribute("lithos.write_status", "duplicate")
+                    dup = outcome.duplicate_of
+                    return {
+                        "status": "duplicate",
+                        "duplicate_of": {
+                            "id": dup.id,
+                            "title": dup.title,
+                            "source_url": dup.source_url,
+                        }
+                        if dup
+                        else None,
+                        "message": outcome.message,
+                        "warnings": list(outcome.warnings),
+                    }
+                if outcome.status in ("invalid_input", "version_conflict", "error"):
+                    span.set_attribute("lithos.write_status", outcome.status)
+                    error_response: dict[str, Any] = {
+                        "status": outcome.status,
+                        "message": outcome.message,
+                        "warnings": list(outcome.warnings),
+                    }
+                    if outcome.current_version is not None:
+                        error_response["current_version"] = outcome.current_version
+                    return error_response
+
+                doc = outcome.document
+                assert doc is not None
+                span.set_attribute("lithos.write_status", outcome.status)
+                logger.info(
+                    "lithos_note_update completed doc_id=%s status=%s", doc.id, outcome.status
+                )
                 return {
                     "status": outcome.status,
                     "id": doc.id,

@@ -487,6 +487,37 @@ The error code is the canonical top-level `status` value (e.g. `status="slug_col
 
 **Update semantics:** Omitted optional fields preserve existing values. Some fields support explicit clear. At the MCP boundary, FastMCP cannot distinguish omitted from `null`, so clearable string fields use `""` (empty string) as the clear signal (e.g., `source_url: ""`). See `unified-write-contract.md` for the full MCP boundary convention.
 
+#### `lithos_note_update`
+Patch a note's frontmatter (tags / metadata / title / status) **without resending its body** — the note counterpart to `lithos_task_update`. Use this instead of `lithos_write` whenever only frontmatter changes: it removes the read → reconstruct-body → write round-trip (and the lost-update risk of reproducing the body), because the body is never read into the request. Internally it reuses the same update pipeline as `lithos_write` (the `_write_lock` atomicity and `expected_version` check, the search/graph view sync, and the `note.updated` event), passing the body through untouched.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | string | Yes | UUID of the note to patch. |
+| `agent` | string | Yes | Your agent identifier. |
+| `title` | string | No | New title. Omit/`null` preserves. Renaming may change the slug; a collision with another note's slug returns `status="slug_collision"`. |
+| `tags` | string[] | No | Omit/`null` preserves; `[]` clears all tags; a non-empty list replaces them. |
+| `status` | enum | No | `active` \| `archived` \| `quarantined`. Omit/`null` preserves. An out-of-enum value returns `status="invalid_input"`. |
+| `metadata` | object | No | Additive per-key merge into existing frontmatter metadata: a key whose value is `null` deletes it, other keys are set, keys not mentioned are preserved. There is no wholesale-clear affordance — `metadata={}` makes no metadata change (mirroring `lithos_task_update`). Keys must be strings and must not collide with reserved frontmatter fields, else `status="invalid_input"`. |
+| `expected_version` | int | No | Optimistic-locking guard; reject with `version_conflict` when the note's current version differs. Omit to skip. |
+
+At least one mutable field (`title`, `tags`, `status`, or a non-empty `metadata`) must be provided; otherwise — including `metadata={}` with no other field — the call returns `status="invalid_input"` and writes no revision.
+
+**Returns (status envelope):**
+
+`{ status: "updated", id: string, path: string, version: int, warnings: string[] }`
+
+`{ status: "invalid_input", message: string, warnings: string[] }`
+
+`{ status: "slug_collision", message: string, existing_id: string, warnings: string[] }`
+
+`{ status: "duplicate", duplicate_of: { id, title, source_url }, message: string, warnings: string[] }`
+
+`{ status: "version_conflict", message: string, current_version: int, warnings: string[] }`
+
+`{ status: "error", code: "note_not_found", message: string }`  *(unknown `id`)*
+
 #### `lithos_read`
 Read a knowledge file by ID or path.
 
@@ -1423,7 +1454,7 @@ Lithos includes an in-memory event bus that emits `LithosEvent` on all write, de
 | Type Constant | Emitted By | Payload Fields |
 |---------------|-----------|----------------|
 | `note.created` | `lithos_write` (create) | `id`, `title`, `path` |
-| `note.updated` | `lithos_write` (update), file watcher (create/modify) | `id`, `title`, `path` (tool); `path` (watcher) |
+| `note.updated` | `lithos_write` (update), `lithos_note_update` (frontmatter patch), file watcher (create/modify) | `id`, `title`, `path` (tool); `path` (watcher) |
 | `note.deleted` | `lithos_delete`, file watcher (delete) | `id`, `path` (tool); `path` (watcher) |
 | `note.renamed` | `WatchIntake.rename_on_disk` (in-corpus rename detected by the watcher) | `id`, `src_path`, `dest_path` |
 | `edge.upserted` | `lithos_edge_upsert` via `CorpusIntake.assert_edge`; also `lithos_conflict_resolve` when it updates a `contradicts` edge | `edge_id`, `from_id`, `to_id`, `type`, `namespace` (assert_edge); `edge_id`, `from_id`, `to_id`, `type`, `conflict_state` (conflict_resolve) |
@@ -1729,7 +1760,7 @@ These are explicitly not part of the initial implementation but may be considere
 
 | Category | Tools |
 |----------|-------|
-| Knowledge | `lithos_write`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup` |
+| Knowledge | `lithos_write`, `lithos_note_update`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup` |
 | Graph | `lithos_tags`, `lithos_related` |
 | Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_reopen`, `lithos_task_list`, `lithos_task_status`, `lithos_task_get`, `lithos_finding_post`, `lithos_finding_list` |
@@ -1738,7 +1769,7 @@ These are explicitly not part of the initial implementation but may be considere
 | LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
 | HTTP | `GET /health`, `GET /events`, `GET /audit` (not MCP tools; see §5.7 and §8.7) |
 
-**Total: 36 MCP tools + 3 HTTP endpoints** (task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_reopen` completes the lifecycle (terminal → open, the remediation for stranded dependents) and `lithos_task_update` now accepts terminal tasks (#303); `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
+**Total: 37 MCP tools + 3 HTTP endpoints** (`lithos_note_update` adds a frontmatter-only note patch — tags/metadata/title/status without the body — at parity with `lithos_task_update` (#362); task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_reopen` completes the lifecycle (terminal → open, the remediation for stranded dependents) and `lithos_task_update` now accepts terminal tasks (#303); `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
 
 ---
 

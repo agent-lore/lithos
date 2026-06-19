@@ -106,6 +106,28 @@ class WriteRequest:
 
 
 @dataclass(frozen=True)
+class NoteUpdateRequest:
+    """Validated input for a metadata/tags-only note patch (no body).
+
+    Mirrors :class:`WriteRequest`'s *update* semantics but deliberately omits
+    ``content`` — the body is never touched. As with the write boundary,
+    ``_UNSET`` means preserve, ``None`` means clear (for fields that support
+    clearing), and a value means set. ``metadata`` is an additive per-key
+    merge (a key whose value is ``None`` deletes it); unlike ``lithos_write``
+    there is no wholesale-clear affordance — ``metadata={}`` carries no change,
+    matching ``lithos_task_update`` (the boundary rejects it when no other
+    field is set rather than writing a no-op revision).
+    """
+
+    id: str
+    title: str | None = None
+    tags: list[str] | _UnsetType = _UNSET
+    lcma_status: str | None | _UnsetType = _UNSET
+    metadata: dict | _UnsetType = _UNSET
+    expected_version: int | None = None
+
+
+@dataclass(frozen=True)
 class EdgeRequest:
     """Validated input for an asserted edge upsert (ADR-0006 Slice 1).
 
@@ -404,6 +426,99 @@ class CorpusIntake:
             await self._emit(
                 LithosEvent(
                     type=NOTE_UPDATED if request.id else NOTE_CREATED,
+                    agent=agent,
+                    payload={"id": doc.id, "title": doc.title, "path": str(doc.path)},
+                    tags=list(doc.metadata.tags),
+                )
+            )
+
+            return WriteOutcome(
+                status=result.status,
+                document=doc,
+                warnings=list(result.warnings),
+            )
+
+    async def note_update(self, agent: str, request: NoteUpdateRequest) -> WriteOutcome:
+        """Patch a note's metadata/tags/title/status without touching its body.
+
+        The metadata-only counterpart to :meth:`write`. The body is preserved
+        by passing ``content=None`` to :meth:`KnowledgeManager.update`, so no
+        full round-trip of the markdown is required to flip a frontmatter key.
+        Otherwise the pipeline matches :meth:`write` exactly — the same
+        ``_write_lock`` atomicity (including ``expected_version`` checks),
+        the same Search/graph view sync in ADR-0003 order, and the same
+        ``NOTE_UPDATED`` event afterwards.
+
+        Raises ``FileNotFoundError`` if the id is unknown — the handler maps it
+        to a ``note_not_found`` envelope. ``SlugCollisionError`` (a title
+        rename onto an existing slug) is translated into a
+        ``WriteOutcome(status="slug_collision")``; all other non-success
+        ``WriteResult`` statuses are forwarded verbatim. ``ensure_agent_known``
+        runs for every call.
+        """
+        tracer = get_tracer()
+        with tracer.start_as_current_span("lithos.intake.note_update") as span:
+            span.set_attribute("lithos.intake.op", "note_update")
+            span.set_attribute("lithos.agent", agent)
+            span.set_attribute("lithos.id", request.id)
+
+            await self._coordination.ensure_agent_known(agent)
+
+            try:
+                result = await self._knowledge.update(
+                    id=request.id,
+                    agent=agent,
+                    content=None,  # body untouched — this is a frontmatter patch
+                    title=request.title,
+                    tags=request.tags,
+                    lcma_status=request.lcma_status,
+                    expected_version=request.expected_version,
+                    extra=request.metadata,
+                )
+            except SlugCollisionError as exc:
+                logger.info(
+                    "lithos_note_update slug_collision: agent=%s id=%s slug=%s existing_id=%s",
+                    agent,
+                    request.id,
+                    exc.slug,
+                    exc.existing_id,
+                )
+                span.set_attribute("lithos.write_status", "slug_collision")
+                return WriteOutcome(
+                    status="slug_collision",
+                    slug_collision_existing_id=exc.existing_id,
+                    message=str(exc),
+                )
+
+            if result.status != "updated":
+                span.set_attribute("lithos.write_status", result.status)
+                return WriteOutcome(
+                    status=result.status,
+                    document=result.document,
+                    duplicate_of=result.duplicate_of,
+                    current_version=result.current_version,
+                    path_collision_existing_id=result.path_collision_existing_id,
+                    message=result.message,
+                    warnings=list(result.warnings),
+                )
+
+            doc = result.document
+            assert doc is not None
+
+            # Sync derived views in the ADR-0003 order, exactly as write():
+            # search index (await), then graph (sync), then emit the event.
+            indexable = KnowledgeManager.to_indexable(doc)
+            await asyncio.to_thread(self._search.index, indexable)
+            self._graph.add_document(doc)
+
+            span.set_attribute("lithos.doc_id", doc.id)
+            span.set_attribute("lithos.write_status", result.status)
+            if result.warnings:
+                span.set_attribute("lithos.provenance.warning_count", len(result.warnings))
+
+            await self._emit(
+                LithosEvent(
+                    type=NOTE_UPDATED,
                     agent=agent,
                     payload={"id": doc.id, "title": doc.title, "path": str(doc.path)},
                     tags=list(doc.metadata.tags),

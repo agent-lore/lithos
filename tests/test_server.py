@@ -1530,6 +1530,185 @@ class TestWriteUpdateSentinel:
         assert updated.metadata.confidence == pytest.approx(0.95)
 
 
+class TestNoteUpdateTool:
+    """Tests for lithos_note_update — the metadata/tags-only note patch."""
+
+    async def _call_note_update(self, server: LithosServer, **kwargs) -> dict:
+        tool = await server.mcp.get_tool("lithos_note_update")
+        return await tool.fn(**kwargs)
+
+    @pytest.mark.asyncio
+    async def test_metadata_merge_leaves_body_untouched(self, server: LithosServer):
+        """A metadata patch merges per-key and never touches the body."""
+        doc = (
+            await server.knowledge.create(
+                title="Policy Doc",
+                content="The original body.",
+                agent="agent",
+                extra={"a": 1},
+            )
+        ).document
+        assert doc is not None
+
+        result = await self._call_note_update(
+            server,
+            id=doc.id,
+            agent="editor",
+            metadata={"b": 2},
+        )
+
+        assert result["status"] == "updated"
+        assert result["version"] == doc.metadata.version + 1
+        updated = (await server.knowledge.read(id=doc.id))[0]
+        assert updated.metadata.extra == {"a": 1, "b": 2}
+        assert updated.content == "The original body."
+
+    @pytest.mark.asyncio
+    async def test_metadata_null_value_deletes_key(self, server: LithosServer):
+        """A per-key null deletes that key (mirrors lithos_task_update)."""
+        doc = (
+            await server.knowledge.create(
+                title="Deletable",
+                content="Body.",
+                agent="agent",
+                extra={"a": 1, "b": 2},
+            )
+        ).document
+        assert doc is not None
+
+        await self._call_note_update(server, id=doc.id, agent="editor", metadata={"a": None})
+        updated = (await server.knowledge.read(id=doc.id))[0]
+        assert updated.metadata.extra == {"b": 2}
+
+    @pytest.mark.asyncio
+    async def test_empty_metadata_dict_with_other_field_preserves_metadata(
+        self, server: LithosServer
+    ):
+        """metadata={} alongside another field makes no metadata change (preserve)."""
+        doc = (
+            await server.knowledge.create(
+                title="Keepable",
+                content="Body.",
+                agent="agent",
+                extra={"keep": "this"},
+            )
+        ).document
+        assert doc is not None
+
+        result = await self._call_note_update(
+            server, id=doc.id, agent="editor", metadata={}, tags=["t"]
+        )
+        assert result["status"] == "updated"
+        updated = (await server.knowledge.read(id=doc.id))[0]
+        assert updated.metadata.extra == {"keep": "this"}
+
+    @pytest.mark.asyncio
+    async def test_empty_metadata_dict_alone_is_invalid_input(self, server: LithosServer):
+        """metadata={} with no other field is rejected — not a version-bumping no-op."""
+        doc = (
+            await server.knowledge.create(title="NoNoop", content="Body.", agent="agent")
+        ).document
+        assert doc is not None
+        v0 = doc.metadata.version
+
+        result = await self._call_note_update(server, id=doc.id, agent="editor", metadata={})
+        assert result["status"] == "invalid_input"
+        # No revision was written: version is unchanged.
+        unchanged = (await server.knowledge.read(id=doc.id))[0]
+        assert unchanged.metadata.version == v0
+
+    @pytest.mark.asyncio
+    async def test_tags_and_status_and_title(self, server: LithosServer):
+        """tags replace, status sets, title renames — body preserved throughout."""
+        doc = (
+            await server.knowledge.create(
+                title="Original",
+                content="Body stays.",
+                agent="agent",
+                tags=["old"],
+            )
+        ).document
+        assert doc is not None
+
+        result = await self._call_note_update(
+            server,
+            id=doc.id,
+            agent="editor",
+            title="Renamed",
+            tags=["new", "shiny"],
+            status="archived",
+        )
+        assert result["status"] == "updated"
+        updated = (await server.knowledge.read(id=doc.id))[0]
+        assert updated.title == "Renamed"
+        assert updated.metadata.tags == ["new", "shiny"]
+        assert updated.metadata.status == "archived"
+        assert updated.content == "Body stays."
+
+    @pytest.mark.asyncio
+    async def test_no_fields_returns_invalid_input(self, server: LithosServer):
+        """At least one mutable field must be provided."""
+        doc = (await server.knowledge.create(title="Doc", content="Body.", agent="agent")).document
+        assert doc is not None
+
+        result = await self._call_note_update(server, id=doc.id, agent="editor")
+        assert result["status"] == "invalid_input"
+
+    @pytest.mark.asyncio
+    async def test_unknown_id_returns_note_not_found(self, server: LithosServer):
+        """An unknown id maps to a clean note_not_found envelope, not an exception."""
+        result = await self._call_note_update(
+            server,
+            id="99999999-9999-4999-8999-999999999999",
+            agent="editor",
+            tags=["x"],
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "note_not_found"
+
+    @pytest.mark.asyncio
+    async def test_version_conflict(self, server: LithosServer):
+        """A stale expected_version is rejected with version_conflict and current_version."""
+        doc = (
+            await server.knowledge.create(title="Versioned", content="Body.", agent="agent")
+        ).document
+        assert doc is not None
+
+        result = await self._call_note_update(
+            server,
+            id=doc.id,
+            agent="editor",
+            metadata={"k": "v"},
+            expected_version=doc.metadata.version + 5,
+        )
+        assert result["status"] == "version_conflict"
+        assert result["current_version"] == doc.metadata.version
+
+    @pytest.mark.asyncio
+    async def test_reserved_metadata_key_rejected(self, server: LithosServer):
+        """A reserved frontmatter key in metadata is rejected as invalid_input."""
+        doc = (
+            await server.knowledge.create(title="Reserved", content="Body.", agent="agent")
+        ).document
+        assert doc is not None
+
+        result = await self._call_note_update(
+            server, id=doc.id, agent="editor", metadata={"version": 99}
+        )
+        assert result["status"] == "invalid_input"
+
+    @pytest.mark.asyncio
+    async def test_invalid_status_rejected(self, server: LithosServer):
+        """An out-of-enum status is rejected at the boundary."""
+        doc = (
+            await server.knowledge.create(title="StatusDoc", content="Body.", agent="agent")
+        ).document
+        assert doc is not None
+
+        result = await self._call_note_update(server, id=doc.id, agent="editor", status="bogus")
+        assert result["status"] == "invalid_input"
+
+
 class TestCacheLookup:
     """Integration tests for lithos_cache_lookup tool."""
 
