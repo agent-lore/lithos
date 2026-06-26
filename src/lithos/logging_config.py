@@ -35,7 +35,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
@@ -79,7 +79,7 @@ class LithosJsonFormatter(_JsonFormatter):
 
         # Always produce the timestamp from the record's created time using
         # datetime.isoformat() so we always get the +00:00 form (not +0000).
-        log_data["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(
+        log_data["timestamp"] = datetime.fromtimestamp(record.created, tz=UTC).isoformat(
             timespec="seconds"
         )
 

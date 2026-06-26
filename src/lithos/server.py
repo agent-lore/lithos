@@ -9,7 +9,7 @@ import json
 import logging
 import math
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -426,7 +426,7 @@ class LithosServer:
         overall = "ok" if all(c["status"] == "ok" for c in components.values()) else "degraded"
         return {
             "status": overall,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "components": components,
         }
 
@@ -616,7 +616,7 @@ class LithosServer:
                             evt = await asyncio.wait_for(queue.get(), timeout=15.0)
                             lithos_metrics.sse_events_delivered.add(1)
                             yield _format_sse(evt)
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             # Send keepalive comment to prevent proxy/firewall disconnects
                             yield ": keepalive\n\n"
                         except asyncio.CancelledError:
@@ -1288,7 +1288,7 @@ class LithosServer:
                 # Compute expires_at_dt from ttl_hours or expires_at string
                 expires_at_dt: datetime | None | _UnsetType
                 if ttl_hours is not None:
-                    expires_at_dt = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+                    expires_at_dt = datetime.now(UTC) + timedelta(hours=ttl_hours)
                 elif id is not None:
                     # Update path: map MCP boundary to manager semantics
                     # None (omitted) → _UNSET (preserve), "" → None (clear), str → parse
@@ -1300,9 +1300,9 @@ class LithosServer:
                         try:
                             expires_at_dt = datetime.fromisoformat(expires_at)
                             if expires_at_dt.tzinfo is None:
-                                expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
+                                expires_at_dt = expires_at_dt.replace(tzinfo=UTC)
                             else:
-                                expires_at_dt = expires_at_dt.astimezone(timezone.utc)
+                                expires_at_dt = expires_at_dt.astimezone(UTC)
                         except ValueError:
                             return {
                                 "status": "invalid_input",
@@ -1317,9 +1317,9 @@ class LithosServer:
                         try:
                             expires_at_dt = datetime.fromisoformat(expires_at)
                             if expires_at_dt.tzinfo is None:
-                                expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
+                                expires_at_dt = expires_at_dt.replace(tzinfo=UTC)
                             else:
-                                expires_at_dt = expires_at_dt.astimezone(timezone.utc)
+                                expires_at_dt = expires_at_dt.astimezone(UTC)
                         except ValueError:
                             return {
                                 "status": "invalid_input",
@@ -3854,7 +3854,7 @@ class LithosServer:
                 def _dir_mtime(path: Path) -> str | None:
                     try:
                         mtime = path.stat().st_mtime
-                        return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+                        return datetime.fromtimestamp(mtime, tz=UTC).isoformat()
                     except OSError:
                         return None
 

@@ -11,7 +11,7 @@ import tempfile
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -421,7 +421,7 @@ class KnowledgeMetadata:
         """Return True when expires_at is set and in the past (UTC)."""
         if self.expires_at is None:
             return False
-        return datetime.now(timezone.utc) > _normalize_datetime(self.expires_at)
+        return datetime.now(UTC) > _normalize_datetime(self.expires_at)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for frontmatter.
@@ -484,21 +484,21 @@ class KnowledgeMetadata:
         if isinstance(created_at, str):
             created_at = datetime.fromisoformat(created_at)
         elif created_at is None:
-            created_at = datetime.now(timezone.utc)
+            created_at = datetime.now(UTC)
 
         updated_at = data.get("updated_at")
         if isinstance(updated_at, str):
             updated_at = datetime.fromisoformat(updated_at)
         elif updated_at is None:
-            updated_at = datetime.now(timezone.utc)
+            updated_at = datetime.now(UTC)
 
         expires_at = data.get("expires_at")
         if isinstance(expires_at, str):
             expires_at = datetime.fromisoformat(expires_at)
             if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
+                expires_at = expires_at.replace(tzinfo=UTC)
             else:
-                expires_at = expires_at.astimezone(timezone.utc)
+                expires_at = expires_at.astimezone(UTC)
         elif not isinstance(expires_at, datetime):
             expires_at = None
 
@@ -1107,7 +1107,7 @@ class KnowledgeManager:
                     elif isinstance(raw_updated, datetime):
                         updated_at = raw_updated
                     else:
-                        updated_at = datetime.now(timezone.utc)
+                        updated_at = datetime.now(UTC)
                     raw_tags: list[str] = post.metadata.get("tags", [])  # type: ignore[assignment]
                     raw_author: str = post.metadata.get("author", "")  # type: ignore[assignment]
                     raw_expires: str | datetime | None = post.metadata.get("expires_at")  # type: ignore[assignment]
@@ -1323,7 +1323,7 @@ class KnowledgeManager:
                     return WriteResult(status="invalid_input", message=str(e))
 
             doc_id = str(uuid.uuid4())
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             metadata = KnowledgeMetadata(
                 id=doc_id,
@@ -1865,7 +1865,7 @@ class KnowledgeManager:
                 doc.metadata.confidence = confidence
 
             # Update metadata
-            doc.metadata.updated_at = datetime.now(timezone.utc)
+            doc.metadata.updated_at = datetime.now(UTC)
             if agent not in doc.metadata.contributors and agent != doc.metadata.author:
                 doc.metadata.contributors.append(agent)
 
@@ -2398,7 +2398,7 @@ class KnowledgeManager:
     @property
     def stale_document_count(self) -> int:
         """Synchronous count of documents whose expires_at is set and in the past."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         count = 0
         for cached in self._meta_cache.values():
             if cached.expires_at is not None:
@@ -2415,5 +2415,5 @@ class KnowledgeManager:
 def _normalize_datetime(dt: datetime) -> datetime:
     """Normalize datetime values for safe comparison."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)

@@ -28,6 +28,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
+          python-version: "3.12"
 
       - name: Extract version
         id: version
@@ -64,6 +65,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: uv sync

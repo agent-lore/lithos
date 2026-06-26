@@ -5,7 +5,7 @@ Each scout is tested individually with seeded KnowledgeManager data.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import frontmatter as fm
@@ -85,8 +85,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID1,
         title="Note One",
         author="agent-alpha",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         tags=["testing", "alpha"],
         aliases=["note-one-alias"],
         access_scope="shared",
@@ -102,8 +102,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID2,
         title="Note Two",
         author="agent-beta",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=(datetime.now(UTC) - timedelta(hours=1)).isoformat(),
         tags=["projects"],
         access_scope="shared",
     )
@@ -115,8 +115,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID3,
         title="Task Note",
         author="agent-alpha",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         tags=["task"],
         access_scope="task",
         source="task-42",
@@ -129,8 +129,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID4,
         title="Private Note",
         author="agent-alpha",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         tags=["private"],
         access_scope="agent_private",
     )
@@ -142,10 +142,10 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID5,
         title="Stale Note",
         author="agent-beta",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         tags=["stale"],
-        expires_at=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
         access_scope="shared",
     )
     (kp / "stale-note.md").write_text(fm.dumps(note5))
@@ -156,8 +156,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID6,
         title="Derived Note",
         author="agent-alpha",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         derived_from_ids=[_ID1],
         access_scope="shared",
     )
@@ -577,7 +577,7 @@ class TestScoutTaskContext:
                 agent="agent-alpha",
                 summary="Found something",
                 knowledge_id=_ID1,
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
             FakeFinding(
                 id="f2",
@@ -585,7 +585,7 @@ class TestScoutTaskContext:
                 agent="agent-alpha",
                 summary="Nothing linked",
                 knowledge_id=None,  # Should be ignored
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
         ]
         coordination.get_task_status.return_value = []
@@ -651,7 +651,7 @@ class TestScoutTaskContext:
                 agent="agent-alpha",
                 summary="Found",
                 knowledge_id=_ID1,
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             ),
         ]
         coordination.get_task_status.return_value = []
@@ -686,8 +686,8 @@ def graph_with_links(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -
         id=_ID1,
         title="Note One",
         author="agent-alpha",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         tags=["testing", "alpha"],
         aliases=["note-one-alias"],
         access_scope="shared",
@@ -948,7 +948,7 @@ def source_url_km(seeded_config: LithosConfig) -> KnowledgeManager:
     km = KnowledgeManager(seeded_config)
     kp = seeded_config.storage.knowledge_path
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     note_a = fm.Post(
         "# Research A\n\nFrom example.com",
@@ -1025,7 +1025,7 @@ class TestScoutSourceUrl:
 
         km = KnowledgeManager(seeded_config)
         kp = seeded_config.storage.knowledge_path
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         # Note A owns the source_url slot for example.com/same
         note_a = fm.Post(
@@ -1201,8 +1201,8 @@ class TestScoutContradictions:
                 id=quarantined_id,
                 title="Quarantined Note",
                 author="agent-alpha",
-                created_at=datetime.now(timezone.utc).isoformat(),
-                updated_at=datetime.now(timezone.utc).isoformat(),
+                created_at=datetime.now(UTC).isoformat(),
+                updated_at=datetime.now(UTC).isoformat(),
                 access_scope="shared",
                 namespace="default",
                 status="quarantined",
@@ -1420,8 +1420,8 @@ class TestExplicitNamespaceOverride:
             id="00000000-1111-4111-1111-111111111111",
             title="Override Note",
             author="agent-alpha",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
             tags=["override"],
             access_scope="shared",
             namespace="research/alpha",  # explicit override

@@ -19,7 +19,7 @@ import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -459,7 +459,7 @@ class StatsStore:
         their original value so callers can distinguish first activation
         from subsequent touches.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with self._session() as db:
             await db.execute(
                 """INSERT INTO working_memory
@@ -491,7 +491,7 @@ class StatsStore:
         ``last_seen_at`` is older than *ttl_days* ago.  Returns the count
         of rows deleted.
         """
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl_days)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(days=ttl_days)).isoformat()
         async with self._session() as db:
             if completed_task_ids:
                 placeholders = ", ".join("?" for _ in completed_task_ids)
@@ -531,7 +531,7 @@ class StatsStore:
     ) -> None:
         """Increment coactivation count for an unordered pair."""
         a, b = (node_a, node_b) if node_a <= node_b else (node_b, node_a)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with self._session() as db:
             await db.execute(
                 """INSERT INTO coactivation
@@ -648,7 +648,7 @@ class StatsStore:
             max_attempts: When provided, only claim rows whose ``attempts``
                 column is strictly less than this value.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         # BEGIN IMMEDIATE alone is not enough on one shared connection:
         # another coroutine can otherwise queue a read between this
         # transaction's awaits and observe uncommitted state.
@@ -721,7 +721,7 @@ class StatsStore:
             max_attempts: When provided, only claim rows whose ``attempts``
                 column is strictly less than this value.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         # See drain_pending_nodes for why this needs a Python-level lock now.
         async with self._session(transactional=True) as db:
             db.row_factory = aiosqlite.Row
@@ -827,7 +827,7 @@ class StatsStore:
 
         Inserts with salience=0.5 on first touch.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with self._session() as db:
             await db.execute(
                 """INSERT INTO node_stats (node_id, retrieval_count, last_retrieved_at, salience)
@@ -846,7 +846,7 @@ class StatsStore:
         """
         if not node_ids:
             return
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with self._session(transactional=True) as db:
             await db.executemany(
                 """INSERT INTO node_stats
@@ -875,7 +875,7 @@ class StatsStore:
         """
         if not pairs:
             return
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         # Canonicalize pairs so node_id_a <= node_id_b
         canonical = [(min(a, b), max(a, b)) for a, b in pairs]
         async with self._session(transactional=True) as db:
@@ -950,7 +950,7 @@ class StatsStore:
         observable gauges always report a recent value without requiring async
         callbacks in the SDK metric collection path.
         """
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
         async with self._session() as db:
             row = await (
                 await db.execute("SELECT COUNT(*) FROM enrich_queue WHERE processed_at IS NULL")
@@ -1042,7 +1042,7 @@ class StatsStore:
 
     async def update_last_decay_applied_at(self, node_id: str) -> None:
         """Set ``last_decay_applied_at`` to now for *node_id*."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with self._session() as db:
             await db.execute(
                 "UPDATE node_stats SET last_decay_applied_at = ? WHERE node_id = ?",
@@ -1054,7 +1054,7 @@ class StatsStore:
 
         Creates the row with default salience if absent.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with self._session() as db:
             await db.execute(
                 """INSERT INTO node_stats (node_id, last_used_at)
@@ -1237,7 +1237,7 @@ class StatsStore:
     @staticmethod
     def _quarantine(path: Path) -> Path:
         """Rename a corrupt database file and return the backup path."""
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         backup = path.with_name(f"{path.name}.corrupt-{timestamp}")
         suffix = 1
         while backup.exists():

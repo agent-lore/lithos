@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -567,7 +567,7 @@ class TestKnowledgeToolWorkflow:
             path="guides",
         )
 
-        cutoff = datetime.now(timezone.utc)
+        cutoff = datetime.now(UTC)
         await asyncio.sleep(0.02)
 
         new_doc = (
@@ -766,7 +766,7 @@ class TestKnowledgeToolWorkflow:
         are applied post-rank against the metadata cache. Make sure both
         drop non-matching hits.
         """
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         old = (
             await server.knowledge.create(
@@ -786,7 +786,7 @@ class TestKnowledgeToolWorkflow:
         # Backdate ``old`` so ``since`` filter excludes it.
         old_meta = server.knowledge._meta_cache[old.id]
         server.knowledge._meta_cache[old.id] = replace(
-            old_meta, updated_at=datetime.now(timezone.utc) - timedelta(days=30)
+            old_meta, updated_at=datetime.now(UTC) - timedelta(days=30)
         )
 
         hits = [
@@ -799,7 +799,7 @@ class TestKnowledgeToolWorkflow:
         with patch.object(server.search, "full_text_search", return_value=hits):
             r = await tool.fn(
                 content_query="payload",
-                since=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                since=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
             )
         assert {i["id"] for i in r["items"]} == {new.id}
 
@@ -1350,7 +1350,7 @@ class TestFreshnessWritePath:
             title="TTL Doc",
             content="Content with TTL.",
             agent="agent",
-            expires_at=datetime.now(timezone.utc) + __import__("datetime").timedelta(hours=24),
+            expires_at=datetime.now(UTC) + __import__("datetime").timedelta(hours=24),
         )
         assert result.status == "created"
         assert result.document is not None
@@ -1361,7 +1361,7 @@ class TestFreshnessWritePath:
         """Create with short TTL, read back, verify expires_at is set."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=0.001)
+        expires = datetime.now(UTC) + timedelta(hours=0.001)
         result = await server.knowledge.create(
             title="Short TTL",
             content="Ephemeral content.",
@@ -1378,7 +1378,7 @@ class TestFreshnessWritePath:
         """Update without expires_at preserves existing value."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         doc = (
             await server.knowledge.create(
                 title="Preserve",
@@ -1404,7 +1404,7 @@ class TestFreshnessWritePath:
         """Update with expires_at=None clears existing value."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         doc = (
             await server.knowledge.create(
                 title="ClearExpiry",
@@ -1729,7 +1729,7 @@ class TestCacheLookup:
                 content="Information about quantum computing.",
                 agent="agent",
                 tags=["research"],
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -1753,7 +1753,7 @@ class TestCacheLookup:
                 content="Outdated information about AI trends.",
                 agent="agent",
                 tags=["research"],
-                expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                expires_at=datetime.now(UTC) - timedelta(hours=1),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -1784,7 +1784,7 @@ class TestCacheLookup:
                 content="Content from example.com.",
                 agent="agent",
                 source_url="https://example.com/article",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -1808,7 +1808,7 @@ class TestCacheLookup:
                 title="Fallback Semantic Doc",
                 content="Information about neural networks and deep learning.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -1832,7 +1832,7 @@ class TestCacheLookup:
                 content="Uncertain information about dark matter theories.",
                 agent="agent",
                 confidence=0.2,
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -1855,7 +1855,7 @@ class TestCacheLookup:
                 content="Uncertain information about quantum entanglement.",
                 agent="agent",
                 confidence=0.6,
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(low_doc))
@@ -1866,7 +1866,7 @@ class TestCacheLookup:
                 content="Certain information about quantum entanglement.",
                 agent="agent",
                 confidence=0.9,
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(high_doc))
@@ -1901,11 +1901,11 @@ class TestCacheLookup:
                 title="Old Research Doc",
                 content="Research about blockchain consensus mechanisms.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=100),
+                expires_at=datetime.now(UTC) + timedelta(hours=100),
             )
         ).document
         # Manually set updated_at to 48 hours ago
-        doc.metadata.updated_at = datetime.now(timezone.utc) - timedelta(hours=48)
+        doc.metadata.updated_at = datetime.now(UTC) - timedelta(hours=48)
         # Re-write to disk to persist the old updated_at
         path = server.knowledge._resolve_safe_path(doc.path)[1]
         path.write_text(doc.to_markdown())
@@ -1931,7 +1931,7 @@ class TestCacheLookup:
                 agent="agent",
                 source_url="https://example.com/tagged",
                 tags=["python"],
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -2197,7 +2197,7 @@ class TestWriteMutualExclusion:
         doc, _ = await server.knowledge.read(id=doc_id)
         assert doc.metadata.expires_at is not None
         # Should be roughly 24h from now
-        delta = (doc.metadata.expires_at - datetime.now(timezone.utc)).total_seconds()
+        delta = (doc.metadata.expires_at - datetime.now(UTC)).total_seconds()
         assert 23 * 3600 < delta < 25 * 3600
 
 
@@ -3218,7 +3218,7 @@ class TestTaskListResolvedSince:
             title="Will Cancel", agent="resolved-agent"
         )
 
-        cutoff = datetime.now(timezone.utc).isoformat()
+        cutoff = datetime.now(UTC).isoformat()
         await asyncio.sleep(0.05)
 
         await server.coordination.complete_task(complete_id, "resolved-agent", outcome="ok")

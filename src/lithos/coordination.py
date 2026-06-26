@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -127,8 +127,8 @@ def _validate_gate_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
                 f"a 'timer' gate requires a parseable metadata.ready_at (ISO datetime), got {raw!r}.",
             )
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        md["ready_at"] = parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+            parsed = parsed.replace(tzinfo=UTC)
+        md["ready_at"] = parsed.astimezone(UTC).replace(microsecond=0).isoformat()
     return md
 
 
@@ -274,7 +274,7 @@ class Claim:
     @property
     def is_expired(self) -> bool:
         """Check if claim is expired."""
-        return datetime.now(timezone.utc) > self.expires_at
+        return datetime.now(UTC) > self.expires_at
 
 
 @dataclass
@@ -687,7 +687,7 @@ class CoordinationService:
 
         cursor = await db.execute("SELECT id, metadata FROM tasks WHERE status = 'open'")
         rows = await cursor.fetchall()
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
         created = 0
         for task_id, metadata_raw in rows:
             md = _decode_metadata(metadata_raw)
@@ -730,7 +730,7 @@ class CoordinationService:
     async def ensure_agent_known(self, agent_id: str) -> None:
         """Ensure agent is registered, auto-registering if needed."""
         logger.debug("ensure_agent_known: agent_id=%s", agent_id)
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
         async with aiosqlite.connect(self.db_path) as db:
             # Try to update last_seen_at
             cursor = await db.execute(
@@ -765,7 +765,7 @@ class CoordinationService:
         """
         import json
 
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
         metadata_json = json.dumps(metadata) if metadata else None
 
         async with aiosqlite.connect(self.db_path) as db:
@@ -952,7 +952,7 @@ class CoordinationService:
         task_id = str(uuid.uuid4())
         tags_json = json.dumps(tags) if tags else None
         metadata_json = json.dumps(metadata) if metadata is not None else None
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
         # Dedupe and drop a self-reference; a brand-new task has no outgoing
         # edges, so depends_on/parent_task_id can never form a cycle (nothing
         # depends on or descends from it yet).
@@ -1242,7 +1242,7 @@ class CoordinationService:
         lithos_metrics.coordination_ops.add(1, {"op": "complete"})
         await self.ensure_agent_known(agent)
 
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
             # Update task status, outcome, and resolved_at in a single statement
@@ -1290,7 +1290,7 @@ class CoordinationService:
         lithos_metrics.coordination_ops.add(1, {"op": "cancel"})
         await self.ensure_agent_known(agent)
 
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
@@ -1504,7 +1504,7 @@ class CoordinationService:
         if not task_ids:
             return {}
 
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
         placeholders = ",".join("?" for _ in task_ids)
         cursor = await db.execute(
             f"""
@@ -1518,7 +1518,7 @@ class CoordinationService:
 
         grouped: dict[str, list[dict[str, Any]]] = {tid: [] for tid in task_ids}
         for row in rows:
-            expires_dt = _parse_datetime(row["expires_at"]) or datetime.now(timezone.utc)
+            expires_dt = _parse_datetime(row["expires_at"]) or datetime.now(UTC)
             grouped[row["task_id"]].append(
                 {
                     "agent": row["agent"],
@@ -1542,7 +1542,7 @@ class CoordinationService:
         """
         import json
 
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -1581,8 +1581,8 @@ class CoordinationService:
                         task_id=row["task_id"],
                         agent=row["agent"],
                         aspect=row["aspect"],
-                        claimed_at=_parse_datetime(row["claimed_at"]) or datetime.now(timezone.utc),
-                        expires_at=_parse_datetime(row["expires_at"]) or datetime.now(timezone.utc),
+                        claimed_at=_parse_datetime(row["claimed_at"]) or datetime.now(UTC),
+                        expires_at=_parse_datetime(row["expires_at"]) or datetime.now(UTC),
                     )
                     for row in claim_rows
                 ]
@@ -1646,7 +1646,7 @@ class CoordinationService:
         max_ttl = self.config.coordination.claim_max_ttl_minutes
         ttl_minutes = max(1, min(ttl_minutes, max_ttl))
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = now + timedelta(minutes=ttl_minutes)
 
         async with aiosqlite.connect(self.db_path) as db:
@@ -1718,7 +1718,7 @@ class CoordinationService:
         max_ttl = self.config.coordination.claim_max_ttl_minutes
         ttl_minutes = max(1, min(ttl_minutes, max_ttl))
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         new_expires = now + timedelta(minutes=ttl_minutes)
 
         async with aiosqlite.connect(self.db_path) as db:
@@ -1822,7 +1822,7 @@ class CoordinationService:
         await self.ensure_agent_known(agent)
 
         finding_id = str(uuid.uuid4())
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -1917,7 +1917,7 @@ class CoordinationService:
 
         lithos_metrics.coordination_ops.add(1, {"op": "upsert_task_edge"})
         await self.ensure_agent_known(agent)
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
         metadata_json = json.dumps(metadata) if metadata is not None else None
 
         async with aiosqlite.connect(self.db_path) as db:
@@ -2113,7 +2113,7 @@ class CoordinationService:
     def _now_iso() -> str:
         """Canonical UTC second-precision ISO 'now' — matches the normalized
         ``ready_at`` stored on timer gates, so the comparison is exact."""
-        return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        return datetime.now(UTC).replace(microsecond=0).isoformat()
 
     @staticmethod
     def _unsatisfied_blocker_sql(now: str) -> tuple[str, list[Any]]:
@@ -2520,7 +2520,7 @@ class CoordinationService:
                        ``"search_result"`` (document returned in search results).
             agent_id: The agent that triggered the access (default: ``"unknown"``).
         """
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
         try:
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
@@ -2553,7 +2553,7 @@ class CoordinationService:
         """
         if not doc_ids:
             return
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
         rows = [(agent_id, doc_id, operation, now) for doc_id in doc_ids]
         try:
             async with aiosqlite.connect(self.db_path) as db:
@@ -2646,7 +2646,7 @@ class CoordinationService:
 
     async def get_stats(self) -> dict[str, int]:
         """Get coordination statistics."""
-        now = _format_datetime(datetime.now(timezone.utc))
+        now = _format_datetime(datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
             # Count agents

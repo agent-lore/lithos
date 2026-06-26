@@ -1,6 +1,6 @@
 """Tests for read-access audit logging (issue #130)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -97,7 +97,7 @@ class TestAuditLogFilters:
         """after filter excludes older entries."""
         await coordination_service.log_access(doc_id="old-doc", operation="read", agent_id="ag")
 
-        cutoff = datetime.now(timezone.utc).isoformat()
+        cutoff = datetime.now(UTC).isoformat()
 
         await coordination_service.log_access(doc_id="new-doc", operation="read", agent_id="ag")
 

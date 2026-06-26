@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1153,7 +1154,7 @@ class TestCacheLookupHitPath:
             await cm.stop()
 
     async def test_hit_returns_document_envelope(self, real_memory: CognitiveMemory) -> None:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         doc = (
             await real_memory._knowledge.create(
@@ -1161,7 +1162,7 @@ class TestCacheLookupHitPath:
                 content="Information about quantum computing.",
                 agent="agent",
                 tags=["research"],
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         real_memory._search.index(KnowledgeManager.to_indexable(doc))
@@ -1182,9 +1183,9 @@ class TestCacheLookupHitPath:
         Simulates a legacy doc persisted before write-side validation existed
         (#312) — write validation cannot prevent these, so reads must heal them.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         raw = textwrap.dedent(f"""\
             ---
             id: poisoned-doc

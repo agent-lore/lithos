@@ -3,7 +3,7 @@
 # Multi-stage build for smaller image
 
 # Stage 1: Build dependencies
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 # Install uv for fast dependency management
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -59,7 +59,7 @@ RUN for attempt in 1 2 3 4 5; do \
     exit 1
 
 # Stage 2: Runtime image
-FROM python:3.11-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 

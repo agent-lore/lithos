@@ -4,7 +4,7 @@ These tests prove end-to-end correctness of the research cache and freshness
 system, satisfying the conformance test matrix in final-architecture-guardrails.md.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -21,7 +21,7 @@ class TestFreshnessWriteConformance:
     @pytest.mark.asyncio
     async def test_create_with_ttl_hours_round_trip(self, server: LithosServer):
         """Create with ttl_hours, read back, verify expires_at in metadata."""
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         result = await server.knowledge.create(
             title="TTL Round Trip",
             content="Content with TTL.",
@@ -39,7 +39,7 @@ class TestFreshnessWriteConformance:
     @pytest.mark.asyncio
     async def test_create_with_explicit_expires_at_round_trip(self, server: LithosServer):
         """Create with explicit expires_at, read back, verify match."""
-        expires = datetime(2030, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        expires = datetime(2030, 6, 15, 12, 0, 0, tzinfo=UTC)
         result = await server.knowledge.create(
             title="Explicit Expiry",
             content="Content with explicit expiry.",
@@ -66,7 +66,7 @@ class TestFreshnessWriteConformance:
 
         doc, _ = await server.knowledge.read(id=result["id"])
         assert doc.metadata.expires_at is not None
-        delta = (doc.metadata.expires_at - datetime.now(timezone.utc)).total_seconds()
+        delta = (doc.metadata.expires_at - datetime.now(UTC)).total_seconds()
         assert 11 * 3600 < delta < 13 * 3600
 
     @pytest.mark.asyncio
@@ -127,7 +127,7 @@ class TestUpdateConformance:
     @pytest.mark.asyncio
     async def test_update_preserves_expires_at(self, server: LithosServer):
         """Update without freshness args preserves existing expires_at."""
-        expires = datetime.now(timezone.utc) + timedelta(hours=48)
+        expires = datetime.now(UTC) + timedelta(hours=48)
         doc = (
             await server.knowledge.create(
                 title="Preserve Conformance",
@@ -151,7 +151,7 @@ class TestUpdateConformance:
     @pytest.mark.asyncio
     async def test_update_clears_expires_at(self, server: LithosServer):
         """Update with expires_at=None clears existing expiry."""
-        expires = datetime.now(timezone.utc) + timedelta(hours=48)
+        expires = datetime.now(UTC) + timedelta(hours=48)
         doc = (
             await server.knowledge.create(
                 title="Clear Conformance",
@@ -184,7 +184,7 @@ class TestStalenessInSearchConformance:
                 title="Search Stale Conformance",
                 content="This document is expired for search testing.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                expires_at=datetime.now(UTC) - timedelta(hours=1),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -202,7 +202,7 @@ class TestStalenessInSearchConformance:
                 title="Semantic Stale Conformance",
                 content="This document about machine learning algorithms is expired.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                expires_at=datetime.now(UTC) - timedelta(hours=1),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -228,7 +228,7 @@ class TestCacheLookupConformance:
                 title="Cache Hit Conformance",
                 content="Fresh content about distributed systems.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -247,7 +247,7 @@ class TestCacheLookupConformance:
                 title="Cache Stale Conformance",
                 content="Expired content about graph databases.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                expires_at=datetime.now(UTC) - timedelta(hours=1),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -283,7 +283,7 @@ class TestStaleUpdateFlowConformance:
                 title="Stale Flow Doc",
                 content="Old content about serverless computing.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                expires_at=datetime.now(UTC) - timedelta(minutes=1),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -300,7 +300,7 @@ class TestStaleUpdateFlowConformance:
                 id=stale_id,
                 agent="refresher",
                 content="Updated fresh content about serverless computing.",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(updated))
@@ -327,7 +327,7 @@ class TestSourceUrlFastPathConformance:
                 content="Content from a specific URL source.",
                 agent="agent",
                 source_url="https://example.com/fast-path-test",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
@@ -400,7 +400,7 @@ class TestSchemaConformance:
                 title="Rebuild Test Doc",
                 content="Content for rebuild testing.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))

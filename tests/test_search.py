@@ -3,6 +3,7 @@
 import concurrent.futures
 import logging
 import threading
+from datetime import UTC
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1250,14 +1251,14 @@ class TestExpiresAtInSearch:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Tantivy search returns is_stale=True for expired doc."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         doc = (
             await knowledge_manager.create(
                 title="Expired Research",
                 content="This research has expired and is stale.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                expires_at=datetime.now(UTC) - timedelta(hours=1),
             )
         ).document
         search_engine.index(KnowledgeManager.to_indexable(doc))
@@ -1273,14 +1274,14 @@ class TestExpiresAtInSearch:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """Tantivy search returns is_stale=False for fresh doc."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         doc = (
             await knowledge_manager.create(
                 title="Fresh Research",
                 content="This research is still fresh and valid.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         search_engine.index(KnowledgeManager.to_indexable(doc))
@@ -1316,14 +1317,14 @@ class TestExpiresAtInSearch:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """ChromaDB search returns is_stale=True for expired doc."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         doc = (
             await knowledge_manager.create(
                 title="Expired Semantic Doc",
                 content="This document about machine learning has expired.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                expires_at=datetime.now(UTC) - timedelta(hours=1),
             )
         ).document
         search_engine.index(KnowledgeManager.to_indexable(doc))
@@ -1338,14 +1339,14 @@ class TestExpiresAtInSearch:
         self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
     ):
         """ChromaDB search returns is_stale=False for fresh doc."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         doc = (
             await knowledge_manager.create(
                 title="Fresh Semantic Doc",
                 content="This document about deep learning is still fresh.",
                 agent="agent",
-                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         search_engine.index(KnowledgeManager.to_indexable(doc))

@@ -1,6 +1,6 @@
 """Tests for US-001: LCMA frontmatter fields with lazy read-time defaults."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import frontmatter as fm
@@ -38,8 +38,8 @@ class TestApplyLcmaDefaults:
             "id": "test-id",
             "title": "Test",
             "author": "agent",
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
         }
         base.update(overrides)
         return KnowledgeMetadata(**base)  # type: ignore[arg-type]
@@ -181,7 +181,7 @@ class TestToDictLcmaRoundTrip:
 
     def test_round_trip_with_lcma_fields(self):
         """to_dict -> from_dict preserves LCMA fields."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         meta = KnowledgeMetadata(
             id="rt-id",
             title="Round Trip",
@@ -206,7 +206,7 @@ class TestToDictLcmaRoundTrip:
 
     def test_round_trip_without_lcma_fields(self):
         """to_dict -> from_dict for pre-LCMA note doesn't introduce LCMA keys."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         meta = KnowledgeMetadata(
             id="pre-lcma",
             title="Old Note",
@@ -231,7 +231,7 @@ class TestToDictLcmaRoundTrip:
 
     def test_to_dict_only_includes_set_lcma_fields(self):
         """to_dict omits LCMA fields that are None."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         meta = KnowledgeMetadata(
             id="partial",
             title="Partial",
@@ -284,8 +284,8 @@ class TestLcmaReadTimeDefaults:
             id="deep-id",
             title="Deep Note",
             author="agent",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
             tags=[],
             aliases=[],
             confidence=1.0,
@@ -309,8 +309,8 @@ class TestLcmaReadTimeDefaults:
             id="ns-override-id",
             title="Note",
             author="agent",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
             tags=[],
             aliases=[],
             confidence=1.0,
@@ -335,8 +335,8 @@ class TestLcmaReadTimeDefaults:
             id="sync-id",
             title="Sync Note",
             author="agent",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
             tags=[],
             aliases=[],
             confidence=1.0,
@@ -368,8 +368,8 @@ class TestLcmaReadTimeDefaults:
             id="task-id",
             title="Task Note",
             author="agent",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
             tags=[],
             aliases=[],
             confidence=1.0,

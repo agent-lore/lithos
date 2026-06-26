@@ -11,7 +11,7 @@ Mutation flows through the package-private plan/apply pair on
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -82,7 +82,7 @@ def _write_note(
     derived_from_ids: list[str] | None = None,
 ) -> None:
     """Write a note file to disk."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     kwargs: dict[str, object] = {
         "id": doc_id,
         "title": title,
@@ -212,7 +212,7 @@ class TestForwardProjection:
 
         # Note 2 lives in projects/ (path-derived namespace = "projects")
         # but explicitly overrides to "research/alpha".
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         post = fm.Post(
             "Override-namespaced derivation",
             id=_ID2,

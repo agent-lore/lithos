@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -184,10 +184,10 @@ def _compute_is_stale(expires_at_str: str) -> bool:
     try:
         expires_dt = datetime.fromisoformat(expires_at_str)
         if expires_dt.tzinfo is None:
-            expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+            expires_dt = expires_dt.replace(tzinfo=UTC)
         else:
-            expires_dt = expires_dt.astimezone(timezone.utc)
-        return datetime.now(timezone.utc) > expires_dt
+            expires_dt = expires_dt.astimezone(UTC)
+        return datetime.now(UTC) > expires_dt
     except ValueError:
         return False
 
@@ -782,7 +782,7 @@ collection.count()
 
         backup_path: Path | None = None
         if self.chroma_path.exists():
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             backup_path = self.chroma_path.with_name(f"{self.chroma_path.name}.corrupt-{timestamp}")
             suffix = 1
             while backup_path.exists():
