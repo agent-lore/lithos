@@ -1,7 +1,7 @@
 """Tests for coordination module - tasks, claims, agents, findings."""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 import pytest
@@ -286,7 +286,7 @@ class TestTaskLifecycle:
     @pytest.mark.asyncio
     async def test_cancel_task_writes_resolved_at(self, coordination_service: CoordinationService):
         """cancel_task dual-writes resolved_at alongside the status flip (#286)."""
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         task_id = await coordination_service.create_task(
             title="Cancellable Task",
             agent="agent",
@@ -301,7 +301,7 @@ class TestTaskLifecycle:
         assert task.resolved_at is not None
         # The dual-write timestamp must be in [before, now]. We allow ~5s of
         # slack to absorb clock skew under heavy CI load.
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
         assert before - timedelta(seconds=5) <= task.resolved_at <= after + timedelta(seconds=5)
 
     @pytest.mark.asyncio
@@ -445,7 +445,7 @@ class TestClaimManagement:
 
         assert success
         assert expires_at is not None
-        assert expires_at > datetime.now(timezone.utc)
+        assert expires_at > datetime.now(UTC)
 
     @pytest.mark.asyncio
     async def test_claim_conflict_different_agent(self, coordination_service: CoordinationService):
@@ -547,7 +547,7 @@ class TestClaimManagement:
         )
 
         assert success
-        assert new_expires > datetime.now(timezone.utc) + timedelta(minutes=55)
+        assert new_expires > datetime.now(UTC) + timedelta(minutes=55)
 
     @pytest.mark.asyncio
     async def test_renew_others_claim_fails(self, coordination_service: CoordinationService):
@@ -658,7 +658,7 @@ class TestClaimManagement:
 
         assert success
         # Should be clamped to max (480 minutes = 8 hours by default)
-        max_allowed = datetime.now(timezone.utc) + timedelta(minutes=481)
+        max_allowed = datetime.now(UTC) + timedelta(minutes=481)
         assert expires_at < max_allowed
 
     @pytest.mark.asyncio
@@ -678,8 +678,8 @@ class TestClaimManagement:
 
         assert success
         assert expires_at is not None
-        lower_bound = datetime.now(timezone.utc) + timedelta(seconds=30)
-        upper_bound = datetime.now(timezone.utc) + timedelta(minutes=2)
+        lower_bound = datetime.now(UTC) + timedelta(seconds=30)
+        upper_bound = datetime.now(UTC) + timedelta(minutes=2)
         assert lower_bound < expires_at < upper_bound
 
     @pytest.mark.asyncio
@@ -811,7 +811,7 @@ class TestFindings:
             summary="Old finding",
         )
 
-        cutoff = datetime.now(timezone.utc)
+        cutoff = datetime.now(UTC)
         await asyncio.sleep(0.05)
 
         await coordination_service.post_finding(
@@ -989,11 +989,10 @@ class TestListTasks:
     async def test_list_tasks_filter_by_since(self, coordination_service: CoordinationService):
         """Filter tasks by created_at >= since."""
         import asyncio
-        from datetime import timezone
 
         await coordination_service.create_task(title="Old Task", agent="agent")
         await asyncio.sleep(0.05)
-        cutoff = datetime.now(timezone.utc).isoformat()
+        cutoff = datetime.now(UTC).isoformat()
         await asyncio.sleep(0.05)
         new_id = await coordination_service.create_task(title="New Task", agent="agent")
 
@@ -1087,7 +1086,7 @@ class TestListTasks:
         await coordination_service.claim_task(task_id, "work", "agent", ttl_minutes=10)
 
         # Force-expire the claim by rewriting its expires_at directly.
-        past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        past = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
         async with aiosqlite.connect(coordination_service.db_path) as db:
             await db.execute("UPDATE claims SET expires_at = ? WHERE task_id = ?", (past, task_id))
             await db.commit()
@@ -1112,7 +1111,7 @@ class TestListTasks:
         complete_id = await coordination_service.create_task(title="Will Complete", agent="agent")
         cancel_id = await coordination_service.create_task(title="Will Cancel", agent="agent")
 
-        cutoff = datetime.now(timezone.utc).isoformat()
+        cutoff = datetime.now(UTC).isoformat()
         await asyncio.sleep(0.05)
 
         await coordination_service.complete_task(complete_id, "agent", outcome="done")
@@ -1149,7 +1148,7 @@ class TestListTasks:
             )
             await db.commit()
 
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(days=365)).isoformat()
         tasks = await coordination_service.list_tasks(resolved_since=cutoff)
         ids = {t["id"] for t in tasks}
         assert open_id not in ids

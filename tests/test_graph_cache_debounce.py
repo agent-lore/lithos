@@ -8,7 +8,7 @@ continue to call :meth:`save_cache` directly.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,8 +29,8 @@ def _make_doc(doc_id: str) -> KnowledgeDocument:
             id=doc_id,
             title=f"Doc {doc_id}",
             author="agent",
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 1, 1, tzinfo=UTC),
         ),
     )
 

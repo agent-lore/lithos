@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -465,7 +465,7 @@ class TestSalienceDecay:
         node_id = "decay-test-1"
         # Create node_stats with last_used_at 14 days ago
         await stats_store.increment_node_stats(node_id=node_id)
-        fourteen_days_ago = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        fourteen_days_ago = (datetime.now(UTC) - timedelta(days=14)).isoformat()
         import aiosqlite
 
         async with aiosqlite.connect(stats_store.db_path) as db:
@@ -499,7 +499,7 @@ class TestSalienceDecay:
         node_id = "decay-test-2"
         await stats_store.increment_node_stats(node_id=node_id)
         # Set last_used_at to 3 days ago (within default 7 day threshold)
-        three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        three_days_ago = (datetime.now(UTC) - timedelta(days=3)).isoformat()
         import aiosqlite
 
         async with aiosqlite.connect(stats_store.db_path) as db:
@@ -527,7 +527,7 @@ class TestSalienceDecay:
         """Running decay twice on the same day is idempotent."""
         node_id = "decay-test-3"
         await stats_store.increment_node_stats(node_id=node_id)
-        twenty_days_ago = (datetime.now(timezone.utc) - timedelta(days=20)).isoformat()
+        twenty_days_ago = (datetime.now(UTC) - timedelta(days=20)).isoformat()
         import aiosqlite
 
         async with aiosqlite.connect(stats_store.db_path) as db:
@@ -557,7 +557,7 @@ class TestSalienceDecay:
         node_id = "decay-test-4"
         await stats_store.increment_node_stats(node_id=node_id)
         # last_retrieved_at was set by increment_node_stats, set it to 10 days ago
-        ten_days_ago = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        ten_days_ago = (datetime.now(UTC) - timedelta(days=10)).isoformat()
         import aiosqlite
 
         async with aiosqlite.connect(stats_store.db_path) as db:
@@ -586,7 +586,7 @@ class TestSalienceDecay:
         """Decay amount is capped at 0.1 regardless of days inactive."""
         node_id = "decay-test-5"
         await stats_store.increment_node_stats(node_id=node_id)
-        long_ago = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
+        long_ago = (datetime.now(UTC) - timedelta(days=100)).isoformat()
         import aiosqlite
 
         async with aiosqlite.connect(stats_store.db_path) as db:
@@ -1284,7 +1284,7 @@ class TestFullSweep:
         # Create node_stats with last_used_at 14 days ago (will decay)
         node_id = "sweep-decay-1"
         await stats_store.increment_node_stats(node_id=node_id)
-        fourteen_days_ago = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+        fourteen_days_ago = (datetime.now(UTC) - timedelta(days=14)).isoformat()
         import aiosqlite
 
         async with aiosqlite.connect(stats_store.db_path) as db:

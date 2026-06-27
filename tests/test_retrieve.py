@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -67,8 +67,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID1,
         title="Alpha Note",
         author="agent-alpha",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         tags=["testing"],
         access_scope="shared",
         note_type="observation",
@@ -80,8 +80,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID2,
         title="Beta Note",
         author="agent-beta",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=(datetime.now(UTC) - timedelta(hours=1)).isoformat(),
         tags=["projects"],
         access_scope="shared",
         note_type="agent_finding",
@@ -93,8 +93,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID3,
         title="Gamma Note",
         author="agent-alpha",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         tags=["testing"],
         derived_from_ids=[_ID1],
         access_scope="shared",
@@ -483,8 +483,8 @@ class TestRetrieveSnippetParity:
             id=nid,
             title="Quantum Title Match",
             author="agent-alpha",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
             tags=["testing"],
             access_scope="shared",
             note_type="observation",
@@ -1682,8 +1682,8 @@ class TestNewScoutsWiredInPhaseB:
             id=_ID1,
             title="Source A",
             author="agent",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
             tags=[],
             access_scope="shared",
             note_type="observation",
@@ -1696,8 +1696,8 @@ class TestNewScoutsWiredInPhaseB:
             id=_ID2,
             title="Source B",
             author="agent",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
             tags=[],
             access_scope="shared",
             note_type="observation",

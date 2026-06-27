@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from datetime import UTC
 from typing import Any
 
 import pytest
@@ -998,9 +999,9 @@ class TestResourceGauges:
         km = KnowledgeManager(config)
 
         # Create a doc that expires in the past
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        past = datetime.now(timezone.utc) - timedelta(hours=1)
+        past = datetime.now(UTC) - timedelta(hours=1)
         await km.create(
             title="Stale Doc",
             content="This doc is stale.",
@@ -1020,9 +1021,9 @@ class TestResourceGauges:
         config = LithosConfig(storage=StorageConfig(data_dir=str(tmp_path)))
         km = KnowledgeManager(config)
 
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        future = datetime.now(timezone.utc) + timedelta(hours=1)
+        future = datetime.now(UTC) + timedelta(hours=1)
         await km.create(
             title="Fresh Doc",
             content="Not expired yet.",

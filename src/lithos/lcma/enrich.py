@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from lithos.events import (
@@ -348,9 +348,9 @@ class EnrichWorker:
                         t0 = datetime.fromisoformat(triggered_at_raw)
                         t1 = datetime.fromisoformat(processed_at_raw)
                         if t0.tzinfo is None:
-                            t0 = t0.replace(tzinfo=timezone.utc)
+                            t0 = t0.replace(tzinfo=UTC)
                         if t1.tzinfo is None:
-                            t1 = t1.replace(tzinfo=timezone.utc)
+                            t1 = t1.replace(tzinfo=UTC)
                         lag_ms = (t1 - t0).total_seconds() * 1000
                         _lithos_metrics.lcma_enrich_queue_processing_lag.record(lag_ms)
                     except Exception:
@@ -423,14 +423,14 @@ class EnrichWorker:
         Convergent: skips if ``last_decay_applied_at`` is already today (UTC).
         Returns ``True`` if decay was applied, ``False`` otherwise.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Check convergence — skip if already decayed today
         last_decay_raw = stats.get("last_decay_applied_at")
         if isinstance(last_decay_raw, str) and last_decay_raw:
             last_decay_dt = datetime.fromisoformat(last_decay_raw)
             if last_decay_dt.tzinfo is None:
-                last_decay_dt = last_decay_dt.replace(tzinfo=timezone.utc)
+                last_decay_dt = last_decay_dt.replace(tzinfo=UTC)
             if last_decay_dt.date() == now.date():
                 return False
 
@@ -444,7 +444,7 @@ class EnrichWorker:
 
         last_used_dt = datetime.fromisoformat(last_used_raw)
         if last_used_dt.tzinfo is None:
-            last_used_dt = last_used_dt.replace(tzinfo=timezone.utc)
+            last_used_dt = last_used_dt.replace(tzinfo=UTC)
 
         days_since_last_use = (now - last_used_dt).days
         if days_since_last_use <= self._config.decay_inactive_days:

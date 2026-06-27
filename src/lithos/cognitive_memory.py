@@ -22,7 +22,7 @@ import itertools
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from lithos.errors import SearchBackendError
@@ -799,7 +799,7 @@ class CognitiveMemory:
             # Evaluate candidates
             best_hit = None
             first_stale_id: str | None = None
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             passing_docs: list[Any] = []
 
             for doc_id in candidates:

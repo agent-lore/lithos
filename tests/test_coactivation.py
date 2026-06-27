@@ -7,7 +7,7 @@ tests verifying multi-call invariants.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -64,8 +64,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID1,
         title="Alpha",
         author="agent-a",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         tags=["test"],
         access_scope="shared",
     )
@@ -76,8 +76,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID2,
         title="Beta",
         author="agent-b",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=(datetime.now(UTC) - timedelta(hours=1)).isoformat(),
         tags=["test"],
         access_scope="shared",
     )
@@ -90,8 +90,8 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
         id=_ID3,
         title="Gamma",
         author="agent-a",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
         tags=["test"],
         access_scope="shared",
         derived_from_ids=[_ID1],

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -23,7 +23,7 @@ def _make_doc(*, source_url=None, updated_at=None, expires_at=None) -> Knowledge
             id="11111111-1111-1111-1111-111111111111",
             title="Seam Test Doc",
             author="alice",
-            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
             updated_at=updated_at,
             tags=["alpha", "beta"],
             source_url=source_url,
@@ -97,8 +97,8 @@ def test_to_indexable_coerces_none_optionals_to_empty_string() -> None:
 
 def test_to_indexable_serialises_datetimes_to_iso() -> None:
     """updated_at and expires_at are written as ISO strings, not datetimes."""
-    when = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
-    expires = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    when = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
+    expires = datetime(2026, 6, 1, tzinfo=UTC)
     doc = _make_doc(updated_at=when, expires_at=expires)
     indexable = KnowledgeManager.to_indexable(doc)
     assert indexable.updated_at == when.isoformat()

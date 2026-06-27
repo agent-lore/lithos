@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -1676,9 +1676,9 @@ class TestSearchAndListFilters:
         await asyncio.sleep(0.05)
 
         # Use current time as the cutoff (after old doc was created).
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        cutoff = datetime.now(timezone.utc).isoformat()
+        cutoff = datetime.now(UTC).isoformat()
 
         await asyncio.sleep(0.02)
 
@@ -1737,7 +1737,7 @@ class TestSearchAndListFilters:
     @pytest.mark.asyncio
     async def test_agent_list_active_since_filter(self, server: LithosServer):
         """lithos_agent_list active_since filter returns recently active agents."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         await _call_tool(
             server,
@@ -1746,7 +1746,7 @@ class TestSearchAndListFilters:
         )
 
         await asyncio.sleep(0.05)
-        cutoff = datetime.now(timezone.utc).isoformat()
+        cutoff = datetime.now(UTC).isoformat()
         await asyncio.sleep(0.02)
 
         await _call_tool(
@@ -2466,7 +2466,7 @@ class TestSourceUrlMCPResponses:
                 "title": "Expired Health Doc",
                 "content": "This document is already expired.",
                 "agent": "health-agent",
-                "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+                "expires_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
             },
         )
 

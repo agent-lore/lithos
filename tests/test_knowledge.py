@@ -1,7 +1,7 @@
 """Tests for knowledge module - document CRUD operations."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import frontmatter as fm
@@ -665,7 +665,7 @@ class TestKnowledgeManager:
             agent="agent",
         )
 
-        cutoff = datetime.now(timezone.utc)
+        cutoff = datetime.now(UTC)
         await asyncio.sleep(0.02)
 
         new_doc = (
@@ -1390,8 +1390,8 @@ class TestSourceUrlField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         assert meta.source_url is None
 
@@ -1401,8 +1401,8 @@ class TestSourceUrlField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
             source_url="https://example.com/page",
         )
         d = meta.to_dict()
@@ -1414,8 +1414,8 @@ class TestSourceUrlField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         d = meta.to_dict()
         assert "source_url" not in d
@@ -1494,8 +1494,8 @@ class TestDerivedFromIdsField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         assert meta.derived_from_ids == []
 
@@ -1505,8 +1505,8 @@ class TestDerivedFromIdsField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
             derived_from_ids=["aaaa-bbbb-cccc", "dddd-eeee-ffff"],
         )
         d = meta.to_dict()
@@ -1518,8 +1518,8 @@ class TestDerivedFromIdsField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         d = meta.to_dict()
         assert "derived_from_ids" not in d
@@ -3772,8 +3772,8 @@ class TestExpiresAtField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         assert meta.expires_at is None
 
@@ -3783,8 +3783,8 @@ class TestExpiresAtField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         assert meta.is_stale is False
 
@@ -3796,9 +3796,9 @@ class TestExpiresAtField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-            expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) - timedelta(hours=1),
         )
         assert meta.is_stale is True
 
@@ -3810,9 +3810,9 @@ class TestExpiresAtField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
         assert meta.is_stale is False
 
@@ -3820,14 +3820,16 @@ class TestExpiresAtField:
         """is_stale handles naive datetimes by treating them as UTC."""
         from datetime import timedelta
 
-        # Naive datetime in the past should be treated as UTC and be stale
+        # Naive datetime in the past should be treated as UTC and be stale.
+        # .replace(tzinfo=None) keeps the value naive (the case under test)
+        # without the deprecated datetime.utcnow().
         meta = KnowledgeMetadata(
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-            expires_at=datetime.utcnow() - timedelta(hours=1),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=1),
         )
         assert meta.is_stale is True
 
@@ -3835,13 +3837,13 @@ class TestExpiresAtField:
         """to_dict() includes expires_at as ISO 8601 string when set."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         meta = KnowledgeMetadata(
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
             expires_at=expires,
         )
         d = meta.to_dict()
@@ -3853,8 +3855,8 @@ class TestExpiresAtField:
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         d = meta.to_dict()
         assert "expires_at" not in d
@@ -3863,7 +3865,7 @@ class TestExpiresAtField:
         """from_dict() parses expires_at from ISO 8601 string."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         data = {
             "id": "test-id",
             "title": "Test",
@@ -3877,7 +3879,7 @@ class TestExpiresAtField:
         """from_dict() accepts datetime objects directly (e.g., from YAML)."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         data = {
             "id": "test-id",
             "title": "Test",
@@ -3901,7 +3903,7 @@ class TestExpiresAtField:
             "id": "test-id",
             "title": "Test",
             "author": "agent",
-            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
         }
         meta = KnowledgeMetadata.from_dict(data)
         assert "expires_at" not in meta.extra
@@ -3910,13 +3912,13 @@ class TestExpiresAtField:
         """expires_at survives to_dict -> from_dict round-trip."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         meta = KnowledgeMetadata(
             id="test-id",
             title="Test",
             author="agent",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
             expires_at=expires,
         )
         d = meta.to_dict()
@@ -3944,7 +3946,7 @@ class TestExpiresAtWritePath:
         """create() with expires_at stores it in metadata."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         result = await knowledge_manager.create(
             title="Fresh Doc",
             content="Fresh content.",
@@ -3972,7 +3974,7 @@ class TestExpiresAtWritePath:
         """expires_at persists through create-read round trip."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=48)
+        expires = datetime.now(UTC) + timedelta(hours=48)
         created = (
             await knowledge_manager.create(
                 title="Round Trip",
@@ -4002,7 +4004,7 @@ class TestExpiresAtWritePath:
         """update() with _UNSET preserves existing expires_at."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         doc = (
             await knowledge_manager.create(
                 title="Preserve Test",
@@ -4028,7 +4030,7 @@ class TestExpiresAtWritePath:
         """update() with None clears existing expires_at."""
         from datetime import timedelta
 
-        expires = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires = datetime.now(UTC) + timedelta(hours=24)
         doc = (
             await knowledge_manager.create(
                 title="Clear Test",
@@ -4053,8 +4055,8 @@ class TestExpiresAtWritePath:
         """update() with datetime replaces existing expires_at."""
         from datetime import timedelta
 
-        old_expires = datetime.now(timezone.utc) + timedelta(hours=24)
-        new_expires = datetime.now(timezone.utc) + timedelta(hours=72)
+        old_expires = datetime.now(UTC) + timedelta(hours=24)
+        new_expires = datetime.now(UTC) + timedelta(hours=72)
 
         doc = (
             await knowledge_manager.create(
@@ -4090,7 +4092,7 @@ class TestExpiresAtWritePath:
         assert doc is not None
         assert doc.metadata.expires_at is None
 
-        new_expires = datetime.now(timezone.utc) + timedelta(hours=12)
+        new_expires = datetime.now(UTC) + timedelta(hours=12)
         await knowledge_manager.update(
             id=doc.id,
             agent="editor",

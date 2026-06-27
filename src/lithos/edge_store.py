@@ -18,7 +18,7 @@ import contextlib
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
@@ -250,7 +250,7 @@ class EdgeStore:
     @staticmethod
     def _quarantine(path: Path) -> Path:
         """Rename a corrupt database file and return the backup path."""
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         backup = path.with_name(f"{path.name}.corrupt-{timestamp}")
         suffix = 1
         while backup.exists():
@@ -287,7 +287,7 @@ class EdgeStore:
         the read-modify-write so either both calls observe a single row and
         both UPDATE, or one INSERTs and the next UPDATEs.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with self._session(transactional=True) as db:
             cursor = await db.execute(
                 "SELECT edge_id FROM edges "
@@ -411,7 +411,7 @@ class EdgeStore:
 
         Returns ``True`` if the edge was found and updated, ``False`` otherwise.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with self._session() as db:
             cursor = await db.execute(
                 "UPDATE edges SET conflict_state = ?, provenance_actor = ?, updated_at = ? "
@@ -511,7 +511,7 @@ class EdgeStore:
         own write even when another coroutine adjusts the same edge
         concurrently (#172).
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         async with self._session(transactional=True) as db:
             cursor = await db.execute(
                 "UPDATE edges SET weight = MAX(0.0, MIN(1.0, weight + ?)), updated_at = ? "
