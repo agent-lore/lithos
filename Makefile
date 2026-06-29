@@ -1,4 +1,4 @@
-.PHONY: install fmt lint typecheck test test-integration test-all docker-build check
+.PHONY: install fmt lint typecheck test test-integration test-all docker-build check diagrams
 
 install:
 	uv sync
@@ -24,5 +24,11 @@ test-all:
 
 docker-build:
 	docker build -t lithos:dev -f docker/Dockerfile .
+
+# Regenerate the architecture & domain diagrams under docs/generated/.
+# Run this after changing the code/models and commit the result; CI fails if
+# the committed diagrams drift from the code (see .github/workflows/ci.yml).
+diagrams:
+	uv run pytest tests/guardrail/ -q
 
 check: lint typecheck test

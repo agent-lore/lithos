@@ -59,6 +59,8 @@ dev = [
     # (lithos.lcma.entities), falling back to heuristic extraction if offline.
     # Bump the pinned version alongside the spacy minor version.
     "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "grimp>=3.14",
+    "import-linter>=2.12",
 ]
 
 [tool.hatch.metadata]
@@ -103,6 +105,61 @@ pythonPlatform = "Linux"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
+
+[tool.importlinter]
+# Directional architecture contract: dependencies must only point downward,
+# Entrypoints -> Core -> Foundation. Expressed as `forbidden` contracts (not
+# `layers`) because some core modules legitimately import each other
+# (e.g. graph <-> knowledge), which a strict layers contract would reject.
+# The lithos.lcma seam is guarded separately by tests/test_module_boundaries.py.
+root_package = "lithos"
+
+[[tool.importlinter.contracts]]
+name = "Foundation must not import Core or Entrypoints"
+type = "forbidden"
+source_modules = [
+    "lithos.config",
+    "lithos.telemetry",
+    "lithos.errors",
+    "lithos.events",
+    "lithos._merge",
+    "lithos.edge_store",
+    "lithos.logging_config",
+]
+forbidden_modules = [
+    "lithos.knowledge",
+    "lithos.reconcile",
+    "lithos.search",
+    "lithos.graph",
+    "lithos.coordination",
+    "lithos.intake",
+    "lithos.provenance",
+    "lithos.cognitive_memory",
+    "lithos.lcma",
+    "lithos.cli",
+    "lithos.server",
+    "lithos.watch_intake",
+]
+
+[[tool.importlinter.contracts]]
+name = "Core must not import Entrypoints"
+type = "forbidden"
+source_modules = [
+    "lithos.knowledge",
+    "lithos.reconcile",
+    "lithos.search",
+    "lithos.graph",
+    "lithos.coordination",
+    "lithos.intake",
+    "lithos.provenance",
+    "lithos.cognitive_memory",
+    "lithos.lcma",
+]
+forbidden_modules = [
+    "lithos.cli",
+    "lithos.server",
+    "lithos.watch_intake",
+]
 
 [tool.pytest.ini_options]
 # asyncio_mode = "auto" means pytest-asyncio decorates every async test

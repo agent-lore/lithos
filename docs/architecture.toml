@@ -1,0 +1,50 @@
+# Architecture model for the "diagrams as tests" guardrail.
+#
+# This file is the single source of truth for:
+#   - the generated component diagram (tests/guardrail/test_architecture_diagram.py)
+#   - which modules are scanned for the domain class diagram
+#
+# The directional layering contract itself lives in pyproject.toml
+# ([tool.importlinter]); the tiers below are documentation of that intent and
+# drive how the component diagram is grouped.
+#
+# `component_of()` matches a module to a component by LONGEST module-prefix,
+# so "lithos.lcma" also captures "lithos.lcma.scouts" etc.
+
+[components]
+Entrypoints     = ["lithos.cli", "lithos.server", "lithos.watch_intake", "lithos.__main__"]
+Knowledge       = ["lithos.knowledge", "lithos.reconcile", "lithos._merge"]
+Search          = ["lithos.search"]
+Graph           = ["lithos.graph", "lithos.edge_store"]
+Coordination    = ["lithos.coordination"]
+Intake          = ["lithos.intake"]
+Provenance      = ["lithos.provenance"]
+CognitiveMemory = ["lithos.cognitive_memory"]
+LCMA            = ["lithos.lcma"]
+Events          = ["lithos.events"]
+Config          = ["lithos.config"]
+Telemetry       = ["lithos.telemetry"]
+Errors          = ["lithos.errors"]
+Logging         = ["lithos.logging_config"]
+
+# Tiers are for diagram grouping + documentation of the forbidden-import contract.
+# Dependencies must only point downward (Entrypoints -> Core -> Foundation).
+[tiers]
+Entrypoints = ["Entrypoints"]
+Core        = ["Knowledge", "Search", "Graph", "Coordination", "Intake", "Provenance", "CognitiveMemory", "LCMA"]
+Foundation  = ["Events", "Config", "Telemetry", "Errors", "Logging"]
+
+# Domain class diagram: which modules to scan for dataclasses / Pydantic models.
+# Config/settings models are excluded — they are configuration, not domain entities.
+[domain]
+include_modules = [
+    "lithos.coordination",
+    "lithos.graph",
+    "lithos.events",
+    "lithos.knowledge",
+    "lithos.provenance",
+    "lithos.cognitive_memory",
+    "lithos.intake",
+    "lithos.search",
+]
+exclude_modules = ["lithos.config"]
