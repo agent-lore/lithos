@@ -84,7 +84,13 @@ def render_component_diagram() -> str:
         members = [c for c in sorted(tiers[tier]) if c in components]
         if not members:
             continue
-        lines.append(f"  subgraph {tier}")
+        # Give the subgraph an explicit id distinct from any component node id.
+        # A tier and a component may share a name (e.g. "Entrypoints"); emitting
+        # `subgraph Entrypoints` around a node `Entrypoints` makes Mermaid think
+        # the subgraph contains itself ("would create a cycle") and GitHub fails
+        # to render it. `subgraph tier_X["X"]` keeps the label but avoids the clash.
+        tier_id = "tier_" + re.sub(r"\W+", "_", tier)
+        lines.append(f'  subgraph {tier_id}["{tier}"]')
         for comp in members:
             lines.append(f"    {comp}")
             placed.add(comp)

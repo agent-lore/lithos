@@ -5,7 +5,7 @@
 
 ```mermaid
 graph TD
-  subgraph Core
+  subgraph tier_Core["Core"]
     CognitiveMemory
     Coordination
     Graph
@@ -15,10 +15,10 @@ graph TD
     Provenance
     Search
   end
-  subgraph Entrypoints
+  subgraph tier_Entrypoints["Entrypoints"]
     Entrypoints
   end
-  subgraph Foundation
+  subgraph tier_Foundation["Foundation"]
     Config
     Errors
     Events
