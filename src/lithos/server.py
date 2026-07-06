@@ -20,9 +20,10 @@ from starlette.responses import Response, StreamingResponse
 
 from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig, get_config, set_config
-from lithos.coordination import CoordinationError, CoordinationService, Task, TaskStatus
+from lithos.coordination import CoordinationService, Task, TaskStatus
 from lithos.edge_store import EdgeStore
-from lithos.errors import SearchBackendError
+from lithos.envelopes import coordination_error_envelope, error_envelope
+from lithos.errors import CoordinationError, SearchBackendError
 from lithos.events import (
     AGENT_REGISTERED,
     FINDING_POSTED,
@@ -307,14 +308,10 @@ class LithosServer:
             receipt = await self.memory.get_receipt(receipt_id, task_id)
             if receipt is None:
                 return (
-                    {
-                        "status": "error",
-                        "code": "receipt_not_found",
-                        "message": (
-                            f"Receipt '{receipt_id}' not found or does not "
-                            f"belong to task '{task_id}'."
-                        ),
-                    },
+                    error_envelope(
+                        "receipt_not_found",
+                        f"Receipt '{receipt_id}' not found or does not belong to task '{task_id}'.",
+                    ),
                     None,
                 )
         else:
@@ -1576,11 +1573,7 @@ class LithosServer:
                     outcome = await self.intake.note_update(agent, request)
                 except FileNotFoundError:
                     span.set_attribute("lithos.write_status", "note_not_found")
-                    return {
-                        "status": "error",
-                        "code": "note_not_found",
-                        "message": f"Note {id} not found",
-                    }
+                    return error_envelope("note_not_found", f"Note {id} not found")
 
                 if outcome.status == "slug_collision":
                     span.set_attribute("lithos.write_status", "slug_collision")
@@ -1664,11 +1657,7 @@ class LithosServer:
                         max_length=max_length,
                     )
                 except FileNotFoundError as e:
-                    return {
-                        "status": "error",
-                        "code": "doc_not_found",
-                        "message": str(e),
-                    }
+                    return error_envelope("doc_not_found", str(e))
 
                 # Audit log — awaited so the write is committed before we query
                 # retrieval_count (avoids TOCTOU off-by-one). lithos_search uses
@@ -1728,11 +1717,7 @@ class LithosServer:
 
                 outcome = await self.intake.delete(agent, DeleteRequest(id=id))
                 if outcome.status == "not_found":
-                    return {
-                        "status": "error",
-                        "code": "doc_not_found",
-                        "message": f"Document not found: {id}",
-                    }
+                    return error_envelope("doc_not_found", f"Document not found: {id}")
                 return {"success": True}
 
         @self.mcp.tool()
@@ -1801,11 +1786,10 @@ class LithosServer:
 
                 valid_modes = {"hybrid", "fulltext", "semantic", "graph"}
                 if mode not in valid_modes:
-                    return {
-                        "status": "error",
-                        "code": "invalid_mode",
-                        "message": f"Unknown search mode {mode!r}. Valid values: hybrid, fulltext, semantic, graph.",
-                    }
+                    return error_envelope(
+                        "invalid_mode",
+                        f"Unknown search mode {mode!r}. Valid values: hybrid, fulltext, semantic, graph.",
+                    )
 
                 # Entities are not a per-backend filter: resolve the candidate
                 # set once from the knowledge inverted index (#316) and
@@ -1970,11 +1954,7 @@ class LithosServer:
                 # itself stays free of envelope concerns.
                 if not self._config.lcma.enabled:
                     logger.warning("lithos_retrieve: LCMA is disabled")
-                    return {
-                        "status": "error",
-                        "code": "lcma_disabled",
-                        "message": "LCMA is disabled via configuration",
-                    }
+                    return error_envelope("lcma_disabled", "LCMA is disabled via configuration")
 
                 result = await self.memory.retrieve(
                     query=query,
@@ -2040,19 +2020,14 @@ class LithosServer:
                 span.set_attribute("lithos.tool", "lithos_edge_upsert")
 
                 if not namespace:
-                    return {
-                        "status": "error",
-                        "code": "invalid_input",
-                        "message": "namespace is required",
-                    }
+                    return error_envelope("invalid_input", "namespace is required")
 
                 # Validate evidence type
                 if evidence is not None and not isinstance(evidence, (dict, list)):
-                    return {
-                        "status": "error",
-                        "code": "invalid_input",
-                        "message": "evidence must be a dict, list, or null — scalars are not accepted",
-                    }
+                    return error_envelope(
+                        "invalid_input",
+                        "evidence must be a dict, list, or null — scalars are not accepted",
+                    )
 
                 evidence_str = json.dumps(evidence) if evidence is not None else None
 
@@ -2257,11 +2232,9 @@ class LithosServer:
                             path_prefix=path_prefix,
                         )
                     except SearchBackendError as exc:
-                        return {
-                            "status": "error",
-                            "code": "search_backend_error",
-                            "message": f"Full-text search failed: {exc}",
-                        }
+                        return error_envelope(
+                            "search_backend_error", f"Full-text search failed: {exc}"
+                        )
 
                     # Apply the filters Tantivy doesn't handle: ``since``,
                     # ``title_contains`` and ``metadata_match``. Consult the
@@ -2444,11 +2417,7 @@ class LithosServer:
                 span.set_attribute("lithos.id", id)
 
                 if not self.knowledge.has_document(id):
-                    return {
-                        "status": "error",
-                        "code": "doc_not_found",
-                        "message": f"Document not found: {id}",
-                    }
+                    return error_envelope("doc_not_found", f"Document not found: {id}")
 
                 requested = include if include is not None else list(_RELATED_INCLUDES)
                 selected = [k for k in _RELATED_INCLUDES if k in requested]
@@ -2725,7 +2694,7 @@ class LithosServer:
                     )
                 except CoordinationError as exc:
                     span.set_attribute("lithos.success", False)
-                    return {"status": "error", "code": exc.code, "message": exc.message}
+                    return coordination_error_envelope(exc)
                 span.set_attribute("lithos.task_id", task_id)
 
                 await self._emit(
@@ -2776,11 +2745,10 @@ class LithosServer:
                 Dict with success and message
             """
             if title is None and description is None and tags is None and metadata is None:
-                return {
-                    "status": "error",
-                    "code": "invalid_input",
-                    "message": "At least one of title, description, tags, or metadata must be provided",
-                }
+                return error_envelope(
+                    "invalid_input",
+                    "At least one of title, description, tags, or metadata must be provided",
+                )
 
             logger.info("lithos_task_update task=%s agent=%s", task_id, agent)
             tracer = get_tracer()
@@ -2799,7 +2767,7 @@ class LithosServer:
                     )
                 except CoordinationError as exc:
                     span.set_attribute("lithos.success", False)
-                    return {"status": "error", "code": exc.code, "message": exc.message}
+                    return coordination_error_envelope(exc)
                 span.set_attribute("lithos.success", updated)
 
                 if updated:
@@ -2811,11 +2779,7 @@ class LithosServer:
                         )
                     )
                     return {"success": True, "message": f"Task {task_id} updated"}
-                return {
-                    "status": "error",
-                    "code": "task_not_found",
-                    "message": f"Task {task_id} not found",
-                }
+                return error_envelope("task_not_found", f"Task {task_id} not found")
 
         @self.mcp.tool()
         @tool_metrics()
@@ -2852,14 +2816,11 @@ class LithosServer:
                 span.set_attribute("lithos.success", success)
 
                 if not success:
-                    return {
-                        "status": "error",
-                        "code": "claim_failed",
-                        "message": (
-                            f"Could not claim aspect '{aspect}' on task '{task_id}': "
-                            "task not found, not open, or aspect already claimed by another agent."
-                        ),
-                    }
+                    return error_envelope(
+                        "claim_failed",
+                        f"Could not claim aspect '{aspect}' on task '{task_id}': "
+                        "task not found, not open, or aspect already claimed by another agent.",
+                    )
 
                 await self._emit(
                     LithosEvent(
@@ -2909,14 +2870,11 @@ class LithosServer:
                 span.set_attribute("lithos.success", success)
 
                 if not success:
-                    return {
-                        "status": "error",
-                        "code": "claim_not_found",
-                        "message": (
-                            f"No active claim found for task '{task_id}', "
-                            f"aspect '{aspect}', agent '{agent}'."
-                        ),
-                    }
+                    return error_envelope(
+                        "claim_not_found",
+                        f"No active claim found for task '{task_id}', "
+                        f"aspect '{aspect}', agent '{agent}'.",
+                    )
 
                 return {
                     "success": True,
@@ -2955,14 +2913,11 @@ class LithosServer:
                 span.set_attribute("lithos.success", success)
 
                 if not success:
-                    return {
-                        "status": "error",
-                        "code": "claim_not_found",
-                        "message": (
-                            f"No matching claim found for task '{task_id}', "
-                            f"aspect '{aspect}', agent '{agent}'."
-                        ),
-                    }
+                    return error_envelope(
+                        "claim_not_found",
+                        f"No matching claim found for task '{task_id}', "
+                        f"aspect '{aspect}', agent '{agent}'.",
+                    )
 
                 await self._emit(
                     LithosEvent(
@@ -3044,11 +2999,9 @@ class LithosServer:
                 span.set_attribute("lithos.success", success)
 
                 if not success:
-                    return {
-                        "status": "error",
-                        "code": "task_not_found",
-                        "message": f"Task '{task_id}' not found or not in an open state.",
-                    }
+                    return error_envelope(
+                        "task_not_found", f"Task '{task_id}' not found or not in an open state."
+                    )
 
                 # -- Apply reinforcement side-effects after task is completed --
                 if validated is not None:
@@ -3126,11 +3079,9 @@ class LithosServer:
                     )
                     return {"success": True}
 
-                return {
-                    "status": "error",
-                    "code": "task_not_found",
-                    "message": f"Task {task_id} not found or already closed",
-                }
+                return error_envelope(
+                    "task_not_found", f"Task {task_id} not found or already closed"
+                )
 
         @self.mcp.tool()
         @tool_metrics()
@@ -3171,7 +3122,7 @@ class LithosServer:
                     )
                 except CoordinationError as exc:
                     span.set_attribute("lithos.success", False)
-                    return {"status": "error", "code": exc.code, "message": exc.message}
+                    return coordination_error_envelope(exc)
 
                 # Durable audit: a queryable finding recording the prior terminal state.
                 summary = f"[Reopened] task reopened (was {prior_status})"
@@ -3351,7 +3302,7 @@ class LithosServer:
                     )
                 except CoordinationError as exc:
                     span.set_attribute("lithos.success", False)
-                    return {"status": "error", "code": exc.code, "message": exc.message}
+                    return coordination_error_envelope(exc)
                 return {"success": True}
 
         @self.mcp.tool()
@@ -3378,14 +3329,10 @@ class LithosServer:
                 span.set_attribute("lithos.tool", "lithos_task_edge_list")
                 span.set_attribute("lithos.task_id", task_id)
                 if direction not in ("incoming", "outgoing", "both"):
-                    return {
-                        "status": "error",
-                        "code": "invalid_input",
-                        "message": (
-                            f"direction must be 'incoming', 'outgoing', or 'both', got "
-                            f"{direction!r}."
-                        ),
-                    }
+                    return error_envelope(
+                        "invalid_input",
+                        f"direction must be 'incoming', 'outgoing', or 'both', got {direction!r}.",
+                    )
                 edges = await self.coordination.list_task_edges(
                     task_id=task_id,
                     direction=direction,
@@ -3432,11 +3379,7 @@ class LithosServer:
             with tracer.start_as_current_span("lithos.tool.task_ready") as span:
                 span.set_attribute("lithos.tool", "lithos_task_ready")
                 if limit < 1:
-                    return {
-                        "status": "error",
-                        "code": "invalid_input",
-                        "message": f"limit must be >= 1, got {limit}.",
-                    }
+                    return error_envelope("invalid_input", f"limit must be >= 1, got {limit}.")
                 if metadata_match is not None:
                     try:
                         validate_metadata_match(metadata_match)
@@ -3483,11 +3426,7 @@ class LithosServer:
             with tracer.start_as_current_span("lithos.tool.task_blocked") as span:
                 span.set_attribute("lithos.tool", "lithos_task_blocked")
                 if limit < 1:
-                    return {
-                        "status": "error",
-                        "code": "invalid_input",
-                        "message": f"limit must be >= 1, got {limit}.",
-                    }
+                    return error_envelope("invalid_input", f"limit must be >= 1, got {limit}.")
                 if metadata_match is not None:
                     try:
                         validate_metadata_match(metadata_match)
@@ -3604,7 +3543,7 @@ class LithosServer:
                     )
                 except CoordinationError as exc:
                     span.set_attribute("lithos.success", False)
-                    return {"status": "error", "code": exc.code, "message": exc.message}
+                    return coordination_error_envelope(exc)
                 span.set_attribute("lithos.task_id", task_id)
                 await self._emit(
                     LithosEvent(
@@ -3686,11 +3625,7 @@ class LithosServer:
 
                 task = await self.coordination.get_task(task_id)
                 if task is None:
-                    return {
-                        "status": "error",
-                        "code": "task_not_found",
-                        "message": f"Task '{task_id}' not found.",
-                    }
+                    return error_envelope("task_not_found", f"Task '{task_id}' not found.")
 
                 return {"task": _serialize_task_record(task)}
 
