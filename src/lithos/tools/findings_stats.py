@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from fastmcp import FastMCP
 
+from lithos.envelopes import invalid_input_envelope
 from lithos.events import FINDING_POSTED, LithosEvent
+from lithos.knowledge import _normalize_datetime
 from lithos.telemetry import get_current_span, tool_metrics
 from lithos.tools._seam import tool_span
 
@@ -95,7 +97,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
         since_dt = None
         if since:
-            since_dt = datetime.fromisoformat(since)
+            try:
+                since_dt = _normalize_datetime(datetime.fromisoformat(since))
+            except ValueError:
+                return invalid_input_envelope(f"Invalid since datetime: {since}")
 
         findings = await server.coordination.list_findings(
             task_id=task_id,
