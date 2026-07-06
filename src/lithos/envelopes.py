@@ -22,13 +22,18 @@ from typing import Any
 
 from lithos.errors import CoordinationError
 
+_CANONICAL_KEYS = frozenset({"status", "code", "message"})
+
 
 def error_envelope(code: str, message: str, **extra: Any) -> dict[str, Any]:
     """Build the canonical error envelope.
 
     ``extra`` allows documented code-specific supplementary keys; they are
-    appended after the three canonical keys.
+    appended after the three canonical keys and may not override them.
     """
+    overridden = _CANONICAL_KEYS & extra.keys()
+    if overridden:
+        raise ValueError(f"extra must not override canonical envelope keys: {sorted(overridden)}")
     return {"status": "error", "code": code, "message": message, **extra}
 
 

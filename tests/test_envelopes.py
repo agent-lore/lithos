@@ -1,5 +1,7 @@
 """Unit tests for the canonical error-envelope constructors."""
 
+import pytest
+
 from lithos.envelopes import coordination_error_envelope, error_envelope
 from lithos.errors import CoordinationError, LithosError
 
@@ -21,6 +23,14 @@ class TestErrorEnvelope:
 
         assert envelope["current_version"] == 7
         assert list(envelope) == ["status", "code", "message", "current_version"]
+
+    def test_extra_cannot_override_canonical_keys(self):
+        # "status" is only reachable through **extra — the guard rejects it.
+        with pytest.raises(ValueError, match="canonical envelope keys"):
+            error_envelope("some_code", "msg", status="ok")
+        # "code"/"message" collide with the named parameters before **extra.
+        with pytest.raises(TypeError):
+            error_envelope("some_code", "msg", code="other")  # type: ignore[call-arg]
 
 
 class TestCoordinationErrorEnvelope:
