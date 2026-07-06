@@ -8,10 +8,13 @@ The canonical failure shape is built here::
 Key order is part of the wire contract (dicts serialise in insertion order);
 do not reorder.
 
-Every MCP tool failure uses this one wire shape; validation failures carry
-the reserved code ``invalid_input`` and error envelopes never include
-``warnings``. Handlers build failures through these constructors — a few
-Core modules still assemble the same shape inline and are migrating.
+Every failure a handler can anticipate (validation and operational) uses
+this one wire shape; validation failures carry the reserved code
+``invalid_input`` and error envelopes never include ``warnings``. Requests
+rejected by MCP schema validation before a handler runs, and unexpected
+internal exceptions, still surface as protocol-level errors. Handlers build
+failures through these constructors — a few Core modules still assemble the
+same shape inline and are migrating.
 
 Success envelopes remain per-tool: they are the tool's result shape, not a
 shared failure contract. Actionable write *outcomes* (``duplicate``,

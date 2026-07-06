@@ -8,7 +8,6 @@ from typing import Any
 
 import frontmatter
 import pytest
-from fastmcp.exceptions import ToolError
 
 from lithos.config import LithosConfig
 from lithos.knowledge import KnowledgeManager
@@ -1313,18 +1312,16 @@ class TestAgentAndCoordinationMCPTools:
             },
         )
 
-        with pytest.raises(ToolError, match="Invalid isoformat string"):
-            await _call_tool(server, "lithos_list", {"since": "not-a-date"})
-
-        with pytest.raises(ToolError, match="Invalid isoformat string"):
-            await _call_tool(server, "lithos_agent_list", {"active_since": "still-not-a-date"})
-
-        with pytest.raises(ToolError, match="Invalid isoformat string"):
-            await _call_tool(
-                server,
-                "lithos_finding_list",
-                {"task_id": task["task_id"], "since": "definitely-not-a-date"},
-            )
+        # Datetime filters are boundary-validated: an unparseable value
+        # returns the canonical invalid_input envelope, never a ToolError.
+        for tool, args in (
+            ("lithos_list", {"since": "not-a-date"}),
+            ("lithos_agent_list", {"active_since": "still-not-a-date"}),
+            ("lithos_finding_list", {"task_id": task["task_id"], "since": "definitely-not-a-date"}),
+        ):
+            result = await _call_tool(server, tool, args)
+            assert result["status"] == "error", tool
+            assert result["code"] == "invalid_input", tool
 
 
 class TestReadByPathAndTruncation:

@@ -2185,9 +2185,14 @@ class LithosServer:
                 span.set_attribute("lithos.tool", "lithos_list")
                 span.set_attribute("lithos.limit", limit)
 
+                # Normalize to UTC so comparisons against normalized document
+                # timestamps never mix naive and aware values.
                 since_dt = None
                 if since:
-                    since_dt = datetime.fromisoformat(since)
+                    try:
+                        since_dt = _normalize_datetime(datetime.fromisoformat(since))
+                    except ValueError:
+                        return invalid_input_envelope(f"Invalid since datetime: {since}")
 
                 if metadata_match is not None:
                     try:
@@ -2592,7 +2597,12 @@ class LithosServer:
 
                 since_dt = None
                 if active_since:
-                    since_dt = datetime.fromisoformat(active_since)
+                    try:
+                        since_dt = _normalize_datetime(datetime.fromisoformat(active_since))
+                    except ValueError:
+                        return invalid_input_envelope(
+                            f"Invalid active_since datetime: {active_since}"
+                        )
 
                 agents = await self.coordination.list_agents(
                     agent_type=type,
@@ -3682,7 +3692,10 @@ class LithosServer:
 
                 since_dt = None
                 if since:
-                    since_dt = datetime.fromisoformat(since)
+                    try:
+                        since_dt = _normalize_datetime(datetime.fromisoformat(since))
+                    except ValueError:
+                        return invalid_input_envelope(f"Invalid since datetime: {since}")
 
                 findings = await self.coordination.list_findings(
                     task_id=task_id,

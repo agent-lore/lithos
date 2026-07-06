@@ -10,8 +10,14 @@ Every tool **failure** now uses one canonical envelope:
 {"status": "error", "code": "<stable_snake_case>", "message": "<sentence>"}
 ```
 
-Validation failures carry the reserved code `invalid_input`. Error envelopes no
-longer include a `warnings` key.
+Validation failures carry the reserved code `invalid_input` — including
+previously-raising paths such as unparseable datetime filters
+(`lithos_list.since`, `lithos_agent_list.active_since`,
+`lithos_finding_list.since`). Error envelopes no longer include a `warnings`
+key. Precisely: every failure a handler can anticipate (validation and
+operational) is returned as this envelope; protocol-level `ToolError`s remain
+only for requests rejected by MCP schema validation before the handler runs,
+and for unexpected internal exceptions (bugs).
 
 Before / after for a rejected write:
 

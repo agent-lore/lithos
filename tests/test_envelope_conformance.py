@@ -116,6 +116,10 @@ VALIDATION_CASES: list[tuple[str, dict[str, Any], str]] = [
     ("lithos_task_list", {"metadata_match": {"k": ["not-a-scalar"]}}, "invalid_input"),
     ("lithos_task_ready", {"metadata_match": {"k": ["not-a-scalar"]}}, "invalid_input"),
     ("lithos_task_blocked", {"metadata_match": {"k": ["not-a-scalar"]}}, "invalid_input"),
+    # datetime filters: unparseable values are boundary-validated, never ToolErrors
+    ("lithos_list", {"since": "not-a-date"}, "invalid_input"),
+    ("lithos_agent_list", {"active_since": "not-a-date"}, "invalid_input"),
+    ("lithos_finding_list", {"task_id": "any-task", "since": "not-a-date"}, "invalid_input"),
     # not-found family
     (
         "lithos_read",

@@ -9,7 +9,14 @@ Every tool failure is one shape — check `status`, then branch on `code`:
 ```
 
 `code` is machine-stable; never parse `message`. Validation failures carry
-`code: "invalid_input"`. Error envelopes never include `warnings`.
+`code: "invalid_input"` — including unparseable datetime filters (`since`,
+`active_since`). Error envelopes never include `warnings`. Protocol-level
+errors (MCP `ToolError`) occur only when a request is rejected by schema
+validation before the handler runs, or on unexpected internal exceptions.
+
+Common codes (illustrative, not exhaustive — any tool may return other codes,
+always in the same shape; e.g. `invalid_mode`, `invalid_metadata_key`,
+`self_edge`, `cycle`):
 
 | Code | Meaning | Action |
 |------|---------|--------|
