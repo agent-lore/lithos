@@ -8,9 +8,10 @@ The canonical failure shape is built here::
 Key order is part of the wire contract (dicts serialise in insertion order);
 do not reorder.
 
-Legacy divergent shapes (the ``status: "invalid_input"`` + ``warnings``
-dialect in the write family) still exist at some handlers until the envelope
-normalization lands; new error paths must use these constructors.
+Every MCP tool failure uses this one wire shape; validation failures carry
+the reserved code ``invalid_input`` and error envelopes never include
+``warnings``. Handlers build failures through these constructors — a few
+Core modules still assemble the same shape inline and are migrating.
 
 Success envelopes remain per-tool: they are the tool's result shape, not a
 shared failure contract. Actionable write *outcomes* (``duplicate``,
