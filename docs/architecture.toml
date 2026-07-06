@@ -12,7 +12,7 @@
 # so "lithos.lcma" also captures "lithos.lcma.scouts" etc.
 
 [components]
-Entrypoints     = ["lithos.cli", "lithos.server", "lithos.watch_intake", "lithos.__main__"]
+Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__"]
 Knowledge       = ["lithos.knowledge", "lithos.reconcile", "lithos._merge"]
 Search          = ["lithos.search"]
 Graph           = ["lithos.graph", "lithos.edge_store"]

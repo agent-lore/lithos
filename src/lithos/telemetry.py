@@ -395,6 +395,18 @@ def get_meter(name: str = "lithos") -> Any:
     return _NoOpMeter()
 
 
+def get_current_span() -> Any:
+    """Get the active span. Returns a no-op span if OTEL is not active.
+
+    Lets code running inside a span (e.g. a tool handler under the
+    ``tool_span`` decorator) set attributes without importing
+    ``opentelemetry`` directly.
+    """
+    if _HAS_OTEL and _initialized:
+        return trace.get_current_span()
+    return _NoOpSpan()
+
+
 # --- @traced decorator ---
 
 

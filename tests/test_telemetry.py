@@ -901,23 +901,33 @@ class TestToolMetrics:
         assert hasattr(counter, "add"), "tool_errors must expose .add()"
 
     def test_all_server_tools_have_tool_metrics_decorator(self):
-        """Every @self.mcp.tool() in LithosServer._register_tools also has @tool_metrics().
+        """Every MCP tool registration also carries @tool_metrics().
 
-        Counts occurrences of each decorator in the source so the assertion
-        automatically catches new tools added without the metrics decorator.
+        Dual scan: the legacy closures still inside
+        ``LithosServer._register_tools`` (``@self.mcp.tool()``) and the
+        extracted domain modules under ``lithos/tools/`` (``@mcp.tool()``).
+        Counting decorator occurrences per source automatically catches new
+        tools added without the metrics decorator.
         """
         import inspect
+        from pathlib import Path
 
+        import lithos.tools
         from lithos.server import LithosServer
 
-        source = inspect.getsource(LithosServer._register_tools)
-        mcp_tool_count = source.count("@self.mcp.tool()")
-        metered_count = source.count("@tool_metrics()")
-        assert metered_count == mcp_tool_count, (
-            f"Missing @tool_metrics() on {mcp_tool_count - metered_count} tool(s): "
-            f"found {metered_count} @tool_metrics() decorator(s) but "
-            f"{mcp_tool_count} @self.mcp.tool() decorator(s)"
-        )
+        sources = {"LithosServer._register_tools": inspect.getsource(LithosServer._register_tools)}
+        tools_dir = Path(inspect.getfile(lithos.tools)).parent
+        for module_file in sorted(tools_dir.glob("*.py")):
+            sources[f"lithos/tools/{module_file.name}"] = module_file.read_text()
+
+        for origin, source in sources.items():
+            mcp_tool_count = source.count("@self.mcp.tool()") + source.count("@mcp.tool()")
+            metered_count = source.count("@tool_metrics()")
+            assert metered_count == mcp_tool_count, (
+                f"{origin}: missing @tool_metrics() on "
+                f"{mcp_tool_count - metered_count} tool(s): found {metered_count} "
+                f"@tool_metrics() decorator(s) but {mcp_tool_count} tool registration(s)"
+            )
 
     def test_tool_metrics_preserves_signature_for_mcp_introspection(self):
         """@tool_metrics() does not break the parameter schema seen by the MCP SDK.
