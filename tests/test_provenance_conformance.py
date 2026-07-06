@@ -234,8 +234,8 @@ class TestValidationConformance:
                     "derived_from_ids": [bad],
                 },
             )
-            assert result["status"] == "error", f"Expected invalid_input for {bad!r}"
-            assert result["code"] == "invalid_input", f"Expected invalid_input for {bad!r}"
+            assert result["status"] == "error", f"Expected canonical error envelope for {bad!r}"
+            assert result["code"] == "invalid_input", f"Expected code invalid_input for {bad!r}"
 
     async def test_unresolved_produces_warnings_not_errors(self, server: LithosServer):
         """Unresolved source IDs produce warnings, not errors."""
