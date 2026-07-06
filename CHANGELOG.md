@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+### BREAKING — MCP error envelopes normalized (0.4.0)
+
+Every tool **failure** now uses one canonical envelope:
+
+```json
+{"status": "error", "code": "<stable_snake_case>", "message": "<sentence>"}
+```
+
+Validation failures carry the reserved code `invalid_input`. Error envelopes no
+longer include a `warnings` key.
+
+Before / after for a rejected write:
+
+```json
+// before
+{"status": "invalid_input", "message": "ttl_hours must be ...", "warnings": []}
+// after
+{"status": "error", "code": "invalid_input", "message": "ttl_hours must be ..."}
+```
+
+**What changed, by tool family:**
+
+- `lithos_write` / `lithos_note_update`: boundary-validation rejections and the
+  `invalid_input` / `content_too_large` / internal-`error` outcome passthroughs
+  now use the canonical envelope (internal errors carry `code: "internal_error"`).
+- `lithos_list`, `lithos_task_list`, `lithos_task_ready`, `lithos_task_blocked`:
+  `metadata_match` validation rejections now use the canonical envelope.
+- Everything else was already canonical and is unchanged.
+
+**What deliberately did NOT change** — actionable write outcomes keep their own
+top-level `status` (they carry payloads agents act on): `version_conflict`
+(with `current_version`; read-merge-write retry loops keep branching on it),
+`duplicate`, `slug_collision`, `path_collision`, all success envelopes, and the
+`{"success": ...}` claim/release shapes. Error `code` strings are also
+unchanged (`doc_not_found` vs `note_not_found` etc. keep their spellings).
+
+**Migration:** replace any `status == "invalid_input"` branch with
+`status == "error" and code == "invalid_input"`, and stop reading `warnings`
+off error responses. This partially reverses the earlier pre-0.3 change that
+promoted every write-error code to a top-level status — that promotion made
+`status` an open set an agent had to enumerate just to detect failure; the
+line now sits at "actionable outcome vs failure". Permitted by the pre-1.0
+compatibility policy in `SPECIFICATION.md §1.4`.
+
 ### Added
 
 - **Free-form metadata on knowledge notes (#305).** `lithos_write` accepts a `metadata` object of arbitrary key/value pairs (scalars or lists), persisted to YAML frontmatter via `KnowledgeMetadata.extra`. `lithos_read` returns it as `metadata.extra`; `lithos_list` includes it on each item. Update semantics mirror `tags`: omit/`null` preserves, `{}` clears, a non-empty dict is an additive per-key merge (per-key `null` deletes). Keys that collide with reserved frontmatter fields are rejected with `status="invalid_input"`.

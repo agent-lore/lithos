@@ -22,7 +22,11 @@ from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig, get_config, set_config
 from lithos.coordination import CoordinationService, Task, TaskStatus
 from lithos.edge_store import EdgeStore
-from lithos.envelopes import coordination_error_envelope, error_envelope
+from lithos.envelopes import (
+    coordination_error_envelope,
+    error_envelope,
+    invalid_input_envelope,
+)
 from lithos.errors import CoordinationError, SearchBackendError
 from lithos.events import (
     AGENT_REGISTERED,
@@ -1123,12 +1127,12 @@ class LithosServer:
                     all metadata; a non-empty dict is an additive per-key merge (a
                     key whose value is null deletes it). Keys must be strings and
                     must not collide with reserved frontmatter fields (e.g. title,
-                    tags, version) — such writes are rejected as invalid_input.
+                    tags, version) — such writes are rejected with code "invalid_input".
                 confidence: Confidence score 0-1 (default: 1.0 on create). On update:
                     null/omit preserves existing; float sets new value. Integers
                     are coerced to float; anything else that is not a finite
                     number in [0.0, 1.0] (non-numeric, bool, NaN/inf, or
-                    out-of-range) is rejected as invalid_input.
+                    out-of-range) is rejected with code "invalid_input".
                 path: Where to store the note. Two accepted forms:
                     - Subdirectory (e.g., "procedures") — the filename is derived
                       from the title (slugified) and ".md" is appended.
@@ -1137,7 +1141,7 @@ class LithosServer:
                       as the filename verbatim; the title does NOT influence the
                       filename in this mode.
                     Intermediate path segments may not end in ".md"; such inputs
-                    are rejected with status "invalid_input" to prevent
+                    are rejected with code "invalid_input" to prevent
                     accidental creation of directories whose names end in ".md".
 
                 --- Provenance ---
@@ -1172,7 +1176,12 @@ class LithosServer:
                 summaries: Optional dict with short/long summary strings.
 
             Returns:
-                Dict with status envelope: created/updated/duplicate
+                On success: {"status": "created"|"updated", "id", "path", "version",
+                "warnings"}. Actionable outcomes keep their own top-level status:
+                duplicate / slug_collision / path_collision / version_conflict
+                (version_conflict carries "current_version"). All other failures
+                use the standard error envelope {"status": "error", "code",
+                "message"} — validation failures carry code "invalid_input".
             """
             logger.info("lithos_write agent=%s title=%r update=%s", agent, title, id is not None)
             tracer = get_tracer()
@@ -1183,11 +1192,9 @@ class LithosServer:
 
                 # Validate ttl_hours / expires_at mutual exclusion
                 if ttl_hours is not None and expires_at is not None:
-                    return {
-                        "status": "invalid_input",
-                        "message": "Provide either ttl_hours or expires_at, not both.",
-                        "warnings": [],
-                    }
+                    return invalid_input_envelope(
+                        "Provide either ttl_hours or expires_at, not both."
+                    )
 
                 # Validate ttl_hours
                 if ttl_hours is not None and (
@@ -1196,61 +1203,41 @@ class LithosServer:
                     or math.isinf(ttl_hours)
                     or ttl_hours <= 0
                 ):
-                    return {
-                        "status": "invalid_input",
-                        "message": "ttl_hours must be a finite positive number.",
-                        "warnings": [],
-                    }
+                    return invalid_input_envelope("ttl_hours must be a finite positive number.")
 
                 # Validate LCMA enum fields
                 if access_scope is not None and access_scope not in VALID_ACCESS_SCOPES:
-                    return {
-                        "status": "invalid_input",
-                        "message": f"Invalid access_scope: {access_scope!r}. "
-                        f"Must be one of {sorted(VALID_ACCESS_SCOPES)}",
-                        "warnings": [],
-                    }
+                    return invalid_input_envelope(
+                        f"Invalid access_scope: {access_scope!r}. "
+                        f"Must be one of {sorted(VALID_ACCESS_SCOPES)}"
+                    )
                 if note_type is not None and note_type not in VALID_NOTE_TYPES:
-                    return {
-                        "status": "invalid_input",
-                        "message": f"Invalid note_type: {note_type!r}. "
-                        f"Must be one of {sorted(VALID_NOTE_TYPES)}",
-                        "warnings": [],
-                    }
+                    return invalid_input_envelope(
+                        f"Invalid note_type: {note_type!r}. "
+                        f"Must be one of {sorted(VALID_NOTE_TYPES)}"
+                    )
                 if status is not None and status not in VALID_STATUSES:
-                    return {
-                        "status": "invalid_input",
-                        "message": f"Invalid status: {status!r}. "
-                        f"Must be one of {sorted(VALID_STATUSES)}",
-                        "warnings": [],
-                    }
+                    return invalid_input_envelope(
+                        f"Invalid status: {status!r}. Must be one of {sorted(VALID_STATUSES)}"
+                    )
 
                 # Validate summaries shape
                 if summaries is not None:
                     if not isinstance(summaries, dict):
-                        return {
-                            "status": "invalid_input",
-                            "message": "summaries must be an object with "
-                            "'short' and/or 'long' string fields.",
-                            "warnings": [],
-                        }
+                        return invalid_input_envelope(
+                            "summaries must be an object with 'short' and/or 'long' string fields."
+                        )
                     unknown_keys = set(summaries.keys()) - {"short", "long"}
                     if unknown_keys:
-                        return {
-                            "status": "invalid_input",
-                            "message": f"summaries has unknown keys: "
-                            f"{sorted(unknown_keys)}. "
-                            f"Allowed keys: ['long', 'short'].",
-                            "warnings": [],
-                        }
+                        return invalid_input_envelope(
+                            f"summaries has unknown keys: {sorted(unknown_keys)}. "
+                            f"Allowed keys: ['long', 'short']."
+                        )
                     for k, v in summaries.items():
                         if not isinstance(v, str):
-                            return {
-                                "status": "invalid_input",
-                                "message": f"summaries.{k} must be a string, "
-                                f"got {type(v).__name__}.",
-                                "warnings": [],
-                            }
+                            return invalid_input_envelope(
+                                f"summaries.{k} must be a string, got {type(v).__name__}."
+                            )
 
                 # Validate metadata shape at the boundary for a fast, clean
                 # envelope. The same rule is enforced in the storage layer
@@ -1259,22 +1246,14 @@ class LithosServer:
                     try:
                         validate_extra_metadata(metadata)
                     except ValueError as e:
-                        return {
-                            "status": "invalid_input",
-                            "message": str(e),
-                            "warnings": [],
-                        }
+                        return invalid_input_envelope(str(e))
 
                 # Validate task-scope create-time invariant. The update-time
                 # case is enforced under ``_write_lock`` inside
                 # ``KnowledgeManager.update`` to avoid the TOCTOU window
                 # described in ADR-0003.
                 if access_scope == "task" and id is None and not source_task:
-                    return {
-                        "status": "invalid_input",
-                        "message": "access_scope='task' requires source_task",
-                        "warnings": [],
-                    }
+                    return invalid_input_envelope("access_scope='task' requires source_task")
 
                 # Emit freshness span attributes
                 if ttl_hours is not None:
@@ -1301,11 +1280,9 @@ class LithosServer:
                             else:
                                 expires_at_dt = expires_at_dt.astimezone(UTC)
                         except ValueError:
-                            return {
-                                "status": "invalid_input",
-                                "message": f"Invalid expires_at datetime: {expires_at}",
-                                "warnings": [],
-                            }
+                            return invalid_input_envelope(
+                                f"Invalid expires_at datetime: {expires_at}"
+                            )
                 else:
                     # Create path: None means no expiry, str → parse
                     if expires_at is None:
@@ -1318,11 +1295,9 @@ class LithosServer:
                             else:
                                 expires_at_dt = expires_at_dt.astimezone(UTC)
                         except ValueError:
-                            return {
-                                "status": "invalid_input",
-                                "message": f"Invalid expires_at datetime: {expires_at}",
-                                "warnings": [],
-                            }
+                            return invalid_input_envelope(
+                                f"Invalid expires_at datetime: {expires_at}"
+                            )
 
                 # Translate MCP wire shape into intake field semantics:
                 #   None  (omitted) → _UNSET (preserve)
@@ -1425,21 +1400,24 @@ class LithosServer:
                         "message": outcome.message,
                         "warnings": list(outcome.warnings),
                     }
-                if outcome.status in (
-                    "invalid_input",
-                    "version_conflict",
-                    "content_too_large",
-                    "error",
-                ):
-                    span.set_attribute("lithos.write_status", outcome.status)
-                    error_response: dict[str, Any] = {
-                        "status": outcome.status,
+                if outcome.status == "version_conflict":
+                    # An actionable write outcome, not an error: read-merge-write
+                    # retry loops branch on this status (see CHANGELOG).
+                    span.set_attribute("lithos.write_status", "version_conflict")
+                    conflict: dict[str, Any] = {
+                        "status": "version_conflict",
                         "message": outcome.message,
                         "warnings": list(outcome.warnings),
                     }
                     if outcome.current_version is not None:
-                        error_response["current_version"] = outcome.current_version
-                    return error_response
+                        conflict["current_version"] = outcome.current_version
+                    return conflict
+                if outcome.status in ("invalid_input", "content_too_large", "error"):
+                    span.set_attribute("lithos.write_status", outcome.status)
+                    if outcome.status == "invalid_input":
+                        return invalid_input_envelope(outcome.message or "")
+                    code = "internal_error" if outcome.status == "error" else outcome.status
+                    return error_envelope(code, outcome.message or "")
 
                 doc = outcome.document
                 assert doc is not None
@@ -1497,29 +1475,30 @@ class LithosServer:
                     other keys are set; keys not mentioned are preserved. As with
                     ``lithos_task_update`` there is no wholesale-clear affordance —
                     ``metadata={}`` makes no metadata change (and, with no other
-                    field set, is rejected as invalid_input). Keys must be strings
-                    and must not collide with reserved frontmatter fields (e.g.
-                    title, tags, version) — such patches are rejected as
-                    invalid_input.
+                    field set, is rejected with code "invalid_input"). Keys must be
+                    strings and must not collide with reserved frontmatter fields
+                    (e.g. title, tags, version) — such patches are rejected with
+                    code "invalid_input".
                 expected_version: If provided, reject with version_conflict when
                     the note's current version differs. Omit to skip the check.
 
             Returns:
-                Dict with status envelope: updated on success; otherwise
-                invalid_input / version_conflict / slug_collision / duplicate /
-                error (with code ``note_not_found`` for an unknown id).
+                On success: {"status": "updated", ...}. Actionable outcomes keep
+                their own top-level status: slug_collision / duplicate /
+                version_conflict (the latter carries "current_version"). All other
+                failures use the standard error envelope {"status": "error",
+                "code", "message"} — validation failures carry code
+                "invalid_input"; an unknown id carries code "note_not_found".
             """
             # An empty metadata dict carries no change (it maps to _UNSET below),
             # so it does not count as a provided field — `metadata={}` alone is
             # rejected rather than producing a version-bumping, event-emitting no-op.
             has_metadata_change = metadata is not None and metadata != {}
             if title is None and tags is None and status is None and not has_metadata_change:
-                return {
-                    "status": "invalid_input",
-                    "message": "At least one of title, tags, status, or metadata must be provided "
-                    "(an empty metadata dict makes no change).",
-                    "warnings": [],
-                }
+                return invalid_input_envelope(
+                    "At least one of title, tags, status, or metadata must be provided "
+                    "(an empty metadata dict makes no change)."
+                )
 
             logger.info("lithos_note_update agent=%s id=%s", agent, id)
             tracer = get_tracer()
@@ -1530,12 +1509,9 @@ class LithosServer:
 
                 # Validate status enum at the boundary for a fast, clean envelope.
                 if status is not None and status not in VALID_STATUSES:
-                    return {
-                        "status": "invalid_input",
-                        "message": f"Invalid status: {status!r}. "
-                        f"Must be one of {sorted(VALID_STATUSES)}",
-                        "warnings": [],
-                    }
+                    return invalid_input_envelope(
+                        f"Invalid status: {status!r}. Must be one of {sorted(VALID_STATUSES)}"
+                    )
 
                 # Validate metadata shape at the boundary. The same rule is
                 # enforced in KnowledgeManager so the invariant holds for every
@@ -1544,11 +1520,7 @@ class LithosServer:
                     try:
                         validate_extra_metadata(metadata)
                     except ValueError as e:
-                        return {
-                            "status": "invalid_input",
-                            "message": str(e),
-                            "warnings": [],
-                        }
+                        return invalid_input_envelope(str(e))
 
                 # Translate the MCP wire shape into KnowledgeManager semantics:
                 #   None (omitted) → _UNSET (preserve)
@@ -1598,16 +1570,23 @@ class LithosServer:
                         "message": outcome.message,
                         "warnings": list(outcome.warnings),
                     }
-                if outcome.status in ("invalid_input", "version_conflict", "error"):
-                    span.set_attribute("lithos.write_status", outcome.status)
-                    error_response: dict[str, Any] = {
-                        "status": outcome.status,
+                if outcome.status == "version_conflict":
+                    # An actionable write outcome, not an error: read-merge-write
+                    # retry loops branch on this status (see CHANGELOG).
+                    span.set_attribute("lithos.write_status", "version_conflict")
+                    conflict: dict[str, Any] = {
+                        "status": "version_conflict",
                         "message": outcome.message,
                         "warnings": list(outcome.warnings),
                     }
                     if outcome.current_version is not None:
-                        error_response["current_version"] = outcome.current_version
-                    return error_response
+                        conflict["current_version"] = outcome.current_version
+                    return conflict
+                if outcome.status in ("invalid_input", "error"):
+                    span.set_attribute("lithos.write_status", outcome.status)
+                    if outcome.status == "invalid_input":
+                        return invalid_input_envelope(outcome.message or "")
+                    return error_envelope("internal_error", outcome.message or "")
 
                 doc = outcome.document
                 assert doc is not None
@@ -2214,7 +2193,7 @@ class LithosServer:
                     try:
                         validate_metadata_match(metadata_match)
                     except ValueError as e:
-                        return {"status": "invalid_input", "message": str(e), "warnings": []}
+                        return invalid_input_envelope(str(e))
 
                 if content_query is not None:
                     # Push the Tantivy-native filters into the search call so
@@ -3234,7 +3213,7 @@ class LithosServer:
                     try:
                         validate_metadata_match(metadata_match)
                     except ValueError as e:
-                        return {"status": "invalid_input", "message": str(e), "warnings": []}  # type: ignore[return-value]
+                        return invalid_input_envelope(str(e))
 
                 tasks = await self.coordination.list_tasks(
                     agent=agent,
@@ -3384,7 +3363,7 @@ class LithosServer:
                     try:
                         validate_metadata_match(metadata_match)
                     except ValueError as e:
-                        return {"status": "invalid_input", "message": str(e), "warnings": []}  # type: ignore[return-value]
+                        return invalid_input_envelope(str(e))
                 tasks = await self.coordination.list_ready(
                     project=project,
                     tags=tags,
@@ -3431,7 +3410,7 @@ class LithosServer:
                     try:
                         validate_metadata_match(metadata_match)
                     except ValueError as e:
-                        return {"status": "invalid_input", "message": str(e), "warnings": []}  # type: ignore[return-value]
+                        return invalid_input_envelope(str(e))
                 tasks = await self.coordination.list_blocked(
                     project=project,
                     tags=tags,

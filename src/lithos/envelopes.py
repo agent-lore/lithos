@@ -40,6 +40,17 @@ def error_envelope(code: str, message: str, **extra: Any) -> dict[str, Any]:
     return {"status": "error", "code": code, "message": message, **extra}
 
 
+def invalid_input_envelope(message: str) -> dict[str, Any]:
+    """Build the canonical validation-failure envelope.
+
+    Structurally the operational shape with the reserved code
+    ``invalid_input``: the request was rejected at the boundary and no side
+    effects occurred. One error branch for agents; ``code`` distinguishes
+    "fix your input" from "handle a failure".
+    """
+    return error_envelope("invalid_input", message)
+
+
 def coordination_error_envelope(exc: CoordinationError) -> dict[str, Any]:
     """Map a :class:`~lithos.errors.CoordinationError` onto the canonical envelope.
 

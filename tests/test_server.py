@@ -1612,7 +1612,8 @@ class TestNoteUpdateTool:
         v0 = doc.metadata.version
 
         result = await self._call_note_update(server, id=doc.id, agent="editor", metadata={})
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         # No revision was written: version is unchanged.
         unchanged = (await server.knowledge.read(id=doc.id))[0]
         assert unchanged.metadata.version == v0
@@ -1652,7 +1653,8 @@ class TestNoteUpdateTool:
         assert doc is not None
 
         result = await self._call_note_update(server, id=doc.id, agent="editor")
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
 
     @pytest.mark.asyncio
     async def test_unknown_id_returns_note_not_found(self, server: LithosServer):
@@ -1695,7 +1697,8 @@ class TestNoteUpdateTool:
         result = await self._call_note_update(
             server, id=doc.id, agent="editor", metadata={"version": 99}
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
 
     @pytest.mark.asyncio
     async def test_invalid_status_rejected(self, server: LithosServer):
@@ -1706,7 +1709,8 @@ class TestNoteUpdateTool:
         assert doc is not None
 
         result = await self._call_note_update(server, id=doc.id, agent="editor", status="bogus")
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
 
 
 class TestCacheLookup:
@@ -2179,7 +2183,8 @@ class TestWriteMutualExclusion:
             ttl_hours=24.0,
             expires_at="",
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
 
     @pytest.mark.asyncio
     async def test_write_via_tool_with_ttl_hours(self, server: LithosServer):
@@ -2322,7 +2327,8 @@ class TestWriteContentSizeLimit:
             content=oversized,
             agent="agent",
         )
-        assert result["status"] == "content_too_large"
+        assert result["status"] == "error"
+        assert result["code"] == "content_too_large"
         assert "10" in result["message"]
 
     @pytest.mark.asyncio
@@ -2401,8 +2407,9 @@ class TestSlugCollisionServerBoundary:
 
     @pytest.mark.asyncio
     async def test_write_invalid_input_returns_canonical_envelope(self, server: LithosServer):
-        """``invalid_input`` errors surface as ``status="invalid_input"``
-        rather than ``status="error"`` plus a discriminator field.
+        """Validation failures use the canonical error envelope:
+        ``status="error"`` with the reserved code ``invalid_input`` and no
+        ``warnings`` key.
         """
         result = await self._call_write(
             server,
@@ -2412,10 +2419,10 @@ class TestSlugCollisionServerBoundary:
             ttl_hours=1,
             expires_at="2030-01-01T00:00:00+00:00",
         )
-        assert result["status"] == "invalid_input"
-        assert "code" not in result
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert result["message"]
-        assert result["warnings"] == []
+        assert "warnings" not in result
 
     @pytest.mark.asyncio
     async def test_write_version_conflict_returns_canonical_envelope(self, server: LithosServer):
@@ -2441,12 +2448,13 @@ class TestSlugCollisionServerBoundary:
 
     @pytest.mark.asyncio
     async def test_write_content_too_large_returns_canonical_envelope(self, server: LithosServer):
-        """Oversize content surfaces as ``status="content_too_large"``."""
+        """Oversize content uses the canonical error envelope with code
+        ``content_too_large``."""
         max_bytes = server._config.storage.max_content_size_bytes
         oversized = "x" * (max_bytes + 1)
         result = await self._call_write(server, title="Big Doc", content=oversized, agent="agent")
-        assert result["status"] == "content_too_large"
-        assert "code" not in result
+        assert result["status"] == "error"
+        assert result["code"] == "content_too_large"
         assert result["message"]
 
 
@@ -2789,7 +2797,8 @@ class TestDocumentMetadataTool:
             agent="agent",
             metadata={"title": "shadow"},
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert "reserved" in result["message"]
 
     @pytest.mark.asyncio
@@ -2802,7 +2811,8 @@ class TestDocumentMetadataTool:
             agent="agent",
             metadata=["not", "a", "dict"],
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
 
     @pytest.mark.asyncio
     async def test_expected_version_conflict_unchanged_with_metadata(self, server: LithosServer):
@@ -2896,13 +2906,10 @@ class TestMetadataMatchFilterTool:
 
     @pytest.mark.asyncio
     async def test_list_invalid_metadata_match(self, server: LithosServer):
-        assert (await self._list(server, metadata_match=["not", "dict"]))["status"] == (
-            "invalid_input"
-        )
-        assert (await self._list(server, metadata_match={"k": ["list", "val"]}))["status"] == (
-            "invalid_input"
-        )
-        assert (await self._list(server, metadata_match={"": "v"}))["status"] == "invalid_input"
+        for bad_match in (["not", "dict"], {"k": ["list", "val"]}, {"": "v"}):
+            result = await self._list(server, metadata_match=bad_match)
+            assert result["status"] == "error", bad_match
+            assert result["code"] == "invalid_input", bad_match
 
     @pytest.mark.asyncio
     async def test_task_list_metadata_match(self, server: LithosServer):
@@ -2914,7 +2921,8 @@ class TestMetadataMatchFilterTool:
     @pytest.mark.asyncio
     async def test_task_list_invalid_metadata_match(self, server: LithosServer):
         res = await self._task_list(server, metadata_match={"k": None})
-        assert res["status"] == "invalid_input"
+        assert res["status"] == "error"
+        assert res["code"] == "invalid_input"
 
 
 class TestEntitiesFilterTool:

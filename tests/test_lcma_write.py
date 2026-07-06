@@ -263,7 +263,8 @@ class TestLithosWriteEnumValidation:
                 "access_scope": "invalid_scope",
             },
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert "access_scope" in result["message"]
 
     @pytest.mark.asyncio
@@ -278,7 +279,8 @@ class TestLithosWriteEnumValidation:
                 "note_type": "invalid_type",
             },
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert "note_type" in result["message"]
 
     @pytest.mark.asyncio
@@ -293,7 +295,8 @@ class TestLithosWriteEnumValidation:
                 "status": "deleted",
             },
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert "status" in result["message"]
 
     @pytest.mark.asyncio
@@ -309,7 +312,8 @@ class TestLithosWriteEnumValidation:
                 "summaries": {"short": "ok", "medium": "disallowed"},
             },
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert "summaries" in result["message"]
         assert "medium" in result["message"]
 
@@ -326,7 +330,8 @@ class TestLithosWriteEnumValidation:
                 "summaries": {"short": 42},
             },
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert "summaries" in result["message"]
 
     @pytest.mark.asyncio
@@ -360,7 +365,8 @@ class TestLithosWriteTaskScopeInvariant:
                 "access_scope": "task",
             },
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert "source_task" in result["message"]
 
     @pytest.mark.asyncio
@@ -431,7 +437,8 @@ class TestLithosWriteTaskScopeInvariant:
                 "access_scope": "task",
             },
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert "source_task" in result["message"]
 
 

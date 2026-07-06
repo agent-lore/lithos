@@ -582,7 +582,8 @@ async def test_lithos_write_rejects_md_in_intermediate_segment(
         path="bad.md/nested.md",
     )
 
-    assert result["status"] == "invalid_input"
+    assert result["status"] == "error"
+    assert result["code"] == "invalid_input"
     assert ".md" in result["message"]
 
 
