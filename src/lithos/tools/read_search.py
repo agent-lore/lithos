@@ -472,9 +472,14 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.limit", limit)
 
+        # Normalize to UTC so the comparison against _normalize_datetime'd
+        # document timestamps below never mixes naive and aware values.
         since_dt = None
         if since:
-            since_dt = datetime.fromisoformat(since)
+            try:
+                since_dt = _normalize_datetime(datetime.fromisoformat(since))
+            except ValueError:
+                return invalid_input_envelope(f"Invalid since datetime: {since}")
 
         if metadata_match is not None:
             try:
