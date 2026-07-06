@@ -14,6 +14,11 @@ import aiosqlite
 
 from lithos._merge import merge_metadata
 from lithos.config import LithosConfig, get_config
+
+# CoordinationError lives in lithos.errors (the shared taxonomy); this import
+# exists because this module raises it. That incidentally keeps
+# ``from lithos.coordination import CoordinationError`` working — that path is
+# not a maintained contract; import from ``lithos.errors``.
 from lithos.errors import CoordinationError
 from lithos.telemetry import lithos_metrics, traced
 

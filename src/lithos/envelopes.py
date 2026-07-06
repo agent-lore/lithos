@@ -1,13 +1,16 @@
 """Canonical MCP error-envelope constructors.
 
-Every MCP tool failure is expressed as one wire shape, built here and nowhere
-else::
+The canonical failure shape is built here::
 
     {"status": "error", "code": "<stable_snake_case>", "message": "<sentence>"}
 
 ``code`` is machine-stable — agents branch on it and never parse ``message``.
 Key order is part of the wire contract (dicts serialise in insertion order);
 do not reorder.
+
+Legacy divergent shapes (the ``status: "invalid_input"`` + ``warnings``
+dialect in the write family) still exist at some handlers until the envelope
+normalization lands; new error paths must use these constructors.
 
 Success envelopes remain per-tool: they are the tool's result shape, not a
 shared failure contract. Actionable write *outcomes* (``duplicate``,
