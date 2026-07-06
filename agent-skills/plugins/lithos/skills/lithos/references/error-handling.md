@@ -1,6 +1,38 @@
 # Error Handling Reference
 
-## Knowledge Tool Errors
+## The Canonical Error Envelope
+
+Every tool failure is one shape — check `status`, then branch on `code`:
+
+```
+{"status": "error", "code": "<stable_snake_case>", "message": "<sentence>"}
+```
+
+`code` is machine-stable; never parse `message`. Validation failures carry
+`code: "invalid_input"` — including unparseable datetime filters (`since`,
+`active_since`). Error envelopes never include `warnings`. Protocol-level
+errors (MCP `ToolError`) occur only when a request is rejected by schema
+validation before the handler runs, or on unexpected internal exceptions.
+
+Common codes (illustrative, not exhaustive — any tool may return other codes,
+always in the same shape; e.g. `invalid_mode`, `invalid_metadata_key`,
+`self_edge`, `cycle`):
+
+| Code | Meaning | Action |
+|------|---------|--------|
+| `invalid_input` | Field validation failed | Check error message for specifics |
+| `content_too_large` | Content exceeds the size limit | Trim or split the document |
+| `doc_not_found` | ID doesn't exist | Verify the UUID |
+| `note_not_found` | `lithos_note_update` id doesn't exist | Verify the UUID |
+| `task_not_found` | Task doesn't exist or is closed | Verify the task id |
+| `search_backend_error` | Tantivy/ChromaDB down | Retry or fall back to a different search mode |
+| `lcma_disabled` | LCMA not enabled | Fall back to `lithos_search` |
+| `internal_error` | Unexpected write failure | Retry; report if persistent |
+
+## Write Outcomes (not errors)
+
+Actionable write results keep their own top-level `status` — they carry
+payloads you act on:
 
 | Status | Meaning | Action |
 |--------|---------|--------|
@@ -8,11 +40,6 @@
 | `slug_collision` | Title slugifies to same filename | Use `existing_id` to update, or pick different title |
 | `path_collision` | Explicit `.md` path already taken | Use `existing_id` or change path |
 | `version_conflict` | Optimistic lock failed | Re-read, get `current_version`, retry |
-| `content_too_large` | Content exceeds 1MB | Trim or split the document |
-| `invalid_input` | Field validation failed | Check error message for specifics |
-| `doc_not_found` | ID doesn't exist | Verify the UUID |
-| `search_backend_error` | Tantivy/ChromaDB down | Retry or fall back to a different search mode |
-| `lcma_disabled` | LCMA not enabled | Fall back to `lithos_search` |
 
 ---
 

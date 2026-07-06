@@ -104,7 +104,8 @@ class TestMutualExclusionConformance:
             ttl_hours=24.0,
             expires_at="2030-01-01T00:00:00+00:00",
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
         assert "either" in result["message"].lower() or "not both" in result["message"].lower()
 
     @pytest.mark.asyncio
@@ -118,7 +119,8 @@ class TestMutualExclusionConformance:
             ttl_hours=24.0,
             expires_at="",
         )
-        assert result["status"] == "invalid_input"
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
 
 
 class TestUpdateConformance:

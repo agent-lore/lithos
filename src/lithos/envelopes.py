@@ -8,9 +8,13 @@ The canonical failure shape is built here::
 Key order is part of the wire contract (dicts serialise in insertion order);
 do not reorder.
 
-Legacy divergent shapes (the ``status: "invalid_input"`` + ``warnings``
-dialect in the write family) still exist at some handlers until the envelope
-normalization lands; new error paths must use these constructors.
+Every failure a handler can anticipate (validation and operational) uses
+this one wire shape; validation failures carry the reserved code
+``invalid_input`` and error envelopes never include ``warnings``. Requests
+rejected by MCP schema validation before a handler runs, and unexpected
+internal exceptions, still surface as protocol-level errors. Handlers build
+failures through these constructors — a few Core modules still assemble the
+same shape inline and are migrating.
 
 Success envelopes remain per-tool: they are the tool's result shape, not a
 shared failure contract. Actionable write *outcomes* (``duplicate``,
@@ -38,6 +42,17 @@ def error_envelope(code: str, message: str, **extra: Any) -> dict[str, Any]:
     if overridden:
         raise ValueError(f"extra must not override canonical envelope keys: {sorted(overridden)}")
     return {"status": "error", "code": code, "message": message, **extra}
+
+
+def invalid_input_envelope(message: str) -> dict[str, Any]:
+    """Build the canonical validation-failure envelope.
+
+    Structurally the operational shape with the reserved code
+    ``invalid_input``: the request was rejected at the boundary and no side
+    effects occurred. One error branch for agents; ``code`` distinguishes
+    "fix your input" from "handle a failure".
+    """
+    return error_envelope("invalid_input", message)
 
 
 def coordination_error_envelope(exc: CoordinationError) -> dict[str, Any]:

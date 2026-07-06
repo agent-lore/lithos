@@ -2,9 +2,59 @@
 
 ## Unreleased
 
+### BREAKING — MCP error envelopes normalized (0.4.0)
+
+Every tool **failure** now uses one canonical envelope:
+
+```json
+{"status": "error", "code": "<stable_snake_case>", "message": "<sentence>"}
+```
+
+Validation failures carry the reserved code `invalid_input` — including
+previously-raising paths such as unparseable datetime filters
+(`lithos_list.since`, `lithos_agent_list.active_since`,
+`lithos_finding_list.since`). Error envelopes no longer include a `warnings`
+key. Precisely: every failure a handler can anticipate (validation and
+operational) is returned as this envelope; protocol-level `ToolError`s remain
+only for requests rejected by MCP schema validation before the handler runs,
+and for unexpected internal exceptions (bugs).
+
+Before / after for a rejected write:
+
+```json
+// before
+{"status": "invalid_input", "message": "ttl_hours must be ...", "warnings": []}
+// after
+{"status": "error", "code": "invalid_input", "message": "ttl_hours must be ..."}
+```
+
+**What changed, by tool family:**
+
+- `lithos_write` / `lithos_note_update`: boundary-validation rejections and the
+  `invalid_input` / `content_too_large` / internal-`error` outcome passthroughs
+  now use the canonical envelope (internal errors carry `code: "internal_error"`).
+- `lithos_list`, `lithos_task_list`, `lithos_task_ready`, `lithos_task_blocked`:
+  `metadata_match` validation rejections now use the canonical envelope.
+- Everything else was already canonical and is unchanged.
+
+**What deliberately did NOT change** — actionable write outcomes keep their own
+top-level `status` (they carry payloads agents act on): `version_conflict`
+(with `current_version`; read-merge-write retry loops keep branching on it),
+`duplicate`, `slug_collision`, `path_collision`, all success envelopes, and the
+`{"success": ...}` claim/release shapes. Error `code` strings are also
+unchanged (`doc_not_found` vs `note_not_found` etc. keep their spellings).
+
+**Migration:** replace any `status == "invalid_input"` branch with
+`status == "error" and code == "invalid_input"`, and stop reading `warnings`
+off error responses. This partially reverses the earlier pre-0.3 change that
+promoted every write-error code to a top-level status — that promotion made
+`status` an open set an agent had to enumerate just to detect failure; the
+line now sits at "actionable outcome vs failure". Permitted by the pre-1.0
+compatibility policy in `SPECIFICATION.md §1.4`.
+
 ### Added
 
-- **Free-form metadata on knowledge notes (#305).** `lithos_write` accepts a `metadata` object of arbitrary key/value pairs (scalars or lists), persisted to YAML frontmatter via `KnowledgeMetadata.extra`. `lithos_read` returns it as `metadata.extra`; `lithos_list` includes it on each item. Update semantics mirror `tags`: omit/`null` preserves, `{}` clears, a non-empty dict is an additive per-key merge (per-key `null` deletes). Keys that collide with reserved frontmatter fields are rejected with `status="invalid_input"`.
+- **Free-form metadata on knowledge notes (#305).** `lithos_write` accepts a `metadata` object of arbitrary key/value pairs (scalars or lists), persisted to YAML frontmatter via `KnowledgeMetadata.extra`. `lithos_read` returns it as `metadata.extra`; `lithos_list` includes it on each item. Update semantics mirror `tags`: omit/`null` preserves, `{}` clears, a non-empty dict is an additive per-key merge (per-key `null` deletes). Keys that collide with reserved frontmatter fields are rejected with the canonical error envelope (`status="error"`, `code="invalid_input"` — see the BREAKING entry above).
 - **`metadata_match` filter on `lithos_list` and `lithos_task_list` (#306).** Filter by free-form metadata: AND across keys, where each `key: q` matches records whose stored value equals `q` or is a list containing `q` (e.g. `github_repos: ["org/a","org/b"]` matches `{"github_repos": "org/a"}`). Query values are scalars; matching is type-sensitive. `lithos_list` resolves it through an in-memory inverted index (no full scan); `lithos_task_list` pushes it into SQLite via `json_extract`/`json_each`. As part of this, `lithos_list`'s existing equality filters (`tags`, `author`) are now index-backed too.
 - **`lithos_task_list` `with_claims` flag.** When set to `true`, each task in the response includes its active (non-expired) claims inline as a `claims` array (same shape as `lithos_task_status`). Defaults to `false`, so existing payloads are unchanged. Lets list views avoid an N+1 of `lithos_task_status` calls. Implementation issues a single batched `WHERE task_id IN (...)` query rather than one per task.
 

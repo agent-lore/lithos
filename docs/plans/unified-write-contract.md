@@ -168,10 +168,14 @@ Authority rule:
 
 Notes:
 
-- `warnings` is always present (possibly empty).
+- `warnings` is always present (possibly empty) **on success and actionable
+  outcomes**; error envelopes (below) never carry `warnings`.
 - Typical warning: unresolved `derived_from_ids` references.
 - `duplicate` is specific to source URL dedup policy.
 - `duplicate` is not an internal server error; it is a first-class write outcome.
+- The full set of first-class (top-level `status`) outcomes is `created` /
+  `updated` / `duplicate` / `slug_collision` / `path_collision` /
+  `version_conflict` (which carries `current_version`).
 
 Batch-mode policy:
 
@@ -181,6 +185,14 @@ Batch-mode policy:
 ## Error Model
 
 Errors are machine-readable and consistent across single and batch write paths.
+Every error uses the canonical envelope built by `lithos.envelopes`:
+
+```python
+{"status": "error", "code": "<stable_snake_case>", "message": "<sentence>"}
+```
+
+Validation failures carry the reserved code `invalid_input`. Error envelopes
+never include `warnings`.
 
 Core codes:
 
