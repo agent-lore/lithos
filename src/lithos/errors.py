@@ -68,6 +68,20 @@ class IndexingError(LithosError):
         return f"{super().__str__()} [{detail}]"
 
 
+class CoordinationError(LithosError):
+    """A coordination operation failed validation.
+
+    Carries a stable ``code`` and human ``message`` so the MCP layer can map it
+    onto the standard ``{"status": "error", "code", "message"}`` envelope without
+    re-deriving the reason.
+    """
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
 class CognitiveMemoryError(LithosError):
     """Base error for any failure originating inside CognitiveMemory.
 

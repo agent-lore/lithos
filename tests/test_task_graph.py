@@ -11,7 +11,8 @@ import aiosqlite
 import pytest
 
 from lithos.config import LithosConfig
-from lithos.coordination import CoordinationError, CoordinationService
+from lithos.coordination import CoordinationService
+from lithos.errors import CoordinationError
 from lithos.server import LithosServer
 
 pytestmark = pytest.mark.asyncio

@@ -7,7 +7,8 @@ import aiosqlite
 import pytest
 
 from lithos.config import LithosConfig, StorageConfig
-from lithos.coordination import CoordinationError, CoordinationService
+from lithos.coordination import CoordinationService
+from lithos.errors import CoordinationError
 
 
 class TestAgentRegistry:

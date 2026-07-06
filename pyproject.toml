@@ -121,6 +121,7 @@ source_modules = [
     "lithos.config",
     "lithos.telemetry",
     "lithos.errors",
+    "lithos.envelopes",
     "lithos.events",
     "lithos._merge",
     "lithos.edge_store",

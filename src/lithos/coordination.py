@@ -14,6 +14,7 @@ import aiosqlite
 
 from lithos._merge import merge_metadata
 from lithos.config import LithosConfig, get_config
+from lithos.errors import CoordinationError
 from lithos.telemetry import lithos_metrics, traced
 
 logger = logging.getLogger(__name__)
@@ -66,20 +67,6 @@ INHERITABLE_CONTEXT_KEYS: tuple[str, ...] = ("priority", "parallelizable", "phas
 # is rejected so stale, scheduler-invisible dependency state cannot be recreated
 # through the additive metadata write path (see SPECIFICATION migration notes).
 FORBIDDEN_METADATA_KEYS: tuple[str, ...] = ("depends_on", "blocked_on")
-
-
-class CoordinationError(Exception):
-    """A coordination operation failed validation.
-
-    Carries a stable ``code`` and human ``message`` so the MCP layer can map it
-    onto the standard ``{"status": "error", "code", "message"}`` envelope without
-    re-deriving the reason.
-    """
-
-    def __init__(self, code: str, message: str):
-        self.code = code
-        self.message = message
-        super().__init__(message)
 
 
 def _reject_scheduling_metadata(metadata: dict[str, Any] | None) -> None:

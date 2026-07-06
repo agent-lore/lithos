@@ -24,7 +24,7 @@ LCMA            = ["lithos.lcma"]
 Events          = ["lithos.events"]
 Config          = ["lithos.config"]
 Telemetry       = ["lithos.telemetry"]
-Errors          = ["lithos.errors"]
+Errors          = ["lithos.errors", "lithos.envelopes"]
 Logging         = ["lithos.logging_config"]
 
 # Tiers are for diagram grouping + documentation of the forbidden-import contract.

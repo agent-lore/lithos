@@ -1,0 +1,41 @@
+"""Canonical MCP error-envelope constructors.
+
+Every MCP tool failure is expressed as one wire shape, built here and nowhere
+else::
+
+    {"status": "error", "code": "<stable_snake_case>", "message": "<sentence>"}
+
+``code`` is machine-stable — agents branch on it and never parse ``message``.
+Key order is part of the wire contract (dicts serialise in insertion order);
+do not reorder.
+
+Success envelopes remain per-tool: they are the tool's result shape, not a
+shared failure contract. Actionable write *outcomes* (``duplicate``,
+``slug_collision``, ``path_collision``, ``version_conflict``) are also not
+errors — they carry payloads agents act on and keep their own top-level
+statuses.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from lithos.errors import CoordinationError
+
+
+def error_envelope(code: str, message: str, **extra: Any) -> dict[str, Any]:
+    """Build the canonical error envelope.
+
+    ``extra`` allows documented code-specific supplementary keys; they are
+    appended after the three canonical keys.
+    """
+    return {"status": "error", "code": code, "message": message, **extra}
+
+
+def coordination_error_envelope(exc: CoordinationError) -> dict[str, Any]:
+    """Map a :class:`~lithos.errors.CoordinationError` onto the canonical envelope.
+
+    The single construction point for the mapping the exception was designed
+    for — handlers must not restate the dict.
+    """
+    return error_envelope(exc.code, exc.message)

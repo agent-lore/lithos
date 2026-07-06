@@ -37,6 +37,7 @@ graph TD
   CognitiveMemory --> Search
   CognitiveMemory --> Telemetry
   Coordination --> Config
+  Coordination --> Errors
   Coordination --> Knowledge
   Coordination --> Telemetry
   Entrypoints --> CognitiveMemory
