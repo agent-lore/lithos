@@ -3,40 +3,19 @@
 Integration tests that exercise edge tools via the MCP interface.
 """
 
-import json
-from typing import Any
-
 import pytest
 
 from lithos.server import LithosServer
+from tests.helpers import call_tool
 
 pytestmark = pytest.mark.integration
-
-
-async def _call_tool(server: LithosServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Call an MCP tool and return its JSON payload."""
-    result = await server.mcp._call_tool_mcp(name, arguments)
-
-    if isinstance(result, tuple):
-        payload = result[1]
-        if isinstance(payload, dict):
-            return payload
-
-    content = getattr(result, "content", []) if hasattr(result, "content") else result
-
-    if isinstance(content, list) and content:
-        text = getattr(content[0], "text", None)
-        if isinstance(text, str):
-            return json.loads(text)
-
-    raise AssertionError(f"Unable to decode MCP result for tool {name!r}: {result!r}")
 
 
 class TestEdgeUpsertCreate:
     @pytest.mark.asyncio
     async def test_create_edge(self, server: LithosServer) -> None:
         """Create a new edge and verify edge_id returned."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -53,7 +32,7 @@ class TestEdgeUpsertCreate:
     @pytest.mark.asyncio
     async def test_create_edge_with_evidence_dict(self, server: LithosServer) -> None:
         """Create edge with dict evidence."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -70,7 +49,7 @@ class TestEdgeUpsertCreate:
     @pytest.mark.asyncio
     async def test_create_edge_with_evidence_list(self, server: LithosServer) -> None:
         """Create edge with list evidence."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -89,7 +68,7 @@ class TestEdgeUpsertUpdate:
     @pytest.mark.asyncio
     async def test_update_by_composite_key(self, server: LithosServer) -> None:
         """Upsert with same (from_id, to_id, type, namespace) updates existing edge."""
-        result1 = await _call_tool(
+        result1 = await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -102,7 +81,7 @@ class TestEdgeUpsertUpdate:
         )
         edge_id1 = result1["edge_id"]
 
-        result2 = await _call_tool(
+        result2 = await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -119,7 +98,7 @@ class TestEdgeUpsertUpdate:
         assert edge_id1 == edge_id2
 
         # Verify updated weight
-        list_result = await _call_tool(
+        list_result = await call_tool(
             server,
             "lithos_edge_list",
             {"from_id": "node-x", "namespace": "default"},
@@ -138,8 +117,8 @@ class TestEdgeUpsertUpdate:
             "weight": 1.0,
             "namespace": "default",
         }
-        r1 = await _call_tool(server, "lithos_edge_upsert", args)
-        r2 = await _call_tool(server, "lithos_edge_upsert", args)
+        r1 = await call_tool(server, "lithos_edge_upsert", args)
+        r2 = await call_tool(server, "lithos_edge_upsert", args)
         assert r1["edge_id"] == r2["edge_id"]
 
 
@@ -147,7 +126,7 @@ class TestEdgeUpsertValidation:
     @pytest.mark.asyncio
     async def test_missing_namespace_returns_error(self, server: LithosServer) -> None:
         """Missing namespace returns error envelope."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -164,7 +143,7 @@ class TestEdgeUpsertValidation:
     @pytest.mark.asyncio
     async def test_scalar_evidence_returns_error(self, server: LithosServer) -> None:
         """Scalar evidence returns error envelope."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -184,7 +163,7 @@ class TestEdgeList:
     @pytest.mark.asyncio
     async def test_query_by_from_id(self, server: LithosServer) -> None:
         """Query edges by from_id."""
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -195,7 +174,7 @@ class TestEdgeList:
                 "namespace": "ns1",
             },
         )
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_list",
             {"from_id": "src-1"},
@@ -206,7 +185,7 @@ class TestEdgeList:
     @pytest.mark.asyncio
     async def test_query_by_to_id(self, server: LithosServer) -> None:
         """Query edges by to_id."""
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -217,7 +196,7 @@ class TestEdgeList:
                 "namespace": "ns2",
             },
         )
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_list",
             {"to_id": "tgt-unique"},
@@ -227,7 +206,7 @@ class TestEdgeList:
     @pytest.mark.asyncio
     async def test_query_by_type(self, server: LithosServer) -> None:
         """Query edges by type."""
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -238,7 +217,7 @@ class TestEdgeList:
                 "namespace": "ns3",
             },
         )
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_list",
             {"type": "unique_type_test"},
@@ -248,7 +227,7 @@ class TestEdgeList:
     @pytest.mark.asyncio
     async def test_query_by_namespace(self, server: LithosServer) -> None:
         """Query edges by namespace."""
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -259,7 +238,7 @@ class TestEdgeList:
                 "namespace": "unique_ns_test",
             },
         )
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_list",
             {"namespace": "unique_ns_test"},
@@ -269,7 +248,7 @@ class TestEdgeList:
     @pytest.mark.asyncio
     async def test_empty_results(self, server: LithosServer) -> None:
         """Query with no matches returns empty list."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_list",
             {"from_id": "nonexistent-node"},
@@ -279,7 +258,7 @@ class TestEdgeList:
     @pytest.mark.asyncio
     async def test_result_has_all_keys(self, server: LithosServer) -> None:
         """Edge dict has all specified keys."""
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -293,7 +272,7 @@ class TestEdgeList:
                 "conflict_state": "none",
             },
         )
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_list",
             {"from_id": "src-keys"},
@@ -324,7 +303,7 @@ class TestEdgeUpsertEvent:
 
         queue = server.event_bus.subscribe(event_types=[EDGE_UPSERTED])
 
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_edge_upsert",
             {

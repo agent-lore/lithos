@@ -5,33 +5,14 @@ tool end-to-end via the MCP interface.
 """
 
 import json
-from typing import Any
 
 import aiosqlite
 import pytest
 
 from lithos.server import LithosServer
+from tests.helpers import call_tool
 
 pytestmark = pytest.mark.integration
-
-
-async def _call_tool(server: LithosServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Call an MCP tool and return its JSON payload."""
-    result = await server.mcp._call_tool_mcp(name, arguments)
-
-    if isinstance(result, tuple):
-        payload = result[1]
-        if isinstance(payload, dict):
-            return payload
-
-    content = getattr(result, "content", []) if hasattr(result, "content") else result
-
-    if isinstance(content, list) and content:
-        text = getattr(content[0], "text", None)
-        if isinstance(text, str):
-            return json.loads(text)
-
-    raise AssertionError(f"Unable to decode MCP result for tool {name!r}: {result!r}")
 
 
 async def _seed_notes(server: LithosServer) -> list[str]:
@@ -42,7 +23,7 @@ async def _seed_notes(server: LithosServer) -> list[str]:
         ("Beta Analysis", "Analysis of beta testing results and metrics", "agent_finding"),
         ("Gamma Summary", "Summary of gamma project progress and outcomes", "summary"),
     ]:
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -84,7 +65,7 @@ class TestRetrieveCreatesStores:
         """
         await _seed_notes(server)
 
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_retrieve",
             {"query": "alpha research"},
@@ -113,7 +94,7 @@ class TestRetrieveCreatesStores:
         # the enrich worker's projection helpers have a live DB to write to.
         assert edges_path.exists()
 
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_edge_upsert",
             {
@@ -135,7 +116,7 @@ class TestTenReceiptsProduceTenRows:
         await _seed_notes(server)
 
         for i in range(10):
-            await _call_tool(
+            await call_tool(
                 server,
                 "lithos_retrieve",
                 {"query": f"research query {i}"},
@@ -155,12 +136,12 @@ class TestResponseCompatibility:
         """Every key in lithos_search result is present in lithos_retrieve result."""
         await _seed_notes(server)
 
-        search_result = await _call_tool(
+        search_result = await call_tool(
             server,
             "lithos_search",
             {"query": "alpha research"},
         )
-        retrieve_result = await _call_tool(
+        retrieve_result = await call_tool(
             server,
             "lithos_retrieve",
             {"query": "alpha research"},
@@ -183,12 +164,12 @@ class TestResponseCompatibility:
         """snippet, source_url, is_stale, derived_from_ids match lithos_search."""
         await _seed_notes(server)
 
-        search_result = await _call_tool(
+        search_result = await call_tool(
             server,
             "lithos_search",
             {"query": "alpha research"},
         )
-        retrieve_result = await _call_tool(
+        retrieve_result = await call_tool(
             server,
             "lithos_retrieve",
             {"query": "alpha research"},
@@ -219,7 +200,7 @@ class TestWorkingMemoryIntegration:
         await _seed_notes(server)
 
         # First call with task_id
-        result1 = await _call_tool(
+        result1 = await call_tool(
             server,
             "lithos_retrieve",
             {"query": "research", "task_id": "task-wm-test"},
@@ -227,7 +208,7 @@ class TestWorkingMemoryIntegration:
         assert len(result1["results"]) > 0
 
         # Second call with same task_id
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_retrieve",
             {"query": "research", "task_id": "task-wm-test"},
@@ -254,7 +235,7 @@ class TestScoutsFiredReceipt:
         # We need task_id for task_context scout, and a refresh keyword for freshness
         await _seed_notes(server)
 
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_retrieve",
             {
@@ -287,7 +268,7 @@ class TestLcmaDisabled:
         original = server.config.lcma.enabled
         server.config.lcma.enabled = False
         try:
-            result = await _call_tool(
+            result = await call_tool(
                 server,
                 "lithos_retrieve",
                 {"query": "test"},
@@ -328,7 +309,7 @@ class TestNoteTypePriorsIntegration:
                 "task_record",
             ),
         ]:
-            result = await _call_tool(
+            result = await call_tool(
                 server,
                 "lithos_write",
                 {
@@ -341,7 +322,7 @@ class TestNoteTypePriorsIntegration:
             )
             assert result["status"] == "created"
 
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_retrieve",
             {"query": "algorithm performance analysis"},
@@ -352,7 +333,7 @@ class TestNoteTypePriorsIntegration:
         for r in result["results"]:
             # Read the note to get its note_type (nested under metadata in the
             # lithos_read response).
-            doc_result = await _call_tool(server, "lithos_read", {"id": r["id"]})
+            doc_result = await call_tool(server, "lithos_read", {"id": r["id"]})
             nt = doc_result.get("metadata", {}).get("note_type", "observation")
             if nt in ("agent_finding", "task_record"):
                 scores_by_type[nt] = r["score"]

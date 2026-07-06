@@ -1,33 +1,14 @@
 """Tests for OpenTelemetry instrumentation."""
 
 import asyncio
-import json
 import logging
 from datetime import UTC
-from typing import Any
 
 import pytest
 
 from lithos.knowledge import KnowledgeManager
 from lithos.server import LithosServer
-
-
-def _extract_id(mcp_result: Any) -> str:
-    """Extract doc ID from an MCP tool result."""
-    # Handle tuple form (some FastMCP versions)
-    if isinstance(mcp_result, tuple):
-        payload = mcp_result[1]
-        if isinstance(payload, dict):
-            return payload["id"]
-
-    # Handle content-list form
-    content = getattr(mcp_result, "content", []) if hasattr(mcp_result, "content") else mcp_result
-    if isinstance(content, list) and content:
-        text = getattr(content[0], "text", None)
-        if isinstance(text, str):
-            return json.loads(text)["id"]
-
-    raise AssertionError(f"Unable to extract ID from MCP result: {mcp_result!r}")
+from tests.helpers import call_tool
 
 
 def _has_otel_packages() -> bool:
@@ -214,7 +195,8 @@ class TestTelemetryIntegration:
     async def test_write_produces_tool_and_service_spans(self, otel_server):
         server, exporter = otel_server
 
-        result = await server.mcp._call_tool_mcp(
+        result = await call_tool(
+            server,
             "lithos_write",
             {
                 "title": "Telemetry Test Doc",
@@ -223,14 +205,7 @@ class TestTelemetryIntegration:
                 "tags": ["telemetry"],
             },
         )
-
-        # Extract doc_id from result to verify the write succeeded
-        content = getattr(result, "content", []) if hasattr(result, "content") else result
-        if isinstance(content, list) and content:
-            text = getattr(content[0], "text", None)
-            if isinstance(text, str):
-                payload = json.loads(text)
-                assert "id" in payload
+        assert "id" in result
 
         spans = exporter.get_finished_spans()
         span_names = [s.name for s in spans]
@@ -251,7 +226,8 @@ class TestTelemetryIntegration:
         server, exporter = otel_server
 
         # Create a source doc first
-        source_result = await server.mcp._call_tool_mcp(
+        source_result = await call_tool(
+            server,
             "lithos_write",
             {
                 "title": "OTEL Source",
@@ -259,12 +235,13 @@ class TestTelemetryIntegration:
                 "agent": "test-agent",
             },
         )
-        source_id = _extract_id(source_result)
+        source_id = source_result["id"]
 
         exporter.clear()
 
         # Create a derived doc referencing the source
-        await server.mcp._call_tool_mcp(
+        await call_tool(
+            server,
             "lithos_write",
             {
                 "title": "OTEL Derived",
@@ -284,7 +261,8 @@ class TestTelemetryIntegration:
         server, exporter = otel_server
 
         # Create a doc
-        result = await server.mcp._call_tool_mcp(
+        result = await call_tool(
+            server,
             "lithos_write",
             {
                 "title": "OTEL Related Query",
@@ -292,12 +270,13 @@ class TestTelemetryIntegration:
                 "agent": "test-agent",
             },
         )
-        doc_id = _extract_id(result)
+        doc_id = result["id"]
 
         exporter.clear()
 
         # Call lithos_related with provenance-only include
-        await server.mcp._call_tool_mcp(
+        await call_tool(
+            server,
             "lithos_related",
             {"id": doc_id, "include": ["provenance"], "depth": 1},
         )

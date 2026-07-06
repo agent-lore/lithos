@@ -6,10 +6,8 @@ tests verifying multi-call invariants.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import aiosqlite
@@ -25,6 +23,7 @@ from lithos.lcma.stats import StatsStore
 from lithos.provenance import EdgeStore, ProvenanceProjection
 from lithos.search import SearchEngine
 from lithos.server import LithosServer
+from tests.helpers import call_tool
 
 # ---------------------------------------------------------------------------
 # Unit test fixtures
@@ -420,33 +419,19 @@ class TestCoactivationMultiCall:
 pytestmark_integration = pytest.mark.integration
 
 
-async def _call_tool(server: LithosServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    result = await server.mcp._call_tool_mcp(name, arguments)
-    if isinstance(result, tuple):
-        payload = result[1]
-        if isinstance(payload, dict):
-            return payload
-    content = getattr(result, "content", []) if hasattr(result, "content") else result
-    if isinstance(content, list) and content:
-        text = getattr(content[0], "text", None)
-        if isinstance(text, str):
-            return json.loads(text)
-    raise AssertionError(f"Unable to decode MCP result for tool {name!r}: {result!r}")
-
-
 @pytest.mark.integration
 class TestCoactivationIntegration:
     @pytest.mark.asyncio
     async def test_single_call_creates_node_stats(self, server: LithosServer) -> None:
         """A single lithos_retrieve call creates node_stats rows."""
         # Seed a note
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_write",
             {"title": "Coact Note", "content": "Content for coactivation", "agent": "test"},
         )
 
-        await _call_tool(server, "lithos_retrieve", {"query": "coactivation"})
+        await call_tool(server, "lithos_retrieve", {"query": "coactivation"})
 
         stats_path = server.config.storage.stats_db_path
         async with aiosqlite.connect(stats_path) as db:
@@ -459,14 +444,14 @@ class TestCoactivationIntegration:
     @pytest.mark.asyncio
     async def test_multi_call_increments(self, server: LithosServer) -> None:
         """Two calls increment retrieval_count."""
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_write",
             {"title": "Multi Note", "content": "Content for multi call", "agent": "test"},
         )
 
-        r1 = await _call_tool(server, "lithos_retrieve", {"query": "multi call"})
-        r2 = await _call_tool(server, "lithos_retrieve", {"query": "multi call"})
+        r1 = await call_tool(server, "lithos_retrieve", {"query": "multi call"})
+        r2 = await call_tool(server, "lithos_retrieve", {"query": "multi call"})
 
         if r1["results"] and r2["results"]:
             # Find a common doc_id
