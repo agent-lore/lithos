@@ -34,6 +34,23 @@ A change is **not done** unless all five are green:
 - Config via `LithosConfig` pydantic-settings model; env vars use `LITHOS_` prefix
 - Tests use temp directories via `test_config` fixture; always clean up
 
+## Architecture guardrails & generated docs
+
+`docs/generated/` holds generated views of the code (component diagram, domain
+model, index) produced by `tests/guardrail/` and drift-checked in CI:
+
+- `make diagrams` regenerates everything (it just runs `pytest tests/guardrail/ -q`).
+  Note `make test` runs the same tests, so a test run rewrites `docs/generated/`
+  as a side effect — commit the result if it changed.
+- The CI job `Diagram drift` fails when the committed files disagree with what
+  the code generates. Fix: `make diagrams`, commit.
+- `docs/architecture.toml` is the source of truth for components, tiers, and
+  domain-model scanning. Adding a new module or component? The guardrail orphan
+  checks will fail until you map it there.
+- Directional import rules (Entrypoints → Core → Foundation) are enforced by
+  import-linter (`pyproject.toml [tool.importlinter]`); the `lithos.lcma` seam
+  by `tests/test_module_boundaries.py`.
+
 ## Agent skills
 
 ### Issue tracker

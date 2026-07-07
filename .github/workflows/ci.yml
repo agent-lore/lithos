@@ -48,9 +48,12 @@ jobs:
         run: make diagrams
 
       - name: Fail if diagrams are stale
+        # `git status --porcelain` (not `git diff`) so newly generated but
+        # never-committed artifacts fail the gate too, not just modifications.
         run: |
-          if ! git diff --quiet docs/generated; then
+          if [ -n "$(git status --porcelain docs/generated)" ]; then
             echo "::error::docs/generated is out of date. Run 'make diagrams' and commit the result."
+            git status --short docs/generated
             git --no-pager diff -- docs/generated
             exit 1
           fi
