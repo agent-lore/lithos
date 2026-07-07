@@ -903,9 +903,9 @@ class CognitiveMemory:
             resolver,
         )
         tracer = get_tracer()
-        with tracer.start_as_current_span("lithos.tool.conflict_resolve") as span:
-            span.set_attribute("lithos.tool", "lithos_conflict_resolve")
-
+        # Component-level span: the tool-named span (and the lithos.tool
+        # attribute) belongs to the MCP boundary, emitted by @tool_span().
+        with tracer.start_as_current_span("lithos.memory.conflict_resolve"):
             valid_resolutions = {"accepted_dual", "superseded", "refuted", "merged"}
             if resolution not in valid_resolutions:
                 return {

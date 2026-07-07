@@ -313,6 +313,29 @@ class TestTelemetryIntegration:
         assert related_attrs.get("lithos.depth") == 1
         assert "lithos.related_count" in related_attrs
 
+    async def test_conflict_resolve_emits_single_tool_span(self, otel_server):
+        """Exactly one tool-named span per call; the Core span is component-named.
+
+        Regression test: ``CognitiveMemory.conflict_resolve`` used to open its
+        own span named ``lithos.tool.conflict_resolve``, which nested a
+        duplicate under the extracted handler's ``@tool_span()``. Tool-named
+        spans live only at the MCP boundary.
+        """
+        from tests.helpers import call_tool
+
+        server, exporter = otel_server
+
+        result = await call_tool(
+            server,
+            "lithos_conflict_resolve",
+            {"edge_id": "no-such-edge", "resolution": "refuted", "resolver": "test-agent"},
+        )
+        assert result["code"] == "not_found"
+
+        span_names = [s.name for s in exporter.get_finished_spans()]
+        assert span_names.count("lithos.tool.conflict_resolve") == 1
+        assert "lithos.memory.conflict_resolve" in span_names
+
 
 class TestWriteDurationHistogram:
     """Tests for lithos.knowledge.write_duration_ms histogram (issue #89)."""
@@ -901,14 +924,16 @@ class TestToolMetrics:
         assert hasattr(counter, "add"), "tool_errors must expose .add()"
 
     def test_all_server_tools_have_tool_metrics_decorator(self):
-        """Every function decorated with ``mcp.tool()`` also has ``@tool_metrics()``.
+        """Every function decorated with ``mcp.tool()`` carries the full stack.
 
         AST-based dual scan of ``lithos/server.py`` (legacy
         ``@self.mcp.tool()`` closures) and every module under
         ``lithos/tools/`` (``@mcp.tool()``), so docstring examples and
         comments cannot skew the check and ``@mcp.tool(name=...)`` variants
-        are still caught. A total-count floor proves the scan actually saw
-        the registrations.
+        are still caught. All tools need ``@tool_metrics()``; extracted tools
+        (under ``lithos/tools/``) additionally need ``@tool_span`` — legacy
+        server.py handlers keep their hand-rolled span preambles until moved.
+        A total-count floor proves the scan actually saw the registrations.
         """
         import ast
         import inspect
@@ -917,9 +942,9 @@ class TestToolMetrics:
         import lithos.server
         import lithos.tools
 
-        def tool_functions(source: str) -> list[tuple[str, bool]]:
-            """Return (name, has_tool_metrics) per mcp.tool-decorated function."""
-            found: list[tuple[str, bool]] = []
+        def tool_functions(source: str) -> list[tuple[str, bool, bool]]:
+            """Return (name, has_tool_metrics, has_tool_span) per mcp.tool function."""
+            found: list[tuple[str, bool, bool]] = []
             for node in ast.walk(ast.parse(source)):
                 if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
                     continue
@@ -928,7 +953,13 @@ class TestToolMetrics:
                     target = dec.func if isinstance(dec, ast.Call) else dec
                     decorator_names.append(ast.unparse(target))
                 if any(n in ("mcp.tool", "self.mcp.tool") for n in decorator_names):
-                    found.append((node.name, "tool_metrics" in decorator_names))
+                    found.append(
+                        (
+                            node.name,
+                            "tool_metrics" in decorator_names,
+                            "tool_span" in decorator_names,
+                        )
+                    )
             return found
 
         sources = {"lithos/server.py": Path(inspect.getfile(lithos.server)).read_text()}
@@ -940,8 +971,11 @@ class TestToolMetrics:
         for origin, source in sources.items():
             tools = tool_functions(source)
             total += len(tools)
-            unmetered = [name for name, has_metrics in tools if not has_metrics]
+            unmetered = [name for name, has_metrics, _ in tools if not has_metrics]
             assert not unmetered, f"{origin}: tools missing @tool_metrics(): {unmetered}"
+            if origin.startswith("lithos/tools/"):
+                unspanned = [name for name, _, has_span in tools if not has_span]
+                assert not unspanned, f"{origin}: tools missing @tool_span: {unspanned}"
 
         assert total >= 37, f"scan looks broken: only {total} tool registrations found"
 
