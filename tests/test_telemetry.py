@@ -313,6 +313,29 @@ class TestTelemetryIntegration:
         assert related_attrs.get("lithos.depth") == 1
         assert "lithos.related_count" in related_attrs
 
+    async def test_conflict_resolve_emits_single_tool_span(self, otel_server):
+        """Exactly one tool-named span per call; the Core span is component-named.
+
+        Regression test: ``CognitiveMemory.conflict_resolve`` used to open its
+        own span named ``lithos.tool.conflict_resolve``, which nested a
+        duplicate under the extracted handler's ``@tool_span()``. Tool-named
+        spans live only at the MCP boundary.
+        """
+        from tests.helpers import call_tool
+
+        server, exporter = otel_server
+
+        result = await call_tool(
+            server,
+            "lithos_conflict_resolve",
+            {"edge_id": "no-such-edge", "resolution": "refuted", "resolver": "test-agent"},
+        )
+        assert result["code"] == "not_found"
+
+        span_names = [s.name for s in exporter.get_finished_spans()]
+        assert span_names.count("lithos.tool.conflict_resolve") == 1
+        assert "lithos.memory.conflict_resolve" in span_names
+
 
 class TestWriteDurationHistogram:
     """Tests for lithos.knowledge.write_duration_ms histogram (issue #89)."""
@@ -901,23 +924,60 @@ class TestToolMetrics:
         assert hasattr(counter, "add"), "tool_errors must expose .add()"
 
     def test_all_server_tools_have_tool_metrics_decorator(self):
-        """Every @self.mcp.tool() in LithosServer._register_tools also has @tool_metrics().
+        """Every function decorated with ``mcp.tool()`` carries the full stack.
 
-        Counts occurrences of each decorator in the source so the assertion
-        automatically catches new tools added without the metrics decorator.
+        AST-based dual scan of ``lithos/server.py`` (legacy
+        ``@self.mcp.tool()`` closures) and every module under
+        ``lithos/tools/`` (``@mcp.tool()``), so docstring examples and
+        comments cannot skew the check and ``@mcp.tool(name=...)`` variants
+        are still caught. All tools need ``@tool_metrics()``; extracted tools
+        (under ``lithos/tools/``) additionally need ``@tool_span`` — legacy
+        server.py handlers keep their hand-rolled span preambles until moved.
+        A total-count floor proves the scan actually saw the registrations.
         """
+        import ast
         import inspect
+        from pathlib import Path
 
-        from lithos.server import LithosServer
+        from lithos import server as lithos_server
+        from lithos import tools as lithos_tools
 
-        source = inspect.getsource(LithosServer._register_tools)
-        mcp_tool_count = source.count("@self.mcp.tool()")
-        metered_count = source.count("@tool_metrics()")
-        assert metered_count == mcp_tool_count, (
-            f"Missing @tool_metrics() on {mcp_tool_count - metered_count} tool(s): "
-            f"found {metered_count} @tool_metrics() decorator(s) but "
-            f"{mcp_tool_count} @self.mcp.tool() decorator(s)"
-        )
+        def tool_functions(source: str) -> list[tuple[str, bool, bool]]:
+            """Return (name, has_tool_metrics, has_tool_span) per mcp.tool function."""
+            found: list[tuple[str, bool, bool]] = []
+            for node in ast.walk(ast.parse(source)):
+                if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+                    continue
+                decorator_names = []
+                for dec in node.decorator_list:
+                    target = dec.func if isinstance(dec, ast.Call) else dec
+                    decorator_names.append(ast.unparse(target))
+                if any(n in ("mcp.tool", "self.mcp.tool") for n in decorator_names):
+                    found.append(
+                        (
+                            node.name,
+                            "tool_metrics" in decorator_names,
+                            "tool_span" in decorator_names,
+                        )
+                    )
+            return found
+
+        sources = {"lithos/server.py": Path(inspect.getfile(lithos_server)).read_text()}
+        tools_dir = Path(inspect.getfile(lithos_tools)).parent
+        for module_file in sorted(tools_dir.glob("*.py")):
+            sources[f"lithos/tools/{module_file.name}"] = module_file.read_text()
+
+        total = 0
+        for origin, source in sources.items():
+            tools = tool_functions(source)
+            total += len(tools)
+            unmetered = [name for name, has_metrics, _ in tools if not has_metrics]
+            assert not unmetered, f"{origin}: tools missing @tool_metrics(): {unmetered}"
+            if origin.startswith("lithos/tools/"):
+                unspanned = [name for name, _, has_span in tools if not has_span]
+                assert not unspanned, f"{origin}: tools missing @tool_span: {unspanned}"
+
+        assert total >= 37, f"scan looks broken: only {total} tool registrations found"
 
     def test_tool_metrics_preserves_signature_for_mcp_introspection(self):
         """@tool_metrics() does not break the parameter schema seen by the MCP SDK.

@@ -140,6 +140,7 @@ forbidden_modules = [
     "lithos.cli",
     "lithos.server",
     "lithos.watch_intake",
+    "lithos.tools",
 ]
 
 [[tool.importlinter.contracts]]
@@ -160,6 +161,7 @@ forbidden_modules = [
     "lithos.cli",
     "lithos.server",
     "lithos.watch_intake",
+    "lithos.tools",
 ]
 
 [tool.pytest.ini_options]
