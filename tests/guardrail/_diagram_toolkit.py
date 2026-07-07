@@ -27,7 +27,6 @@ import re
 from dataclasses import dataclass
 
 from tests.guardrail._common import (
-    _AUTOGEN_HEADER,
     ARCH_TOML,
     GENERATED_DIR,
     REPO_ROOT,
@@ -37,6 +36,7 @@ from tests.guardrail._common import (
     component_of,
     load_architecture,
     module_files,
+    with_header,
     write,
 )
 
@@ -102,7 +102,7 @@ def render_component_diagram() -> str:
     for src, dst in sorted(edges):
         lines.append(f"  {src} --> {dst}")
     lines.append("```")
-    return _AUTOGEN_HEADER + "# Component dependencies\n\n" + "\n".join(lines) + "\n"
+    return with_header("# Component dependencies\n\n" + "\n".join(lines) + "\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -227,4 +227,4 @@ def render_domain_model() -> str:
     for a in _associations(models):
         lines.append(f'  {a.src} "1" --> "{a.card}" {a.dst} : {a.label}')
     lines.append("```")
-    return _AUTOGEN_HEADER + "# Domain model\n\n" + "\n".join(lines) + "\n"
+    return with_header("# Domain model\n\n" + "\n".join(lines) + "\n")

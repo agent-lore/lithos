@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from tests.guardrail._common import _AUTOGEN_HEADER
+from tests.guardrail._common import with_header
 from tests.guardrail._metrics_toolkit import COMPLEXITY_THRESHOLD, GOD_MODULE_LINES, budget_actual
 
 
@@ -137,4 +137,4 @@ def render_metrics_md(metrics: dict[str, Any], budgets: dict[str, int]) -> str:
         _summary_section(metrics),
     ]
     body = "\n\n".join("\n".join(section) for section in sections)
-    return _AUTOGEN_HEADER + body + "\n"
+    return with_header(body + "\n")
