@@ -39,6 +39,22 @@ def artifacts() -> list[Artifact]:
                 "extracted statically from the modules listed in docs/architecture.toml."
             ),
         ),
+        Artifact(
+            path="metrics.md",
+            title="Architecture metrics",
+            description=(
+                "Quantitative snapshot (coupling, cycles, size, complexity) with the hard "
+                "budgets from docs/architecture.toml — the improving-vs-regressing signal."
+            ),
+        ),
+        Artifact(
+            path="metrics.json",
+            title="Architecture metrics (machine-readable)",
+            description=(
+                "Same snapshot as JSON; its git history is the metric time series "
+                "(`make metrics-history`)."
+            ),
+        ),
     ]
 
 

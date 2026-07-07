@@ -13,6 +13,8 @@ Do not edit these files by hand.
 |---|---|
 | [Component dependencies](architecture.md) | Cross-component import graph computed from the real code via grimp, grouped by tier (Entrypoints → Core → Foundation). |
 | [Domain model](domain_model.md) | Class diagram of the domain dataclasses and Pydantic models, extracted statically from the modules listed in docs/architecture.toml. |
+| [Architecture metrics](metrics.md) | Quantitative snapshot (coupling, cycles, size, complexity) with the hard budgets from docs/architecture.toml — the improving-vs-regressing signal. |
+| [Architecture metrics (machine-readable)](metrics.json) | Same snapshot as JSON; its git history is the metric time series (`make metrics-history`). |
 
 ## Legend
 

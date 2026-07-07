@@ -34,6 +34,18 @@ Entrypoints = ["Entrypoints"]
 Core        = ["Knowledge", "Search", "Graph", "Coordination", "Intake", "Provenance", "CognitiveMemory", "LCMA"]
 Foundation  = ["Events", "Config", "Telemetry", "Errors", "Logging"]
 
+# Hard architecture budgets, checked by tests/guardrail/test_metrics_budgets.py
+# against the metrics snapshot (docs/generated/metrics.md explains each one).
+# CI fails if a measured value exceeds its budget. Raising a budget is allowed
+# but must be an explicit, reviewed edit to this file; lower a budget after
+# improving the code to lock in the gain.
+[budgets]
+cross_component_edges  = 63    # measured 2026-07; direction: down
+component_cycles       = 1    # one 6-component SCC in Core (Coordination/Graph/Knowledge/LCMA/Provenance/Search); goal: shrink it
+module_cycles          = 2    # knowledge<->graph<->search<->provenance<->lcma.edges, server<->tools; goal: 0
+modules_over_800_lines = 10   # no new god modules; direction: down
+max_module_lines       = 2800 # stop-loss; largest today is coordination.py at 2675
+
 # Domain class diagram: which modules to scan for dataclasses / Pydantic models.
 # Config/settings models are excluded — they are configuration, not domain entities.
 [domain]
