@@ -620,8 +620,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     # ==================== Graph Tools ====================
 
-    _RELATED_INCLUDES = ("links", "provenance", "edges")
-
     @mcp.tool()
     @tool_metrics()
     @tool_span()

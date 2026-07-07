@@ -4,10 +4,60 @@ Verifies that synchronous SearchEngine methods wrapped in asyncio.to_thread()
 do not block the asyncio event loop, allowing concurrent operations.
 """
 
+import ast
 import asyncio
+import inspect
 import time
+from pathlib import Path
+from types import ModuleType
 
 import pytest
+
+
+def _guarded_sources(*extra_modules: ModuleType) -> dict[str, str]:
+    """Sources the static offload guards scan: server.py, every module under
+    lithos/tools/ (handlers move there extraction PR by extraction PR), plus
+    any explicitly passed modules."""
+    import lithos.server
+    import lithos.tools
+
+    sources = {"lithos/server.py": Path(inspect.getfile(lithos.server)).read_text()}
+    tools_dir = Path(inspect.getfile(lithos.tools)).parent
+    for module_file in sorted(tools_dir.glob("*.py")):
+        sources[f"lithos/tools/{module_file.name}"] = module_file.read_text()
+    for module in extra_modules:
+        path = Path(inspect.getfile(module))
+        sources[f"lithos/{path.name}"] = path.read_text()
+    return sources
+
+
+def _is_search_method_ref(node: ast.expr, methods: frozenset[str]) -> bool:
+    """True for attribute chains ending ``.search.<method>`` or ``._search.<method>``."""
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr in methods
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr in ("search", "_search")
+    )
+
+
+def _scan_search_call_sites(
+    sources: dict[str, str], methods: frozenset[str]
+) -> tuple[list[str], int]:
+    """Return (direct-call violations, count of to_thread-offloaded references)."""
+    violations: list[str] = []
+    offloaded = 0
+    for origin, source in sources.items():
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.Call):
+                continue
+            if _is_search_method_ref(node.func, methods):
+                violations.append(f"{origin}:{node.lineno} {ast.unparse(node.func)}(...)")
+            func = node.func
+            is_to_thread = isinstance(func, ast.Attribute) and func.attr == "to_thread"
+            if is_to_thread and node.args and _is_search_method_ref(node.args[0], methods):
+                offloaded += 1
+    return violations, offloaded
 
 
 class TestAsyncSearchNonBlocking:
@@ -98,45 +148,40 @@ class TestAsyncSearchNonBlocking:
 
     @pytest.mark.asyncio
     async def test_server_search_call_sites_use_to_thread(self) -> None:
-        """Verify that server.py call sites use asyncio.to_thread for search methods.
+        """Search read-path call sites are offloaded via asyncio.to_thread.
 
-        This is a static verification test — we check that the server module
-        imports asyncio and that lithos_search uses to_thread wrapping by
-        inspecting the source code.
+        Static AST scan of lithos/server.py plus every lithos/tools/ module:
+        a search method invoked directly is a violation (it would block the
+        event loop on Tantivy/Chroma); the legitimate pattern passes the
+        bound method to asyncio.to_thread. The count floor proves the scan
+        actually saw the call sites (4 modes in lithos_search + the
+        content_query path in lithos_list).
         """
-        import inspect
-
-        from lithos import server
-
-        source = inspect.getsource(server)
-        # All three search methods should be wrapped in asyncio.to_thread
-        assert "asyncio.to_thread(\n" in source or "asyncio.to_thread(" in source
-        assert "self.search.full_text_search" in source
-        assert "self.search.semantic_search" in source
-        assert "self.search.hybrid_search" in source
+        read_methods = frozenset(
+            {"full_text_search", "semantic_search", "hybrid_search", "graph_search"}
+        )
+        violations, offloaded = _scan_search_call_sites(_guarded_sources(), read_methods)
+        assert not violations, f"direct (blocking) search calls: {violations}"
+        assert offloaded >= 5, f"scan looks broken: only {offloaded} offloaded call sites found"
 
     @pytest.mark.asyncio
     async def test_server_search_mutation_sites_use_to_thread(self) -> None:
-        """Regression guard for #199: ``lithos_write`` and the file-watcher
-        path used to call ``self.search.index()`` synchronously, blocking
-        the event loop for Tantivy commits and ChromaDB embeddings.
+        """Regression guard for #199: the write and file-watcher paths used
+        to call ``search.index()`` synchronously, blocking the event loop
+        for Tantivy commits and ChromaDB embeddings.
 
-        Greps the server source to ensure no direct (non-``to_thread``)
-        call to the seam mutation methods remains.
+        The mutation call sites live behind Corpus intake now
+        (``intake.py`` / ``watch_intake.py`` as ``self._search.index`` /
+        ``.remove``), so those modules are scanned alongside server.py and
+        the tool modules. Any direct call is a violation; the count floor
+        proves the scan still sees the offloaded intake sites.
         """
-        import inspect
+        import lithos.intake
+        import lithos.watch_intake
 
-        from lithos import server
-
-        source = inspect.getsource(server)
-        for line in source.splitlines():
-            stripped = line.strip()
-            # Skip comments and inline references; only flag real call sites.
-            if stripped.startswith("#"):
-                continue
-            for method in ("index", "remove"):
-                if f"self.search.{method}(" in stripped:
-                    assert "asyncio.to_thread" in stripped, (
-                        f"Direct self.search.{method}() call — must be wrapped in "
-                        f"asyncio.to_thread (#199). Offending line: {stripped!r}"
-                    )
+        mutation_methods = frozenset({"index", "remove"})
+        violations, offloaded = _scan_search_call_sites(
+            _guarded_sources(lithos.intake, lithos.watch_intake), mutation_methods
+        )
+        assert not violations, f"direct (blocking) search mutations (#199): {violations}"
+        assert offloaded >= 4, f"scan looks broken: only {offloaded} offloaded call sites found"

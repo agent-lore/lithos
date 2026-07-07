@@ -313,6 +313,27 @@ class TestTelemetryIntegration:
         assert related_attrs.get("lithos.depth") == 1
         assert "lithos.related_count" in related_attrs
 
+    async def test_search_tool_span_records_mode_attribute(self, otel_server):
+        """lithos_search's tool identity is mode-agnostic; ``lithos.mode`` is
+        the dimension for per-mode breakdowns.
+
+        Intentional normalization with the @tool_span() adoption: the handler
+        previously set ``lithos.tool = "lithos_search:{mode}"``; dashboards
+        filtering on mode-suffixed tool names should group by ``lithos.mode``
+        instead.
+        """
+        from tests.helpers import call_tool
+
+        server, exporter = otel_server
+
+        await call_tool(server, "lithos_search", {"query": "anything", "mode": "fulltext"})
+
+        spans = exporter.get_finished_spans()
+        search_span = next(s for s in spans if s.name == "lithos.tool.search")
+        attrs = dict(search_span.attributes)
+        assert attrs.get("lithos.tool") == "lithos_search"
+        assert attrs.get("lithos.mode") == "fulltext"
+
     async def test_conflict_resolve_emits_single_tool_span(self, otel_server):
         """Exactly one tool-named span per call; the Core span is component-named.
 
