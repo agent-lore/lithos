@@ -939,7 +939,7 @@ class TestToolMetrics:
         import inspect
         from pathlib import Path
 
-        import lithos.server
+        from lithos import server as lithos_server
         import lithos.tools
 
         def tool_functions(source: str) -> list[tuple[str, bool, bool]]:
@@ -962,7 +962,7 @@ class TestToolMetrics:
                     )
             return found
 
-        sources = {"lithos/server.py": Path(inspect.getfile(lithos.server)).read_text()}
+        sources = {"lithos/server.py": Path(inspect.getfile(lithos_server)).read_text()}
         tools_dir = Path(inspect.getfile(lithos.tools)).parent
         for module_file in sorted(tools_dir.glob("*.py")):
             sources[f"lithos/tools/{module_file.name}"] = module_file.read_text()
