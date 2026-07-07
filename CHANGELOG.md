@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## [0.4.0] — 2026-07-06
 
 ### BREAKING — MCP error envelopes normalized (0.4.0)
