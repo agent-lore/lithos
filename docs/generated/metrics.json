@@ -223,7 +223,8 @@
         "lithos.tools.findings_stats",
         "lithos.tools.memory_edges",
         "lithos.tools.notes",
-        "lithos.tools.read_search"
+        "lithos.tools.read_search",
+        "lithos.tools.tasks"
       ]
     ],
     "tier_skipping": [
@@ -276,11 +277,11 @@
         "classes": 3,
         "functions": 122,
         "largest_module": "lithos.server",
-        "largest_module_lines": 2018,
-        "lines": 5231,
-        "modules": 10,
-        "public_symbols": 26,
-        "sloc": 4233
+        "largest_module_lines": 1004,
+        "lines": 5203,
+        "modules": 11,
+        "public_symbols": 27,
+        "sloc": 4202
       },
       "Errors": {
         "classes": 8,
@@ -395,15 +396,16 @@
       "lithos.lcma.stats",
       "lithos.search",
       "lithos.server",
-      "lithos.telemetry"
+      "lithos.telemetry",
+      "lithos.tools.tasks"
     ],
-    "total_lines": 23231,
-    "total_modules": 36,
-    "total_sloc": 18793
+    "total_lines": 23203,
+    "total_modules": 37,
+    "total_sloc": 18762
   },
   "tests": {
-    "ratio": 1.77,
-    "src_lines": 23231,
-    "test_lines": 41033
+    "ratio": 1.76,
+    "src_lines": 23203,
+    "test_lines": 40852
   }
 }
