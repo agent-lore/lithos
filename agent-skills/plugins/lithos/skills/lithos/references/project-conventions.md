@@ -50,6 +50,8 @@ All tasks and documents belonging to a project should carry **both**:
 | All docs for a project | `lithos_list(path_prefix="projects/<slug>/")` |
 | All tasks (Agent Zero) | `lithos_task_list(tags=["project:<slug>"])` |
 | All tasks (Loom) | `lithos_task_list(metadata_match={"project": "<slug>"})` |
+| Ready (workable) tasks for a project | `lithos_task_ready(project="<slug>")` — matches `metadata.project`; run `tags=["project:<slug>"]` too (union caveat below) |
+| Blocked tasks and why | `lithos_task_blocked(project="<slug>")` |
 | Search within a project | `lithos_search(query="...", path_prefix="projects/<slug>/")` |
 | All project contexts | `lithos_list(path_prefix="projects/", tags=["project-context"])` |
 | Recently closed tasks | `lithos_task_list(resolved_since="2026-06-01T00:00:00Z")` |

@@ -51,6 +51,9 @@ Four modes:
 | `semantic` | Meaning matters more than exact words |
 | `graph` | Discover related docs by following wiki-links |
 
+- `graph` mode takes `seed_ids=[...]` (starting documents) and `graph_depth` (1–3)
+- `entities=["..."]` filters results to docs whose extracted entities contain every listed value (exact match)
+
 **Important**: `lithos_search` does NOT enforce LCMA access scopes and does NOT track retrieval for salience scoring. Use only for exploration.
 
 ---
@@ -65,9 +68,9 @@ lithos_retrieve(query="inbox error handling patterns", task_id="...", limit=10)
 
 - Runs 10 scouts across multiple backends with Terrace 1 reranking
 - Enforces access scopes (`agent_private`, `task` visibility)
-- Writes audit receipts — enables cited/misleading feedback loops
+- Writes audit receipts — the returned `receipt_id` can be passed to `lithos_task_complete(receipt_id=...)` to bind cited/misleading feedback to this exact retrieval
 - `task_id` activates the task_context scout (extra retrieval dimension)
-- **Requires LCMA enabled** — falls back to `lithos_search` if LCMA is off
+- **Requires LCMA enabled** — returns `{status: "error", code: "lcma_disabled"}` when off; fall back to `lithos_search` yourself
 
 ### Scout Weights (for tuning queries)
 
@@ -106,6 +109,8 @@ lithos_list(
 
 - `tags`, `author`, `path_prefix` are pushed down into the Tantivy query
 - `since`, `title_contains` applied as post-filters
+- `metadata_match={...}` filters on free-form note metadata — AND across keys; a key matches when the stored value equals it, or is a list containing it (scalar query values only)
+- `entities=["..."]` exact-match entity filter
 - More efficient than `lithos_search` + manual filtering for constrained queries
 
 ---
@@ -121,3 +126,11 @@ Returns three relationship types:
 - **provenance**: `derived_from_ids` chains
 - **edges**: typed LCMA edges (flat)
 - Plus `related_ids` — deduped union of all referenced IDs
+
+For edge queries **not** centred on one document (e.g. all `contradicts` edges in a namespace), use `lithos_edge_list(from_id=..., to_id=..., type=..., namespace=...)` — all filters optional, AND semantics.
+
+Resolve a `contradicts` edge with:
+```
+lithos_conflict_resolve(edge_id="...", resolution="accepted_dual|superseded|refuted|merged", resolver="<id>")
+```
+(`winner_id` required when `resolution="superseded"`.)
