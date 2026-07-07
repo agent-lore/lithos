@@ -940,7 +940,7 @@ class TestToolMetrics:
         from pathlib import Path
 
         from lithos import server as lithos_server
-        import lithos.tools
+        from lithos import tools as lithos_tools
 
         def tool_functions(source: str) -> list[tuple[str, bool, bool]]:
             """Return (name, has_tool_metrics, has_tool_span) per mcp.tool function."""
@@ -963,7 +963,7 @@ class TestToolMetrics:
             return found
 
         sources = {"lithos/server.py": Path(inspect.getfile(lithos_server)).read_text()}
-        tools_dir = Path(inspect.getfile(lithos.tools)).parent
+        tools_dir = Path(inspect.getfile(lithos_tools)).parent
         for module_file in sorted(tools_dir.glob("*.py")):
             sources[f"lithos/tools/{module_file.name}"] = module_file.read_text()
 
