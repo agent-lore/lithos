@@ -19,8 +19,11 @@ jobs:
       - uses: tesslio/setup-tessl@v2
         with:
           token: ${{ secrets.TESSL_TOKEN }}
+      # Publishes the version committed in each plugin manifest verbatim.
+      # Changing a plugin means bumping its manifest version in the same PR;
+      # an already-published version fails loudly here as the reminder.
       - name: Publish plugins
         working-directory: agent-skills
         run: |
-          tessl plugin publish ./plugins/lithos --bump patch
-          tessl plugin publish ./plugins/influx-inbox --bump patch
+          tessl plugin publish ./plugins/lithos
+          tessl plugin publish ./plugins/influx-inbox
