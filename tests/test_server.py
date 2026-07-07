@@ -809,6 +809,32 @@ class TestKnowledgeToolWorkflow:
         assert {i["id"] for i in r["items"]} == {old.id}
 
     @pytest.mark.asyncio
+    async def test_lithos_list_since_accepts_naive_datetime(self, server: LithosServer):
+        """A timezone-naive ``since`` is normalized to UTC instead of raising
+        a naive-vs-aware TypeError against normalized document timestamps."""
+        from datetime import datetime, timedelta
+
+        doc = (
+            await server.knowledge.create(title="Naive Since", content="payload", agent="agent")
+        ).document
+        tool = await server.mcp.get_tool("lithos_list")
+
+        naive_cutoff = (datetime.now(UTC) - timedelta(days=1)).replace(tzinfo=None)
+        hits = [SimpleNamespace(id=doc.id)]
+        with patch.object(server.search, "full_text_search", return_value=hits):
+            r = await tool.fn(content_query="payload", since=naive_cutoff.isoformat())
+        assert {i["id"] for i in r["items"]} == {doc.id}
+
+    @pytest.mark.asyncio
+    async def test_lithos_list_since_invalid_returns_canonical_envelope(self, server: LithosServer):
+        """An unparseable ``since`` gets the canonical invalid_input envelope."""
+        tool = await server.mcp.get_tool("lithos_list")
+        r = await tool.fn(since="not-a-datetime")
+        assert r["status"] == "error"
+        assert r["code"] == "invalid_input"
+        assert "since" in r["message"]
+
+    @pytest.mark.asyncio
     async def test_lithos_list_content_query_search_backend_error(self, server: LithosServer):
         """content_query returns error envelope when full_text_search raises SearchBackendError."""
         from lithos.errors import SearchBackendError

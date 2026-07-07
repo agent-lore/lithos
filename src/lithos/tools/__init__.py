@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 
-from lithos.tools import agents, findings_stats, memory_edges
+from lithos.tools import agents, findings_stats, memory_edges, notes, read_search
 
 if TYPE_CHECKING:
     from lithos.server import LithosServer
@@ -28,3 +28,5 @@ def register_all(mcp: FastMCP, server: LithosServer) -> None:
     agents.register(mcp, server)
     memory_edges.register(mcp, server)
     findings_stats.register(mcp, server)
+    notes.register(mcp, server)
+    read_search.register(mcp, server)
