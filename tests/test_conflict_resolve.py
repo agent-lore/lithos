@@ -3,32 +3,11 @@
 Unit tests that exercise conflict resolution logic directly via the server.
 """
 
-import json
-from typing import Any
-
 import pytest
 
 from lithos.config import LithosConfig
 from lithos.server import LithosServer
-
-
-async def _call_tool(server: LithosServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Call an MCP tool and return its JSON payload."""
-    result = await server.mcp._call_tool_mcp(name, arguments)
-
-    if isinstance(result, tuple):
-        payload = result[1]
-        if isinstance(payload, dict):
-            return payload
-
-    content = getattr(result, "content", []) if hasattr(result, "content") else result
-
-    if isinstance(content, list) and content:
-        text = getattr(content[0], "text", None)
-        if isinstance(text, str):
-            return json.loads(text)
-
-    raise AssertionError(f"Unable to decode MCP result for tool {name!r}: {result!r}")
+from tests.helpers import call_tool
 
 
 @pytest.fixture
@@ -38,12 +17,12 @@ async def server_with_notes(test_config: LithosConfig) -> LithosServer:
     await srv.initialize()
 
     # Create two notes
-    r1 = await _call_tool(
+    r1 = await call_tool(
         srv,
         "lithos_write",
         {"title": "Note Alpha", "content": "Alpha says X is true.", "agent": "agent-a"},
     )
-    r2 = await _call_tool(
+    r2 = await call_tool(
         srv,
         "lithos_write",
         {"title": "Note Beta", "content": "Beta says X is false.", "agent": "agent-b"},
@@ -52,7 +31,7 @@ async def server_with_notes(test_config: LithosConfig) -> LithosServer:
     srv._note_beta_id = r2["id"]  # type: ignore[attr-defined]
 
     # Create a contradiction edge between them
-    edge_result = await _call_tool(
+    edge_result = await call_tool(
         srv,
         "lithos_edge_upsert",
         {
@@ -66,7 +45,7 @@ async def server_with_notes(test_config: LithosConfig) -> LithosServer:
     srv._contradiction_edge_id = edge_result["edge_id"]  # type: ignore[attr-defined]
 
     # Also create a non-contradiction edge for negative testing
-    non_c = await _call_tool(
+    non_c = await call_tool(
         srv,
         "lithos_edge_upsert",
         {
@@ -93,7 +72,7 @@ class TestConflictResolveValidResolutions:
     @pytest.mark.asyncio
     async def test_resolve_accepted_dual(self, server_with_notes: LithosServer) -> None:
         srv = server_with_notes
-        result = await _call_tool(
+        result = await call_tool(
             srv,
             "lithos_conflict_resolve",
             {
@@ -109,7 +88,7 @@ class TestConflictResolveValidResolutions:
     @pytest.mark.asyncio
     async def test_resolve_refuted(self, server_with_notes: LithosServer) -> None:
         srv = server_with_notes
-        result = await _call_tool(
+        result = await call_tool(
             srv,
             "lithos_conflict_resolve",
             {
@@ -124,7 +103,7 @@ class TestConflictResolveValidResolutions:
     @pytest.mark.asyncio
     async def test_resolve_merged(self, server_with_notes: LithosServer) -> None:
         srv = server_with_notes
-        result = await _call_tool(
+        result = await call_tool(
             srv,
             "lithos_conflict_resolve",
             {
@@ -140,7 +119,7 @@ class TestConflictResolveValidResolutions:
     async def test_resolve_superseded(self, server_with_notes: LithosServer) -> None:
         srv = server_with_notes
         alpha_id = srv._note_alpha_id  # type: ignore[attr-defined]
-        result = await _call_tool(
+        result = await call_tool(
             srv,
             "lithos_conflict_resolve",
             {
@@ -165,7 +144,7 @@ class TestConflictResolveInvalidResolution:
     @pytest.mark.asyncio
     async def test_rejects_invalid_resolution(self, server_with_notes: LithosServer) -> None:
         srv = server_with_notes
-        result = await _call_tool(
+        result = await call_tool(
             srv,
             "lithos_conflict_resolve",
             {
@@ -185,7 +164,7 @@ class TestConflictResolveNonContradiction:
     @pytest.mark.asyncio
     async def test_rejects_non_contradiction_edge(self, server_with_notes: LithosServer) -> None:
         srv = server_with_notes
-        result = await _call_tool(
+        result = await call_tool(
             srv,
             "lithos_conflict_resolve",
             {
@@ -205,7 +184,7 @@ class TestConflictResolveSupersededValidation:
     @pytest.mark.asyncio
     async def test_rejects_superseded_without_winner(self, server_with_notes: LithosServer) -> None:
         srv = server_with_notes
-        result = await _call_tool(
+        result = await call_tool(
             srv,
             "lithos_conflict_resolve",
             {
@@ -223,7 +202,7 @@ class TestConflictResolveSupersededValidation:
         self, server_with_notes: LithosServer
     ) -> None:
         srv = server_with_notes
-        result = await _call_tool(
+        result = await call_tool(
             srv,
             "lithos_conflict_resolve",
             {
@@ -255,7 +234,7 @@ class TestConflictResolveUpdateFailure:
             new_callable=AsyncMock,
             return_value=False,
         ):
-            result = await _call_tool(
+            result = await call_tool(
                 srv,
                 "lithos_conflict_resolve",
                 {
@@ -287,7 +266,7 @@ class TestConflictResolveUpdateFailure:
             new_callable=AsyncMock,
             return_value=False,
         ):
-            result = await _call_tool(
+            result = await call_tool(
                 srv,
                 "lithos_conflict_resolve",
                 {
@@ -311,7 +290,7 @@ class TestConflictResolveEdgeNotFound:
     @pytest.mark.asyncio
     async def test_rejects_missing_edge(self, server_with_notes: LithosServer) -> None:
         srv = server_with_notes
-        result = await _call_tool(
+        result = await call_tool(
             srv,
             "lithos_conflict_resolve",
             {

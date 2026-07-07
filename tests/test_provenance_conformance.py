@@ -4,7 +4,6 @@ Cross-cutting tests proving provenance behavior aligns with the
 unified write contract and architecture guardrails.
 """
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -14,23 +13,9 @@ import pytest
 from lithos.config import LithosConfig
 from lithos.knowledge import KnowledgeManager
 from lithos.server import LithosServer
+from tests.helpers import call_tool
 
 pytestmark = pytest.mark.integration
-
-
-async def _call_tool(server: LithosServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Call an MCP tool and return its JSON payload."""
-    result = await server.mcp._call_tool_mcp(name, arguments)
-    if isinstance(result, tuple):
-        payload = result[1]
-        if isinstance(payload, dict):
-            return payload
-    content = getattr(result, "content", []) if hasattr(result, "content") else result
-    if isinstance(content, list) and content:
-        text = getattr(content[0], "text", None)
-        if isinstance(text, str):
-            return json.loads(text)
-    raise AssertionError(f"Unable to decode MCP result for tool {name!r}: {result!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +28,7 @@ class TestCreateConformance:
 
     async def test_create_with_none_stores_empty(self, server: LithosServer):
         """create with derived_from_ids=None stores []."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {"title": "None Prov", "content": "Test.", "agent": "conf-agent"},
@@ -54,12 +39,12 @@ class TestCreateConformance:
 
     async def test_create_with_valid_uuids_stores_normalized(self, server: LithosServer):
         """create with valid UUIDs stores normalized (sorted, lowered) list."""
-        s1 = await _call_tool(
+        s1 = await call_tool(
             server,
             "lithos_write",
             {"title": "Src1", "content": ".", "agent": "conf-agent"},
         )
-        s2 = await _call_tool(
+        s2 = await call_tool(
             server,
             "lithos_write",
             {"title": "Src2", "content": ".", "agent": "conf-agent"},
@@ -67,7 +52,7 @@ class TestCreateConformance:
         id1, id2 = s1["id"], s2["id"]
 
         # Pass in reverse order; expect sorted
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -83,13 +68,13 @@ class TestCreateConformance:
 
     async def test_create_uppercase_normalized(self, server: LithosServer):
         """Uppercase UUIDs are normalized to lowercase, not rejected."""
-        src = await _call_tool(
+        src = await call_tool(
             server,
             "lithos_write",
             {"title": "Lower Src", "content": ".", "agent": "conf-agent"},
         )
         upper_id = src["id"].upper()
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -113,7 +98,7 @@ class TestUpdateConformance:
     """Conformance tests for update provenance semantics."""
 
     async def _create(self, server: LithosServer, title: str, **kw: Any) -> str:
-        r = await _call_tool(
+        r = await call_tool(
             server,
             "lithos_write",
             {"title": title, "content": ".", "agent": "conf-agent", **kw},
@@ -128,7 +113,7 @@ class TestUpdateConformance:
         assert server.knowledge.get_doc_sources(doc_id) == [src_id]
 
         # Update without derived_from_ids (None at MCP = preserve)
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -145,7 +130,7 @@ class TestUpdateConformance:
         """update with [] clears provenance."""
         src_id = await self._create(server, "Clear Src")
         doc_id = await self._create(server, "Clear Derived", derived_from_ids=[src_id])
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -164,7 +149,7 @@ class TestUpdateConformance:
         s1 = await self._create(server, "Repl Src1")
         s2 = await self._create(server, "Repl Src2")
         doc_id = await self._create(server, "Repl Derived", derived_from_ids=[s1])
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -183,7 +168,7 @@ class TestUpdateConformance:
     async def test_self_reference_rejected(self, server: LithosServer):
         """Self-reference on update is rejected with invalid_input."""
         doc_id = await self._create(server, "Self Ref")
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -208,7 +193,7 @@ class TestValidationConformance:
 
     async def test_malformed_uuid_rejected(self, server: LithosServer):
         """Malformed UUIDs rejected with invalid_input."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -224,7 +209,7 @@ class TestValidationConformance:
     async def test_non_uuid_identifiers_rejected(self, server: LithosServer):
         """Non-UUID identifiers (titles, slugs, paths) rejected."""
         for bad in ["My Document Title", "my-slug", "/path/to/file.md", "", "  "]:
-            result = await _call_tool(
+            result = await call_tool(
                 server,
                 "lithos_write",
                 {
@@ -240,7 +225,7 @@ class TestValidationConformance:
     async def test_unresolved_produces_warnings_not_errors(self, server: LithosServer):
         """Unresolved source IDs produce warnings, not errors."""
         missing_id = "00000000-0000-0000-0000-cccccccccccc"
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -266,7 +251,7 @@ class TestIndexLifecycleConformance:
         """File-watcher ingestion of a source doc auto-resolves unresolved provenance."""
         # Pre-create a missing source ID
         missing_id = "11111111-1111-1111-1111-111111111111"
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -294,13 +279,13 @@ class TestIndexLifecycleConformance:
 
     async def test_delete_source_marks_unresolved(self, server: LithosServer):
         """Deleting a source doc marks provenance as unresolved."""
-        src = await _call_tool(
+        src = await call_tool(
             server,
             "lithos_write",
             {"title": "Del Source", "content": ".", "agent": "conf-agent"},
         )
         src_id = src["id"]
-        derived = await _call_tool(
+        derived = await call_tool(
             server,
             "lithos_write",
             {
@@ -313,7 +298,7 @@ class TestIndexLifecycleConformance:
         derived_id = derived["id"]
 
         # Delete the source
-        await _call_tool(server, "lithos_delete", {"id": src_id, "agent": "conf-agent"})
+        await call_tool(server, "lithos_delete", {"id": src_id, "agent": "conf-agent"})
 
         # Derived doc now has unresolved provenance
         assert derived_id in server.knowledge._unresolved_provenance.get(src_id, set())
@@ -321,12 +306,12 @@ class TestIndexLifecycleConformance:
 
     async def test_cycles_no_infinite_traversal(self, server: LithosServer):
         """Provenance cycles don't cause infinite traversal."""
-        a = await _call_tool(
+        a = await call_tool(
             server,
             "lithos_write",
             {"title": "Cyc A", "content": ".", "agent": "conf-agent"},
         )
-        b = await _call_tool(
+        b = await call_tool(
             server,
             "lithos_write",
             {
@@ -337,7 +322,7 @@ class TestIndexLifecycleConformance:
             },
         )
         # Create cycle: A -> B -> A
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_write",
             {
@@ -349,7 +334,7 @@ class TestIndexLifecycleConformance:
             },
         )
         # This must terminate
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_related",
             {"id": a["id"], "include": ["provenance"], "depth": 3},
@@ -369,7 +354,7 @@ class TestWriteContractConformance:
 
     async def test_create_returns_write_result_envelope(self, server: LithosServer):
         """Create returns status, id, path, warnings."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {"title": "Env Create", "content": ".", "agent": "conf-agent"},
@@ -381,12 +366,12 @@ class TestWriteContractConformance:
 
     async def test_update_returns_write_result_envelope(self, server: LithosServer):
         """Update returns status, id, path, warnings."""
-        cr = await _call_tool(
+        cr = await call_tool(
             server,
             "lithos_write",
             {"title": "Env Update", "content": ".", "agent": "conf-agent"},
         )
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -401,7 +386,7 @@ class TestWriteContractConformance:
 
     async def test_duplicate_returns_envelope(self, server: LithosServer):
         """Duplicate returns status=duplicate with duplicate_of."""
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_write",
             {
@@ -411,7 +396,7 @@ class TestWriteContractConformance:
                 "source_url": "https://example.com/dup-conformance",
             },
         )
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {
@@ -496,7 +481,7 @@ class TestScanConformance:
 
     async def test_external_title_change_updates_cache(self, server: LithosServer):
         """External title change via file watcher updates _id_to_title."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {"title": "Old Title", "content": ".", "agent": "conf-agent"},
@@ -531,7 +516,7 @@ class TestReadPathNormalization:
         knowledge_path = server.config.storage.knowledge_path
 
         # Create source doc via MCP (let it generate its own id)
-        src_result = await _call_tool(
+        src_result = await call_tool(
             server,
             "lithos_write",
             {"title": "Source", "content": "Source content.", "agent": "test"},
@@ -560,7 +545,7 @@ class TestReadPathNormalization:
         await server.watch_intake.upsert_from_disk(knowledge_path / "derived-ext.md")
 
         # lithos_read should return normalized (lowercase) UUID
-        result = await _call_tool(server, "lithos_read", {"id": derived_id})
+        result = await call_tool(server, "lithos_read", {"id": derived_id})
         assert result["metadata"]["derived_from_ids"] == [source_id]
 
     async def test_lithos_list_returns_normalized_provenance(self, server: LithosServer):
@@ -568,7 +553,7 @@ class TestReadPathNormalization:
         knowledge_path = server.config.storage.knowledge_path
 
         # Create source doc via MCP (let it generate its own id)
-        src_result = await _call_tool(
+        src_result = await call_tool(
             server,
             "lithos_write",
             {"title": "ListSrc", "content": "Source.", "agent": "test"},
@@ -596,6 +581,6 @@ class TestReadPathNormalization:
         await server.watch_intake.upsert_from_disk(knowledge_path / "list-derived.md")
 
         # lithos_list should return normalized UUIDs
-        result = await _call_tool(server, "lithos_list", {})
+        result = await call_tool(server, "lithos_list", {})
         derived_entry = next(d for d in result["items"] if d["id"] == derived_id)
         assert derived_entry["derived_from_ids"] == [source_id]

@@ -1,8 +1,5 @@
 """Integration tests for event emission from server tool handlers."""
 
-import json
-from typing import Any
-
 import pytest
 
 from lithos.events import (
@@ -20,27 +17,9 @@ from lithos.events import (
     LithosEvent,
 )
 from lithos.server import LithosServer
+from tests.helpers import call_tool
 
 pytestmark = pytest.mark.integration
-
-
-async def _call_tool(server: LithosServer, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Call an MCP tool and return its JSON payload."""
-    result = await server.mcp._call_tool_mcp(name, arguments)
-
-    if isinstance(result, tuple):
-        payload = result[1]
-        if isinstance(payload, dict):
-            return payload
-
-    content = getattr(result, "content", []) if hasattr(result, "content") else result
-
-    if isinstance(content, list) and content:
-        text = getattr(content[0], "text", None)
-        if isinstance(text, str):
-            return json.loads(text)
-
-    raise AssertionError(f"Unable to decode MCP result for tool {name!r}: {result!r}")
 
 
 class TestNoteEventEmission:
@@ -49,7 +28,7 @@ class TestNoteEventEmission:
     @pytest.mark.asyncio
     async def test_lithos_write_create_emits_note_created(self, server: LithosServer) -> None:
         queue = server.event_bus.subscribe(event_types=[NOTE_CREATED])
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {"title": "Test Note", "content": "Hello world", "agent": "test-agent", "tags": ["t1"]},
@@ -67,7 +46,7 @@ class TestNoteEventEmission:
 
     @pytest.mark.asyncio
     async def test_lithos_write_update_emits_note_updated(self, server: LithosServer) -> None:
-        create_result = await _call_tool(
+        create_result = await call_tool(
             server,
             "lithos_write",
             {"title": "Original", "content": "Content", "agent": "test-agent"},
@@ -75,7 +54,7 @@ class TestNoteEventEmission:
         doc_id = create_result["id"]
 
         queue = server.event_bus.subscribe(event_types=[NOTE_UPDATED])
-        update_result = await _call_tool(
+        update_result = await call_tool(
             server,
             "lithos_write",
             {
@@ -96,7 +75,7 @@ class TestNoteEventEmission:
 
     @pytest.mark.asyncio
     async def test_lithos_write_duplicate_emits_no_event(self, server: LithosServer) -> None:
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_write",
             {
@@ -108,7 +87,7 @@ class TestNoteEventEmission:
         )
 
         queue = server.event_bus.subscribe()
-        dup_result = await _call_tool(
+        dup_result = await call_tool(
             server,
             "lithos_write",
             {
@@ -124,7 +103,7 @@ class TestNoteEventEmission:
 
     @pytest.mark.asyncio
     async def test_lithos_delete_emits_note_deleted(self, server: LithosServer) -> None:
-        create_result = await _call_tool(
+        create_result = await call_tool(
             server,
             "lithos_write",
             {"title": "To Delete", "content": "Content", "agent": "test-agent"},
@@ -132,7 +111,7 @@ class TestNoteEventEmission:
         doc_id = create_result["id"]
 
         queue = server.event_bus.subscribe(event_types=[NOTE_DELETED])
-        delete_result = await _call_tool(
+        delete_result = await call_tool(
             server,
             "lithos_delete",
             {"id": doc_id, "agent": "test-agent"},
@@ -153,7 +132,7 @@ class TestTaskEventEmission:
     @pytest.mark.asyncio
     async def test_lithos_task_create_emits_task_created(self, server: LithosServer) -> None:
         queue = server.event_bus.subscribe(event_types=[TASK_CREATED])
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_task_create",
             {"title": "Test Task", "agent": "test-agent"},
@@ -169,7 +148,7 @@ class TestTaskEventEmission:
 
     @pytest.mark.asyncio
     async def test_lithos_task_claim_emits_task_claimed(self, server: LithosServer) -> None:
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_task_create",
             {"title": "Claimable Task", "agent": "test-agent"},
@@ -177,7 +156,7 @@ class TestTaskEventEmission:
         task_id = result["task_id"]
 
         queue = server.event_bus.subscribe(event_types=[TASK_CLAIMED])
-        claim_result = await _call_tool(
+        claim_result = await call_tool(
             server,
             "lithos_task_claim",
             {"task_id": task_id, "aspect": "research", "agent": "test-agent"},
@@ -193,20 +172,20 @@ class TestTaskEventEmission:
 
     @pytest.mark.asyncio
     async def test_lithos_task_release_emits_task_released(self, server: LithosServer) -> None:
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_task_create",
             {"title": "Releasable Task", "agent": "test-agent"},
         )
         task_id = result["task_id"]
-        await _call_tool(
+        await call_tool(
             server,
             "lithos_task_claim",
             {"task_id": task_id, "aspect": "research", "agent": "test-agent"},
         )
 
         queue = server.event_bus.subscribe(event_types=[TASK_RELEASED])
-        release_result = await _call_tool(
+        release_result = await call_tool(
             server,
             "lithos_task_release",
             {"task_id": task_id, "aspect": "research", "agent": "test-agent"},
@@ -222,7 +201,7 @@ class TestTaskEventEmission:
 
     @pytest.mark.asyncio
     async def test_lithos_task_complete_emits_task_completed(self, server: LithosServer) -> None:
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_task_create",
             {"title": "Completable Task", "agent": "test-agent"},
@@ -230,7 +209,7 @@ class TestTaskEventEmission:
         task_id = result["task_id"]
 
         queue = server.event_bus.subscribe(event_types=[TASK_COMPLETED])
-        complete_result = await _call_tool(
+        complete_result = await call_tool(
             server,
             "lithos_task_complete",
             {"task_id": task_id, "agent": "test-agent"},
@@ -247,12 +226,12 @@ class TestTaskEventEmission:
 
     @pytest.mark.asyncio
     async def test_lithos_task_reopen_emits_task_reopened(self, server: LithosServer) -> None:
-        result = await _call_tool(server, "lithos_task_create", {"title": "T", "agent": "a"})
+        result = await call_tool(server, "lithos_task_create", {"title": "T", "agent": "a"})
         task_id = result["task_id"]
-        await _call_tool(server, "lithos_task_complete", {"task_id": task_id, "agent": "a"})
+        await call_tool(server, "lithos_task_complete", {"task_id": task_id, "agent": "a"})
 
         queue = server.event_bus.subscribe(event_types=[TASK_REOPENED])
-        reopen = await _call_tool(server, "lithos_task_reopen", {"task_id": task_id, "agent": "a"})
+        reopen = await call_tool(server, "lithos_task_reopen", {"task_id": task_id, "agent": "a"})
         assert reopen["success"] is True
 
         event = queue.get_nowait()
@@ -265,7 +244,7 @@ class TestTaskEventEmission:
     async def test_lithos_task_complete_accepts_outcome(self, server: LithosServer) -> None:
         """Regression test for #178: ``outcome`` must be an accepted parameter
         and must flow into the persisted task + the task.completed event."""
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_task_create",
             {"title": "Task with Outcome", "agent": "test-agent"},
@@ -274,7 +253,7 @@ class TestTaskEventEmission:
 
         queue = server.event_bus.subscribe(event_types=[TASK_COMPLETED])
         outcome_text = "Reviewed LCMA scout architecture and filed 3 follow-ups."
-        complete_result = await _call_tool(
+        complete_result = await call_tool(
             server,
             "lithos_task_complete",
             {"task_id": task_id, "agent": "test-agent", "outcome": outcome_text},
@@ -297,7 +276,7 @@ class TestTaskEventEmission:
     async def test_lithos_task_update_emits_task_updated(self, server: LithosServer) -> None:
         """#283: lithos_task_update must emit task.updated so live SSE
         consumers see metadata mutations without restarting."""
-        create_result = await _call_tool(
+        create_result = await call_tool(
             server,
             "lithos_task_create",
             {"title": "Updatable Task", "agent": "test-agent"},
@@ -305,7 +284,7 @@ class TestTaskEventEmission:
         task_id = create_result["task_id"]
 
         queue = server.event_bus.subscribe(event_types=[TASK_UPDATED])
-        update_result = await _call_tool(
+        update_result = await call_tool(
             server,
             "lithos_task_update",
             {"task_id": task_id, "agent": "test-agent", "metadata": {"project": "demo"}},
@@ -324,7 +303,7 @@ class TestTaskEventEmission:
     ) -> None:
         """Failed updates against unknown task ids must not emit task.updated."""
         queue = server.event_bus.subscribe(event_types=[TASK_UPDATED])
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_task_update",
             {"task_id": "does-not-exist", "agent": "test-agent", "title": "x"},
@@ -337,7 +316,7 @@ class TestTaskEventEmission:
     @pytest.mark.asyncio
     async def test_lithos_task_update_no_event_on_invalid_input(self, server: LithosServer) -> None:
         """Invalid-input rejections (no fields supplied) must not emit task.updated."""
-        create_result = await _call_tool(
+        create_result = await call_tool(
             server,
             "lithos_task_create",
             {"title": "Invalid-Update Target", "agent": "test-agent"},
@@ -345,7 +324,7 @@ class TestTaskEventEmission:
         task_id = create_result["task_id"]
 
         queue = server.event_bus.subscribe(event_types=[TASK_UPDATED])
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_task_update",
             {"task_id": task_id, "agent": "test-agent"},
@@ -361,7 +340,7 @@ class TestFindingEventEmission:
 
     @pytest.mark.asyncio
     async def test_lithos_finding_post_emits_finding_posted(self, server: LithosServer) -> None:
-        task_result = await _call_tool(
+        task_result = await call_tool(
             server,
             "lithos_task_create",
             {"title": "Finding Task", "agent": "test-agent"},
@@ -369,7 +348,7 @@ class TestFindingEventEmission:
         task_id = task_result["task_id"]
 
         queue = server.event_bus.subscribe(event_types=[FINDING_POSTED])
-        finding_result = await _call_tool(
+        finding_result = await call_tool(
             server,
             "lithos_finding_post",
             {"task_id": task_id, "agent": "test-agent", "summary": "Found something"},
@@ -391,7 +370,7 @@ class TestAgentEventEmission:
     @pytest.mark.asyncio
     async def test_lithos_agent_register_emits_agent_registered(self, server: LithosServer) -> None:
         queue = server.event_bus.subscribe(event_types=[AGENT_REGISTERED])
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_agent_register",
             {"id": "event-test-agent", "name": "Event Test Agent"},
@@ -418,7 +397,7 @@ class TestEventEmissionFailureIsolation:
 
         server.event_bus.emit = broken_emit  # type: ignore[assignment]
         try:
-            result = await _call_tool(
+            result = await call_tool(
                 server,
                 "lithos_write",
                 {"title": "Resilient Note", "content": "Still works", "agent": "test-agent"},
@@ -441,7 +420,7 @@ class TestEventEmissionFailureIsolation:
             )
 
         # Queue is now full; next emit should drop for this subscriber but not fail
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_write",
             {"title": "Backpressure Test", "content": "Content", "agent": "test-agent"},
@@ -457,7 +436,7 @@ class TestEventEmissionFailureIsolation:
         queue = server.event_bus.subscribe(event_types=[NOTE_DELETED])
 
         # Try to delete a non-existent document
-        result = await _call_tool(
+        result = await call_tool(
             server,
             "lithos_delete",
             {"id": "nonexistent-uuid", "agent": "test-agent"},
