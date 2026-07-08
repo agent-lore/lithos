@@ -64,6 +64,24 @@ max_module_lines       = 2800 # stop-loss; largest today is coordination.py at 2
 # with no MCP tools can leave this empty.
 [tool_catalog]
 include_modules = ["lithos.tools", "lithos.server"]
+# Public server methods a handler may touch that are NOT a component boundary
+# (so the completeness check doesn't flag them).
+ignore_attrs = ["initialize"]
+
+# server.<attr> -> component, for the catalog's "Touches" column. A handler that
+# reaches an unmapped, non-ignored server attribute fails test_tool_catalog.
+[tool_catalog.component_attrs]
+coordination = "Coordination"
+knowledge    = "Knowledge"
+search       = "Search"
+graph        = "Graph"
+edge_store   = "Graph"
+intake       = "Intake"
+projection   = "Provenance"
+memory       = "CognitiveMemory"
+event_bus    = "Events"
+_emit        = "Events"        # server-local wrapper around event_bus.emit
+watch_intake = "Entrypoints"
 
 # Domain class diagram: which modules to scan for dataclasses / Pydantic models.
 # Config/settings models are excluded — they are configuration, not domain entities.

@@ -40,6 +40,14 @@ def artifacts() -> list[Artifact]:
             ),
         ),
         Artifact(
+            path="tool_catalog.md",
+            title="MCP tool catalog",
+            description=(
+                "The server's public API: every lithos_* tool with its signature, "
+                "one-line summary, and which core components it touches."
+            ),
+        ),
+        Artifact(
             path="metrics.md",
             title="Architecture metrics",
             description=(
