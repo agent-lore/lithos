@@ -100,3 +100,69 @@ include_modules = [
 # Not domain entities: config/settings, error types, and LCMA-internal pipeline
 # working types (e.g. lcma.utils.Candidate).
 exclude_modules = ["lithos.config", "lithos.errors", "lithos.lcma"]
+
+# Container / data-store view (docs/generated/containers.md). Store topology is
+# deployment knowledge, not derivable from imports — declared here, but every
+# store is anchored to a StorageConfig property (src/lithos/config.py) and
+# test_container_diagram fails if a *_path/*_db_path property is added, renamed,
+# or removed without updating this list. Roles use the CONTEXT.md vocabulary.
+[containers]
+ignore_properties = ["lithos_store_path"]  # base dir that contains the stores below
+
+[[containers.stores]]
+id = "corpus"
+label = "Corpus — Markdown notes"
+config_property = "knowledge_path"
+owner = "Knowledge"
+role = "source_of_truth"
+
+[[containers.stores]]
+id = "edges_db"
+label = "edges.db — asserted edges (+ projection rows)"
+config_property = "edges_db_path"
+owner = "Graph"
+role = "source_of_truth"      # ADR-0006: asserted rows authoritative; projection rows are derived
+engine = "SQLite"
+
+[[containers.stores]]
+id = "tantivy_index"
+label = "Full-text index"
+config_property = "tantivy_path"
+owner = "Search"
+role = "derived_view"
+derived_from = "corpus"
+engine = "Tantivy"
+
+[[containers.stores]]
+id = "chroma_index"
+label = "Semantic index"
+config_property = "chroma_path"
+owner = "Search"
+role = "derived_view"
+derived_from = "corpus"
+engine = "ChromaDB + embeddings"
+
+[[containers.stores]]
+id = "graph_cache"
+label = "Wiki-link graph cache"
+config_property = "graph_path"
+owner = "Graph"
+role = "derived_view"
+derived_from = "corpus"
+engine = "NetworkX"
+
+[[containers.stores]]
+id = "coordination_db"
+label = "coordination.db — tasks, claims, findings, agents"
+config_property = "coordination_db_path"
+owner = "Coordination"
+role = "agent_state"
+engine = "SQLite"
+
+[[containers.stores]]
+id = "stats_db"
+label = "stats.db — salience, retrieval, coactivation"
+config_property = "stats_db_path"
+owner = "CognitiveMemory"
+role = "agent_state"
+engine = "SQLite"

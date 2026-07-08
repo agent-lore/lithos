@@ -40,6 +40,14 @@ def artifacts() -> list[Artifact]:
             ),
         ),
         Artifact(
+            path="containers.md",
+            title="Data stores",
+            description=(
+                "The on-disk stores and external engines (corpus, indexes, SQLite DBs) "
+                "with the component that owns each — source of truth vs derived views."
+            ),
+        ),
+        Artifact(
             path="tool_catalog.md",
             title="MCP tool catalog",
             description=(
