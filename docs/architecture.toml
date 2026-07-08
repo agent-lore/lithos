@@ -84,7 +84,8 @@ _emit        = "Events"        # server-local wrapper around event_bus.emit
 watch_intake = "Entrypoints"
 
 # Domain class diagram: which modules to scan for dataclasses / Pydantic models.
-# Config/settings models are excluded — they are configuration, not domain entities.
+# test_domain_model_diagram asserts EVERY public model's module is in include or
+# exclude — so a new model in an unlisted module fails until it is classified.
 [domain]
 include_modules = [
     "lithos.coordination",
@@ -96,4 +97,6 @@ include_modules = [
     "lithos.intake",
     "lithos.search",
 ]
-exclude_modules = ["lithos.config"]
+# Not domain entities: config/settings, error types, and LCMA-internal pipeline
+# working types (e.g. lcma.utils.Candidate).
+exclude_modules = ["lithos.config", "lithos.errors", "lithos.lcma"]

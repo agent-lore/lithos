@@ -85,6 +85,6 @@ Top 10 most complex functions:
 
 ## Domain, tools & tests
 
-- Domain models: **42** (25 associations, 0 without docstrings)
+- Domain models: **42** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.77** (41082 test lines / 23203 source lines)
+- Test-to-source line ratio: **1.78** (41269 test lines / 23203 source lines)

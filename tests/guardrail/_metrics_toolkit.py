@@ -289,11 +289,15 @@ def _domain_metrics() -> dict[str, Any]:
     arch = load_architecture()
     domain = arch.get("domain", {})
     include = domain.get("include_modules") or [ROOT_PACKAGE]
-    models = dt._discover_models(dt._module_files(include))
+    exclude = domain.get("exclude_modules", [])
+    files = [
+        f for f in dt._module_files(include) if not dt._excluded(dt.module_name_of(f), exclude)
+    ]
+    models = dt._discover_models(files)
     return {
         "associations": len(dt._associations(models)),
         "models": len(models),
-        "models_without_docstrings": sum(1 for m in models if ast.get_docstring(m) is None),
+        "models_without_docstrings": sum(1 for m in models if ast.get_docstring(m.node) is None),
     }
 
 

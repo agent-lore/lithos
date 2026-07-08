@@ -118,7 +118,7 @@
     "total_functions": 660
   },
   "domain": {
-    "associations": 25,
+    "associations": 26,
     "models": 42,
     "models_without_docstrings": 0
   },
@@ -404,8 +404,8 @@
     "total_sloc": 18762
   },
   "tests": {
-    "ratio": 1.77,
+    "ratio": 1.78,
     "src_lines": 23203,
-    "test_lines": 41082
+    "test_lines": 41269
   }
 }

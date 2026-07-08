@@ -36,6 +36,7 @@ from tests.guardrail._common import (
     component_of,
     load_architecture,
     module_files,
+    module_name_of,
     with_header,
     write,
 )
@@ -116,8 +117,23 @@ class _Assoc:
     label: str
 
 
+@dataclass(frozen=True)
+class _Model:
+    node: ast.ClassDef
+    module: str
+
+    @property
+    def name(self) -> str:
+        return self.node.name
+
+
 def _module_files(modules: list[str]) -> list[pathlib.Path]:
     return module_files(modules)
+
+
+def _excluded(module: str, exclude: list[str]) -> bool:
+    """True if *module* is, or lives under, any excluded module prefix."""
+    return any(module == e or module.startswith(e + ".") for e in exclude)
 
 
 def _is_dataclass(node: ast.ClassDef) -> bool:
@@ -138,93 +154,180 @@ def _is_pydantic(node: ast.ClassDef, model_names: set[str]) -> bool:
     return False
 
 
-def _discover_models(files: list[pathlib.Path]) -> list[ast.ClassDef]:
-    all_classes: list[ast.ClassDef] = []
+def _discover_models(files: list[pathlib.Path]) -> list[_Model]:
+    all_classes: list[tuple[ast.ClassDef, str]] = []
     for path in files:
+        module = module_name_of(path)
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        all_classes.extend(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
-    names = {c.name for c in all_classes}
+        all_classes.extend((n, module) for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
+    names = {c.name for c, _ in all_classes}
     models = [
-        c
-        for c in all_classes
+        (c, mod)
+        for c, mod in all_classes
         if (_is_dataclass(c) or _is_pydantic(c, names)) and not c.name.startswith("_")
     ]
-    # de-dupe by name (a class may appear once); keep first, sort by name
+    # de-dupe by name (keep first, sorted by name for determinism)
     seen: set[str] = set()
-    unique = []
-    for c in sorted(models, key=lambda c: c.name):
+    unique: list[_Model] = []
+    for c, mod in sorted(models, key=lambda cm: cm[0].name):
         if c.name not in seen:
             seen.add(c.name)
-            unique.append(c)
+            unique.append(_Model(node=c, module=mod))
     return unique
 
 
-def _fields(cls: ast.ClassDef) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
+def discover_all_models() -> list[_Model]:
+    """Every public dataclass / Pydantic model under the source root."""
+    return _discover_models(sorted(SRC_ROOT.rglob("*.py")))
+
+
+def _fields(cls: ast.ClassDef) -> list[tuple[str, ast.expr]]:
+    """Public annotated fields as ``(name, annotation-AST)`` pairs."""
+    out: list[tuple[str, ast.expr]] = []
     for stmt in cls.body:
         if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
             fname = stmt.target.id
             if fname.startswith("_"):
                 continue
-            out.append((fname, ast.unparse(stmt.annotation)))
+            out.append((fname, stmt.annotation))
     return out
 
 
-_MANY = re.compile(r"\b(list|set|frozenset|tuple|Sequence|Iterable|Collection)\s*\[")
+# --- structure-aware association extraction (walks the annotation AST) -------- #
+_MANY_CTORS = {
+    "list", "set", "frozenset", "tuple", "Sequence", "MutableSequence",
+    "Iterable", "Collection", "MutableSet",
+}  # fmt: skip
+_MAP_CTORS = {"dict", "Dict", "Mapping", "MutableMapping", "defaultdict", "OrderedDict"}
+_CARD_RANK = {"1": 0, "0..1": 1, "0..*": 2}
 
 
-def _cardinality(annotation: str, target: str) -> str:
-    if _MANY.search(annotation) and target in annotation:
-        return "0..*"
-    if "Optional[" in annotation or "| None" in annotation or "None |" in annotation:
-        return "0..1"
-    return "1"
+def _looser(a: str, b: str) -> str:
+    return a if _CARD_RANK[a] >= _CARD_RANK[b] else b
 
 
-def _associations(models: list[ast.ClassDef]) -> list[_Assoc]:
-    names = {c.name for c in models}
-    seen: set[tuple[str, str]] = set()
+def _anno_head(value: ast.expr) -> str:
+    if isinstance(value, ast.Name):
+        return value.id
+    if isinstance(value, ast.Attribute):
+        return value.attr
+    return ""
+
+
+def _slice_elts(sl: ast.expr) -> list[ast.expr]:
+    return list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+
+
+def _is_none(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+def _walk_anno(
+    anno: ast.expr, model_names: set[str], card: str, out: list[tuple[str, str]]
+) -> None:
+    if isinstance(anno, ast.Name):
+        if anno.id in model_names:
+            out.append((anno.id, card))
+    elif isinstance(anno, ast.Attribute):
+        if anno.attr in model_names:
+            out.append((anno.attr, card))
+    elif isinstance(anno, ast.Constant) and isinstance(anno.value, str):
+        # forward reference as a string: re-parse and recurse ("B", "B | None", …)
+        try:
+            inner = ast.parse(anno.value, mode="eval").body
+        except SyntaxError:
+            return
+        _walk_anno(inner, model_names, card, out)
+    elif isinstance(anno, ast.BinOp) and isinstance(anno.op, ast.BitOr):
+        c = _looser(card, "0..1") if (_is_none(anno.left) or _is_none(anno.right)) else card
+        for side in (anno.left, anno.right):
+            if not _is_none(side):
+                _walk_anno(side, model_names, c, out)
+    elif isinstance(anno, ast.Subscript):
+        head = _anno_head(anno.value)
+        if head == "Literal":
+            return  # values inside Literal[...] are not type references
+        elts = _slice_elts(anno.slice)
+        if head in _MANY_CTORS or head in _MAP_CTORS:
+            child = _looser(card, "0..*")
+            for e in elts:
+                _walk_anno(e, model_names, child, out)
+        elif head == "Optional":
+            for e in elts:
+                _walk_anno(e, model_names, _looser(card, "0..1"), out)
+        elif head == "Union":
+            c = _looser(card, "0..1") if any(_is_none(e) for e in elts) else card
+            for e in elts:
+                if not _is_none(e):
+                    _walk_anno(e, model_names, c, out)
+        else:  # Annotated / Final / ClassVar / … — recurse, preserve cardinality
+            for e in elts:
+                _walk_anno(e, model_names, card, out)
+
+
+def _annotation_refs(anno: ast.expr, model_names: set[str]) -> list[tuple[str, str]]:
+    """``(target_model, cardinality)`` for every model referenced in an annotation."""
+    out: list[tuple[str, str]] = []
+    _walk_anno(anno, model_names, "1", out)
+    return out
+
+
+def _associations(models: list[_Model]) -> list[_Assoc]:
+    names = {m.name for m in models}
+    seen: set[tuple[str, str, str]] = set()  # directional, per field label
     result: list[_Assoc] = []
-    for cls in models:
-        for fname, anno in _fields(cls):
-            for target in sorted(names):
-                if target == cls.name:
+    for m in models:
+        for fname, anno in _fields(m.node):
+            for target, card in _annotation_refs(anno, names):
+                if target == m.name:
                     continue
-                if re.search(rf"\b{re.escape(target)}\b", anno):
-                    pair = (min(cls.name, target), max(cls.name, target))
-                    if pair in seen:
-                        continue
-                    seen.add(pair)
-                    result.append(_Assoc(cls.name, _cardinality(anno, target), target, fname))
+                key = (m.name, target, fname)
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append(_Assoc(m.name, card, target, fname))
     return sorted(result, key=lambda a: (a.src, a.dst, a.label))
 
 
 def render_domain_model() -> str:
     arch = load_architecture()
+    components: dict[str, list[str]] = arch["components"]
     domain = arch.get("domain", {})
     include = domain.get("include_modules") or [ROOT_PACKAGE]
-    exclude = set(domain.get("exclude_modules", []))
-    files = [
-        f
-        for f in _module_files(include)
-        if not any(
-            f == SRC_ROOT / (m[len(ROOT_PACKAGE) + 1 :].replace(".", "/") + ".py") for m in exclude
-        )
-    ]
-    models = _discover_models(files)
-    model_names = {c.name for c in models}
+    exclude = domain.get("exclude_modules", [])
+    files = [f for f in _module_files(include) if not _excluded(module_name_of(f), exclude)]
 
-    lines = ["```mermaid", "classDiagram"]
-    for cls in models:
-        scalar = [(n, t) for n, t in _fields(cls) if not any(m in t for m in model_names)]
-        if scalar:
-            lines.append(f"  class {cls.name} {{")
-            for n, t in scalar:
-                lines.append(f"    +{n} {t}")
-            lines.append("  }")
-        else:
-            lines.append(f"  class {cls.name}")
-    for a in _associations(models):
-        lines.append(f'  {a.src} "1" --> "{a.card}" {a.dst} : {a.label}')
-    lines.append("```")
-    return with_header("# Domain model\n\n" + "\n".join(lines) + "\n")
+    models = _discover_models(files)
+    model_names = {m.name for m in models}
+    comp_of = {m.name: (component_of(m.module, components) or "Other") for m in models}
+    assocs = _associations(models)
+
+    body = ["# Domain model", ""]
+    for comp in sorted(set(comp_of.values())):
+        members = [m for m in models if comp_of[m.name] == comp]
+        member_names = {m.name for m in members}
+        comp_assocs = [a for a in assocs if comp_of.get(a.src) == comp]
+
+        body += [f"## {comp}", "", "```mermaid", "classDiagram"]
+        for m in members:
+            scalar = [
+                (n, ast.unparse(a))
+                for n, a in _fields(m.node)
+                if not _annotation_refs(a, model_names)
+            ]
+            if scalar:
+                body.append(f"  class {m.name} {{")
+                for n, t in scalar:
+                    body.append(f"    +{n} {t}")
+                body.append("  }")
+            else:
+                body.append(f"  class {m.name}")
+        # stubs for association targets that live in another component
+        for dst in sorted({a.dst for a in comp_assocs} - member_names):
+            body.append(f"  class {dst}")
+            body.append(f"  <<{comp_of.get(dst, 'Other')}>> {dst}")
+        for a in comp_assocs:
+            body.append(f'  {a.src} "1" --> "{a.card}" {a.dst} : {a.label}')
+        body += ["```", ""]
+
+    return with_header("\n".join(body).rstrip("\n") + "\n")
