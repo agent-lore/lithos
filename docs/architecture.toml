@@ -10,6 +10,19 @@
 #
 # `component_of()` matches a module to a component by LONGEST module-prefix,
 # so "lithos.lcma" also captures "lithos.lcma.scouts" etc.
+#
+# PORTING TO ANOTHER PROJECT: the tests/guardrail/ kit is project-agnostic —
+# to reuse it, copy tests/guardrail/ + this file and edit only this file:
+#   1. [project] below (root_package + src_layout),
+#   2. [components]/[tiers] to your modules,
+#   3. [domain]/[tool_catalog] scan lists and [budgets] to your measured values.
+# No code changes required.
+
+[project]
+# Root importable package and the directory holding it (src-layout). For a flat
+# layout with the package at the repo root, set src_layout = "".
+root_package = "lithos"
+src_layout   = "src"
 
 [components]
 Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__"]
@@ -45,6 +58,12 @@ component_cycles       = 1    # one 6-component SCC in Core (Coordination/Graph/
 module_cycles          = 2    # knowledge<->graph<->search<->provenance<->lcma.edges, server<->tools; goal: 0
 modules_over_800_lines = 11   # incl. tools.tasks (985) split from server in #374; direction: down
 max_module_lines       = 2800 # stop-loss; largest today is coordination.py at 2675
+
+# MCP tool surface: modules scanned for @…tool()-decorated handlers (counted in
+# the metrics snapshot; catalogued in docs/generated/tool_catalog.md). A project
+# with no MCP tools can leave this empty.
+[tool_catalog]
+include_modules = ["lithos.tools", "lithos.server"]
 
 # Domain class diagram: which modules to scan for dataclasses / Pydantic models.
 # Config/settings models are excluded — they are configuration, not domain entities.

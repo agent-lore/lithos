@@ -32,6 +32,7 @@ from tests.guardrail._common import (
     build_import_graph,
     component_of,
     load_architecture,
+    module_files,
     module_name_of,
 )
 
@@ -297,7 +298,13 @@ def _domain_metrics() -> dict[str, Any]:
 
 
 def _tool_files() -> list[pathlib.Path]:
-    return [*sorted((SRC_ROOT / "tools").glob("*.py")), SRC_ROOT / "server.py"]
+    """Source files scanned for @…tool()-decorated MCP handlers.
+
+    Driven by ``[tool_catalog].include_modules`` so the kit ports to another
+    project (or one with no MCP surface -> empty list) without code changes.
+    """
+    modules = load_architecture().get("tool_catalog", {}).get("include_modules", [])
+    return module_files(modules)
 
 
 def _is_tool_decorator(dec: ast.expr) -> bool:
