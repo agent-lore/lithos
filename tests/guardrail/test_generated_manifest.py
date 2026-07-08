@@ -11,7 +11,7 @@ from tests.guardrail import _index
 
 
 def test_generated_dir_matches_registry() -> None:
-    expected = {a.path for a in _index.artifacts()} | {"README.md"}
+    expected = _index.all_expected_paths()
     actual = _index.generated_files()
 
     unregistered = sorted(actual - expected)

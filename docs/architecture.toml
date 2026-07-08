@@ -24,6 +24,25 @@
 root_package = "lithos"
 src_layout   = "src"
 
+# One-line description per component, shown at the top of its drill-down page
+# (docs/generated/components/<Component>.md). test_component_pages requires one
+# for every component in [components].
+[component_docs]
+Entrypoints     = "CLI, MCP server, tool handlers, and filesystem watcher — the outward-facing surfaces."
+Knowledge       = "The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived views."
+Search          = "Full-text (Tantivy) and semantic (ChromaDB) search behind one engine that hides its backends."
+Graph           = "The wiki-link knowledge graph and the authoritative edges.db store."
+Coordination    = "SQLite-backed task claiming, findings, and the agent registry for multi-agent work."
+Intake          = "The controlled mutation entry point: validates and applies writes to the corpus."
+Provenance      = "Corpus-derived edge projection — where a note came from."
+CognitiveMemory = "Agent-facing facade of LCMA: retrieval, learning, and asserted state."
+LCMA            = "Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment, stats."
+Events          = "Internal event bus decoupling producers from consumers."
+Config          = "Pydantic-settings configuration and resolved store paths."
+Telemetry       = "OpenTelemetry tracing and metrics."
+Errors          = "Standard error types and canonical MCP error envelopes."
+Logging         = "Structured JSON logging setup."
+
 [components]
 Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__"]
 Knowledge       = ["lithos.knowledge", "lithos.reconcile", "lithos._merge"]

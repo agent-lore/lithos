@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tests.guardrail._common import GENERATED_DIR, with_header
+from tests.guardrail._common import GENERATED_DIR, load_architecture, with_header
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,16 @@ class Artifact:
     path: str  # relative to docs/generated/
     title: str
     description: str  # one line, CONTEXT.md vocabulary
+
+
+def component_page_paths() -> list[str]:
+    """Per-component drill-down pages (one per [components] entry)."""
+    return [f"components/{c}.md" for c in sorted(load_architecture()["components"])]
+
+
+def all_expected_paths() -> set[str]:
+    """Every file the generators are expected to produce (for the manifest test)."""
+    return {a.path for a in artifacts()} | set(component_page_paths()) | {"README.md"}
 
 
 def artifacts() -> list[Artifact]:
@@ -95,6 +105,11 @@ def render_index() -> str:
     ]
     for a in artifacts():
         lines.append(f"| [{a.title}]({a.path}) | {a.description} |")
+    comp_links = " · ".join(
+        f"[{path.removeprefix('components/').removesuffix('.md')}]({path})"
+        for path in component_page_paths()
+    )
+    lines += ["", "## Components", "", f"Per-component drill-down pages: {comp_links}"]
     lines += [
         "",
         "## Legend",
