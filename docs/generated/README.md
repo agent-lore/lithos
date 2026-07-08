@@ -7,6 +7,18 @@ Everything in this directory is a **derived view of the source code** — genera
 
 Do not edit these files by hand.
 
+## How to use these
+
+- **New to the codebase?** Start at [architecture.md](architecture.md) for the
+  component map, click a node to open its drill-down page, then read
+  [containers.md](containers.md) for where data lives and
+  [domain_model.md](domain_model.md) for the shapes it takes.
+- **Building against the server?** [tool_catalog.md](tool_catalog.md) is the
+  public MCP API — every tool, its signature, and the components it touches.
+- **Reviewing a PR?** CI posts an architecture-metrics delta in its job summary;
+  [metrics.md](metrics.md) has the full snapshot and the budgets that gate
+  regressions. `make metrics-history` plots any metric over its commit history.
+
 ## Artifacts
 
 | Artifact | What it shows |
