@@ -40,6 +40,12 @@ component, store, or tool means editing the toml.
 Config sections: `[project]`, `[components]`, `[tiers]`, `[domain]`,
 `[tool_catalog]`, `[containers]`, `[budgets]`, `[component_docs]`.
 
+The **tool catalog** (`[tool_catalog]`) and **container view** (`[containers]`)
+are optional adapters: their driver tests skip and their artifacts are omitted
+when the section is absent, and their Lithos-specific bits (tool prefix, tool
+floor, closure var, the `StorageConfig` anchor) are config, not code. The other
+views run from `[project]` + `[components]`/`[tiers]` + `[domain]` alone.
+
 ## The registry is the manifest
 
 Every file under `docs/generated/` must be produced by a generator **and**

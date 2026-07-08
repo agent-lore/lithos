@@ -11,7 +11,7 @@ lint:
 	uv run ruff format --check src/ tests/ scripts/
 
 typecheck:
-	uv run pyright src/
+	uv run pyright src/ scripts/ tests/guardrail/ tests/test_metrics_diff.py
 
 test:
 	uv run pytest -m "not integration" tests/ -q

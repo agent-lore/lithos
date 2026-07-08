@@ -31,8 +31,15 @@ def all_expected_paths() -> set[str]:
 
 
 def artifacts() -> list[Artifact]:
-    """All generated artifacts, in the order they appear in the index."""
-    return [
+    """All generated artifacts, in the order they appear in the index.
+
+    The container view and tool catalog are optional adapters: each appears only
+    when its ``docs/architecture.toml`` section is populated, so a project that
+    reuses the kit without them gets no empty/orphaned artifact (and the manifest
+    test stays exact).
+    """
+    arch = load_architecture()
+    items = [
         Artifact(
             path="architecture.md",
             title="Component dependencies",
@@ -49,22 +56,30 @@ def artifacts() -> list[Artifact]:
                 "extracted statically from the modules listed in docs/architecture.toml."
             ),
         ),
-        Artifact(
-            path="containers.md",
-            title="Data stores",
-            description=(
-                "The on-disk stores and external engines (corpus, indexes, SQLite DBs) "
-                "with the component that owns each — source of truth vs derived views."
-            ),
-        ),
-        Artifact(
-            path="tool_catalog.md",
-            title="MCP tool catalog",
-            description=(
-                "The server's public API: every lithos_* tool with its signature, "
-                "one-line summary, and which core components it touches."
-            ),
-        ),
+    ]
+    if arch.get("containers", {}).get("stores"):
+        items.append(
+            Artifact(
+                path="containers.md",
+                title="Data stores",
+                description=(
+                    "The on-disk stores and external engines (corpus, indexes, SQLite DBs) "
+                    "with the component that owns each — source of truth vs derived views."
+                ),
+            )
+        )
+    if arch.get("tool_catalog", {}).get("include_modules"):
+        items.append(
+            Artifact(
+                path="tool_catalog.md",
+                title="MCP tool catalog",
+                description=(
+                    "The server's public API: every lithos_* tool with its signature, "
+                    "one-line summary, and which core components it touches."
+                ),
+            )
+        )
+    items += [
         Artifact(
             path="metrics.md",
             title="Architecture metrics",
@@ -82,6 +97,7 @@ def artifacts() -> list[Artifact]:
             ),
         ),
     ]
+    return items
 
 
 def render_index() -> str:

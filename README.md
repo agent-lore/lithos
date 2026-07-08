@@ -96,7 +96,7 @@ claude mcp add --transport http lithos http://localhost:8765/mcp
 - [CLI Reference](docs/cli.md) — installing and using the `lithos` command-line tool
 - [Specification](docs/SPECIFICATION.md) — full technical specification
 - [LCMA Design](docs/lcma-design.md) — design notes
-- [Generated architecture docs](docs/generated/README.md) — component & domain diagrams generated from the code, drift-checked in CI (`make diagrams`)
+- [Generated architecture docs](docs/generated/README.md) — diagrams, metrics, tool catalog, container view, and per-component drill-downs generated from the code, drift-checked in CI (`make diagrams`)
 
 ## Metadata Filtering
 

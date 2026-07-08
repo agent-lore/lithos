@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from tests.guardrail._common import load_architecture, module_files, module_name_of, with_header
 
-CLOSURE_VAR = "server"  # register(mcp, server): handlers close over this name
+DEFAULT_CLOSURE_VAR = "server"  # register(mcp, server): handlers close over this name
 
 
 @dataclass(frozen=True)
@@ -74,14 +74,14 @@ def _render_arg(arg: ast.arg, default: ast.expr | None) -> str:
     return text
 
 
-def _server_attrs(node: ast.AST) -> set[str]:
-    """Public ``server.<attr>`` names accessed in a handler body."""
+def _server_attrs(node: ast.AST, closure_var: str) -> set[str]:
+    """Public ``<closure_var>.<attr>`` names accessed in a handler body."""
     return {
         n.attr
         for n in ast.walk(node)
         if isinstance(n, ast.Attribute)
         and isinstance(n.value, ast.Name)
-        and n.value.id == CLOSURE_VAR
+        and n.value.id == closure_var
     }
 
 
@@ -93,6 +93,7 @@ def discover_tools() -> list[ToolInfo]:
     cfg = load_architecture().get("tool_catalog", {})
     include = cfg.get("include_modules", [])
     attr_map: dict[str, str] = cfg.get("component_attrs", {})
+    closure_var = cfg.get("closure_var", DEFAULT_CLOSURE_VAR)
 
     tools: list[ToolInfo] = []
     for path in module_files(include):
@@ -103,7 +104,7 @@ def discover_tools() -> list[ToolInfo]:
                 continue
             if not _has_tool_decorator(node):
                 continue
-            attrs = _server_attrs(node)
+            attrs = _server_attrs(node, closure_var)
             tools.append(
                 ToolInfo(
                     name=node.name,

@@ -50,6 +50,16 @@ def test_every_model_is_scanned_or_excluded() -> None:
     )
 
 
+def test_no_duplicate_model_names() -> None:
+    """Same-named models in different modules would collapse into one diagram node."""
+    dupes = dt.duplicate_model_names(dt.domain_files())
+    assert not dupes, (
+        "public model class names defined in more than one module would collapse "
+        "in the domain diagram and share a Mermaid id — rename one, or exclude its "
+        f"module in docs/architecture.toml [domain]: {dupes}"
+    )
+
+
 def _card(annotation: str, targets: set[str]) -> list[tuple[str, str]]:
     node = ast.parse(annotation, mode="eval").body
     return sorted(dt._annotation_refs(node, targets))

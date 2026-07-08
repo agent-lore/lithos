@@ -169,26 +169,52 @@ def _is_pydantic(node: ast.ClassDef, model_names: set[str]) -> bool:
     return False
 
 
-def _discover_models(files: list[pathlib.Path]) -> list[_Model]:
+def _scan_models(files: list[pathlib.Path]) -> list[tuple[ast.ClassDef, str]]:
+    """Every public dataclass / Pydantic model as ``(ClassDef, module)``, no dedup."""
     all_classes: list[tuple[ast.ClassDef, str]] = []
     for path in files:
         module = module_name_of(path)
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         all_classes.extend((n, module) for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
     names = {c.name for c, _ in all_classes}
-    models = [
+    return [
         (c, mod)
         for c, mod in all_classes
         if (_is_dataclass(c) or _is_pydantic(c, names)) and not c.name.startswith("_")
     ]
-    # de-dupe by name (keep first, sorted by name for determinism)
+
+
+def _discover_models(files: list[pathlib.Path]) -> list[_Model]:
+    # de-dupe by name (keep first, sorted by name for determinism). Same-named
+    # models sharing a Mermaid id would collapse — duplicate_model_names() guards
+    # against that so the collapse can't happen silently.
     seen: set[str] = set()
     unique: list[_Model] = []
-    for c, mod in sorted(models, key=lambda cm: cm[0].name):
+    for c, mod in sorted(_scan_models(files), key=lambda cm: cm[0].name):
         if c.name not in seen:
             seen.add(c.name)
             unique.append(_Model(node=c, module=mod))
     return unique
+
+
+def domain_files() -> list[pathlib.Path]:
+    """The source files scanned for the domain diagram (include minus exclude)."""
+    domain = load_architecture().get("domain", {})
+    include = domain.get("include_modules") or [ROOT_PACKAGE]
+    exclude = domain.get("exclude_modules", [])
+    return [f for f in _module_files(include) if not _excluded(module_name_of(f), exclude)]
+
+
+def duplicate_model_names(files: list[pathlib.Path]) -> dict[str, list[str]]:
+    """Public model names defined in more than one of *files* → the owning modules.
+
+    These would collapse to a single node in the diagram (and share a Mermaid id),
+    so a guard test asserts this is empty.
+    """
+    by_name: dict[str, set[str]] = {}
+    for c, mod in _scan_models(files):
+        by_name.setdefault(c.name, set()).add(mod)
+    return {name: sorted(mods) for name, mods in sorted(by_name.items()) if len(mods) > 1}
 
 
 def discover_all_models() -> list[_Model]:
@@ -307,12 +333,7 @@ def _associations(models: list[_Model]) -> list[_Assoc]:
 def render_domain_model() -> str:
     arch = load_architecture()
     components: dict[str, list[str]] = arch["components"]
-    domain = arch.get("domain", {})
-    include = domain.get("include_modules") or [ROOT_PACKAGE]
-    exclude = domain.get("exclude_modules", [])
-    files = [f for f in _module_files(include) if not _excluded(module_name_of(f), exclude)]
-
-    models = _discover_models(files)
+    models = _discover_models(domain_files())
     model_names = {m.name for m in models}
     comp_of = {m.name: (component_of(m.module, components) or "Other") for m in models}
     assocs = _associations(models)

@@ -36,8 +36,10 @@ A change is **not done** unless all five are green:
 
 ## Architecture guardrails & generated docs
 
-`docs/generated/` holds generated views of the code (component diagram, domain
-model, index) produced by `tests/guardrail/` and drift-checked in CI:
+`docs/generated/` holds generated views of the code — component diagram, domain
+model, architecture metrics, MCP tool catalog, container/data-store view, and
+per-component drill-down pages (indexed by `docs/generated/README.md`) — produced
+by `tests/guardrail/` and drift-checked in CI:
 
 - `make diagrams` regenerates everything (it just runs `pytest tests/guardrail/ -q`).
   Note `make test` runs the same tests, so a test run rewrites `docs/generated/`

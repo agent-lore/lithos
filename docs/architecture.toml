@@ -11,12 +11,19 @@
 # `component_of()` matches a module to a component by LONGEST module-prefix,
 # so "lithos.lcma" also captures "lithos.lcma.scouts" etc.
 #
-# PORTING TO ANOTHER PROJECT: the tests/guardrail/ kit is project-agnostic —
-# to reuse it, copy tests/guardrail/ + this file and edit only this file:
+# PORTING TO ANOTHER PROJECT: copy tests/guardrail/ + this file and edit only
+# this file — no code changes. The component diagram, domain model, metrics, and
+# per-component pages work from [project] + [components]/[tiers] + [domain] alone.
 #   1. [project] below (root_package + src_layout),
 #   2. [components]/[tiers] to your modules,
-#   3. [domain]/[tool_catalog] scan lists and [budgets] to your measured values.
-# No code changes required.
+#   3. [domain] scan list and [budgets] to your measured values.
+# The tool catalog and container view are OPTIONAL adapters, each enabled by its
+# own section and skipped when absent:
+#   - [tool_catalog] targets a decorator-registered tool surface (MCP-style); its
+#     prefix/floor/closure-var are configurable (see below). Omit the section for
+#     a project with no such surface.
+#   - [containers] declares data stores; [containers.anchor] optionally binds them
+#     to a config class for a code-anchored drift check. Omit to skip.
 
 [project]
 # Root importable package and the directory holding it (src-layout). For a flat
@@ -79,10 +86,14 @@ modules_over_800_lines = 11   # incl. tools.tasks (985) split from server in #37
 max_module_lines       = 2800 # stop-loss; largest today is coordination.py at 2675
 
 # MCP tool surface: modules scanned for @…tool()-decorated handlers (counted in
-# the metrics snapshot; catalogued in docs/generated/tool_catalog.md). A project
-# with no MCP tools can leave this empty.
+# the metrics snapshot; catalogued in docs/generated/tool_catalog.md). Omit the
+# whole section (or leave include_modules empty) for a project with no such
+# surface — the catalog artifact is then skipped, not emitted empty.
 [tool_catalog]
 include_modules = ["lithos.tools", "lithos.server"]
+tool_prefix = "lithos_"   # required name prefix; "" drops the check
+min_tools = 35            # floor for the completeness guard; 0 for an optional surface
+closure_var = "server"    # handler closure param whose .attr access maps to components
 # Public server methods a handler may touch that are NOT a component boundary
 # (so the completeness check doesn't flag them).
 ignore_attrs = ["initialize"]
@@ -127,6 +138,15 @@ exclude_modules = ["lithos.config", "lithos.errors", "lithos.lcma"]
 # or removed without updating this list. Roles use the CONTEXT.md vocabulary.
 [containers]
 ignore_properties = ["lithos_store_path"]  # base dir that contains the stores below
+
+# Optional code anchor: cross-check the stores below against the @property members
+# of a config class — every <suffix> property must be declared or ignored, and
+# vice versa (test_container_diagram). Omit this section to skip the check, e.g.
+# for a project whose storage config lives elsewhere or has no central class.
+[containers.anchor]
+module = "config"                        # <src_root>/config.py
+class = "StorageConfig"
+property_suffixes = ["_path", "_db_path"]
 
 [[containers.stores]]
 id = "corpus"

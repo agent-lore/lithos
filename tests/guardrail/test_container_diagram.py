@@ -10,21 +10,31 @@ from __future__ import annotations
 
 import ast
 
+import pytest
+
 from tests.guardrail import _containers as ct
 from tests.guardrail._common import SRC_ROOT, load_architecture, write
 
 
-def _storage_path_properties() -> set[str]:
-    """@property names on StorageConfig that name a path/db store."""
-    tree = ast.parse((SRC_ROOT / "config.py").read_text(encoding="utf-8"))
-    cls = next(
-        n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "StorageConfig"
-    )
+def _require_containers() -> dict:
+    cfg = load_architecture().get("containers", {})
+    if not cfg.get("stores"):
+        pytest.skip("no [containers].stores — container view is not enabled")
+    return cfg
+
+
+def _storage_path_properties(anchor: dict) -> set[str]:
+    """@property names on the anchor class whose name ends in a store suffix."""
+    module = anchor.get("module", "config")
+    class_name = anchor.get("class", "StorageConfig")
+    suffixes = tuple(anchor.get("property_suffixes", ["_path", "_db_path"]))
+    tree = ast.parse((SRC_ROOT / f"{module}.py").read_text(encoding="utf-8"))
+    cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == class_name)
     props: set[str] = set()
     for node in cls.body:
         if (
             isinstance(node, ast.FunctionDef)
-            and node.name.endswith(("_path", "_db_path"))
+            and node.name.endswith(suffixes)
             and any(isinstance(d, ast.Name) and d.id == "property" for d in node.decorator_list)
         ):
             props.add(node.name)
@@ -32,16 +42,20 @@ def _storage_path_properties() -> set[str]:
 
 
 def test_generate_container_diagram() -> None:
+    _require_containers()
     out = write("containers.md", ct.render_container_diagram())
     assert out.exists()
     assert "graph LR" in out.read_text(encoding="utf-8")
 
 
 def test_declared_stores_match_config() -> None:
+    cfg = _require_containers()
+    anchor = cfg.get("anchor")
+    if not anchor:
+        pytest.skip("no [containers.anchor] — code-anchoring check disabled")
     stores = ct.stores()
-    cfg = load_architecture().get("containers", {})
     declared = {s["config_property"] for s in stores} | set(cfg.get("ignore_properties", []))
-    actual = _storage_path_properties()
+    actual = _storage_path_properties(anchor)
 
     undocumented = sorted(actual - declared)
     stale = sorted({s["config_property"] for s in stores} - actual)
@@ -55,6 +69,7 @@ def test_declared_stores_match_config() -> None:
 
 
 def test_store_metadata_is_valid() -> None:
+    _require_containers()
     components = set(load_architecture()["components"])
     stores = ct.stores()
 
