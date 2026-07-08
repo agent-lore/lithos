@@ -25,6 +25,20 @@ graph TD
     Logging
     Telemetry
   end
+  click CognitiveMemory "components/CognitiveMemory.md"
+  click Config "components/Config.md"
+  click Coordination "components/Coordination.md"
+  click Entrypoints "components/Entrypoints.md"
+  click Errors "components/Errors.md"
+  click Events "components/Events.md"
+  click Graph "components/Graph.md"
+  click Intake "components/Intake.md"
+  click Knowledge "components/Knowledge.md"
+  click LCMA "components/LCMA.md"
+  click Logging "components/Logging.md"
+  click Provenance "components/Provenance.md"
+  click Search "components/Search.md"
+  click Telemetry "components/Telemetry.md"
   CognitiveMemory --> Config
   CognitiveMemory --> Coordination
   CognitiveMemory --> Errors
@@ -88,4 +102,35 @@ graph TD
   Search --> Graph
   Search --> Telemetry
   Telemetry --> Config
+  linkStyle 0 stroke:#bbb
+  linkStyle 2 stroke:#bbb
+  linkStyle 3 stroke:#bbb
+  linkStyle 10 stroke:#bbb
+  linkStyle 11 stroke:#bbb
+  linkStyle 12 stroke:#bbb
+  linkStyle 14 stroke:#bbb
+  linkStyle 16 stroke:#999,stroke-dasharray:4
+  linkStyle 18 stroke:#999,stroke-dasharray:4
+  linkStyle 19 stroke:#999,stroke-dasharray:4
+  linkStyle 23 stroke:#999,stroke-dasharray:4
+  linkStyle 26 stroke:#999,stroke-dasharray:4
+  linkStyle 27 stroke:#bbb
+  linkStyle 28 stroke:#bbb
+  linkStyle 29 stroke:#bbb
+  linkStyle 31 stroke:#bbb
+  linkStyle 33 stroke:#bbb
+  linkStyle 34 stroke:#bbb
+  linkStyle 38 stroke:#bbb
+  linkStyle 39 stroke:#bbb
+  linkStyle 40 stroke:#bbb
+  linkStyle 44 stroke:#bbb
+  linkStyle 45 stroke:#bbb
+  linkStyle 47 stroke:#bbb
+  linkStyle 48 stroke:#bbb
+  linkStyle 53 stroke:#bbb
+  linkStyle 54 stroke:#bbb
+  linkStyle 58 stroke:#bbb
+  linkStyle 59 stroke:#bbb
+  linkStyle 61 stroke:#bbb
+  linkStyle 62 stroke:#bbb
 ```

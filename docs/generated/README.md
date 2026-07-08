@@ -28,6 +28,9 @@ Per-component drill-down pages: [CognitiveMemory](components/CognitiveMemory.md)
   in component A to a module in component B.
 - Tier subgraphs (Entrypoints / Core / Foundation): dependencies must only
   point downward; enforced by import-linter (`pyproject.toml [tool.importlinter]`).
+- Dashed grey edge: a tier-skipping dependency (e.g. Entrypoints → Foundation).
+  Grey edge: a dependency on a Foundation component (de-emphasized fan-in).
+- Component nodes are clickable — they link to the per-component drill-down page.
 - `Src "1" --> "0..*" Dst : field` in the domain model: class `Src` has a
   field holding many `Dst`; `0..1` = optional, `1` = exactly one.
 

@@ -77,7 +77,12 @@ def render_component_diagram() -> str:
     arch = load_architecture()
     components: dict[str, list[str]] = arch["components"]
     tiers: dict[str, list[str]] = arch.get("tiers", {})
-    edges = component_edges(components)
+    edges = sorted(component_edges(components))
+
+    # tier rank (declared order) drives edge styling; the lowest tier is the
+    # foundation whose heavy fan-in we de-emphasize.
+    rank = {c: i for i, members in enumerate(tiers.values()) for c in members}
+    lowest = {c for c, r in rank.items() if r == max(rank.values(), default=-1)}
 
     lines = ["```mermaid", "graph TD"]
     # group nodes into tier subgraphs for readability (deterministic order)
@@ -100,8 +105,18 @@ def render_component_diagram() -> str:
     for comp in sorted(components):
         if comp not in placed:
             lines.append(f"  {comp}")
-    for src, dst in sorted(edges):
+    # each node links to its drill-down page
+    for comp in sorted(components):
+        lines.append(f'  click {comp} "components/{comp}.md"')
+    # edges, then linkStyle by edge index (indices are stable — edges are sorted)
+    styles: list[str] = []
+    for i, (src, dst) in enumerate(edges):
         lines.append(f"  {src} --> {dst}")
+        if src in rank and dst in rank and rank[dst] - rank[src] >= 2:
+            styles.append(f"  linkStyle {i} stroke:#999,stroke-dasharray:4")  # tier-skipping
+        elif dst in lowest:
+            styles.append(f"  linkStyle {i} stroke:#bbb")  # foundation fan-in, de-emphasized
+    lines.extend(styles)
     lines.append("```")
     return with_header("# Component dependencies\n\n" + "\n".join(lines) + "\n")
 
