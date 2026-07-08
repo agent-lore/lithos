@@ -124,12 +124,15 @@ def _heading(module: str) -> str:
 
 def render_tool_catalog() -> str:
     tools = discover_tools()
+    closure_var = (
+        load_architecture().get("tool_catalog", {}).get("closure_var", DEFAULT_CLOSURE_VAR)
+    )
     lines = [
         "# MCP tool catalog",
         "",
         f"{len(tools)} tools exposed by the server, grouped by source module. "
         '"Touches" lists the core components each handler reaches (via '
-        "`server.<attr>`). Generated from the code — see `docs/architecture.toml` "
+        f"`{closure_var}.<attr>`). Generated from the code — see `docs/architecture.toml` "
         "`[tool_catalog]`.",
     ]
 

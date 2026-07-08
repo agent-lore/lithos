@@ -37,14 +37,15 @@ def _node_label(store: dict) -> str:
 
 def render_container_diagram() -> str:
     declared = stores()
+    anchor = load_architecture().get("containers", {}).get("anchor", {})
+    anchored = f"anchored to `{anchor['class']}`" if anchor.get("class") else "declared here"
     lines = [
         "# Data stores",
         "",
         "On-disk stores and external engines, with the component that owns each. "
         "The corpus is the source of truth; derived views are rebuilt from it "
         "(dashed = derived / reconciled); agent & coordination state stands "
-        "alone. Declared in `docs/architecture.toml` `[containers]`, anchored to "
-        "`StorageConfig`.",
+        f"alone. Declared in `docs/architecture.toml` `[containers]`, {anchored}.",
         "",
         "```mermaid",
         "graph LR",

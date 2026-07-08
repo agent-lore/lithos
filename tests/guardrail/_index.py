@@ -30,7 +30,7 @@ def all_expected_paths() -> set[str]:
     return {a.path for a in artifacts()} | set(component_page_paths()) | {"README.md"}
 
 
-def artifacts() -> list[Artifact]:
+def artifacts(arch: dict | None = None) -> list[Artifact]:
     """All generated artifacts, in the order they appear in the index.
 
     The container view and tool catalog are optional adapters: each appears only
@@ -38,7 +38,7 @@ def artifacts() -> list[Artifact]:
     reuses the kit without them gets no empty/orphaned artifact (and the manifest
     test stays exact).
     """
-    arch = load_architecture()
+    arch = arch if arch is not None else load_architecture()
     items = [
         Artifact(
             path="architecture.md",
@@ -100,7 +100,41 @@ def artifacts() -> list[Artifact]:
     return items
 
 
-def render_index() -> str:
+def _usage_lines(present: set[str]) -> list[str]:
+    """The 'How to use these' bullets, referencing only artifacts that exist.
+
+    Optional adapters (containers.md, tool_catalog.md) are only linked when their
+    artifact is present, so a ported project without them gets no broken links.
+    """
+    lines = [
+        "## How to use these",
+        "",
+        "- **New to the codebase?** Start at [architecture.md](architecture.md) for the",
+        "  component map and click a node to open its drill-down page.",
+    ]
+    if "containers.md" in present:
+        lines += [
+            "  [containers.md](containers.md) shows where data lives;",
+            "  [domain_model.md](domain_model.md) shows the shapes it takes.",
+        ]
+    else:
+        lines.append("  [domain_model.md](domain_model.md) shows the shapes the data takes.")
+    if "tool_catalog.md" in present:
+        lines += [
+            "- **Building against the server?** [tool_catalog.md](tool_catalog.md) is the",
+            "  public API — every tool, its signature, and the components it touches.",
+        ]
+    lines += [
+        "- **Reviewing a PR?** CI posts an architecture-metrics delta in its job summary;",
+        "  [metrics.md](metrics.md) has the full snapshot and the budgets that gate",
+        "  regressions. `make metrics-history` plots any metric over its commit history.",
+    ]
+    return lines
+
+
+def render_index(arch: dict | None = None) -> str:
+    arch = arch if arch is not None else load_architecture()
+    items = artifacts(arch)
     lines = [
         "# Generated architecture docs",
         "",
@@ -114,24 +148,16 @@ def render_index() -> str:
         "",
         "Do not edit these files by hand.",
         "",
-        "## How to use these",
-        "",
-        "- **New to the codebase?** Start at [architecture.md](architecture.md) for the",
-        "  component map, click a node to open its drill-down page, then read",
-        "  [containers.md](containers.md) for where data lives and",
-        "  [domain_model.md](domain_model.md) for the shapes it takes.",
-        "- **Building against the server?** [tool_catalog.md](tool_catalog.md) is the",
-        "  public MCP API — every tool, its signature, and the components it touches.",
-        "- **Reviewing a PR?** CI posts an architecture-metrics delta in its job summary;",
-        "  [metrics.md](metrics.md) has the full snapshot and the budgets that gate",
-        "  regressions. `make metrics-history` plots any metric over its commit history.",
+    ]
+    lines += _usage_lines({a.path for a in items})
+    lines += [
         "",
         "## Artifacts",
         "",
         "| Artifact | What it shows |",
         "|---|---|",
     ]
-    for a in artifacts():
+    for a in items:
         lines.append(f"| [{a.title}]({a.path}) | {a.description} |")
     comp_links = " · ".join(
         f"[{path.removeprefix('components/').removesuffix('.md')}]({path})"
