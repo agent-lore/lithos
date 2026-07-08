@@ -48,12 +48,22 @@ jobs:
         run: make diagrams
 
       - name: Fail if diagrams are stale
+        # `git status --porcelain` (not `git diff`) so newly generated but
+        # never-committed artifacts fail the gate too, not just modifications.
         run: |
-          if ! git diff --quiet docs/generated; then
+          if [ -n "$(git status --porcelain docs/generated)" ]; then
             echo "::error::docs/generated is out of date. Run 'make diagrams' and commit the result."
+            git status --short docs/generated
             git --no-pager diff -- docs/generated
             exit 1
           fi
+
+      - name: Architecture metrics delta vs base (informational)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          git show "FETCH_HEAD:docs/generated/metrics.json" > /tmp/base-metrics.json 2>/dev/null || echo '{}' > /tmp/base-metrics.json
+          uv run python scripts/metrics_diff.py /tmp/base-metrics.json docs/generated/metrics.json --markdown >> "$GITHUB_STEP_SUMMARY"
 
   test:
     name: Test

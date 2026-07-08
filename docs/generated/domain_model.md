@@ -3,6 +3,27 @@
 
 # Domain model
 
+## CognitiveMemory
+
+```mermaid
+classDiagram
+  class NodeStats {
+    +node_id str
+    +salience float
+    +retrieval_count int
+    +cited_count int
+    +last_retrieved_at str | None
+    +last_used_at str | None
+    +ignored_count int
+    +misleading_count int
+    +decay_rate float
+    +spaced_rep_strength float
+    +last_decay_applied_at str | None
+  }
+```
+
+## Coordination
+
 ```mermaid
 classDiagram
   class AccessLogEntry {
@@ -27,33 +48,6 @@ classDiagram
     +claimed_at datetime
     +expires_at datetime
   }
-  class DeleteOutcome {
-    +status Literal['deleted', 'not_found']
-    +path str
-  }
-  class DeleteRequest {
-    +id str
-  }
-  class DuplicateInfo {
-    +id str
-    +title str
-    +source_url str | None
-  }
-  class EdgeOutcome {
-    +edge_id str
-    +status Literal['ok']
-  }
-  class EdgeRequest {
-    +from_id str
-    +to_id str
-    +edge_type str
-    +weight float
-    +namespace str
-    +provenance_actor str | None
-    +provenance_type str | None
-    +evidence str | None
-    +conflict_state str | None
-  }
   class Finding {
     +id str
     +task_id str
@@ -61,165 +55,6 @@ classDiagram
     +summary str
     +knowledge_id str | None
     +created_at datetime | None
-  }
-  class GraphReconcileAction {
-    +target Literal['graph_cache', 'wiki_link']
-    +action Literal['full_rebuild', 'stale_link']
-    +reason str
-    +source_id str | None
-    +source_title str | None
-    +link_target str | None
-    +corpus_count int | None
-    +cached_count int | None
-  }
-  class GraphReconcileFailure {
-    +detail str
-  }
-  class GraphReconcilePlan {
-    +scanned int
-  }
-  class GraphReconcileResult {
-    +repaired int
-    +scanned int
-  }
-  class Healthy
-  class IndexableDocument {
-    +id str
-    +title str
-    +content str
-    +path str
-    +author str
-    +tags tuple[str, ...]
-    +source_url str
-    +updated_at str
-    +expires_at str
-    +entities tuple[str, ...]
-  }
-  class KnowledgeDocument {
-    +id str
-    +title str
-    +content str
-    +path Path
-  }
-  class KnowledgeMetadata {
-    +id str
-    +title str
-    +author str
-    +created_at datetime
-    +updated_at datetime
-    +tags list[str]
-    +aliases list[str]
-    +confidence float
-    +contributors list[str]
-    +source str | None
-    +source_url str | None
-    +supersedes str | None
-    +derived_from_ids list[str]
-    +expires_at datetime | None
-    +extra dict
-    +version int
-    +schema_version int | None
-    +namespace str | None
-    +access_scope str | None
-    +note_type str | None
-    +status str | None
-    +summaries dict | None
-    +entities list[str]
-    +entities_extractor int | None
-  }
-  class LinkInfo
-  class LinkedDocument {
-    +id str
-    +title str
-  }
-  class LithosEvent {
-    +type str
-    +agent str
-    +payload dict[str, str | int | float | bool | None]
-    +tags list[str]
-    +id str
-    +timestamp datetime
-  }
-  class NodeStats {
-    +node_id str
-    +salience float
-    +retrieval_count int
-    +cited_count int
-    +last_retrieved_at str | None
-    +last_used_at str | None
-    +ignored_count int
-    +misleading_count int
-    +decay_rate float
-    +spaced_rep_strength float
-    +last_decay_applied_at str | None
-  }
-  class NoteUpdateRequest {
-    +id str
-    +title str | None
-    +tags list[str] | _UnsetType
-    +lcma_status str | None | _UnsetType
-    +metadata dict | _UnsetType
-    +expected_version int | None
-  }
-  class ProvenancePlan {
-    +scanned int
-    +supported bool
-  }
-  class ProvenanceReconcileAction {
-    +target Literal['projection_edge']
-    +action Literal['create', 'remove', 'resync']
-    +from_id str
-    +to_id str
-    +namespace str
-    +edge_id str | None
-  }
-  class ProvenanceReconcileFailure {
-    +detail str
-  }
-  class ProvenanceResult {
-    +created int
-    +removed int
-    +resynced int
-    +scanned int
-    +supported bool
-  }
-  class ReconcileAction {
-    +backend str
-    +action str
-    +reason str
-  }
-  class ReconcileFailure {
-    +backend str
-    +detail str
-  }
-  class ReconcilePlan
-  class ReconcileResult
-  class SearchReconcilePlan {
-    +scanned int
-  }
-  class SearchReconcileResult {
-    +repaired int
-    +scanned int
-  }
-  class SearchResult {
-    +id str
-    +title str
-    +snippet str
-    +score float
-    +path str
-    +source_url str
-    +updated_at str
-    +is_stale bool
-  }
-  class SemanticResult {
-    +id str
-    +title str
-    +snippet str
-    +similarity float
-    +path str
-    +source_url str
-    +updated_at str
-    +is_stale bool
   }
   class Task {
     +id str
@@ -255,12 +90,95 @@ classDiagram
     +outcome str | None
     +resolved_at datetime | None
   }
-  class Unhealthy {
-    +reason str
+  TaskStatus "1" --> "0..*" Claim : claims
+```
+
+## Events
+
+```mermaid
+classDiagram
+  class LithosEvent {
+    +type str
+    +agent str
+    +payload dict[str, str | int | float | bool | None]
+    +tags list[str]
+    +id str
+    +timestamp datetime
   }
-  class WikiLink {
-    +target str
-    +display str | None
+```
+
+## Graph
+
+```mermaid
+classDiagram
+  class GraphReconcileAction {
+    +target Literal['graph_cache', 'wiki_link']
+    +action Literal['full_rebuild', 'stale_link']
+    +reason str
+    +source_id str | None
+    +source_title str | None
+    +link_target str | None
+    +corpus_count int | None
+    +cached_count int | None
+  }
+  class GraphReconcileFailure {
+    +detail str
+  }
+  class GraphReconcilePlan {
+    +scanned int
+  }
+  class GraphReconcileResult {
+    +repaired int
+    +scanned int
+  }
+  class LinkInfo
+  class LinkedDocument {
+    +id str
+    +title str
+  }
+  class KnowledgeDocument
+  <<Knowledge>> KnowledgeDocument
+  GraphReconcilePlan "1" --> "0..*" GraphReconcileAction : actions
+  GraphReconcilePlan "1" --> "0..*" KnowledgeDocument : docs
+  GraphReconcileResult "1" --> "0..*" GraphReconcileAction : actions
+  GraphReconcileResult "1" --> "0..*" GraphReconcileFailure : failed
+  LinkInfo "1" --> "0..*" LinkedDocument : incoming
+  LinkInfo "1" --> "0..*" LinkedDocument : outgoing
+```
+
+## Intake
+
+```mermaid
+classDiagram
+  class DeleteOutcome {
+    +status Literal['deleted', 'not_found']
+    +path str
+  }
+  class DeleteRequest {
+    +id str
+  }
+  class EdgeOutcome {
+    +edge_id str
+    +status Literal['ok']
+  }
+  class EdgeRequest {
+    +from_id str
+    +to_id str
+    +edge_type str
+    +weight float
+    +namespace str
+    +provenance_actor str | None
+    +provenance_type str | None
+    +evidence str | None
+    +conflict_state str | None
+  }
+  class NoteUpdateRequest {
+    +id str
+    +title str | None
+    +tags list[str] | _UnsetType
+    +lcma_status str | None | _UnsetType
+    +metadata dict | _UnsetType
+    +expected_version int | None
   }
   class WriteOutcome {
     +status Literal['created', 'updated', 'duplicate', 'invalid_input', 'version_conflict', 'content_too_large', 'slug_collision', 'path_collision', 'error']
@@ -290,6 +208,61 @@ classDiagram
     +summaries dict | None | _UnsetType
     +metadata dict | _UnsetType
   }
+  class DuplicateInfo
+  <<Knowledge>> DuplicateInfo
+  class KnowledgeDocument
+  <<Knowledge>> KnowledgeDocument
+  WriteOutcome "1" --> "0..1" DuplicateInfo : duplicate_of
+  WriteOutcome "1" --> "0..1" KnowledgeDocument : document
+```
+
+## Knowledge
+
+```mermaid
+classDiagram
+  class DuplicateInfo {
+    +id str
+    +title str
+    +source_url str | None
+  }
+  class KnowledgeDocument {
+    +id str
+    +title str
+    +content str
+    +path Path
+  }
+  class KnowledgeMetadata {
+    +id str
+    +title str
+    +author str
+    +created_at datetime
+    +updated_at datetime
+    +tags list[str]
+    +aliases list[str]
+    +confidence float
+    +contributors list[str]
+    +source str | None
+    +source_url str | None
+    +supersedes str | None
+    +derived_from_ids list[str]
+    +expires_at datetime | None
+    +extra dict
+    +version int
+    +schema_version int | None
+    +namespace str | None
+    +access_scope str | None
+    +note_type str | None
+    +status str | None
+    +summaries dict | None
+    +entities list[str]
+    +entities_extractor int | None
+  }
+  class ReconcilePlan
+  class ReconcileResult
+  class WikiLink {
+    +target str
+    +display str | None
+  }
   class WriteResult {
     +status Literal['created', 'updated', 'duplicate', 'error', 'invalid_input', 'version_conflict', 'content_too_large', 'path_collision']
     +warnings list[str]
@@ -297,29 +270,119 @@ classDiagram
     +current_version int | None
     +path_collision_existing_id str | None
   }
-  GraphReconcilePlan "1" --> "0..*" GraphReconcileAction : actions
-  GraphReconcilePlan "1" --> "0..*" KnowledgeDocument : docs
-  GraphReconcileResult "1" --> "0..*" GraphReconcileAction : actions
-  GraphReconcileResult "1" --> "0..*" GraphReconcileFailure : failed
+  class GraphReconcilePlan
+  <<Graph>> GraphReconcilePlan
+  class GraphReconcileResult
+  <<Graph>> GraphReconcileResult
+  class ProvenancePlan
+  <<Provenance>> ProvenancePlan
+  class ProvenanceResult
+  <<Provenance>> ProvenanceResult
+  class SearchReconcilePlan
+  <<Search>> SearchReconcilePlan
+  class SearchReconcileResult
+  <<Search>> SearchReconcileResult
   KnowledgeDocument "1" --> "1" KnowledgeMetadata : metadata
   KnowledgeDocument "1" --> "0..*" WikiLink : links
-  LinkInfo "1" --> "0..*" LinkedDocument : outgoing
-  ProvenancePlan "1" --> "0..*" ProvenanceReconcileAction : actions
-  ProvenanceResult "1" --> "0..*" ProvenanceReconcileAction : actions
-  ProvenanceResult "1" --> "0..*" ProvenanceReconcileFailure : failed
   ReconcilePlan "1" --> "0..1" GraphReconcilePlan : graph
   ReconcilePlan "1" --> "0..1" ProvenancePlan : provenance
   ReconcilePlan "1" --> "0..1" SearchReconcilePlan : search
   ReconcileResult "1" --> "0..1" GraphReconcileResult : graph
   ReconcileResult "1" --> "0..1" ProvenanceResult : provenance
   ReconcileResult "1" --> "0..1" SearchReconcileResult : search
+  WriteResult "1" --> "0..1" DuplicateInfo : duplicate_of
+  WriteResult "1" --> "0..1" KnowledgeDocument : document
+```
+
+## Provenance
+
+```mermaid
+classDiagram
+  class ProvenancePlan {
+    +scanned int
+    +supported bool
+  }
+  class ProvenanceReconcileAction {
+    +target Literal['projection_edge']
+    +action Literal['create', 'remove', 'resync']
+    +from_id str
+    +to_id str
+    +namespace str
+    +edge_id str | None
+  }
+  class ProvenanceReconcileFailure {
+    +detail str
+  }
+  class ProvenanceResult {
+    +created int
+    +removed int
+    +resynced int
+    +scanned int
+    +supported bool
+  }
+  ProvenancePlan "1" --> "0..*" ProvenanceReconcileAction : actions
+  ProvenanceResult "1" --> "0..*" ProvenanceReconcileAction : actions
+  ProvenanceResult "1" --> "0..*" ProvenanceReconcileFailure : failed
+```
+
+## Search
+
+```mermaid
+classDiagram
+  class Healthy
+  class IndexableDocument {
+    +id str
+    +title str
+    +content str
+    +path str
+    +author str
+    +tags tuple[str, ...]
+    +source_url str
+    +updated_at str
+    +expires_at str
+    +entities tuple[str, ...]
+  }
+  class ReconcileAction {
+    +backend str
+    +action str
+    +reason str
+  }
+  class ReconcileFailure {
+    +backend str
+    +detail str
+  }
+  class SearchReconcilePlan {
+    +scanned int
+  }
+  class SearchReconcileResult {
+    +repaired int
+    +scanned int
+  }
+  class SearchResult {
+    +id str
+    +title str
+    +snippet str
+    +score float
+    +path str
+    +source_url str
+    +updated_at str
+    +is_stale bool
+  }
+  class SemanticResult {
+    +id str
+    +title str
+    +snippet str
+    +similarity float
+    +path str
+    +source_url str
+    +updated_at str
+    +is_stale bool
+  }
+  class Unhealthy {
+    +reason str
+  }
   SearchReconcilePlan "1" --> "0..*" IndexableDocument : docs
   SearchReconcilePlan "1" --> "0..*" ReconcileAction : actions
   SearchReconcileResult "1" --> "0..*" ReconcileAction : actions
   SearchReconcileResult "1" --> "0..*" ReconcileFailure : failed
-  TaskStatus "1" --> "0..*" Claim : claims
-  WriteOutcome "1" --> "0..1" DuplicateInfo : duplicate_of
-  WriteOutcome "1" --> "0..1" KnowledgeDocument : document
-  WriteResult "1" --> "0..1" DuplicateInfo : duplicate_of
-  WriteResult "1" --> "0..1" KnowledgeDocument : document
 ```

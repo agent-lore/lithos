@@ -105,6 +105,9 @@ pythonPlatform = "Linux"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
+# Standalone helper scripts import each other by bare module name (added to
+# sys.path at runtime); let pyright resolve them the same way.
+extraPaths = ["scripts"]
 
 [tool.importlinter]
 # Directional architecture contract: dependencies must only point downward,

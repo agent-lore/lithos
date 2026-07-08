@@ -1,0 +1,411 @@
+{
+  "complexity": {
+    "components": {
+      "CognitiveMemory": {
+        "functions_over_10": 2,
+        "max_complexity": 25,
+        "max_function": "lithos.cognitive_memory.CognitiveMemory.cache_lookup"
+      },
+      "Config": {
+        "functions_over_10": 1,
+        "max_complexity": 14,
+        "max_function": "lithos.config.LithosConfig._apply_backward_compat_env_overrides"
+      },
+      "Coordination": {
+        "functions_over_10": 5,
+        "max_complexity": 20,
+        "max_function": "lithos.coordination.CoordinationService.create_task"
+      },
+      "Entrypoints": {
+        "functions_over_10": 14,
+        "max_complexity": 65,
+        "max_function": "lithos.tools.notes.register.lithos_write"
+      },
+      "Errors": {
+        "functions_over_10": 0,
+        "max_complexity": 2,
+        "max_function": "lithos.envelopes.error_envelope"
+      },
+      "Events": {
+        "functions_over_10": 0,
+        "max_complexity": 7,
+        "max_function": "lithos.events.EventBus.emit"
+      },
+      "Graph": {
+        "functions_over_10": 3,
+        "max_complexity": 12,
+        "max_function": "lithos.graph.KnowledgeGraph._plan_reconcile_to"
+      },
+      "Intake": {
+        "functions_over_10": 1,
+        "max_complexity": 21,
+        "max_function": "lithos.intake.CorpusIntake.write"
+      },
+      "Knowledge": {
+        "functions_over_10": 11,
+        "max_complexity": 71,
+        "max_function": "lithos.knowledge.KnowledgeManager.update"
+      },
+      "LCMA": {
+        "functions_over_10": 23,
+        "max_complexity": 51,
+        "max_function": "lithos.lcma.retrieve._run_retrieve_impl"
+      },
+      "Logging": {
+        "functions_over_10": 0,
+        "max_complexity": 10,
+        "max_function": "lithos.logging_config.setup_logging"
+      },
+      "Provenance": {
+        "functions_over_10": 1,
+        "max_complexity": 13,
+        "max_function": "lithos.provenance.ProvenanceProjection._plan_reconcile_to"
+      },
+      "Search": {
+        "functions_over_10": 5,
+        "max_complexity": 33,
+        "max_function": "lithos.search.SearchEngine.graph_search"
+      },
+      "Telemetry": {
+        "functions_over_10": 1,
+        "max_complexity": 19,
+        "max_function": "lithos.telemetry.setup_telemetry"
+      }
+    },
+    "functions_over_10": 67,
+    "top_functions": [
+      {
+        "complexity": 71,
+        "qualname": "lithos.knowledge.KnowledgeManager.update"
+      },
+      {
+        "complexity": 65,
+        "qualname": "lithos.tools.notes.register.lithos_write"
+      },
+      {
+        "complexity": 51,
+        "qualname": "lithos.lcma.retrieve._run_retrieve_impl"
+      },
+      {
+        "complexity": 40,
+        "qualname": "lithos.knowledge.KnowledgeManager._scan_existing"
+      },
+      {
+        "complexity": 37,
+        "qualname": "lithos.knowledge.KnowledgeManager._sync_from_disk_unlocked"
+      },
+      {
+        "complexity": 34,
+        "qualname": "lithos.knowledge.KnowledgeManager.create"
+      },
+      {
+        "complexity": 33,
+        "qualname": "lithos.search.SearchEngine.graph_search"
+      },
+      {
+        "complexity": 30,
+        "qualname": "lithos.tools.read_search.register.lithos_list"
+      },
+      {
+        "complexity": 27,
+        "qualname": "lithos.lcma.scouts.scout_graph"
+      },
+      {
+        "complexity": 26,
+        "qualname": "lithos.server.LithosServer._validate_task_feedback"
+      }
+    ],
+    "total_functions": 660
+  },
+  "domain": {
+    "associations": 26,
+    "models": 42,
+    "models_without_docstrings": 0
+  },
+  "graph": {
+    "component_cycles": [
+      [
+        "Coordination",
+        "Graph",
+        "Knowledge",
+        "LCMA",
+        "Provenance",
+        "Search"
+      ]
+    ],
+    "components": {
+      "CognitiveMemory": {
+        "fan_in": 1,
+        "fan_out": 11,
+        "instability": 0.92
+      },
+      "Config": {
+        "fan_in": 10,
+        "fan_out": 0,
+        "instability": 0.0
+      },
+      "Coordination": {
+        "fan_in": 4,
+        "fan_out": 4,
+        "instability": 0.5
+      },
+      "Entrypoints": {
+        "fan_in": 0,
+        "fan_out": 12,
+        "instability": 1.0
+      },
+      "Errors": {
+        "fan_in": 7,
+        "fan_out": 0,
+        "instability": 0.0
+      },
+      "Events": {
+        "fan_in": 4,
+        "fan_out": 2,
+        "instability": 0.33
+      },
+      "Graph": {
+        "fan_in": 7,
+        "fan_out": 3,
+        "instability": 0.3
+      },
+      "Intake": {
+        "fan_in": 2,
+        "fan_out": 7,
+        "instability": 0.78
+      },
+      "Knowledge": {
+        "fan_in": 7,
+        "fan_out": 6,
+        "instability": 0.46
+      },
+      "LCMA": {
+        "fan_in": 2,
+        "fan_out": 9,
+        "instability": 0.82
+      },
+      "Logging": {
+        "fan_in": 1,
+        "fan_out": 0,
+        "instability": 0.0
+      },
+      "Provenance": {
+        "fan_in": 4,
+        "fan_out": 4,
+        "instability": 0.5
+      },
+      "Search": {
+        "fan_in": 5,
+        "fan_out": 4,
+        "instability": 0.44
+      },
+      "Telemetry": {
+        "fan_in": 9,
+        "fan_out": 1,
+        "instability": 0.1
+      }
+    },
+    "cross_component_edges": 63,
+    "longest_component_chain": 6,
+    "module_cycle_count": 2,
+    "module_cycles": [
+      [
+        "lithos.graph",
+        "lithos.knowledge",
+        "lithos.lcma.edges",
+        "lithos.provenance",
+        "lithos.search"
+      ],
+      [
+        "lithos.server",
+        "lithos.tools",
+        "lithos.tools.agents",
+        "lithos.tools.findings_stats",
+        "lithos.tools.memory_edges",
+        "lithos.tools.notes",
+        "lithos.tools.read_search",
+        "lithos.tools.tasks"
+      ]
+    ],
+    "tier_skipping": [
+      "Entrypoints -> Config",
+      "Entrypoints -> Errors",
+      "Entrypoints -> Events",
+      "Entrypoints -> Logging",
+      "Entrypoints -> Telemetry"
+    ],
+    "tier_skipping_edges": 5
+  },
+  "mcp": {
+    "tools": 37,
+    "tools_without_docstrings": 0
+  },
+  "schema": 1,
+  "size": {
+    "components": {
+      "CognitiveMemory": {
+        "classes": 2,
+        "functions": 27,
+        "largest_module": "lithos.cognitive_memory",
+        "largest_module_lines": 994,
+        "lines": 994,
+        "modules": 1,
+        "public_symbols": 2,
+        "sloc": 822
+      },
+      "Config": {
+        "classes": 9,
+        "functions": 17,
+        "largest_module": "lithos.config",
+        "largest_module_lines": 371,
+        "lines": 371,
+        "modules": 1,
+        "public_symbols": 12,
+        "sloc": 281
+      },
+      "Coordination": {
+        "classes": 8,
+        "functions": 61,
+        "largest_module": "lithos.coordination",
+        "largest_module_lines": 2675,
+        "lines": 2675,
+        "modules": 1,
+        "public_symbols": 8,
+        "sloc": 2256
+      },
+      "Entrypoints": {
+        "classes": 3,
+        "functions": 122,
+        "largest_module": "lithos.server",
+        "largest_module_lines": 1004,
+        "lines": 5203,
+        "modules": 11,
+        "public_symbols": 27,
+        "sloc": 4202
+      },
+      "Errors": {
+        "classes": 8,
+        "functions": 10,
+        "largest_module": "lithos.errors",
+        "largest_module_lines": 118,
+        "lines": 182,
+        "modules": 2,
+        "public_symbols": 11,
+        "sloc": 129
+      },
+      "Events": {
+        "classes": 3,
+        "functions": 11,
+        "largest_module": "lithos.events",
+        "largest_module_lines": 270,
+        "lines": 270,
+        "modules": 1,
+        "public_symbols": 2,
+        "sloc": 219
+      },
+      "Graph": {
+        "classes": 8,
+        "functions": 59,
+        "largest_module": "lithos.graph",
+        "largest_module_lines": 954,
+        "lines": 1509,
+        "modules": 2,
+        "public_symbols": 8,
+        "sloc": 1223
+      },
+      "Intake": {
+        "classes": 8,
+        "functions": 6,
+        "largest_module": "lithos.intake",
+        "largest_module_lines": 605,
+        "lines": 605,
+        "modules": 1,
+        "public_symbols": 8,
+        "sloc": 512
+      },
+      "Knowledge": {
+        "classes": 10,
+        "functions": 74,
+        "largest_module": "lithos.knowledge",
+        "largest_module_lines": 2419,
+        "lines": 3102,
+        "modules": 3,
+        "public_symbols": 25,
+        "sloc": 2505
+      },
+      "LCMA": {
+        "classes": 5,
+        "functions": 129,
+        "largest_module": "lithos.lcma.stats",
+        "largest_module_lines": 1248,
+        "lines": 4600,
+        "modules": 9,
+        "public_symbols": 19,
+        "sloc": 3718
+      },
+      "Logging": {
+        "classes": 1,
+        "functions": 2,
+        "largest_module": "lithos.logging_config",
+        "largest_module_lines": 166,
+        "lines": 166,
+        "modules": 1,
+        "public_symbols": 2,
+        "sloc": 104
+      },
+      "Provenance": {
+        "classes": 5,
+        "functions": 11,
+        "largest_module": "lithos.provenance",
+        "largest_module_lines": 402,
+        "lines": 402,
+        "modules": 1,
+        "public_symbols": 5,
+        "sloc": 306
+      },
+      "Search": {
+        "classes": 12,
+        "functions": 63,
+        "largest_module": "lithos.search",
+        "largest_module_lines": 1941,
+        "lines": 1941,
+        "modules": 1,
+        "public_symbols": 15,
+        "sloc": 1576
+      },
+      "Telemetry": {
+        "classes": 8,
+        "functions": 68,
+        "largest_module": "lithos.telemetry",
+        "largest_module_lines": 1183,
+        "lines": 1183,
+        "modules": 1,
+        "public_symbols": 13,
+        "sloc": 909
+      }
+    },
+    "max_module": "lithos.coordination",
+    "max_module_lines": 2675,
+    "modules_over_800": [
+      "lithos.cli",
+      "lithos.cognitive_memory",
+      "lithos.coordination",
+      "lithos.graph",
+      "lithos.knowledge",
+      "lithos.lcma.scouts",
+      "lithos.lcma.stats",
+      "lithos.search",
+      "lithos.server",
+      "lithos.telemetry",
+      "lithos.tools.tasks"
+    ],
+    "total_lines": 23203,
+    "total_modules": 37,
+    "total_sloc": 18762
+  },
+  "tests": {
+    "ratio": 1.8,
+    "src_lines": 23203,
+    "test_lines": 41855
+  }
+}

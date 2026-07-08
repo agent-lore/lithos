@@ -10,6 +10,45 @@
 #
 # `component_of()` matches a module to a component by LONGEST module-prefix,
 # so "lithos.lcma" also captures "lithos.lcma.scouts" etc.
+#
+# PORTING TO ANOTHER PROJECT: copy tests/guardrail/ + this file and edit only
+# this file — no code changes. The component diagram, domain model, metrics, and
+# per-component pages work from [project] + [components]/[tiers] + [domain] alone.
+#   1. [project] below (root_package + src_layout),
+#   2. [components]/[tiers] to your modules,
+#   3. [domain] scan list and [budgets] to your measured values.
+# The tool catalog and container view are OPTIONAL adapters, each enabled by its
+# own section and skipped when absent:
+#   - [tool_catalog] targets a decorator-registered tool surface (MCP-style); its
+#     prefix/floor/closure-var are configurable (see below). Omit the section for
+#     a project with no such surface.
+#   - [containers] declares data stores; [containers.anchor] optionally binds them
+#     to a config class for a code-anchored drift check. Omit to skip.
+
+[project]
+# Root importable package and the directory holding it (src-layout). For a flat
+# layout with the package at the repo root, set src_layout = "".
+root_package = "lithos"
+src_layout   = "src"
+
+# One-line description per component, shown at the top of its drill-down page
+# (docs/generated/components/<Component>.md). test_component_pages requires one
+# for every component in [components].
+[component_docs]
+Entrypoints     = "CLI, MCP server, tool handlers, and filesystem watcher — the outward-facing surfaces."
+Knowledge       = "The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived views."
+Search          = "Full-text (Tantivy) and semantic (ChromaDB) search behind one engine that hides its backends."
+Graph           = "The wiki-link knowledge graph and the authoritative edges.db store."
+Coordination    = "SQLite-backed task claiming, findings, and the agent registry for multi-agent work."
+Intake          = "The controlled mutation entry point: validates and applies writes to the corpus."
+Provenance      = "Corpus-derived edge projection — where a note came from."
+CognitiveMemory = "Agent-facing facade of LCMA: retrieval, learning, and asserted state."
+LCMA            = "Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment, stats."
+Events          = "Internal event bus decoupling producers from consumers."
+Config          = "Pydantic-settings configuration and resolved store paths."
+Telemetry       = "OpenTelemetry tracing and metrics."
+Errors          = "Standard error types and canonical MCP error envelopes."
+Logging         = "Structured JSON logging setup."
 
 [components]
 Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__"]
@@ -34,8 +73,49 @@ Entrypoints = ["Entrypoints"]
 Core        = ["Knowledge", "Search", "Graph", "Coordination", "Intake", "Provenance", "CognitiveMemory", "LCMA"]
 Foundation  = ["Events", "Config", "Telemetry", "Errors", "Logging"]
 
+# Hard architecture budgets, checked by tests/guardrail/test_metrics_budgets.py
+# against the metrics snapshot (docs/generated/metrics.md explains each one).
+# CI fails if a measured value exceeds its budget. Raising a budget is allowed
+# but must be an explicit, reviewed edit to this file; lower a budget after
+# improving the code to lock in the gain.
+[budgets]
+cross_component_edges  = 63    # measured 2026-07; direction: down
+component_cycles       = 1    # one 6-component SCC in Core (Coordination/Graph/Knowledge/LCMA/Provenance/Search); goal: shrink it
+module_cycles          = 2    # knowledge<->graph<->search<->provenance<->lcma.edges, server<->tools; goal: 0
+modules_over_800_lines = 11   # incl. tools.tasks (985) split from server in #374; direction: down
+max_module_lines       = 2800 # stop-loss; largest today is coordination.py at 2675
+
+# MCP tool surface: modules scanned for @…tool()-decorated handlers (counted in
+# the metrics snapshot; catalogued in docs/generated/tool_catalog.md). Omit the
+# whole section (or leave include_modules empty) for a project with no such
+# surface — the catalog artifact is then skipped, not emitted empty.
+[tool_catalog]
+include_modules = ["lithos.tools", "lithos.server"]
+tool_prefix = "lithos_"   # required name prefix; "" drops the check
+min_tools = 35            # floor for the completeness guard; 0 for an optional surface
+closure_var = "server"    # handler closure param whose .attr access maps to components
+# Public server methods a handler may touch that are NOT a component boundary
+# (so the completeness check doesn't flag them).
+ignore_attrs = ["initialize"]
+
+# server.<attr> -> component, for the catalog's "Touches" column. A handler that
+# reaches an unmapped, non-ignored server attribute fails test_tool_catalog.
+[tool_catalog.component_attrs]
+coordination = "Coordination"
+knowledge    = "Knowledge"
+search       = "Search"
+graph        = "Graph"
+edge_store   = "Graph"
+intake       = "Intake"
+projection   = "Provenance"
+memory       = "CognitiveMemory"
+event_bus    = "Events"
+_emit        = "Events"        # server-local wrapper around event_bus.emit
+watch_intake = "Entrypoints"
+
 # Domain class diagram: which modules to scan for dataclasses / Pydantic models.
-# Config/settings models are excluded — they are configuration, not domain entities.
+# test_domain_model_diagram asserts EVERY public model's module is in include or
+# exclude — so a new model in an unlisted module fails until it is classified.
 [domain]
 include_modules = [
     "lithos.coordination",
@@ -47,4 +127,81 @@ include_modules = [
     "lithos.intake",
     "lithos.search",
 ]
-exclude_modules = ["lithos.config"]
+# Not domain entities: config/settings, error types, and LCMA-internal pipeline
+# working types (e.g. lcma.utils.Candidate).
+exclude_modules = ["lithos.config", "lithos.errors", "lithos.lcma"]
+
+# Container / data-store view (docs/generated/containers.md). Store topology is
+# deployment knowledge, not derivable from imports — declared here, but every
+# store is anchored to a StorageConfig property (src/lithos/config.py) and
+# test_container_diagram fails if a *_path/*_db_path property is added, renamed,
+# or removed without updating this list. Roles use the CONTEXT.md vocabulary.
+[containers]
+ignore_properties = ["lithos_store_path"]  # base dir that contains the stores below
+
+# Optional code anchor: cross-check the stores below against the @property members
+# of a config class — every <suffix> property must be declared or ignored, and
+# vice versa (test_container_diagram). Omit this section to skip the check, e.g.
+# for a project whose storage config lives elsewhere or has no central class.
+[containers.anchor]
+module = "config"                        # <src_root>/config.py
+class = "StorageConfig"
+property_suffixes = ["_path", "_db_path"]
+
+[[containers.stores]]
+id = "corpus"
+label = "Corpus — Markdown notes"
+config_property = "knowledge_path"
+owner = "Knowledge"
+role = "source_of_truth"
+
+[[containers.stores]]
+id = "edges_db"
+label = "edges.db — asserted edges (+ projection rows)"
+config_property = "edges_db_path"
+owner = "Graph"
+role = "source_of_truth"      # ADR-0006: asserted rows authoritative; projection rows are derived
+engine = "SQLite"
+
+[[containers.stores]]
+id = "tantivy_index"
+label = "Full-text index"
+config_property = "tantivy_path"
+owner = "Search"
+role = "derived_view"
+derived_from = "corpus"
+engine = "Tantivy"
+
+[[containers.stores]]
+id = "chroma_index"
+label = "Semantic index"
+config_property = "chroma_path"
+owner = "Search"
+role = "derived_view"
+derived_from = "corpus"
+engine = "ChromaDB + embeddings"
+
+[[containers.stores]]
+id = "graph_cache"
+label = "Wiki-link graph cache"
+config_property = "graph_path"
+owner = "Graph"
+role = "derived_view"
+derived_from = "corpus"
+engine = "NetworkX"
+
+[[containers.stores]]
+id = "coordination_db"
+label = "coordination.db — tasks, claims, findings, agents"
+config_property = "coordination_db_path"
+owner = "Coordination"
+role = "agent_state"
+engine = "SQLite"
+
+[[containers.stores]]
+id = "stats_db"
+label = "stats.db — salience, retrieval, coactivation"
+config_property = "stats_db_path"
+owner = "CognitiveMemory"
+role = "agent_state"
+engine = "SQLite"
