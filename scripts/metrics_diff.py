@@ -92,6 +92,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"metrics_diff: cannot read snapshots: {exc}", file=sys.stderr)
         return 2
 
+    # No base snapshot (e.g. the port's own first PR, before metrics.json exists
+    # on the base branch): a full "— -> value" table for every metric is noise.
+    if not old:
+        sys.stdout.write(
+            "### Architecture metrics: first snapshot (no base to diff)\n"
+            if args.markdown
+            else "First metrics snapshot — no base to diff.\n"
+        )
+        return 0
+
     sys.stdout.write(render(diff_metrics(old, new), markdown=args.markdown))
     return 0
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from tests.guardrail._common import with_header
+from tests.guardrail._common import load_architecture, with_header
 from tests.guardrail._metrics_toolkit import COMPLEXITY_THRESHOLD, GOD_MODULE_LINES, budget_actual
 
 
@@ -115,15 +115,24 @@ def _complexity_section(metrics: dict[str, Any]) -> list[str]:
 
 def _summary_section(metrics: dict[str, Any]) -> list[str]:
     d, m, t = metrics["domain"], metrics["mcp"], metrics["tests"]
-    return [
-        "## Domain, tools & tests",
+    # The MCP tool surface is an optional adapter: only report it when this
+    # project declares one, so metrics.md doesn't advertise a surface with 0 tools.
+    has_tools = bool(load_architecture().get("tool_catalog", {}).get("include_modules"))
+    lines = [
+        "## Domain, tools & tests" if has_tools else "## Domain & tests",
         "",
         f"- Domain models: **{d['models']}** ({d['associations']} associations,"
         f" {d['models_without_docstrings']} without docstrings)",
-        f"- MCP tools: **{m['tools']}** ({m['tools_without_docstrings']} without docstrings)",
-        f"- Test-to-source line ratio: **{t['ratio']:.2f}**"
-        f" ({t['test_lines']} test lines / {t['src_lines']} source lines)",
     ]
+    if has_tools:
+        lines.append(
+            f"- MCP tools: **{m['tools']}** ({m['tools_without_docstrings']} without docstrings)"
+        )
+    lines.append(
+        f"- Test-to-source line ratio: **{t['ratio']:.2f}**"
+        f" ({t['test_lines']} test lines / {t['src_lines']} source lines)"
+    )
+    return lines
 
 
 def render_metrics_md(metrics: dict[str, Any], budgets: dict[str, int]) -> str:

@@ -46,10 +46,12 @@ def iter_snapshots() -> list[tuple[str, str, dict]]:
     for line in log:
         sha, date = line.split(maxsplit=1)
         try:
-            raw = _git("show", f"{sha}:{SNAPSHOT}")
+            metrics = json.loads(_git("show", f"{sha}:{SNAPSHOT}"))
         except subprocess.CalledProcessError:
             continue  # commit removed the file (or predates it)
-        snapshots.append((sha, date, json.loads(raw)))
+        except json.JSONDecodeError:
+            continue  # snapshot at this commit is malformed; skip, don't crash the walk
+        snapshots.append((sha, date, metrics))
     return snapshots
 
 

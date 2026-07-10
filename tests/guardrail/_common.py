@@ -19,9 +19,11 @@ ARCH_TOML = REPO_ROOT / "docs" / "architecture.toml"
 
 # Project identity comes from the [project] table in architecture.toml so this
 # guardrail kit ports to another src-layout repo by editing only that file.
-# For a flat layout (package directly at the repo root) set src_layout = "".
+# root_package is required (no fallback — a missing/typo'd [project] must fail
+# loudly rather than silently scan the wrong package). For a flat layout
+# (package directly at the repo root) set src_layout = "".
 _PROJECT = tomllib.loads(ARCH_TOML.read_text(encoding="utf-8")).get("project", {})
-ROOT_PACKAGE = _PROJECT.get("root_package", "lithos")
+ROOT_PACKAGE = _PROJECT["root_package"]
 _SRC_LAYOUT = _PROJECT.get("src_layout", "src")
 SRC_ROOT = (REPO_ROOT / _SRC_LAYOUT / ROOT_PACKAGE) if _SRC_LAYOUT else REPO_ROOT / ROOT_PACKAGE
 
@@ -89,5 +91,7 @@ def write(name: str, content: str) -> pathlib.Path:
     """Write a generated artifact under ``docs/generated/`` (subpaths allowed)."""
     out = GENERATED_DIR / name
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(content, encoding="utf-8")
+    # newline="\n" pins LF so regeneration is byte-identical on Windows too
+    # (the CI drift gate compares bytes).
+    out.write_text(content, encoding="utf-8", newline="\n")
     return out
