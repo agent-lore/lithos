@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tests.guardrail._common import GENERATED_DIR, load_architecture, with_header
+from tests.guardrail._common import GENERATED_DIR, REPO_ROOT, load_architecture, with_header
 
 
 @dataclass(frozen=True)
@@ -183,8 +183,12 @@ def render_index(arch: dict | None = None) -> str:
         "- [`docs/architecture.toml`](../architecture.toml) — components, tiers, and",
         "  which modules are scanned for domain models.",
         "- `pyproject.toml [tool.importlinter]` — the enforced directional contracts.",
-        "- [`CONTEXT.md`](../../CONTEXT.md) — the domain vocabulary used in labels.",
-        "- [`docs/adr/`](../adr/) — the decisions behind the architecture.",
+    ]
+    if (REPO_ROOT / "CONTEXT.md").exists():
+        lines.append("- [`CONTEXT.md`](../../CONTEXT.md) — the domain vocabulary used in labels.")
+    if (REPO_ROOT / "docs" / "adr").is_dir():
+        lines.append("- [`docs/adr/`](../adr/) — the decisions behind the architecture.")
+    lines += [
         "",
         "## Regenerating",
         "",
