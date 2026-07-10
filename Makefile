@@ -37,10 +37,10 @@ metrics-history:
 	uv run python scripts/metrics_history.py --format $(or $(FORMAT),csv)
 
 # Show the metrics delta between BASE (default origin/main) and the working tree.
+# `set -e` + `trap` so the recipe exits with metrics_diff.py's status, not rm's.
 metrics-diff:
-	@tmp=$$(mktemp); \
+	@set -e; tmp=$$(mktemp); trap 'rm -f $$tmp' EXIT; \
 	git show $(or $(BASE),origin/main):docs/generated/metrics.json > $$tmp 2>/dev/null || echo '{}' > $$tmp; \
-	uv run python scripts/metrics_diff.py $$tmp docs/generated/metrics.json; \
-	rm -f $$tmp
+	uv run python scripts/metrics_diff.py $$tmp docs/generated/metrics.json
 
 check: lint typecheck test

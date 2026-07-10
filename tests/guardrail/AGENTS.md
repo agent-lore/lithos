@@ -53,6 +53,13 @@ accounted for in `_index.all_expected_paths()`. `test_generated_manifest`
 asserts the directory equals the registry, so an orphaned or renamed artifact is
 a failure, not a silently rotting file.
 
+**First-run ordering gotcha:** on a *fresh* port with an empty `docs/generated/`,
+pytest runs `test_generated_index` / `test_generated_manifest` before the
+generators that create the files (files run in alphabetical order), so the
+*first* `make diagrams` can fail on missing artifacts; a second run passes. A
+committed repo never hits this (the files already exist) — it only matters the
+very first time you generate on a new project.
+
 ## Adding a new artifact
 
 1. Write a pure `render_*() -> str` in a `_*.py` helper. Wrap the body in
