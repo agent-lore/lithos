@@ -2,8 +2,9 @@
 
 One page per component: its description, tier, modules (with a coarse size band
 so ordinary line churn doesn't dirty the page), the public API of each module,
-which components it depends on / is used by, the data stores it owns, and the
-ADRs that mention it. All derived statically from the code + config.
+which components it depends on / is used by, the data stores it owns (when the
+[containers] adapter is configured), and the ADRs that mention it. All derived
+statically from the code + config.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from tests.guardrail._common import (
     module_name_of,
     with_header,
 )
-from tests.guardrail._containers import stores
 from tests.guardrail._diagram_toolkit import component_edges
 
 ADR_DIR = REPO_ROOT / "docs" / "adr"
@@ -36,7 +36,9 @@ def _band(lines: int) -> str:
     return "XL"
 
 
-def component_modules(components: dict[str, list[str]]) -> dict[str, list[pathlib.Path]]:
+def component_modules(
+    components: dict[str, list[str]],
+) -> dict[str, list[pathlib.Path]]:
     out: dict[str, list[pathlib.Path]] = {}
     for path in sorted(SRC_ROOT.rglob("*.py")):
         comp = component_of(module_name_of(path), components)
@@ -88,6 +90,22 @@ def _tier_of(component: str, tiers: dict[str, list[str]]) -> str:
     return next((tier for tier, members in tiers.items() if component in members), "")
 
 
+def _owned_stores(component: str, arch: dict) -> list[dict]:
+    """Data stores owned by this component — [] unless [containers] is configured.
+
+    The _containers import is local and only reachable when the config section
+    is populated, so projects without the containers adapter (and without the
+    _containers module) still run this generator unchanged.
+    """
+    if not arch.get("containers", {}).get("stores"):
+        return []
+    # The module only exists in repos with the containers adapter installed
+    # (short import line so 88-width reflow can't strand the ignore comment).
+    from tests.guardrail import _containers  # pyright: ignore
+
+    return [st for st in _containers.stores() if st["owner"] == component]
+
+
 def render_component_page(
     component: str,
     arch: dict,
@@ -99,7 +117,7 @@ def render_component_page(
     paths = comp_modules.get(component, [])
     depends = sorted({d for s, d in edges if s == component})
     used_by = sorted({s for s, d in edges if d == component})
-    owned = [st for st in stores() if st["owner"] == component]
+    owned = _owned_stores(component, arch)
 
     lines = [f"# {component}", ""]
     if desc:
@@ -107,7 +125,12 @@ def render_component_page(
     if tier:
         lines += [f"**Tier:** {tier}", ""]
 
-    lines += ["## Modules", "", "| Module | Size | Classes | Functions |", "|---|---|---:|---:|"]
+    lines += [
+        "## Modules",
+        "",
+        "| Module | Size | Classes | Functions |",
+        "|---|---|---:|---:|",
+    ]
     apis: dict[str, list[tuple[str, str, str]]] = {}
     for path in paths:
         module = module_name_of(path)

@@ -48,5 +48,10 @@ def test_metrics_sanity(metrics: dict) -> None:
     assert metrics["size"]["total_sloc"] <= metrics["size"]["total_lines"]
     for comp, stats in metrics["graph"]["components"].items():
         assert 0.0 <= stats["instability"] <= 1.0, comp
-    assert metrics["mcp"]["tools"] > 0
+    # The MCP tool surface is an optional adapter: assert a positive count only
+    # when this project declares one, else it must be exactly zero.
+    if load_architecture().get("tool_catalog", {}).get("include_modules"):
+        assert metrics["mcp"]["tools"] > 0
+    else:
+        assert metrics["mcp"]["tools"] == 0
     assert metrics["domain"]["models"] > 0
