@@ -35,6 +35,14 @@ def test_optional_adapters_drop_from_registry_when_unconfigured() -> None:
     assert {"architecture.md", "domain_model.md", "metrics.md", "metrics.json"} <= paths
 
 
+def test_domain_model_drops_from_registry_for_cpp() -> None:
+    """C++ projects have no Python domain models, so the artifact is omitted."""
+    cpp = {"project": {"language": "cpp"}, "components": {"A": ["pkg.a"]}}
+    paths = {a.path for a in _index.artifacts(cpp)}
+    assert "domain_model.md" not in paths
+    assert {"architecture.md", "metrics.md", "metrics.json"} <= paths
+
+
 def test_usage_lines_only_link_present_artifacts() -> None:
     """The 'How to use' copy must not reference an adapter that wasn't generated."""
     without = "\n".join(_index._usage_lines({"architecture.md", "domain_model.md", "metrics.md"}))

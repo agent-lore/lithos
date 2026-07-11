@@ -14,15 +14,18 @@ import pathlib
 
 from tests.guardrail._common import (
     REPO_ROOT,
-    SRC_ROOT,
     component_of,
     load_architecture,
     module_name_of,
+    module_paths,
     with_header,
 )
 from tests.guardrail._diagram_toolkit import component_edges
 
 ADR_DIR = REPO_ROOT / "docs" / "adr"
+
+# One page entry: (module name, its source files) — C++ merges the .h/.cpp pair.
+_Entry = tuple[str, list[pathlib.Path]]
 
 # Size bands keep the pages stable against ordinary line churn (raw LOC would
 # dirty a page on nearly every edit); the metrics snapshot carries exact counts.
@@ -38,12 +41,12 @@ def _band(lines: int) -> str:
 
 def component_modules(
     components: dict[str, list[str]],
-) -> dict[str, list[pathlib.Path]]:
-    out: dict[str, list[pathlib.Path]] = {}
-    for path in sorted(SRC_ROOT.rglob("*.py")):
-        comp = component_of(module_name_of(path), components)
+) -> dict[str, list[_Entry]]:
+    out: dict[str, list[_Entry]] = {}
+    for module, paths in sorted(module_paths().items()):
+        comp = component_of(module, components)
         if comp is not None:
-            out.setdefault(comp, []).append(path)
+            out.setdefault(comp, []).append((module, paths))
     return out
 
 
@@ -110,11 +113,11 @@ def render_component_page(
     component: str,
     arch: dict,
     edges: set[tuple[str, str]],
-    comp_modules: dict[str, list[pathlib.Path]],
+    comp_modules: dict[str, list[_Entry]],
 ) -> str:
     desc = arch.get("component_docs", {}).get(component, "")
     tier = _tier_of(component, arch.get("tiers", {}))
-    paths = comp_modules.get(component, [])
+    entries = comp_modules.get(component, [])
     depends = sorted({d for s, d in edges if s == component})
     used_by = sorted({s for s, d in edges if d == component})
     owned = _owned_stores(component, arch)
@@ -132,18 +135,22 @@ def render_component_page(
         "|---|---|---:|---:|",
     ]
     apis: dict[str, list[tuple[str, str, str]]] = {}
-    for path in paths:
-        module = module_name_of(path)
-        text = path.read_text(encoding="utf-8")
-        api = _public_api(ast.parse(text, filename=str(path)))
+    for module, paths in entries:
+        texts = [p.read_text(encoding="utf-8") for p in paths]
+        # The public-API listing is derived from the Python AST; C++ modules
+        # list with zero counts and no API section.
+        api: list[tuple[str, str, str]] = []
+        for path, text in zip(paths, texts, strict=True):
+            if path.suffix == ".py":
+                api.extend(_public_api(ast.parse(text, filename=str(path))))
         apis[module] = api
+        n_lines = sum(len(t.splitlines()) for t in texts)
         n_class = sum(1 for k, _, _ in api if k == "class")
         n_def = sum(1 for k, _, _ in api if k == "def")
-        lines.append(f"| `{module}` | {_band(len(text.splitlines()))} | {n_class} | {n_def} |")
+        lines.append(f"| `{module}` | {_band(n_lines)} | {n_class} | {n_def} |")
 
     lines += ["", "## Public API"]
-    for path in paths:
-        module = module_name_of(path)
+    for module, _paths in entries:
         api = apis[module]
         if not api:
             continue
@@ -161,7 +168,7 @@ def render_component_page(
             engine = f" ({st['engine']})" if st.get("engine") else ""
             lines.append(f"- `{st['id']}` — {st['label']}{engine}")
 
-    adrs = _adrs_for(paths)
+    adrs = _adrs_for([p for _, ps in entries for p in ps])
     if adrs:
         lines += ["", "## ADRs", ""]
         for fname, title in adrs:

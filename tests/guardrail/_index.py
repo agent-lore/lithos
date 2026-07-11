@@ -10,7 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tests.guardrail._common import GENERATED_DIR, REPO_ROOT, load_architecture, with_header
+from tests.guardrail._common import (
+    GENERATED_DIR,
+    LANGUAGE,
+    REPO_ROOT,
+    load_architecture,
+    with_header,
+)
 
 
 @dataclass(frozen=True)
@@ -18,6 +24,15 @@ class Artifact:
     path: str  # relative to docs/generated/
     title: str
     description: str  # one line, CONTEXT.md vocabulary
+
+
+def _tier_names(arch: dict) -> list[str]:
+    """Declared tier names, top-down — the repo's own architecture vocabulary.
+
+    Falls back to the kit's conventional trio so prose stays stable for a
+    project that has not declared [tiers] yet.
+    """
+    return list(arch.get("tiers", {})) or ["Entrypoints", "Core", "Foundation"]
 
 
 def component_page_paths() -> list[str]:
@@ -36,27 +51,34 @@ def artifacts(arch: dict | None = None) -> list[Artifact]:
     The container view and tool catalog are optional adapters: each appears only
     when its ``docs/architecture.toml`` section is populated, so a project that
     reuses the kit without them gets no empty/orphaned artifact (and the manifest
-    test stays exact).
+    test stays exact). The domain model is Python-only (derived from dataclasses
+    / Pydantic models), so C++ projects omit that artifact too.
     """
     arch = arch if arch is not None else load_architecture()
+    language = arch.get("project", {}).get("language", "python")
+    graph_desc = (
+        "Cross-component include graph computed from the real #include directives"
+        if language == "cpp"
+        else "Cross-component import graph computed from the real code via grimp"
+    )
     items = [
         Artifact(
             path="architecture.md",
             title="Component dependencies",
-            description=(
-                "Cross-component import graph computed from the real code via grimp, "
-                "grouped by tier (Entrypoints → Core → Foundation)."
-            ),
-        ),
-        Artifact(
-            path="domain_model.md",
-            title="Domain model",
-            description=(
-                "Class diagram of the domain dataclasses and Pydantic models, "
-                "extracted statically from the modules listed in docs/architecture.toml."
-            ),
+            description=f"{graph_desc}, grouped by tier ({' → '.join(_tier_names(arch))}).",
         ),
     ]
+    if language == "python":
+        items.append(
+            Artifact(
+                path="domain_model.md",
+                title="Domain model",
+                description=(
+                    "Class diagram of the domain dataclasses and Pydantic models, "
+                    "extracted statically from the modules listed in docs/architecture.toml."
+                ),
+            )
+        )
     if arch.get("containers", {}).get("stores"):
         items.append(
             Artifact(
@@ -117,7 +139,7 @@ def _usage_lines(present: set[str]) -> list[str]:
             "  [containers.md](containers.md) shows where data lives;",
             "  [domain_model.md](domain_model.md) shows the shapes it takes.",
         ]
-    else:
+    elif "domain_model.md" in present:
         lines.append("  [domain_model.md](domain_model.md) shows the shapes the data takes.")
     if "tool_catalog.md" in present:
         lines += [
@@ -164,26 +186,40 @@ def render_index(arch: dict | None = None) -> str:
         for path in component_page_paths()
     )
     lines += ["", "## Components", "", f"Per-component drill-down pages: {comp_links}"]
+    dep_word = "`#include`" if LANGUAGE == "cpp" else "`import`"
+    enforced_by = (
+        "  point downward; enforced by `tests/guardrail/test_layering_contract.py`"
+        " (no upward edges)."
+        if LANGUAGE == "cpp"
+        else "  point downward; enforced by import-linter (`pyproject.toml [tool.importlinter]`)."
+    )
+    tier_names = _tier_names(arch)
     lines += [
         "",
         "## Legend",
         "",
-        "- `A --> B` in the component diagram: at least one real `import` from a module",
+        f"- `A --> B` in the component diagram: at least one real {dep_word} from a module",
         "  in component A to a module in component B.",
-        "- Tier subgraphs (Entrypoints / Core / Foundation): dependencies must only",
-        "  point downward; enforced by import-linter (`pyproject.toml [tool.importlinter]`).",
-        "- Dashed grey edge: a tier-skipping dependency (e.g. Entrypoints → Foundation).",
-        "  Grey edge: a dependency on a Foundation component (de-emphasized fan-in).",
+        f"- Tier subgraphs ({' / '.join(tier_names)}): dependencies must only",
+        enforced_by,
+        f"- Dashed grey edge: a tier-skipping dependency (e.g. {tier_names[0]} → {tier_names[-1]}).",
+        f"  Grey edge: a dependency on a {tier_names[-1]} component (de-emphasized fan-in).",
         "- Component nodes are clickable — they link to the per-component drill-down page.",
-        '- `Src "1" --> "0..*" Dst : field` in the domain model: class `Src` has a',
-        "  field holding many `Dst`; `0..1` = optional, `1` = exactly one.",
+    ]
+    if LANGUAGE == "python":
+        lines += [
+            '- `Src "1" --> "0..*" Dst : field` in the domain model: class `Src` has a',
+            "  field holding many `Dst`; `0..1` = optional, `1` = exactly one.",
+        ]
+    lines += [
         "",
         "## Sources of truth",
         "",
         "- [`docs/architecture.toml`](../architecture.toml) — components, tiers, and",
         "  which modules are scanned for domain models.",
-        "- `pyproject.toml [tool.importlinter]` — the enforced directional contracts.",
     ]
+    if LANGUAGE == "python":
+        lines.append("- `pyproject.toml [tool.importlinter]` — the enforced directional contracts.")
     if (REPO_ROOT / "CONTEXT.md").exists():
         lines.append("- [`CONTEXT.md`](../../CONTEXT.md) — the domain vocabulary used in labels.")
     if (REPO_ROOT / "docs" / "adr").is_dir():

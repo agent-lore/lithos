@@ -1,4 +1,4 @@
-"""Deterministic Mermaid diagram generation from the real lithos code.
+"""Deterministic Mermaid diagram generation from the real project code.
 
 Two generators, both driven by ``docs/architecture.toml``:
 
@@ -85,10 +85,12 @@ def render_component_diagram() -> str:
     lowest = {c for c, r in rank.items() if r == max(rank.values(), default=-1)}
 
     lines = ["```mermaid", "graph TD"]
-    # group nodes into tier subgraphs for readability (deterministic order)
+    # group nodes into tier subgraphs, in [tiers] DECLARATION order so the
+    # diagram reads top-down the way the architecture is documented
+    # (Entrypoints -> Core -> Foundation); members sorted within each tier.
     placed: set[str] = set()
-    for tier in sorted(tiers):
-        members = [c for c in sorted(tiers[tier]) if c in components]
+    for tier, tier_members in tiers.items():
+        members = [c for c in sorted(tier_members) if c in components]
         if not members:
             continue
         # Give the subgraph an explicit id distinct from any component node id.

@@ -5,6 +5,9 @@
 
 ```mermaid
 graph TD
+  subgraph tier_Entrypoints["Entrypoints"]
+    Entrypoints
+  end
   subgraph tier_Core["Core"]
     CognitiveMemory
     Coordination
@@ -14,9 +17,6 @@ graph TD
     LCMA
     Provenance
     Search
-  end
-  subgraph tier_Entrypoints["Entrypoints"]
-    Entrypoints
   end
   subgraph tier_Foundation["Foundation"]
     Config

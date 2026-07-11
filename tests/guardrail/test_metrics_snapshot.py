@@ -15,7 +15,7 @@ import pytest
 
 from tests.guardrail import _metrics_render as render
 from tests.guardrail import _metrics_toolkit as mt
-from tests.guardrail._common import load_architecture, write
+from tests.guardrail._common import LANGUAGE, load_architecture, write
 
 
 @pytest.fixture(scope="module")
@@ -54,4 +54,9 @@ def test_metrics_sanity(metrics: dict) -> None:
         assert metrics["mcp"]["tools"] > 0
     else:
         assert metrics["mcp"]["tools"] == 0
-    assert metrics["domain"]["models"] > 0
+    # Domain models are derived from the Python AST; C++ projects must report
+    # exactly zero (the key stays for schema stability across languages).
+    if LANGUAGE == "python":
+        assert metrics["domain"]["models"] > 0
+    else:
+        assert metrics["domain"]["models"] == 0

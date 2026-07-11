@@ -143,7 +143,28 @@ forbidden_modules = [
     "lithos.cli",
     "lithos.server",
     "lithos.watch_intake",
+    "lithos.__main__",
     "lithos.tools",
+]
+
+[[tool.importlinter.contracts]]
+# _merge and edge_store are Core-tier in the component map (they belong to
+# Knowledge/Graph) but are held to Foundation discipline by the contract
+# above; this closes the reverse direction so Foundation cannot grow a
+# dependency on them either (the tier map forbids Foundation -> Core).
+name = "Foundation must not import the Foundation-disciplined Core leaves"
+type = "forbidden"
+source_modules = [
+    "lithos.config",
+    "lithos.telemetry",
+    "lithos.errors",
+    "lithos.envelopes",
+    "lithos.events",
+    "lithos.logging_config",
+]
+forbidden_modules = [
+    "lithos._merge",
+    "lithos.edge_store",
 ]
 
 [[tool.importlinter.contracts]]
@@ -164,6 +185,7 @@ forbidden_modules = [
     "lithos.cli",
     "lithos.server",
     "lithos.watch_intake",
+    "lithos.__main__",
     "lithos.tools",
 ]
 
