@@ -46,7 +46,9 @@ def iter_snapshots() -> list[tuple[str, str, dict]]:
     for line in log:
         sha, date = line.split(maxsplit=1)
         try:
-            metrics = json.loads(_git("show", f"{sha}:{SNAPSHOT}"))
+            # ./ makes the path cwd-relative (a plain path is repo-root-relative,
+            # which breaks when this instance lives in a monorepo subdirectory).
+            metrics = json.loads(_git("show", f"{sha}:./{SNAPSHOT}"))
         except subprocess.CalledProcessError:
             continue  # commit removed the file (or predates it)
         except json.JSONDecodeError:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from tests.guardrail._common import load_architecture, with_header
+from tests.guardrail._common import LANGUAGE, load_architecture, with_header
 from tests.guardrail._metrics_toolkit import COMPLEXITY_THRESHOLD, GOD_MODULE_LINES, budget_actual
 
 
@@ -71,13 +71,17 @@ def _graph_section(metrics: dict[str, Any]) -> list[str]:
         "; ".join(" ↔ ".join(scc) for scc in g["module_cycles"]) if g["module_cycles"] else "none"
     )
     skips = ", ".join(g["tier_skipping"]) if g["tier_skipping"] else "none"
+    # Name the span in the repo's own tier vocabulary (a skip = any edge
+    # jumping ≥2 tiers, illustrated by the top-to-bottom extreme).
+    tiers = list(load_architecture().get("tiers", {})) or ["Entrypoints", "Core", "Foundation"]
     return [
         "## Import graph",
         "",
-        f"- Cross-component edges: **{g['cross_component_edges']}**",
+        f"- Cross-component edges: **{g['cross_component_edges']}**"
+        f" ({g['cross_component_module_edges']} module-level)",
         f"- Component cycles: {cycles}",
         f"- Module cycles: {module_cycles}",
-        f"- Tier-skipping edges (Entrypoints → Foundation): {g['tier_skipping_edges']} ({skips})",
+        f"- Tier-skipping edges ({tiers[0]} → {tiers[-1]}): {g['tier_skipping_edges']} ({skips})",
         f"- Longest component dependency chain: {g['longest_component_chain']}",
     ]
 
@@ -115,15 +119,23 @@ def _complexity_section(metrics: dict[str, Any]) -> list[str]:
 
 def _summary_section(metrics: dict[str, Any]) -> list[str]:
     d, m, t = metrics["domain"], metrics["mcp"], metrics["tests"]
-    # The MCP tool surface is an optional adapter: only report it when this
-    # project declares one, so metrics.md doesn't advertise a surface with 0 tools.
+    # Optional surfaces: report the MCP tool catalog only when this project
+    # declares one, and the domain model only for Python (it is derived from
+    # dataclasses / Pydantic models), so metrics.md never advertises a zero.
     has_tools = bool(load_architecture().get("tool_catalog", {}).get("include_modules"))
-    lines = [
-        "## Domain, tools & tests" if has_tools else "## Domain & tests",
-        "",
-        f"- Domain models: **{d['models']}** ({d['associations']} associations,"
-        f" {d['models_without_docstrings']} without docstrings)",
-    ]
+    has_domain = LANGUAGE == "python"
+    if has_tools:
+        title = "## Domain, tools & tests"
+    elif has_domain:
+        title = "## Domain & tests"
+    else:
+        title = "## Tests"
+    lines = [title, ""]
+    if has_domain:
+        lines.append(
+            f"- Domain models: **{d['models']}** ({d['associations']} associations,"
+            f" {d['models_without_docstrings']} without docstrings)"
+        )
     if has_tools:
         lines.append(
             f"- MCP tools: **{m['tools']}** ({m['tools_without_docstrings']} without docstrings)"

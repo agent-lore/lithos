@@ -19,7 +19,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **63**
+- Cross-component edges: **63** (130 module-level)
 - Component cycles: Coordination ↔ Graph ↔ Knowledge ↔ LCMA ↔ Provenance ↔ Search
 - Module cycles: lithos.graph ↔ lithos.knowledge ↔ lithos.lcma.edges ↔ lithos.provenance ↔ lithos.search; lithos.server ↔ lithos.tools ↔ lithos.tools.agents ↔ lithos.tools.findings_stats ↔ lithos.tools.memory_edges ↔ lithos.tools.notes ↔ lithos.tools.read_search ↔ lithos.tools.tasks
 - Tier-skipping edges (Entrypoints → Foundation): 5 (Entrypoints -> Config, Entrypoints -> Errors, Entrypoints -> Events, Entrypoints -> Logging, Entrypoints -> Telemetry)
@@ -87,4 +87,4 @@ Top 10 most complex functions:
 
 - Domain models: **42** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.81** (42007 test lines / 23203 source lines)
+- Test-to-source line ratio: **1.82** (42309 test lines / 23203 source lines)

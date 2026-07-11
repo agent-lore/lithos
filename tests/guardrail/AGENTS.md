@@ -22,23 +22,37 @@ output for identical input:
 - Determinism is tested (e.g. `test_metrics_snapshot` renders twice and asserts
   byte-equality). Keep those tests passing.
 
-## No importing `lithos` at generation time
+## No importing the target package at generation time
 
-Everything is **static analysis** — `ast` plus grimp's import graph. Importing
-the package would drag ChromaDB/torch into test collection and risk side effects.
-`build_import_graph()` in `_common.py` is the single grimp builder and is
-`lru_cache`d; reuse it, don't rebuild.
+Everything is **static analysis** — `ast` plus the project's dependency graph.
+Importing the package would drag its heavy runtime dependencies into test
+collection and risk side effects.
+`build_import_graph()` in `_common.py` is the single graph builder and is
+`lru_cache`d; reuse it, don't rebuild. It dispatches on `[project] language`:
+grimp's import graph for Python (the default), the quoted-`#include` graph from
+`_cpp_graph.py` for `language = "cpp"` — both expose the same surface
+(`.modules` + `find_modules_directly_imported_by`), so generators stay
+language-blind. Python-only views (domain model, public API, class/function
+counts) report zeros or are omitted for C++; cyclomatic complexity for C++
+comes from `lizard` (pin its version — the committed snapshot embeds its
+counting rules, which differ from the Python AST visitor's, so compare
+complexity within a language, not across); the layering contract swaps
+import-linter for a no-upward-tier-edge check on the include graph.
 
 ## Config is the source of truth, not the code
 
 Project identity and every scan list live in `docs/architecture.toml`. **Never
-hardcode `lithos` or `src/lithos`** — read `[project]` (`root_package`,
+hardcode the package name or its src path** — read `[project]` (`root_package`,
 `src_layout`) via `load_architecture()`. The completeness/orphan/manifest tests
 fail until the config matches reality, which is the point: adding a module,
 component, store, or tool means editing the toml.
 
 Config sections: `[project]`, `[components]`, `[tiers]`, `[domain]`,
-`[tool_catalog]`, `[containers]`, `[budgets]`, `[component_docs]`.
+`[tool_catalog]`, `[containers]`, `[cpp]`, `[budgets]`, `[component_docs]`.
+
+For C++ projects, `[cpp] virtual_includes` maps generated include-path prefixes
+(e.g. protobuf headers emitted into the build dir) to synthetic modules so a
+generated seam still appears as a component instead of vanishing as "external".
 
 The **tool catalog** (`[tool_catalog]`) and **container view** (`[containers]`)
 are optional adapters: their driver tests skip and their artifacts are omitted
@@ -53,12 +67,12 @@ accounted for in `_index.all_expected_paths()`. `test_generated_manifest`
 asserts the directory equals the registry, so an orphaned or renamed artifact is
 a failure, not a silently rotting file.
 
-**First-run ordering gotcha:** on a *fresh* port with an empty `docs/generated/`,
-pytest runs `test_generated_index` / `test_generated_manifest` before the
-generators that create the files (files run in alphabetical order), so the
-*first* `make diagrams` can fail on missing artifacts; a second run passes. A
-committed repo never hits this (the files already exist) — it only matters the
-very first time you generate on a new project.
+**Ordering is handled by `conftest.py`:** a session-scoped autouse fixture
+writes every registered artifact before any test runs, so a single
+`make diagrams` succeeds even from an empty `docs/generated/` and the
+index/manifest checks never depend on pytest's alphabetical file order. The
+driver tests then re-render byte-identically and keep their assertions — if
+you add an artifact, add it to `conftest._generate_all()` too.
 
 ## Adding a new artifact
 
@@ -67,7 +81,8 @@ very first time you generate on a new project.
    the parse — that's why `write()` doesn't add the header itself).
 2. Add a driver `test_*.py` that calls `write("name.md", render_*())`.
 3. Register it: append an `Artifact(...)` in `_index.artifacts()` (or extend
-   `component_page_paths()` for a whole family).
+   `component_page_paths()` for a whole family), and add the same write to
+   `conftest._generate_all()` so fresh runs emit it before validation.
 4. `make diagrams` now emits it and CI drift-gates it automatically.
 
 ## Budgets are hand-edited ratchets
@@ -93,6 +108,7 @@ Always regenerate and commit after touching the kit.
 | `_metrics_toolkit.py` / `_metrics_render.py` | compute metrics / render to `metrics.json` + `metrics.md` |
 | `_tool_catalog.py` | `tool_catalog.md` (AST scan of `@*.tool()`-decorated handlers) |
 | `_containers.py` | `containers.md` (data stores, declared but anchored to `StorageConfig`) |
+| `_cpp_graph.py` | quoted-`#include` graph for `language = "cpp"` (grimp duck-type) |
 | `_component_pages.py` | `components/<Component>.md` drill-down pages |
 | `_index.py` | artifact registry + `README.md` index |
 | `test_*.py` | one driver per artifact, plus manifest + budget guards |

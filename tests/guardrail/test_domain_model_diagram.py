@@ -17,9 +17,12 @@ import ast
 import pytest
 
 from tests.guardrail import _diagram_toolkit as dt
+from tests.guardrail._common import LANGUAGE
 
 
 def test_generate_domain_model_diagram() -> None:
+    if LANGUAGE != "python":
+        pytest.skip("domain models are derived from Python dataclasses/Pydantic models")
     out = dt.write("domain_model.md", dt.render_domain_model())
     assert out.exists()
     assert "classDiagram" in out.read_text(encoding="utf-8")

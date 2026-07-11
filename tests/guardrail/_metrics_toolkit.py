@@ -26,6 +26,8 @@ import networkx as nx
 
 from tests.guardrail import _diagram_toolkit as dt
 from tests.guardrail._common import (
+    CPP_SUFFIXES,
+    LANGUAGE,
     REPO_ROOT,
     ROOT_PACKAGE,
     SRC_ROOT,
@@ -34,6 +36,7 @@ from tests.guardrail._common import (
     load_architecture,
     module_files,
     module_name_of,
+    module_paths,
 )
 
 COMPLEXITY_THRESHOLD = 10
@@ -61,15 +64,17 @@ def _tier_rank(tiers: dict[str, list[str]]) -> dict[str, int]:
 
 def _graph_metrics(components: dict[str, list[str]], tiers: dict[str, list[str]]) -> dict[str, Any]:
     module_edges = _module_edges()
-    comp_edges = sorted(
-        {
-            (src, dst)
-            for m, i in module_edges
-            if (src := component_of(m, components)) is not None
-            and (dst := component_of(i, components)) is not None
-            and src != dst
-        }
-    )
+    # crossing keeps one entry PER module-level edge; comp_edges dedupes to
+    # component pairs. Reporting both catches a PR that deepens an existing
+    # component dependency without adding a new one.
+    crossing = [
+        (src, dst)
+        for m, i in module_edges
+        if (src := component_of(m, components)) is not None
+        and (dst := component_of(i, components)) is not None
+        and src != dst
+    ]
+    comp_edges = sorted(set(crossing))
 
     comp_graph = nx.DiGraph(comp_edges)
     comp_graph.add_nodes_from(components)
@@ -107,6 +112,7 @@ def _graph_metrics(components: dict[str, list[str]], tiers: dict[str, list[str]]
         "component_cycles": component_cycles,
         "components": per_component,
         "cross_component_edges": len(comp_edges),
+        "cross_component_module_edges": len(crossing),
         "longest_component_chain": longest_chain,
         "module_cycle_count": len(module_cycles),
         "module_cycles": module_cycles,
@@ -122,12 +128,17 @@ def _physical_lines(text: str) -> int:
     return len(text.splitlines())
 
 
+# For C++ this misses /* */ block-comment bodies — an accepted approximation;
+# the physical line count is the exact one.
+_COMMENT_PREFIX = "//" if LANGUAGE == "cpp" else "#"
+
+
 def _sloc(text: str) -> int:
-    """Non-blank lines that are not pure ``#`` comments (docstrings count)."""
+    """Non-blank lines that are not pure line comments (docstrings count)."""
     return sum(
         1
         for line in text.splitlines()
-        if (stripped := line.strip()) and not stripped.startswith("#")
+        if (stripped := line.strip()) and not stripped.startswith(_COMMENT_PREFIX)
     )
 
 
@@ -149,10 +160,10 @@ def _size_metrics(components: dict[str, list[str]]) -> dict[str, Any]:
     over_800: list[str] = []
     max_module, max_lines = "", 0
 
-    for path in sorted(SRC_ROOT.rglob("*.py")):
-        module = module_name_of(path)
-        text = path.read_text(encoding="utf-8")
-        lines, sloc = _physical_lines(text), _sloc(text)
+    for module, paths in sorted(module_paths().items()):
+        texts = [p.read_text(encoding="utf-8") for p in paths]
+        lines = sum(_physical_lines(t) for t in texts)
+        sloc = sum(_sloc(t) for t in texts)
         total_lines += lines
         total_sloc += sloc
         total_modules += 1
@@ -164,21 +175,26 @@ def _size_metrics(components: dict[str, list[str]]) -> dict[str, Any]:
         comp = component_of(module, components)
         if comp is None:
             continue
-        tree = ast.parse(text, filename=str(path))
         stats = per_component[comp]
         stats["modules"] += 1
         stats["lines"] += lines
         stats["sloc"] += sloc
-        stats["classes"] += sum(isinstance(n, ast.ClassDef) for n in ast.walk(tree))
-        stats["functions"] += sum(
-            isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) for n in ast.walk(tree)
-        )
-        stats["public_symbols"] += sum(
-            1
-            for n in tree.body
-            if isinstance(n, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
-            and not n.name.startswith("_")
-        )
+        # Declaration counts come from the Python AST; C++ modules report zeros
+        # (the keys stay so metrics.json keeps one schema across languages).
+        for path, text in zip(paths, texts, strict=True):
+            if path.suffix != ".py":
+                continue
+            tree = ast.parse(text, filename=str(path))
+            stats["classes"] += sum(isinstance(n, ast.ClassDef) for n in ast.walk(tree))
+            stats["functions"] += sum(
+                isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) for n in ast.walk(tree)
+            )
+            stats["public_symbols"] += sum(
+                1
+                for n in tree.body
+                if isinstance(n, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+                and not n.name.startswith("_")
+            )
         if lines > stats["largest_module_lines"]:
             stats["largest_module"], stats["largest_module_lines"] = module, lines
 
@@ -249,6 +265,37 @@ def _function_complexities(tree: ast.Module, module: str) -> list[tuple[str, int
     return results
 
 
+def _cpp_function_complexities(module: str, paths: list[pathlib.Path]) -> list[tuple[str, int]]:
+    """(qualname, CCN) per C++ function definition, via lizard's tokenizer.
+
+    lizard needs no compiler or build flags, keeping the cpp instance a pure
+    text scan; its counting rules differ from the Python AST visitor above, so
+    compare complexity trends within a language, not across languages. Pin the
+    lizard version — the committed snapshot embeds its counting rules.
+    """
+    # Only cpp instances need lizard installed (short import line so 88-width
+    # reflow can't strand the ignore comment).
+    import lizard  # pyright: ignore
+
+    results: list[tuple[str, int]] = []
+    for path in paths:
+        analysis = lizard.analyze_file(str(path))
+        results.extend(
+            (f"{module}.{fn.name}", int(fn.cyclomatic_complexity)) for fn in analysis.function_list
+        )
+    return sorted(results)
+
+
+def _accumulate_complexity(stats: dict[str, Any], complexities: list[tuple[str, int]]) -> None:
+    for qualname, score in complexities:
+        if score > COMPLEXITY_THRESHOLD:
+            stats["functions_over_10"] += 1
+        if score > stats["max_complexity"] or (
+            score == stats["max_complexity"] and qualname < stats["max_function"]
+        ):
+            stats["max_complexity"], stats["max_function"] = score, qualname
+
+
 def _complexity_metrics(components: dict[str, list[str]]) -> dict[str, Any]:
     per_component: dict[str, dict[str, Any]] = {
         comp: {"functions_over_10": 0, "max_complexity": 0, "max_function": ""}
@@ -256,22 +303,22 @@ def _complexity_metrics(components: dict[str, list[str]]) -> dict[str, Any]:
     }
     all_functions: list[tuple[str, int]] = []
 
-    for path in sorted(SRC_ROOT.rglob("*.py")):
-        module = module_name_of(path)
-        comp = component_of(module, components)
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        complexities = _function_complexities(tree, module)
-        all_functions.extend(complexities)
-        if comp is None:
-            continue
-        stats = per_component[comp]
-        for qualname, score in complexities:
-            if score > COMPLEXITY_THRESHOLD:
-                stats["functions_over_10"] += 1
-            if score > stats["max_complexity"] or (
-                score == stats["max_complexity"] and qualname < stats["max_function"]
-            ):
-                stats["max_complexity"], stats["max_function"] = score, qualname
+    if LANGUAGE == "python":
+        for path in sorted(SRC_ROOT.rglob("*.py")):
+            module = module_name_of(path)
+            comp = component_of(module, components)
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            complexities = _function_complexities(tree, module)
+            all_functions.extend(complexities)
+            if comp is not None:
+                _accumulate_complexity(per_component[comp], complexities)
+    else:
+        for module, paths in sorted(module_paths().items()):
+            comp = component_of(module, components)
+            complexities = _cpp_function_complexities(module, paths)
+            all_functions.extend(complexities)
+            if comp is not None:
+                _accumulate_complexity(per_component[comp], complexities)
 
     top = sorted(all_functions, key=lambda item: (-item[1], item[0]))[:10]
     return {
@@ -333,8 +380,13 @@ def _mcp_metrics() -> dict[str, Any]:
 
 def _test_metrics(src_lines: int) -> dict[str, Any]:
     tests_root = REPO_ROOT / "tests"
+    # Count the tests written in the project language (a C++ project's Python
+    # guardrail files under tests/ are tooling, not its test suite).
+    suffixes = CPP_SUFFIXES if LANGUAGE == "cpp" else (".py",)
     test_lines = sum(
-        _physical_lines(p.read_text(encoding="utf-8")) for p in sorted(tests_root.rglob("*.py"))
+        _physical_lines(p.read_text(encoding="utf-8"))
+        for p in sorted(tests_root.rglob("*"))
+        if p.suffix in suffixes
     )
     return {
         "ratio": round(test_lines / src_lines, 2) if src_lines else 0.0,
@@ -366,6 +418,7 @@ def budget_actual(metrics: dict[str, Any], key: str) -> int:
     actuals = {
         "component_cycles": len(metrics["graph"]["component_cycles"]),
         "cross_component_edges": metrics["graph"]["cross_component_edges"],
+        "cross_component_module_edges": metrics["graph"]["cross_component_module_edges"],
         "max_module_lines": metrics["size"]["max_module_lines"],
         "module_cycles": metrics["graph"]["module_cycle_count"],
         "modules_over_800_lines": len(metrics["size"]["modules_over_800"]),
