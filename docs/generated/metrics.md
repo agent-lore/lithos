@@ -39,7 +39,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Coordination | 1 | 2675 | 2256 | 4 | 4 | 0.50 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
 | Entrypoints | 11 | 5203 | 4202 | 0 | 12 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 14 |
 | Errors | 2 | 182 | 129 | 7 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
-| Events | 1 | 320 | 256 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
+| Events | 1 | 323 | 259 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1509 | 1223 | 7 | 3 | 0.30 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | Intake | 1 | 624 | 529 | 3 | 7 | 0.70 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 3102 | 2505 | 7 | 6 | 0.46 | 71 (`lithos.knowledge.KnowledgeManager.update`) | 11 |
@@ -51,7 +51,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **38**, lines: **23378**, SLOC: **18879**
+- Modules: **38**, lines: **23381**, SLOC: **18882**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -159,4 +159,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **42** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.84** (42993 test lines / 23378 source lines)
+- Test-to-source line ratio: **1.84** (43010 test lines / 23381 source lines)

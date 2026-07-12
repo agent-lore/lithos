@@ -76,16 +76,19 @@ class LithosEvent:
     ``origin`` is an internal subsystem marker (see the "Event origin markers"
     section above) — set only by trusted in-process callers, never surfaced on
     the MCP schema or SSE wire. It exists so background workers can drop their
-    own events without keying on the spoofable ``agent`` field.
+    own events without keying on the spoofable ``agent`` field. It is appended
+    **last** so adding it did not shift any existing positional field
+    (``type``/``agent``/``payload``/``tags``/``id``/``timestamp``); all callers
+    set it by keyword.
     """
 
     type: str
     agent: str = ""
-    origin: str = ""
     payload: dict[str, str | int | float | bool | None] = field(default_factory=dict)
     tags: list[str] = field(default_factory=list)
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    origin: str = ""
 
 
 def make_edge_upserted_event(

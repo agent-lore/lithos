@@ -367,11 +367,11 @@
         "classes": 3,
         "functions": 12,
         "largest_module": "lithos.events",
-        "largest_module_lines": 320,
-        "lines": 320,
+        "largest_module_lines": 323,
+        "lines": 323,
         "modules": 1,
         "public_symbols": 3,
-        "sloc": 256
+        "sloc": 259
       },
       "Graph": {
         "classes": 8,
@@ -469,13 +469,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23378,
+    "total_lines": 23381,
     "total_modules": 38,
-    "total_sloc": 18879
+    "total_sloc": 18882
   },
   "tests": {
     "ratio": 1.84,
-    "src_lines": 23378,
-    "test_lines": 42993
+    "src_lines": 23381,
+    "test_lines": 43010
   }
 }

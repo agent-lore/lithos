@@ -25,6 +25,7 @@ from starlette.responses import StreamingResponse
 
 from lithos.config import EventsConfig, LithosConfig, StorageConfig
 from lithos.events import (
+    EVENT_ORIGIN_ENRICH,
     NOTE_CREATED,
     NOTE_DELETED,
     NOTE_UPDATED,
@@ -143,6 +144,22 @@ class TestFormatSSE:
         assert data["task_id"] == "t1"
         assert data["title"] == "My Task"
         assert data["agent"] == "bot"
+
+    def test_origin_not_emitted_on_wire(self) -> None:
+        """The internal ``origin`` loop-break marker must never reach SSE clients
+        (task 681ac952): it is an in-process signal, not part of the event wire.
+        """
+        evt = LithosEvent(
+            type=NOTE_UPDATED,
+            agent="az",
+            origin=EVENT_ORIGIN_ENRICH,
+            payload={"id": "n1"},
+        )
+        result = _format_sse(evt)
+        assert "origin" not in result
+        assert EVENT_ORIGIN_ENRICH not in result
+        data = json.loads(result.split("data: ")[1].strip())
+        assert "origin" not in data
 
 
 # ---------------------------------------------------------------------------
