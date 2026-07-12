@@ -283,6 +283,8 @@ async def test_note_update_forwards_lcma_fields_and_reindexes(
     assert created.document is not None
     doc_id = created.document.id
     before, _ = await knowledge_manager.read(id=doc_id)
+    # Replace the real graph with a stub so the graph view-sync is observable.
+    intake._graph = MagicMock()  # type: ignore[assignment]
 
     outcome = await intake.note_update(
         "lithos-enrich",
@@ -294,8 +296,12 @@ async def test_note_update_forwards_lcma_fields_and_reindexes(
     assert after.content == before.content  # body untouched — frontmatter-only patch
     assert after.metadata.entities == ["NetworkX", "ChromaDB"]
     assert after.metadata.entities_extractor == 7
+    # Both derived views synced, and the event carries the caller's agent.
     mocks["search"].index.assert_called_once()
-    assert mocks["event_bus"].emit.await_args.args[0].type == NOTE_UPDATED
+    intake._graph.add_document.assert_called_once()
+    emitted = mocks["event_bus"].emit.await_args.args[0]
+    assert emitted.type == NOTE_UPDATED
+    assert emitted.agent == "lithos-enrich"
 
 
 @pytest.mark.asyncio

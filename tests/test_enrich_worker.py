@@ -970,6 +970,58 @@ class TestSelfOriginatedEventFilter:
 
         worker._stats_store.enqueue.assert_awaited_once()
 
+    async def test_extract_entities_emits_self_event_that_worker_drops(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """End-to-end loop-break: the entity write emits a NOTE_UPDATED stamped
+        ENRICH_AGENT, and feeding that very emitted event back through
+        _handle_event is dropped. Connects the two halves the other tests prove
+        independently — the write really produces a self-event, and the worker
+        really drops that self-event — closing enrich→write→event→enrich.
+        """
+        km = KnowledgeManager(test_config)
+        result = await km.create(
+            title="Loop Note", content="Lithos uses [[NetworkX]].", agent="test-agent"
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+
+        captured_bus = AsyncMock()
+        intake = CorpusIntake(
+            knowledge=km,
+            search=MagicMock(),
+            graph=MagicMock(),
+            coordination=mock_coordination,
+            event_bus=captured_bus,
+            edge_store=edge_store,
+        )
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=captured_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=mock_coordination,
+            intake=intake,
+        )
+
+        await worker._extract_entities(doc_id)
+
+        # The entity write emitted a NOTE_UPDATED stamped with the sentinel actor ...
+        emitted = captured_bus.emit.await_args.args[0]
+        assert emitted.type == NOTE_UPDATED
+        assert emitted.agent == ENRICH_AGENT
+        assert emitted.payload["id"] == doc_id
+        # ... and routing that same emitted event back through the worker drops it.
+        worker._stats_store.enqueue = AsyncMock()  # type: ignore[method-assign]
+        await worker._handle_event(emitted)
+        worker._stats_store.enqueue.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Entity extraction tests

@@ -653,7 +653,8 @@ class CognitiveMemory:
         - ``misleading_count += 1``
         - ``salience -= 0.05``
         - If ``misleading_count >= 3``, set ``status = 'quarantined'``
-          via :meth:`KnowledgeManager.update`.
+          via :meth:`CorpusIntake.note_update` (so the status flip re-indexes
+          Search/graph and emits ``NOTE_UPDATED``; task 681ac952).
 
         After per-node penalties, every edge incident to *any* of the
         misleading nodes is weakened by ``-0.05`` exactly once (a shared

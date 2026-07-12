@@ -53,6 +53,14 @@ logger = logging.getLogger(__name__)
 # ``NOTE_UPDATED`` / ``EDGE_UPSERTED``; :meth:`EnrichWorker._handle_event` drops
 # events stamped with this actor so the worker never re-enqueues the very node
 # it just wrote (enrich→write→event→enrich).
+#
+# RESERVATION CAVEAT: the loop-break keys on the caller-facing ``agent`` string,
+# so an external write that passes agent="lithos-enrich" is also skipped (its
+# node is merely deferred to the periodic full_sweep, not dropped). This id is
+# treated as system-reserved, but that is convention, not enforcement. PR1b of
+# task 681ac952 replaces this with a non-spoofable event-origin marker set by
+# the intake (which callers cannot forge), folded into its EDGE_UPSERTED payload
+# rework.
 ENRICH_AGENT = "lithos-enrich"
 
 _SUBSCRIBED_EVENT_TYPES = [
