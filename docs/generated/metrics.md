@@ -13,9 +13,11 @@ lower a budget after improving the code to lock in the gain.
 |---|---:|---:|---:|
 | `component_cycles` | 1 | 1 | 0 |
 | `cross_component_edges` | 63 | 63 | 0 |
+| `cross_module_private_refs` | 42 | 42 | 0 |
 | `max_module_lines` | 2675 | 2800 | 125 |
 | `module_cycles` | 2 | 2 | 0 |
 | `modules_over_800_lines` | 11 | 11 | 0 |
+| `tests_private_imports` | 88 | 88 | 0 |
 
 ## Import graph
 
@@ -83,8 +85,78 @@ Top 10 most complex functions:
 | 27 | `lithos.lcma.scouts.scout_graph` |
 | 26 | `lithos.server.LithosServer._validate_task_feedback` |
 
+## Seams
+
+Private-name reaches across module seams. Both counts can be pinned as
+`[budgets]` ratchets (`cross_module_private_refs`, `tests_private_imports`).
+
+- Cross-module private refs (src): **42**
+  - `lithos.tools.tasks -> lithos.server.LithosServer._emit (x8)`
+  - `lithos.tools.findings_stats -> lithos.server.LithosServer._config (x2)`
+  - `lithos.tools.read_search -> lithos.server.LithosServer._config (x2)`
+  - `lithos.cognitive_memory -> lithos.knowledge._normalize_datetime`
+  - `lithos.cognitive_memory -> lithos.lcma.retrieve._run_retrieve_impl`
+  - `lithos.intake -> lithos.knowledge._UNSET`
+  - `lithos.intake -> lithos.knowledge._UnsetType`
+  - `lithos.knowledge -> lithos.graph.KnowledgeGraph._apply_reconcile`
+  - `lithos.knowledge -> lithos.graph.KnowledgeGraph._plan_reconcile_to`
+  - `lithos.knowledge -> lithos.provenance.ProvenanceProjection._apply_reconcile`
+  - `lithos.knowledge -> lithos.provenance.ProvenanceProjection._plan_reconcile_to`
+  - `lithos.lcma.enrich -> lithos.provenance._project_node_provenance`
+  - `lithos.lcma.enrich -> lithos.provenance._project_provenance_to_edges`
+  - `lithos.lcma.enrich -> lithos.telemetry._LithosMetrics`
+  - `lithos.lcma.retrieve -> lithos.lcma.stats._generate_receipt_id`
+  - `lithos.lcma.retrieve -> lithos.telemetry._LithosMetrics`
+  - `lithos.lcma.scouts -> lithos.graph.KnowledgeGraph._resolve_link`
+  - `lithos.lcma.scouts -> lithos.knowledge.KnowledgeManager._id_to_path`
+  - `lithos.lcma.scouts -> lithos.knowledge.KnowledgeManager._source_url_to_id`
+  - `lithos.lcma.stats -> lithos.telemetry._LithosMetrics`
+  - `lithos.provenance -> lithos.lcma.edges._project_node_provenance`
+  - `lithos.provenance -> lithos.lcma.edges._project_provenance_to_edges`
+  - `lithos.tools.agents -> lithos.knowledge._normalize_datetime`
+  - `lithos.tools.agents -> lithos.server.LithosServer._emit`
+  - `lithos.tools.findings_stats -> lithos.knowledge._normalize_datetime`
+  - `lithos.tools.findings_stats -> lithos.server.LithosServer._cached_active_claims`
+  - `lithos.tools.findings_stats -> lithos.server.LithosServer._cached_agent_count`
+  - `lithos.tools.findings_stats -> lithos.server.LithosServer._emit`
+  - `lithos.tools.notes -> lithos.knowledge._UNSET`
+  - `lithos.tools.notes -> lithos.knowledge._UnsetType`
+  - … (list capped at 30 pairs)
+- Tests importing src privates: **88**
+  - `tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x18)`
+  - `tests/test_telemetry.py -> lithos.telemetry._lcma_metrics_registered (x8)`
+  - `tests/test_telemetry.py -> lithos.telemetry._initialized (x7)`
+  - `tests/test_telemetry.py -> lithos.telemetry._sse_active_clients_gauge_registered (x6)`
+  - `tests/test_entities.py -> lithos.lcma.entities._cap_entities (x5)`
+  - `tests/test_knowledge.py -> lithos.knowledge._KNOWN_METADATA_KEYS (x3)`
+  - `tests/test_retrieve.py -> lithos.lcma.retrieve._mmr_diversify (x3)`
+  - `tests/test_coordination.py -> lithos.coordination._parse_datetime (x2)`
+  - `tests/test_entities.py -> lithos.lcma.entities._clean_candidate (x2)`
+  - `tests/test_knowledge.py -> lithos.knowledge._UNSET (x2)`
+  - `tests/test_telemetry.py -> lithos.telemetry._TraceContextFilter (x2)`
+  - `tests/test_telemetry.py -> lithos.telemetry._inject_trace_context_into_logs (x2)`
+  - `tests/test_telemetry.py -> lithos.telemetry._trace_context_filter (x2)`
+  - `tests/conftest.py -> lithos.config._reset_config`
+  - `tests/conftest.py -> lithos.logging_config._HANDLER_MARKER`
+  - `tests/test_coactivation.py -> lithos.config._reset_config`
+  - `tests/test_coactivation.py -> lithos.lcma.retrieve._dominant_namespace`
+  - `tests/test_coactivation.py -> lithos.lcma.retrieve._run_retrieve_impl`
+  - `tests/test_config.py -> lithos.config._reset_config`
+  - `tests/test_enrich_worker.py -> lithos.lcma.enrich._resolve_node_id`
+  - `tests/test_enrich_worker.py -> lithos.provenance._project_node_provenance`
+  - `tests/test_entities.py -> lithos.lcma.entities._NER_UNAVAILABLE`
+  - `tests/test_entities.py -> lithos.lcma.entities._VERSION_TOKEN_RE`
+  - `tests/test_entities.py -> lithos.lcma.entities._download_model`
+  - `tests/test_entities.py -> lithos.lcma.entities._get_nlp`
+  - `tests/test_entities.py -> lithos.lcma.entities._load_model`
+  - `tests/test_event_delivery.py -> lithos.server._format_sse`
+  - `tests/test_knowledge.py -> lithos.knowledge._atomic_write`
+  - `tests/test_lcma_config.py -> lithos.config._DEFAULT_NOTE_TYPE_PRIORS`
+  - `tests/test_lcma_config.py -> lithos.config._DEFAULT_RERANK_WEIGHTS`
+  - … (list capped at 30 pairs)
+
 ## Domain, tools & tests
 
 - Domain models: **42** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.82** (42309 test lines / 23203 source lines)
+- Test-to-source line ratio: **1.84** (42600 test lines / 23203 source lines)

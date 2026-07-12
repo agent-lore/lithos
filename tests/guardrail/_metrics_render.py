@@ -12,6 +12,7 @@ from typing import Any
 
 from tests.guardrail._common import LANGUAGE, load_architecture, with_header
 from tests.guardrail._metrics_toolkit import COMPLEXITY_THRESHOLD, GOD_MODULE_LINES, budget_actual
+from tests.guardrail._private_access import DETAIL_CAP
 
 
 def render_metrics_json(metrics: dict[str, Any]) -> str:
@@ -117,6 +118,31 @@ def _complexity_section(metrics: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _seam_details(lines: list[str], details: list[str]) -> None:
+    lines.extend(f"  - `{d}`" for d in details)
+    if len(details) == DETAIL_CAP:
+        lines.append(f"  - … (list capped at {DETAIL_CAP} pairs)")
+
+
+def _seams_section(metrics: dict[str, Any]) -> list[str]:
+    s = metrics["seams"]
+    lines = [
+        "## Seams",
+        "",
+        "Private-name reaches across module seams. Both counts can be pinned as",
+        "`[budgets]` ratchets (`cross_module_private_refs`, `tests_private_imports`).",
+        "",
+    ]
+    if LANGUAGE != "python":
+        lines.append("Not scanned: underscore privacy is a Python convention (n/a here).")
+        return lines
+    lines.append(f"- Cross-module private refs (src): **{s['cross_module_private_refs']}**")
+    _seam_details(lines, s["cross_module_private_detail"])
+    lines.append(f"- Tests importing src privates: **{s['tests_private_imports']}**")
+    _seam_details(lines, s["tests_private_detail"])
+    return lines
+
+
 def _summary_section(metrics: dict[str, Any]) -> list[str]:
     d, m, t = metrics["domain"], metrics["mcp"], metrics["tests"]
     # Optional surfaces: report the MCP tool catalog only when this project
@@ -155,6 +181,7 @@ def render_metrics_md(metrics: dict[str, Any], budgets: dict[str, int]) -> str:
         _component_table(metrics),
         _size_section(metrics),
         _complexity_section(metrics),
+        _seams_section(metrics),
         _summary_section(metrics),
     ]
     body = "\n\n".join("\n".join(section) for section in sections)

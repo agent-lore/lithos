@@ -90,6 +90,8 @@ component_cycles       = 1    # one 6-component SCC in Core (Coordination/Graph/
 module_cycles          = 2    # knowledge<->graph<->search<->provenance<->lcma.edges, server<->tools; goal: 0
 modules_over_800_lines = 11   # incl. tools.tasks (985) split from server in #374; direction: down
 max_module_lines       = 2800 # stop-loss; largest today is coordination.py at 2675
+cross_module_private_refs = 42  # measured 2026-07; server._emit/_config x12, _normalize_datetime x3 etc.; goal: 0
+tests_private_imports     = 88  # measured 2026-07; test_telemetry alone is 45; direction: down
 
 # MCP tool surface: modules scanned for @…tool()-decorated handlers (counted in
 # the metrics snapshot; catalogued in docs/generated/tool_catalog.md). Omit the

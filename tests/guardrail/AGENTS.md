@@ -19,6 +19,11 @@ output for identical input:
   the first suspect.
 - **No wall-clock, git sha, absolute path, hostname, or env-dependent data** in
   any artifact. Round ratios; `json.dumps(..., indent=2, sort_keys=True)`.
+- **No implicit string concatenation** when splitting a long string for line
+  width — GitHub code quality flags it (it reads as a missing comma in lists).
+  Join the pieces with explicit `+` (plain prefix on placeholder-less pieces);
+  the hub's drift normalizer folds `+`-joined plain and f-string pieces, so
+  this never registers as kit drift.
 - Determinism is tested (e.g. `test_metrics_snapshot` renders twice and asserts
   byte-equality). Keep those tests passing.
 
@@ -106,6 +111,7 @@ Always regenerate and commit after touching the kit.
 | `_common.py` | shared plumbing: paths, `load_architecture`, `component_of`, `module_name_of`, memoized `build_import_graph`, `write`, `with_header` |
 | `_diagram_toolkit.py` | `architecture.md` (component diagram, grimp) + `domain_model.md` (AST class scan) |
 | `_metrics_toolkit.py` / `_metrics_render.py` | compute metrics / render to `metrics.json` + `metrics.md` |
+| `_private_access.py` | `seams` metrics: cross-module `_private` reaches in src + tests importing src privates (python-only; optional budgets `cross_module_private_refs`, `tests_private_imports`) |
 | `_tool_catalog.py` | `tool_catalog.md` (AST scan of `@*.tool()`-decorated handlers) |
 | `_containers.py` | `containers.md` (data stores, declared but anchored to `StorageConfig`) |
 | `_cpp_graph.py` | quoted-`#include` graph for `language = "cpp"` (grimp duck-type) |
