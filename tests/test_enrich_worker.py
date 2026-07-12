@@ -12,6 +12,7 @@ import pytest_asyncio
 from lithos.config import LcmaConfig, LithosConfig
 from lithos.events import (
     EDGE_UPSERTED,
+    EVENT_ORIGIN_ENRICH,
     FINDING_POSTED,
     NOTE_CREATED,
     NOTE_DELETED,
@@ -114,6 +115,35 @@ async def worker(
         coordination=mock_coordination,
         intake=_make_intake(mock_knowledge, event_bus, edge_store, mock_coordination),
     )
+
+
+async def test_reinforce_related_edge_creates_then_strengthens(edge_store: EdgeStore) -> None:
+    """Shared related_to policy (task 681ac952 dedup): the first call creates an
+    edge at ``initial_weight``, the second strengthens that same edge by the
+    delta. Both EnrichWorker._consolidate_task and CognitiveMemory.reinforce_between
+    route through this helper (differing only in initial weight / provenance_type).
+    """
+    from lithos.lcma.edge_reinforce import RELATED_TO_STRENGTHEN_DELTA, reinforce_related_edge
+
+    eid, created = await reinforce_related_edge(
+        edge_store, "a", "b", "default", initial_weight=0.5, provenance_type="reinforcement"
+    )
+    assert created is True
+    edges = await edge_store.list_edges(
+        from_id="a", to_id="b", edge_type="related_to", namespace="default"
+    )
+    assert len(edges) == 1
+    assert edges[0]["weight"] == pytest.approx(0.5)
+
+    eid2, created2 = await reinforce_related_edge(
+        edge_store, "a", "b", "default", initial_weight=0.5, provenance_type="reinforcement"
+    )
+    assert created2 is False
+    assert eid2 == eid
+    edges2 = await edge_store.list_edges(
+        from_id="a", to_id="b", edge_type="related_to", namespace="default"
+    )
+    assert edges2[0]["weight"] == pytest.approx(0.5 + RELATED_TO_STRENGTHEN_DELTA)
 
 
 # ---------------------------------------------------------------------------
@@ -952,20 +982,35 @@ class TestSelfOriginatedEventFilter:
     """
 
     async def test_self_originated_event_is_dropped(self, worker: EnrichWorker) -> None:
+        """An event carrying the enrich origin marker is dropped (loop-break)."""
         worker._stats_store.enqueue = AsyncMock()  # type: ignore[method-assign]
 
         await worker._handle_event(
-            LithosEvent(type=NOTE_UPDATED, agent=ENRICH_AGENT, payload={"id": "n1"})
+            LithosEvent(type=NOTE_UPDATED, origin=EVENT_ORIGIN_ENRICH, payload={"id": "n1"})
         )
 
         worker._stats_store.enqueue.assert_not_called()
 
-    async def test_other_agents_still_enqueue(self, worker: EnrichWorker) -> None:
-        """The filter is specific to ENRICH_AGENT — genuine agent writes still enqueue."""
+    async def test_other_events_still_enqueue(self, worker: EnrichWorker) -> None:
+        """The filter is specific to the origin marker — ordinary writes still enqueue."""
         worker._stats_store.enqueue = AsyncMock()  # type: ignore[method-assign]
 
         await worker._handle_event(
             LithosEvent(type=NOTE_UPDATED, agent="real-agent", payload={"id": "n1"})
+        )
+
+        worker._stats_store.enqueue.assert_awaited_once()
+
+    async def test_agent_string_alone_does_not_suppress(self, worker: EnrichWorker) -> None:
+        """Finding-1 fix: a write with agent='lithos-enrich' but NO origin marker is
+        not treated as a self-event. The loop-break keys on the non-spoofable
+        ``origin`` set by the intake, not the caller-facing ``agent`` field, so an
+        external caller can no longer suppress its own enrichment by spoofing the id.
+        """
+        worker._stats_store.enqueue = AsyncMock()  # type: ignore[method-assign]
+
+        await worker._handle_event(
+            LithosEvent(type=NOTE_UPDATED, agent=ENRICH_AGENT, payload={"id": "n1"})
         )
 
         worker._stats_store.enqueue.assert_awaited_once()
@@ -1012,12 +1057,15 @@ class TestSelfOriginatedEventFilter:
 
         await worker._extract_entities(doc_id)
 
-        # The entity write emitted a NOTE_UPDATED stamped with the sentinel actor ...
+        # The entity write emitted a NOTE_UPDATED carrying the enrich origin
+        # marker (and attributed to ENRICH_AGENT) ...
         emitted = captured_bus.emit.await_args.args[0]
         assert emitted.type == NOTE_UPDATED
         assert emitted.agent == ENRICH_AGENT
+        assert emitted.origin == EVENT_ORIGIN_ENRICH
         assert emitted.payload["id"] == doc_id
-        # ... and routing that same emitted event back through the worker drops it.
+        # ... and routing that same emitted event back through the worker drops it
+        # (on the origin marker, not the agent).
         worker._stats_store.enqueue = AsyncMock()  # type: ignore[method-assign]
         await worker._handle_event(emitted)
         worker._stats_store.enqueue.assert_not_called()

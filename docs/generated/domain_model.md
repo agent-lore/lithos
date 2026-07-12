@@ -100,6 +100,7 @@ classDiagram
   class LithosEvent {
     +type str
     +agent str
+    +origin str
     +payload dict[str, str | int | float | bool | None]
     +tags list[str]
     +id str

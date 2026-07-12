@@ -26,9 +26,10 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from lithos.errors import SearchBackendError
-from lithos.events import EDGE_UPSERTED, LithosEvent
+from lithos.events import EVENT_ORIGIN_ENRICH, LithosEvent, make_edge_upserted_event
 from lithos.intake import EdgeRequest, NoteUpdateRequest
 from lithos.knowledge import _normalize_datetime
+from lithos.lcma.edge_reinforce import RELATED_TO_STRENGTHEN_DELTA, reinforce_related_edge
 from lithos.lcma.enrich import ENRICH_AGENT, EnrichWorker
 
 # Re-exported for callers outside the lcma boundary (ADR-0005): the CLI
@@ -219,7 +220,7 @@ class CognitiveMemory:
                 config=self._config.lcma,
                 event_bus=self._event_bus,
                 stats_store=self._stats_store,
-                edge_store=self._projection._edge_store,
+                edge_store=self._projection.edge_store,
                 knowledge=self._knowledge,
                 coordination=self._coordination,
                 intake=self._intake,
@@ -354,7 +355,7 @@ class CognitiveMemory:
             knowledge=self._knowledge,
             graph=self._graph,
             coordination=self._coordination,
-            edge_store=self._projection._edge_store,
+            edge_store=self._projection.edge_store,
             projection=self._projection,
             stats_store=self._stats_store,
             lcma_config=self._config.lcma,
@@ -474,15 +475,11 @@ class CognitiveMemory:
 
         No MCP surface today — provided for the four-method shape ADR-0005
         describes and for future asserted-edge retraction work (e.g.
-        agent-driven contradictions). Mirrors the interim
-        ``self._projection._edge_store.delete_edges`` reach-through that
-        the enrich worker still uses; ADR-0005 / future #263 will route
-        this through a projection-owned write API once it exists.
+        agent-driven contradictions). Writes through the public
+        ``ProvenanceProjection.edge_store`` property; a projection-owned
+        write API may replace the direct ``delete_edges`` call later.
         """
-        # Interim: direct edge-store call mirrors today's use sites and
-        # collapses to a public projection write in ADR-0005's successor
-        # issue (#263).
-        return await self._projection._edge_store.delete_edges(edge_ids=edge_ids)
+        return await self._projection.edge_store.delete_edges(edge_ids=edge_ids)
 
     # ------------------------------------------------------------------
     # Reinforcement (issue #259, ADR-0005)
@@ -492,9 +489,9 @@ class CognitiveMemory:
     # passes *what it knows* (cited / ignored / misleading node ids) and
     # the Module applies the consequences against its owned StatsStore
     # and the projection's EdgeStore. Callers no longer thread stores by
-    # hand. ``self._projection._edge_store`` is a private-attribute read
-    # matching the precedent set in :meth:`start`; a follow-up issue will
-    # promote it to a public ``ProvenanceProjection.edge_store`` property.
+    # hand. Edge writes reach the store through the public
+    # ``ProvenanceProjection.edge_store`` property (these mutate rows the
+    # projection does not own — ``related_to`` reinforcement, edge weakening).
 
     async def reinforce_cited(self, cited_ids: list[str]) -> None:
         """Boost stats for every cited node.
@@ -571,7 +568,7 @@ class CognitiveMemory:
             "CognitiveMemory.reinforce_between: strengthening edges",
             extra={"cited_count": len(cited_ids)},
         )
-        edge_store = self._projection._edge_store
+        edge_store = self._projection.edge_store
 
         # Resolve namespace per node from the meta cache.
         ns_map: dict[str, str] = {}
@@ -603,41 +600,32 @@ class CognitiveMemory:
             from_id, to_id = (a, b) if a <= b else (b, a)
             namespace = ns_a
 
-            existing = await edge_store.list_edges(
-                from_id=from_id,
-                to_id=to_id,
-                edge_type="related_to",
-                namespace=namespace,
+            edge_id, created = await reinforce_related_edge(
+                edge_store,
+                from_id,
+                to_id,
+                namespace,
+                initial_weight=0.5,
+                provenance_type="reinforcement",
             )
-
-            if existing:
-                edge_id = str(existing[0]["edge_id"])
-                await edge_store.adjust_weight(edge_id, 0.03)
+            if created:
+                logger.debug(
+                    "CognitiveMemory.reinforce_between: created new related_to edge",
+                    extra={
+                        "edge_id": edge_id,
+                        "from_id": from_id,
+                        "to_id": to_id,
+                        "namespace": namespace,
+                    },
+                )
+            else:
                 logger.debug(
                     "CognitiveMemory.reinforce_between: strengthened existing edge",
                     extra={
                         "edge_id": edge_id,
                         "from_id": from_id,
                         "to_id": to_id,
-                        "weight_delta": 0.03,
-                    },
-                )
-            else:
-                eid = await edge_store.upsert(
-                    from_id=from_id,
-                    to_id=to_id,
-                    edge_type="related_to",
-                    weight=0.5,
-                    namespace=namespace,
-                    provenance_type="reinforcement",
-                )
-                logger.debug(
-                    "CognitiveMemory.reinforce_between: created new related_to edge",
-                    extra={
-                        "edge_id": eid,
-                        "from_id": from_id,
-                        "to_id": to_id,
-                        "namespace": namespace,
+                        "weight_delta": RELATED_TO_STRENGTHEN_DELTA,
                     },
                 )
 
@@ -680,6 +668,7 @@ class CognitiveMemory:
                     await self._intake.note_update(
                         ENRICH_AGENT,
                         NoteUpdateRequest(id=node_id, lcma_status="quarantined"),
+                        origin=EVENT_ORIGIN_ENRICH,
                     )
                     logger.info(
                         "CognitiveMemory.reinforce_misleading: node quarantined",
@@ -690,7 +679,7 @@ class CognitiveMemory:
                 extra={"node_id": node_id, "salience_delta": -0.05},
             )
 
-        edge_store = self._projection._edge_store
+        edge_store = self._projection.edge_store
         seen: set[str] = set()
         for node_id in misleading_ids:
             edges_from = await edge_store.list_edges(from_id=node_id)
@@ -960,7 +949,7 @@ class CognitiveMemory:
                     }
                 loser_id = to_id if winner_id == from_id else from_id
 
-            updated = await self._projection._edge_store.update_conflict_resolution(
+            updated = await self._projection.edge_store.update_conflict_resolution(
                 edge_id,
                 conflict_state=resolution,
                 provenance_actor=resolver,
@@ -985,15 +974,14 @@ class CognitiveMemory:
                 )
 
             await self._emit(
-                LithosEvent(
-                    type=EDGE_UPSERTED,
-                    payload={
-                        "edge_id": edge_id,
-                        "from_id": from_id,
-                        "to_id": to_id,
-                        "type": "contradicts",
-                        "conflict_state": resolution,
-                    },
+                make_edge_upserted_event(
+                    agent=resolver,
+                    edge_id=edge_id,
+                    from_id=from_id,
+                    to_id=to_id,
+                    edge_type="contradicts",
+                    namespace=str(edge["namespace"]),
+                    conflict_state=resolution,
                 )
             )
 

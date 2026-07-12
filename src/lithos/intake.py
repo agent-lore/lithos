@@ -32,12 +32,12 @@ from lithos.coordination import CoordinationService
 from lithos.edge_store import EdgeStore
 from lithos.errors import SlugCollisionError
 from lithos.events import (
-    EDGE_UPSERTED,
     NOTE_CREATED,
     NOTE_DELETED,
     NOTE_UPDATED,
     EventBus,
     LithosEvent,
+    make_edge_upserted_event,
 )
 from lithos.graph import KnowledgeGraph
 from lithos.knowledge import (
@@ -448,7 +448,9 @@ class CorpusIntake:
                 warnings=list(result.warnings),
             )
 
-    async def note_update(self, agent: str, request: NoteUpdateRequest) -> WriteOutcome:
+    async def note_update(
+        self, agent: str, request: NoteUpdateRequest, *, origin: str = ""
+    ) -> WriteOutcome:
         """Patch a note's metadata/tags/title/status without touching its body.
 
         The metadata-only counterpart to :meth:`write`. The body is preserved
@@ -465,6 +467,11 @@ class CorpusIntake:
         ``WriteOutcome(status="slug_collision")``; all other non-success
         ``WriteResult`` statuses are forwarded verbatim. ``ensure_agent_known``
         runs for every call.
+
+        ``origin`` stamps the emitted ``NOTE_UPDATED`` with an internal subsystem
+        marker (e.g. :data:`EVENT_ORIGIN_ENRICH`) so background workers can drop
+        their own writes without keying on the spoofable ``agent`` field. It is a
+        code-level seam parameter — external MCP writes never set it.
         """
         tracer = get_tracer()
         with tracer.start_as_current_span("lithos.intake.note_update") as span:
@@ -533,6 +540,7 @@ class CorpusIntake:
                 LithosEvent(
                     type=NOTE_UPDATED,
                     agent=agent,
+                    origin=origin,
                     payload={"id": doc.id, "title": doc.title, "path": str(doc.path)},
                     tags=list(doc.metadata.tags),
                 )
@@ -591,16 +599,14 @@ class CorpusIntake:
             span.set_attribute("lithos.edge.edge_id", edge_id)
 
             await self._emit(
-                LithosEvent(
-                    type=EDGE_UPSERTED,
+                make_edge_upserted_event(
                     agent=agent,
-                    payload={
-                        "edge_id": edge_id,
-                        "from_id": request.from_id,
-                        "to_id": request.to_id,
-                        "type": request.edge_type,
-                        "namespace": request.namespace,
-                    },
+                    edge_id=edge_id,
+                    from_id=request.from_id,
+                    to_id=request.to_id,
+                    edge_type=request.edge_type,
+                    namespace=request.namespace,
+                    conflict_state=request.conflict_state,
                 )
             )
 
