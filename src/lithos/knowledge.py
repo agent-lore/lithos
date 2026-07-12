@@ -2341,10 +2341,12 @@ class KnowledgeManager:
         lists are fresh copies — mutations to them never leak back into the
         manager.
 
-        This is the public bulk-read counterpart to :meth:`get_doc_sources`;
-        previously callers (the projection's full-sweep helper in
-        ``lcma/edges.py``) reached into ``_doc_to_sources`` directly. See
-        issue #264.
+        This is the public bulk-read counterpart to :meth:`get_doc_sources`
+        (issue #264) so callers don't reach into ``_doc_to_sources`` directly.
+        Now used only by provenance conformance tests to cross-check KM's
+        in-memory sources against the projected edges — the former full-sweep
+        helper that consumed it moved into ``ProvenanceProjection`` (task
+        681ac952 PR1c).
         """
         return [(doc_id, list(sources)) for doc_id, sources in self._doc_to_sources.items()]
 

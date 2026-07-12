@@ -97,7 +97,6 @@ graph TD
   Provenance --> Config
   Provenance --> Graph
   Provenance --> Knowledge
-  Provenance --> LCMA
   Search --> Config
   Search --> Errors
   Search --> Graph
@@ -130,8 +129,8 @@ graph TD
   linkStyle 48 stroke:#bbb
   linkStyle 54 stroke:#bbb
   linkStyle 55 stroke:#bbb
+  linkStyle 58 stroke:#bbb
   linkStyle 59 stroke:#bbb
-  linkStyle 60 stroke:#bbb
+  linkStyle 61 stroke:#bbb
   linkStyle 62 stroke:#bbb
-  linkStyle 63 stroke:#bbb
 ```

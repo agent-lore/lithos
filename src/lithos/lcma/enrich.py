@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from lithos.intake import CorpusIntake
     from lithos.knowledge import KnowledgeDocument, KnowledgeManager
     from lithos.lcma.stats import StatsStore
-    from lithos.provenance import EdgeStore
+    from lithos.provenance import ProvenanceProjection
     from lithos.telemetry import _LithosMetrics
 
 _lithos_metrics: _LithosMetrics | None = None
@@ -129,7 +129,7 @@ class EnrichWorker:
         config: LcmaConfig,
         event_bus: EventBus,
         stats_store: StatsStore,
-        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         knowledge: KnowledgeManager,
         coordination: CoordinationService,
         intake: CorpusIntake,
@@ -137,7 +137,7 @@ class EnrichWorker:
         self._config = config
         self._event_bus = event_bus
         self._stats_store = stats_store
-        self._edge_store = edge_store
+        self._projection = projection
         self._knowledge = knowledge
         self._coordination = coordination
         self._intake = intake
@@ -414,8 +414,6 @@ class EnrichWorker:
         Entity extraction runs only when trigger_types contains ``note.created``
         or ``note.updated``.
         """
-        from lithos.provenance import _project_node_provenance
-
         logger.debug(
             "EnrichWorker: enriching node",
             extra={
@@ -431,8 +429,17 @@ class EnrichWorker:
         if stats is not None:
             await self._apply_decay(node_id, stats)
 
-        # --- Edge projection ---
-        await _project_node_provenance(self._edge_store, self._knowledge, node_id)
+        # --- derived_from edge projection via the ProvenanceProjection Module ---
+        # Resolve the node's frontmatter sources from KnowledgeManager's in-memory
+        # maps (cheap; no disk read); an absent node projects an empty desired set,
+        # so the projection removes its stale derived_from edges.
+        if self._knowledge.has_document(node_id):
+            cached = self._knowledge.get_cached_meta(node_id)
+            namespace = cached.namespace if cached else "default"
+            sources = self._knowledge.get_doc_sources(node_id)
+        else:
+            namespace, sources = "default", []
+        await self._projection.reconcile_node(node_id, sources=sources, namespace=namespace)
 
         # --- Entity extraction (only on create/update triggers) ---
         if isinstance(trigger_types, (list, set, tuple)) and (
@@ -573,8 +580,6 @@ class EnrichWorker:
 
     async def full_sweep(self) -> None:
         """Run a full sweep: decay all nodes, evict stale WM, reconcile provenance."""
-        from lithos.provenance import _project_provenance_to_edges
-
         # --- Decay all nodes ---
         node_ids = await self._stats_store.list_all_node_ids()
         logger.info(
@@ -599,15 +604,16 @@ class EnrichWorker:
             ttl_days=self._config.wm_eviction_days,
         )
 
-        # --- Reconcile provenance edges ---
-        prov_counts = await _project_provenance_to_edges(self._edge_store, self._knowledge)
-
-        # --- Heal stale extractor-written entities (#313) ---
-        # Passing the already-loaded doc avoids a second per-node disk read;
-        # _extract_entities short-circuits on current-marker and agent-curated
-        # docs, so an up-to-date corpus costs one corpus scan.
+        # Load the corpus once — shared by the provenance reconcile and the
+        # entity heal below. _extract_entities short-circuits on current-marker
+        # and agent-curated docs, so an up-to-date corpus costs one scan.
         _, total = await self._knowledge.list_all(limit=0)
         docs, _ = await self._knowledge.list_all(limit=total) if total else ([], 0)
+
+        # --- Reconcile provenance edges via the ProvenanceProjection Module ---
+        prov_result = await self._projection.reconcile_corpus(docs)
+
+        # --- Heal stale extractor-written entities (#313) ---
         for doc in docs:
             try:
                 await self._extract_entities(doc.id, doc=doc)
@@ -619,8 +625,8 @@ class EnrichWorker:
             extra={
                 "nodes_decayed": decayed,
                 "wm_entries_evicted": evicted,
-                "provenance_edges_created": prov_counts.get("created", 0),
-                "provenance_edges_removed": prov_counts.get("removed", 0),
+                "provenance_edges_created": prov_result.created,
+                "provenance_edges_removed": prov_result.removed,
             },
         )
 
@@ -678,7 +684,7 @@ class EnrichWorker:
                 # Upsert or strengthen the consolidation edge (shared related_to
                 # policy; consolidation starts a fresh edge at weight 0.03).
                 await reinforce_related_edge(
-                    self._edge_store,
+                    self._projection.edge_store,
                     from_id,
                     to_id,
                     ns,

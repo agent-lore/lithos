@@ -220,7 +220,7 @@ class CognitiveMemory:
                 config=self._config.lcma,
                 event_bus=self._event_bus,
                 stats_store=self._stats_store,
-                edge_store=self._projection.edge_store,
+                projection=self._projection,
                 knowledge=self._knowledge,
                 coordination=self._coordination,
                 intake=self._intake,

@@ -24,7 +24,7 @@ Corpus-derived edge projection — where a note came from.
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Graph](Graph.md), [Knowledge](Knowledge.md), [LCMA](LCMA.md)
+- Depends on: [Config](Config.md), [Graph](Graph.md), [Knowledge](Knowledge.md)
 - Used by: [CognitiveMemory](CognitiveMemory.md), [Entrypoints](Entrypoints.md), [Knowledge](Knowledge.md), [LCMA](LCMA.md)
 
 ## ADRs
