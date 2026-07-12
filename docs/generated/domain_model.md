@@ -177,6 +177,9 @@ classDiagram
     +title str | None
     +tags list[str] | _UnsetType
     +lcma_status str | None | _UnsetType
+    +supersedes str | None | _UnsetType
+    +entities list[str] | None | _UnsetType
+    +entities_extractor int | None | _UnsetType
     +metadata dict | _UnsetType
     +expected_version int | None
   }

@@ -89,6 +89,7 @@ graph TD
   LCMA --> Errors
   LCMA --> Events
   LCMA --> Graph
+  LCMA --> Intake
   LCMA --> Knowledge
   LCMA --> Provenance
   LCMA --> Search
@@ -127,10 +128,10 @@ graph TD
   linkStyle 45 stroke:#bbb
   linkStyle 47 stroke:#bbb
   linkStyle 48 stroke:#bbb
-  linkStyle 53 stroke:#bbb
   linkStyle 54 stroke:#bbb
-  linkStyle 58 stroke:#bbb
+  linkStyle 55 stroke:#bbb
   linkStyle 59 stroke:#bbb
-  linkStyle 61 stroke:#bbb
+  linkStyle 60 stroke:#bbb
   linkStyle 62 stroke:#bbb
+  linkStyle 63 stroke:#bbb
 ```

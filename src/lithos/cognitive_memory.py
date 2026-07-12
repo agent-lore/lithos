@@ -27,9 +27,9 @@ from typing import TYPE_CHECKING, Any
 
 from lithos.errors import SearchBackendError
 from lithos.events import EDGE_UPSERTED, LithosEvent
-from lithos.intake import EdgeRequest
+from lithos.intake import EdgeRequest, NoteUpdateRequest
 from lithos.knowledge import _normalize_datetime
-from lithos.lcma.enrich import EnrichWorker
+from lithos.lcma.enrich import ENRICH_AGENT, EnrichWorker
 
 # Re-exported for callers outside the lcma boundary (ADR-0005): the CLI
 # extract-entities command shares the enrichment worker's extractor (#313).
@@ -222,6 +222,7 @@ class CognitiveMemory:
                 edge_store=self._projection._edge_store,
                 knowledge=self._knowledge,
                 coordination=self._coordination,
+                intake=self._intake,
             )
             await self._enrich_worker.start()
         self._started = True
@@ -652,7 +653,8 @@ class CognitiveMemory:
         - ``misleading_count += 1``
         - ``salience -= 0.05``
         - If ``misleading_count >= 3``, set ``status = 'quarantined'``
-          via :meth:`KnowledgeManager.update`.
+          via :meth:`CorpusIntake.note_update` (so the status flip re-indexes
+          Search/graph and emits ``NOTE_UPDATED``; task 681ac952).
 
         After per-node penalties, every edge incident to *any* of the
         misleading nodes is weakened by ``-0.05`` exactly once (a shared
@@ -670,10 +672,14 @@ class CognitiveMemory:
                 misleading = stats["misleading_count"]
                 assert isinstance(misleading, int)
                 if misleading >= 3:
-                    await self._knowledge.update(
-                        id=node_id,
-                        lcma_status="quarantined",
-                        agent="lithos-enrich",
+                    # Route through intake so the status flip re-indexes
+                    # Search/graph and emits NOTE_UPDATED; the direct
+                    # KnowledgeManager.update did neither (Drift, task 681ac952).
+                    # ENRICH_AGENT stamps the event so the enrich worker drops
+                    # it instead of re-enqueuing the quarantined node.
+                    await self._intake.note_update(
+                        ENRICH_AGENT,
+                        NoteUpdateRequest(id=node_id, lcma_status="quarantined"),
                     )
                     logger.info(
                         "CognitiveMemory.reinforce_misleading: node quarantined",
@@ -968,10 +974,14 @@ class CognitiveMemory:
                 }
 
             if resolution == "superseded" and winner_id is not None:
-                await self._knowledge.update(
-                    id=winner_id,
-                    agent=resolver,
-                    supersedes=loser_id,
+                # Route through intake so recording the supersedes link
+                # re-indexes Search/graph and emits NOTE_UPDATED, instead of
+                # the bypassing KnowledgeManager.update (Drift, task 681ac952).
+                # Attributed to the real resolver — a genuine agent write, so
+                # re-enrichment of the winner is legitimate, not a self-loop.
+                await self._intake.note_update(
+                    resolver,
+                    NoteUpdateRequest(id=winner_id, supersedes=loser_id),
                 )
 
             await self._emit(

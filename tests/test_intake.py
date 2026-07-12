@@ -34,6 +34,7 @@ from lithos.intake import (
     DeleteRequest,
     EdgeOutcome,
     EdgeRequest,
+    NoteUpdateRequest,
     WriteOutcome,
     WriteRequest,
 )
@@ -266,6 +267,64 @@ async def test_write_update_returns_updated_outcome(
     emitted_event = mocks["event_bus"].emit.await_args.args[0]
     assert emitted_event.type == NOTE_UPDATED
     assert emitted_event.payload["id"] == doc_id
+
+
+@pytest.mark.asyncio
+async def test_note_update_forwards_lcma_fields_and_reindexes(
+    stub_intake: tuple[CorpusIntake, dict[str, Any]],
+    knowledge_manager: KnowledgeManager,
+) -> None:
+    """note_update carries the LCMA-internal frontmatter fields
+    (entities / entities_extractor) through to KnowledgeManager, leaves the body
+    untouched, and re-indexes Search + emits NOTE_UPDATED. This is the seam the
+    enrich worker now uses instead of bypassing intake (task 681ac952)."""
+    intake, mocks = stub_intake
+    created = await knowledge_manager.create(title="orig", content="body-text", agent="agent-1")
+    assert created.document is not None
+    doc_id = created.document.id
+    before, _ = await knowledge_manager.read(id=doc_id)
+    # Replace the real graph with a stub so the graph view-sync is observable.
+    intake._graph = MagicMock()  # type: ignore[assignment]
+
+    outcome = await intake.note_update(
+        "lithos-enrich",
+        NoteUpdateRequest(id=doc_id, entities=["NetworkX", "ChromaDB"], entities_extractor=7),
+    )
+
+    assert outcome.status == "updated"
+    after, _ = await knowledge_manager.read(id=doc_id)
+    assert after.content == before.content  # body untouched — frontmatter-only patch
+    assert after.metadata.entities == ["NetworkX", "ChromaDB"]
+    assert after.metadata.entities_extractor == 7
+    # Both derived views synced, and the event carries the caller's agent.
+    mocks["search"].index.assert_called_once()
+    intake._graph.add_document.assert_called_once()
+    emitted = mocks["event_bus"].emit.await_args.args[0]
+    assert emitted.type == NOTE_UPDATED
+    assert emitted.agent == "lithos-enrich"
+
+
+@pytest.mark.asyncio
+async def test_note_update_forwards_supersedes(
+    stub_intake: tuple[CorpusIntake, dict[str, Any]],
+    knowledge_manager: KnowledgeManager,
+) -> None:
+    """note_update forwards ``supersedes`` — the field conflict_resolve now
+    writes through intake instead of a bypassing KnowledgeManager.update."""
+    intake, _ = stub_intake
+    winner = await knowledge_manager.create(title="winner", content="w", agent="agent-1")
+    loser = await knowledge_manager.create(title="loser", content="l", agent="agent-1")
+    assert winner.document is not None
+    assert loser.document is not None
+
+    outcome = await intake.note_update(
+        "agent-1",
+        NoteUpdateRequest(id=winner.document.id, supersedes=loser.document.id),
+    )
+
+    assert outcome.status == "updated"
+    doc, _ = await knowledge_manager.read(id=winner.document.id)
+    assert doc.metadata.supersedes == loser.document.id
 
 
 @pytest.mark.asyncio

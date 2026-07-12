@@ -20,11 +20,36 @@ from lithos.events import (
     EventBus,
     LithosEvent,
 )
+from lithos.intake import CorpusIntake
 from lithos.knowledge import KnowledgeManager
-from lithos.lcma.enrich import EnrichWorker, _resolve_node_id
+from lithos.lcma.enrich import ENRICH_AGENT, EnrichWorker, _resolve_node_id
 from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION
 from lithos.lcma.stats import StatsStore
 from lithos.provenance import EdgeStore, _project_node_provenance
+
+
+def _make_intake(
+    knowledge: object,
+    event_bus: EventBus,
+    edge_store: EdgeStore,
+    coordination: object,
+) -> CorpusIntake:
+    """A CorpusIntake wrapping ``knowledge`` with mocked Search/graph.
+
+    Enrichment writes route through ``intake.note_update`` now (task 681ac952),
+    so EnrichWorker requires a CorpusIntake. The entity-extraction tests need a
+    functional intake over their real KnowledgeManager for the frontmatter write
+    to land; Search/graph are mocked because the assertions check frontmatter and
+    stats, not the derived views.
+    """
+    return CorpusIntake(
+        knowledge=knowledge,  # type: ignore[arg-type]
+        search=MagicMock(),
+        graph=MagicMock(),
+        coordination=coordination,  # type: ignore[arg-type]
+        event_bus=event_bus,
+        edge_store=edge_store,
+    )
 
 
 @pytest_asyncio.fixture
@@ -87,6 +112,7 @@ async def worker(
         edge_store=edge_store,
         knowledge=mock_knowledge,
         coordination=mock_coordination,
+        intake=_make_intake(mock_knowledge, event_bus, edge_store, mock_coordination),
     )
 
 
@@ -913,6 +939,91 @@ class TestConsolidateTask:
 
 
 # ---------------------------------------------------------------------------
+# Self-originated event filter (loop-break)
+# ---------------------------------------------------------------------------
+
+
+class TestSelfOriginatedEventFilter:
+    """The worker drops events it caused itself (task 681ac952).
+
+    Enrichment writes now flow through CorpusIntake, which emits NOTE_UPDATED /
+    EDGE_UPSERTED stamped with ENRICH_AGENT. Re-enqueuing on those would loop
+    enrich→write→event→enrich; the actor filter breaks it explicitly.
+    """
+
+    async def test_self_originated_event_is_dropped(self, worker: EnrichWorker) -> None:
+        worker._stats_store.enqueue = AsyncMock()  # type: ignore[method-assign]
+
+        await worker._handle_event(
+            LithosEvent(type=NOTE_UPDATED, agent=ENRICH_AGENT, payload={"id": "n1"})
+        )
+
+        worker._stats_store.enqueue.assert_not_called()
+
+    async def test_other_agents_still_enqueue(self, worker: EnrichWorker) -> None:
+        """The filter is specific to ENRICH_AGENT — genuine agent writes still enqueue."""
+        worker._stats_store.enqueue = AsyncMock()  # type: ignore[method-assign]
+
+        await worker._handle_event(
+            LithosEvent(type=NOTE_UPDATED, agent="real-agent", payload={"id": "n1"})
+        )
+
+        worker._stats_store.enqueue.assert_awaited_once()
+
+    async def test_extract_entities_emits_self_event_that_worker_drops(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """End-to-end loop-break: the entity write emits a NOTE_UPDATED stamped
+        ENRICH_AGENT, and feeding that very emitted event back through
+        _handle_event is dropped. Connects the two halves the other tests prove
+        independently — the write really produces a self-event, and the worker
+        really drops that self-event — closing enrich→write→event→enrich.
+        """
+        km = KnowledgeManager(test_config)
+        result = await km.create(
+            title="Loop Note", content="Lithos uses [[NetworkX]].", agent="test-agent"
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+
+        captured_bus = AsyncMock()
+        intake = CorpusIntake(
+            knowledge=km,
+            search=MagicMock(),
+            graph=MagicMock(),
+            coordination=mock_coordination,
+            event_bus=captured_bus,
+            edge_store=edge_store,
+        )
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=captured_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=mock_coordination,
+            intake=intake,
+        )
+
+        await worker._extract_entities(doc_id)
+
+        # The entity write emitted a NOTE_UPDATED stamped with the sentinel actor ...
+        emitted = captured_bus.emit.await_args.args[0]
+        assert emitted.type == NOTE_UPDATED
+        assert emitted.agent == ENRICH_AGENT
+        assert emitted.payload["id"] == doc_id
+        # ... and routing that same emitted event back through the worker drops it.
+        worker._stats_store.enqueue = AsyncMock()  # type: ignore[method-assign]
+        await worker._handle_event(emitted)
+        worker._stats_store.enqueue.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Entity extraction tests
 # ---------------------------------------------------------------------------
 
@@ -948,6 +1059,7 @@ class TestExtractEntities:
             edge_store=edge_store,
             knowledge=km,
             coordination=mock_coordination,
+            intake=_make_intake(km, event_bus, edge_store, mock_coordination),
         )
 
         await worker._extract_entities(doc_id)
@@ -958,6 +1070,59 @@ class TestExtractEntities:
         assert "NetworkX" in doc.metadata.entities
         assert "ChromaDB" in doc.metadata.entities
         assert doc.metadata.entities_extractor == ENTITY_EXTRACTOR_VERSION
+
+    async def test_extract_entities_reindexes_search_via_intake(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        mock_coordination: AsyncMock,
+    ) -> None:
+        """Drift regression (task 681ac952): the entity write flows through
+        CorpusIntake, so Search is re-indexed. Calling KnowledgeManager.update
+        directly (the old path) persisted the frontmatter but left the Search
+        index and link graph stale until the next Reconcile.
+        """
+        km = KnowledgeManager(test_config)
+        result = await km.create(
+            title="Reindex Note",
+            content="Lithos uses [[NetworkX]] and `ChromaDB`.",
+            agent="test-agent",
+        )
+        assert result.document is not None
+        doc_id = result.document.id
+
+        mock_search = MagicMock()
+        mock_graph = MagicMock()
+        intake = CorpusIntake(
+            knowledge=km,
+            search=mock_search,
+            graph=mock_graph,
+            coordination=mock_coordination,
+            event_bus=event_bus,
+            edge_store=edge_store,
+        )
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            edge_store=edge_store,
+            knowledge=km,
+            coordination=mock_coordination,
+            intake=intake,
+        )
+
+        await worker._extract_entities(doc_id)
+
+        # Frontmatter still persisted (behaviour preserved) ...
+        doc, _ = await km.read(id=doc_id)
+        assert "NetworkX" in doc.metadata.entities
+        assert doc.metadata.entities_extractor == ENTITY_EXTRACTOR_VERSION
+        # ... and the derived views were synced through the intake (the fix).
+        assert mock_search.index.called, "entity write did not re-index Search"
+        assert mock_graph.add_document.called, "entity write did not sync the graph"
 
     def _make_worker(
         self,
@@ -975,6 +1140,7 @@ class TestExtractEntities:
             edge_store=edge_store,
             knowledge=km,
             coordination=mock_coordination,
+            intake=_make_intake(km, event_bus, edge_store, mock_coordination),
         )
 
     async def test_stale_marker_entities_reextracted(
@@ -1116,6 +1282,7 @@ class TestExtractEntities:
             edge_store=edge_store,
             knowledge=km,
             coordination=coord,
+            intake=_make_intake(km, event_bus, edge_store, coord),
         )
         await worker.full_sweep()
 
@@ -1156,6 +1323,7 @@ class TestExtractEntities:
             edge_store=edge_store,
             knowledge=km,
             coordination=mock_coordination,
+            intake=_make_intake(km, event_bus, edge_store, mock_coordination),
         )
 
         await worker._extract_entities(doc_id)
@@ -1191,6 +1359,7 @@ class TestExtractEntities:
             edge_store=edge_store,
             knowledge=km,
             coordination=mock_coordination,
+            intake=_make_intake(km, event_bus, edge_store, mock_coordination),
         )
 
         # Call with edge.upserted trigger — should NOT extract entities
@@ -1239,6 +1408,7 @@ class TestExtractEntities:
             edge_store=edge_store,
             knowledge=km,
             coordination=mock_coordination,
+            intake=_make_intake(km, event_bus, edge_store, mock_coordination),
         )
 
         await worker._extract_entities(doc_id)
@@ -1279,6 +1449,7 @@ class TestFullSweep:
             edge_store=edge_store,
             knowledge=km,
             coordination=coord,
+            intake=_make_intake(km, event_bus, edge_store, coord),
         )
 
         # Create node_stats with last_used_at 14 days ago (will decay)
@@ -1339,6 +1510,7 @@ class TestFullSweep:
             edge_store=edge_store,
             knowledge=km,
             coordination=coord,
+            intake=_make_intake(km, event_bus, edge_store, coord),
         )
 
         # Create two notes: source-note and derived-note

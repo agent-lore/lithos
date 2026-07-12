@@ -13,7 +13,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 |---|---|---:|---:|
 | `lithos.lcma` | XS | 0 | 0 |
 | `lithos.lcma.edges` | S | 0 | 0 |
-| `lithos.lcma.enrich` | M | 1 | 0 |
+| `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
 | `lithos.lcma.retrieve` | L | 0 | 1 |
@@ -58,7 +58,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Coordination](Coordination.md), [Errors](Errors.md), [Events](Events.md), [Graph](Graph.md), [Knowledge](Knowledge.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
+- Depends on: [Config](Config.md), [Coordination](Coordination.md), [Errors](Errors.md), [Events](Events.md), [Graph](Graph.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
 - Used by: [CognitiveMemory](CognitiveMemory.md), [Provenance](Provenance.md)
 
 ## ADRs
