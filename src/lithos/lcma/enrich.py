@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from lithos.config import LcmaConfig
     from lithos.coordination import CoordinationService
     from lithos.events import EventBus
+    from lithos.intake import CorpusIntake
     from lithos.knowledge import KnowledgeDocument, KnowledgeManager
     from lithos.lcma.stats import StatsStore
     from lithos.provenance import EdgeStore
@@ -43,6 +44,16 @@ except Exception:
     _HAS_TELEMETRY = False
 
 logger = logging.getLogger(__name__)
+
+# System-reserved actor for enrichment-originated Corpus writes. Mirrors
+# ``WATCHER_AGENT`` (watch_intake.py): a synthetic agent id so writes made by
+# the enrich subsystem are attributable and — crucially — recognisable by this
+# worker's own event filter. Enrichment writes now flow through ``CorpusIntake``
+# (which re-indexes Search/graph, fixing Drift) and therefore emit
+# ``NOTE_UPDATED`` / ``EDGE_UPSERTED``; :meth:`EnrichWorker._handle_event` drops
+# events stamped with this actor so the worker never re-enqueues the very node
+# it just wrote (enrich→write→event→enrich).
+ENRICH_AGENT = "lithos-enrich"
 
 _SUBSCRIBED_EVENT_TYPES = [
     NOTE_CREATED,
@@ -118,6 +129,7 @@ class EnrichWorker:
         edge_store: EdgeStore,
         knowledge: KnowledgeManager,
         coordination: CoordinationService,
+        intake: CorpusIntake,
     ) -> None:
         self._config = config
         self._event_bus = event_bus
@@ -125,6 +137,7 @@ class EnrichWorker:
         self._edge_store = edge_store
         self._knowledge = knowledge
         self._coordination = coordination
+        self._intake = intake
 
         self._queue: asyncio.Queue[LithosEvent] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
@@ -183,6 +196,18 @@ class EnrichWorker:
 
     async def _handle_event(self, event: LithosEvent) -> None:
         """Route a single event to enrich_queue."""
+        # Drop self-originated events. Enrichment writes now flow through
+        # CorpusIntake (fixing view Drift), which emits NOTE_UPDATED /
+        # EDGE_UPSERTED. Without this guard those events would re-enqueue the
+        # very node the worker just wrote — looping enrich→write→event→enrich.
+        # Filtering on the synthetic actor makes the loop-break explicit rather
+        # than relying on the entities-extractor marker's incidental idempotency.
+        if event.agent == ENRICH_AGENT:
+            logger.debug(
+                "EnrichWorker: skipping self-originated event",
+                extra={"event_type": event.type, "agent": event.agent},
+            )
+            return
         logger.debug(
             "EnrichWorker: received event",
             extra={"event_type": event.type, "event_id": event.id},
@@ -503,11 +528,20 @@ class EnrichWorker:
         if not extracted and not doc.metadata.entities:
             return
 
-        await self._knowledge.update(
-            id=node_id,
-            agent="lithos-enrich",
-            entities=extracted,
-            entities_extractor=ENTITY_EXTRACTOR_VERSION,
+        # Route through CorpusIntake so the entity write re-indexes Search/graph
+        # and emits NOTE_UPDATED — calling KnowledgeManager.update directly here
+        # skipped both, leaving the derived views stale until the next Reconcile
+        # (Drift, task 681ac952). ENRICH_AGENT stamps the emitted event so
+        # :meth:`_handle_event` drops it rather than re-enqueuing this node.
+        from lithos.intake import NoteUpdateRequest
+
+        await self._intake.note_update(
+            ENRICH_AGENT,
+            NoteUpdateRequest(
+                id=node_id,
+                entities=extracted,
+                entities_extractor=ENTITY_EXTRACTOR_VERSION,
+            ),
         )
         logger.debug(
             "EnrichWorker: entity extraction complete",

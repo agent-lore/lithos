@@ -1034,6 +1034,25 @@ class TestReinforceMisleading:
         assert cached is not None
         assert cached.status == "quarantined"
 
+    async def test_quarantine_reindexes_search_via_intake(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+        mock_search: MagicMock,
+    ) -> None:
+        """Drift regression (task 681ac952): the quarantine status flip routes
+        through CorpusIntake, so Search is re-indexed. The old direct
+        KnowledgeManager.update left the index stale until the next Reconcile.
+        """
+        nid = await _create_note(knowledge_manager, "Note Mis-Reindex")
+        mock_search.index.reset_mock()
+
+        for _ in range(3):
+            await memory_with_knowledge.reinforce_misleading([nid])
+
+        assert knowledge_manager.get_cached_meta(nid).status == "quarantined"  # type: ignore[union-attr]
+        assert mock_search.index.called, "quarantine did not re-index Search"
+
     async def test_weakens_adjacent_edges_by_0_05(
         self,
         memory_with_knowledge: CognitiveMemory,
@@ -1318,3 +1337,41 @@ class TestConflictResolve:
         )
         assert result["status"] == "error"
         assert result["code"] == "invalid_input"
+
+    async def test_superseded_records_link_and_reindexes_via_intake(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+        mock_search: MagicMock,
+    ) -> None:
+        """A successful supersede records the link on the winner AND re-indexes
+        Search through CorpusIntake (Drift regression, task 681ac952).
+
+        The existing superseded tests only cover the validation error paths; this
+        is the first to exercise the write, using a real KnowledgeManager so the
+        frontmatter and the view-sync are both observable.
+        """
+        winner = await _create_note(knowledge_manager, "Winner Note")
+        loser = await _create_note(knowledge_manager, "Loser Note")
+        edge_id = await memory_with_knowledge._projection._edge_store.upsert(
+            from_id=winner,
+            to_id=loser,
+            edge_type="contradicts",
+            weight=1.0,
+            namespace="default",
+        )
+        mock_search.index.reset_mock()
+
+        result = await memory_with_knowledge.conflict_resolve(
+            edge_id=edge_id,
+            resolution="superseded",
+            resolver="agent-x",
+            winner_id=winner,
+        )
+        assert result["status"] == "ok"
+
+        # supersedes link persisted on the winner ...
+        doc, _ = await knowledge_manager.read(id=winner)
+        assert doc.metadata.supersedes == loser
+        # ... and the winner was re-indexed through the intake view-sync (the fix).
+        assert mock_search.index.called, "supersede did not re-index Search"

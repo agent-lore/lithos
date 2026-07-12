@@ -28,7 +28,7 @@ The controlled mutation entry point: validates and applies writes to the corpus.
 ## Dependencies
 
 - Depends on: [Coordination](Coordination.md), [Errors](Errors.md), [Events](Events.md), [Graph](Graph.md), [Knowledge](Knowledge.md), [Search](Search.md), [Telemetry](Telemetry.md)
-- Used by: [CognitiveMemory](CognitiveMemory.md), [Entrypoints](Entrypoints.md)
+- Used by: [CognitiveMemory](CognitiveMemory.md), [Entrypoints](Entrypoints.md), [LCMA](LCMA.md)
 
 ## ADRs
 

@@ -117,12 +117,22 @@ class NoteUpdateRequest:
     there is no wholesale-clear affordance — ``metadata={}`` carries no change,
     matching ``lithos_task_update`` (the boundary rejects it when no other
     field is set rather than writing a no-op revision).
+
+    ``supersedes`` / ``entities`` / ``entities_extractor`` are LCMA-internal
+    frontmatter fields carried so the enrich worker and CognitiveMemory can
+    route their metadata patches (entity extraction, quarantine, supersede)
+    through this seam instead of calling ``KnowledgeManager.update`` directly
+    — the direct call skipped Search/graph re-index and emitted no event,
+    manufacturing Drift (task 681ac952).
     """
 
     id: str
     title: str | None = None
     tags: list[str] | _UnsetType = _UNSET
     lcma_status: str | None | _UnsetType = _UNSET
+    supersedes: str | None | _UnsetType = _UNSET
+    entities: list[str] | None | _UnsetType = _UNSET
+    entities_extractor: int | None | _UnsetType = _UNSET
     metadata: dict | _UnsetType = _UNSET
     expected_version: int | None = None
 
@@ -472,6 +482,9 @@ class CorpusIntake:
                     title=request.title,
                     tags=request.tags,
                     lcma_status=request.lcma_status,
+                    supersedes=request.supersedes,
+                    entities=request.entities,
+                    entities_extractor=request.entities_extractor,
                     expected_version=request.expected_version,
                     extra=request.metadata,
                 )
