@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from lithos.events import (
     EDGE_UPSERTED,
     ENRICH_SUBSCRIBER_QUEUE_SIZE,
+    EVENT_ORIGIN_ENRICH,
     FINDING_POSTED,
     NOTE_CREATED,
     NOTE_DELETED,
@@ -23,6 +24,7 @@ from lithos.events import (
     TASK_COMPLETED,
     LithosEvent,
 )
+from lithos.lcma.edge_reinforce import reinforce_related_edge
 from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION, extract_entities
 
 if TYPE_CHECKING:
@@ -45,22 +47,15 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-# System-reserved actor for enrichment-originated Corpus writes. Mirrors
-# ``WATCHER_AGENT`` (watch_intake.py): a synthetic agent id so writes made by
-# the enrich subsystem are attributable and — crucially — recognisable by this
-# worker's own event filter. Enrichment writes now flow through ``CorpusIntake``
-# (which re-indexes Search/graph, fixing Drift) and therefore emit
-# ``NOTE_UPDATED`` / ``EDGE_UPSERTED``; :meth:`EnrichWorker._handle_event` drops
-# events stamped with this actor so the worker never re-enqueues the very node
-# it just wrote (enrich→write→event→enrich).
+# Contributor attribution for enrichment-originated Corpus writes. Mirrors
+# ``WATCHER_AGENT`` (watch_intake.py): a synthetic agent id recorded as the
+# author of writes the enrich subsystem makes (entity extraction, quarantine).
 #
-# RESERVATION CAVEAT: the loop-break keys on the caller-facing ``agent`` string,
-# so an external write that passes agent="lithos-enrich" is also skipped (its
-# node is merely deferred to the periodic full_sweep, not dropped). This id is
-# treated as system-reserved, but that is convention, not enforcement. PR1b of
-# task 681ac952 replaces this with a non-spoofable event-origin marker set by
-# the intake (which callers cannot forge), folded into its EDGE_UPSERTED payload
-# rework.
+# The enrich→write→event→enrich loop-break is NOT keyed on this string — it uses
+# the non-spoofable ``LithosEvent.origin`` marker (:data:`EVENT_ORIGIN_ENRICH`)
+# that the intake stamps and :meth:`EnrichWorker._handle_event` filters on. That
+# marker is a code-level seam the MCP surface never exposes, so an external write
+# passing agent="lithos-enrich" is no longer mistaken for a self-event.
 ENRICH_AGENT = "lithos-enrich"
 
 _SUBSCRIBED_EVENT_TYPES = [
@@ -204,16 +199,16 @@ class EnrichWorker:
 
     async def _handle_event(self, event: LithosEvent) -> None:
         """Route a single event to enrich_queue."""
-        # Drop self-originated events. Enrichment writes now flow through
-        # CorpusIntake (fixing view Drift), which emits NOTE_UPDATED /
-        # EDGE_UPSERTED. Without this guard those events would re-enqueue the
-        # very node the worker just wrote — looping enrich→write→event→enrich.
-        # Filtering on the synthetic actor makes the loop-break explicit rather
-        # than relying on the entities-extractor marker's incidental idempotency.
-        if event.agent == ENRICH_AGENT:
+        # Drop self-originated events. Enrichment writes flow through CorpusIntake
+        # (fixing view Drift), which emits NOTE_UPDATED / EDGE_UPSERTED. Without
+        # this guard those events would re-enqueue the very node the worker just
+        # wrote — looping enrich→write→event→enrich. The origin marker is set by
+        # the intake and cannot be forged through the MCP surface (unlike the
+        # caller-facing ``agent`` field), so this is a non-spoofable loop-break.
+        if event.origin == EVENT_ORIGIN_ENRICH:
             logger.debug(
                 "EnrichWorker: skipping self-originated event",
-                extra={"event_type": event.type, "agent": event.agent},
+                extra={"event_type": event.type, "origin": event.origin},
             )
             return
         logger.debug(
@@ -539,7 +534,7 @@ class EnrichWorker:
         # Route through CorpusIntake so the entity write re-indexes Search/graph
         # and emits NOTE_UPDATED — calling KnowledgeManager.update directly here
         # skipped both, leaving the derived views stale until the next Reconcile
-        # (Drift, task 681ac952). ENRICH_AGENT stamps the emitted event so
+        # (Drift, task 681ac952). ``origin`` stamps the emitted event so
         # :meth:`_handle_event` drops it rather than re-enqueuing this node.
         from lithos.intake import NoteUpdateRequest
 
@@ -550,6 +545,7 @@ class EnrichWorker:
                 entities=extracted,
                 entities_extractor=ENTITY_EXTRACTOR_VERSION,
             ),
+            origin=EVENT_ORIGIN_ENRICH,
         )
         logger.debug(
             "EnrichWorker: entity extraction complete",
@@ -679,22 +675,16 @@ class EnrichWorker:
                     continue
                 await self._stats_store.record_consolidation_edge_op(task_id, from_id, to_id)
 
-                # Upsert or adjust edge
-                existing = await self._edge_store.list_edges(
-                    from_id=from_id, to_id=to_id, edge_type="related_to", namespace=ns
+                # Upsert or strengthen the consolidation edge (shared related_to
+                # policy; consolidation starts a fresh edge at weight 0.03).
+                await reinforce_related_edge(
+                    self._edge_store,
+                    from_id,
+                    to_id,
+                    ns,
+                    initial_weight=0.03,
+                    provenance_type="consolidation",
                 )
-                if existing:
-                    edge_id = str(existing[0]["edge_id"])
-                    await self._edge_store.adjust_weight(edge_id, 0.03)
-                else:
-                    await self._edge_store.upsert(
-                        from_id=from_id,
-                        to_id=to_id,
-                        edge_type="related_to",
-                        weight=0.03,
-                        namespace=ns,
-                        provenance_type="consolidation",
-                    )
 
         # --- Salience boost for each frequent node ---
         for entry in frequent:

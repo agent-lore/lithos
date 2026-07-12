@@ -104,6 +104,7 @@ classDiagram
     +tags list[str]
     +id str
     +timestamp datetime
+    +origin str
   }
 ```
 

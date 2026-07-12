@@ -46,6 +46,16 @@ EDGE_UPSERTED = "edge.upserted"
 
 AGENT_REGISTERED = "agent.registered"
 
+# --- Event origin markers ---
+#
+# An internal, non-caller-facing signal on ``LithosEvent.origin`` naming the
+# subsystem that produced a write. Background workers use it to skip their own
+# events (loop-break) WITHOUT overloading the caller-facing ``agent`` field.
+# It is set only by trusted in-process callers (e.g. the enrich worker via the
+# intake) and is never surfaced on the MCP tool schema or the SSE wire, so an
+# external caller cannot forge it. Default ``""`` = ordinary external write.
+EVENT_ORIGIN_ENRICH = "enrich"
+
 BATCH_QUEUED = "batch.queued"
 BATCH_APPLYING = "batch.applying"
 BATCH_PROJECTING = "batch.projecting"
@@ -61,7 +71,16 @@ ENRICH_SUBSCRIBER_QUEUE_SIZE = 10_000
 
 @dataclass
 class LithosEvent:
-    """A typed event emitted by the Lithos event bus."""
+    """A typed event emitted by the Lithos event bus.
+
+    ``origin`` is an internal subsystem marker (see the "Event origin markers"
+    section above) — set only by trusted in-process callers, never surfaced on
+    the MCP schema or SSE wire. It exists so background workers can drop their
+    own events without keying on the spoofable ``agent`` field. It is appended
+    **last** so adding it did not shift any existing positional field
+    (``type``/``agent``/``payload``/``tags``/``id``/``timestamp``); all callers
+    set it by keyword.
+    """
 
     type: str
     agent: str = ""
@@ -69,6 +88,40 @@ class LithosEvent:
     tags: list[str] = field(default_factory=list)
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    origin: str = ""
+
+
+def make_edge_upserted_event(
+    *,
+    agent: str,
+    edge_id: str,
+    from_id: str,
+    to_id: str,
+    edge_type: str,
+    namespace: str,
+    conflict_state: str | None = None,
+    origin: str = "",
+) -> LithosEvent:
+    """Build the canonical :data:`EDGE_UPSERTED` event.
+
+    Single source of the payload shape so every emitter
+    (``CorpusIntake.assert_edge``, ``CognitiveMemory.conflict_resolve``) agrees
+    on the same keys — previously the two hand-rolled dicts diverged (one had
+    ``namespace``/``agent`` but no ``conflict_state``, the other the reverse).
+    """
+    return LithosEvent(
+        type=EDGE_UPSERTED,
+        agent=agent,
+        origin=origin,
+        payload={
+            "edge_id": edge_id,
+            "from_id": from_id,
+            "to_id": to_id,
+            "type": edge_type,
+            "namespace": namespace,
+            "conflict_state": conflict_state,
+        },
+    )
 
 
 @dataclass

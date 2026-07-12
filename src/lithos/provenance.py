@@ -178,6 +178,19 @@ class ProvenanceProjection:
         """
         await self._edge_store.close()
 
+    @property
+    def edge_store(self) -> EdgeStore:
+        """The underlying edge store (public accessor promised to CognitiveMemory).
+
+        ADR-0005 anticipated this so reinforcement/consolidation paths stop
+        reaching through the private ``_edge_store`` attribute. Corpus-derived
+        writes still go through the plan/apply pair; asserted-edge writes through
+        ``CorpusIntake.assert_edge``. This handle serves the LCMA write paths that
+        mutate rows the projection does not own (``related_to`` reinforcement,
+        conflict-resolution updates, edge weakening).
+        """
+        return self._edge_store
+
     # ---- package-private plan/apply (ADR-0001 step 3 / ADR-0004) ----
 
     async def _plan_reconcile_to(self, docs: Iterable[KnowledgeDocument]) -> ProvenancePlan:

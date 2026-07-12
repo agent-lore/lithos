@@ -21,6 +21,7 @@ from lithos.edge_store import EdgeStore
 from lithos.errors import SlugCollisionError
 from lithos.events import (
     EDGE_UPSERTED,
+    EVENT_ORIGIN_ENRICH,
     NOTE_CREATED,
     NOTE_DELETED,
     NOTE_UPDATED,
@@ -325,6 +326,33 @@ async def test_note_update_forwards_supersedes(
     assert outcome.status == "updated"
     doc, _ = await knowledge_manager.read(id=winner.document.id)
     assert doc.metadata.supersedes == loser.document.id
+
+
+@pytest.mark.asyncio
+async def test_note_update_stamps_internal_origin_on_event(
+    stub_intake: tuple[CorpusIntake, dict[str, Any]],
+    knowledge_manager: KnowledgeManager,
+) -> None:
+    """The ``origin`` seam stamps the emitted NOTE_UPDATED; default is unset.
+
+    This is the non-spoofable loop-break marker (task 681ac952): background
+    workers drop events carrying their own origin. It is a code-level parameter,
+    never exposed on the MCP tool surface, so external writes always emit "".
+    """
+    intake, mocks = stub_intake
+    created = await knowledge_manager.create(title="orig", content="b", agent="agent-1")
+    assert created.document is not None
+    doc_id = created.document.id
+
+    # Default: ordinary external write carries no origin.
+    await intake.note_update("agent-1", NoteUpdateRequest(id=doc_id, tags=["x"]))
+    assert mocks["event_bus"].emit.await_args.args[0].origin == ""
+
+    # Explicit internal origin is stamped onto the event.
+    await intake.note_update(
+        "agent-1", NoteUpdateRequest(id=doc_id, tags=["y"]), origin=EVENT_ORIGIN_ENRICH
+    )
+    assert mocks["event_bus"].emit.await_args.args[0].origin == EVENT_ORIGIN_ENRICH
 
 
 @pytest.mark.asyncio
@@ -838,6 +866,9 @@ async def test_assert_edge_emits_edge_upserted_after_upsert(
     assert emitted_event.payload["to_id"] == "b"
     assert emitted_event.payload["type"] == "related_to"
     assert emitted_event.payload["namespace"] == "default"
+    # Unified EDGE_UPSERTED shape carries conflict_state (None here); the
+    # conflict_resolve emitter produces the same keys (task 681ac952 / 11c).
+    assert emitted_event.payload["conflict_state"] is None
 
 
 @pytest.mark.asyncio

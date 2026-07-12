@@ -120,6 +120,14 @@ async def memory(
         await cm.stop()
 
 
+async def test_projection_edge_store_property_exposes_store(
+    projection: ProvenanceProjection,
+) -> None:
+    """The public ``edge_store`` property returns the underlying store (11c) —
+    callers no longer reach through the private ``_edge_store`` attribute."""
+    assert projection.edge_store is projection._edge_store
+
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
@@ -1375,3 +1383,21 @@ class TestConflictResolve:
         assert doc.metadata.supersedes == loser
         # ... and the winner was re-indexed through the intake view-sync (the fix).
         assert mock_search.index.called, "supersede did not re-index Search"
+
+    async def test_emits_unified_edge_upserted_payload(self, memory: CognitiveMemory) -> None:
+        """conflict_resolve emits EDGE_UPSERTED with the canonical unified payload
+        (agent + namespace + conflict_state), matching CorpusIntake.assert_edge —
+        the two hand-rolled dicts used to diverge (11c, task 681ac952)."""
+        edge_id = await self._make_contradiction_edge(memory)
+        memory._event_bus = AsyncMock()  # type: ignore[assignment]
+
+        await memory.conflict_resolve(
+            edge_id=edge_id, resolution="accepted_dual", resolver="agent-x"
+        )
+
+        event = memory._event_bus.emit.await_args.args[0]
+        assert event.type == EDGE_UPSERTED
+        assert event.agent == "agent-x"
+        assert event.payload["type"] == "contradicts"
+        assert event.payload["namespace"] == "default"
+        assert event.payload["conflict_state"] == "accepted_dual"
