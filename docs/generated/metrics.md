@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **63** (130 module-level)
+- Cross-component edges: **63** (131 module-level)
 - Component cycles: Graph ↔ Knowledge ↔ Provenance ↔ Search
 - Module cycles: lithos.graph ↔ lithos.knowledge ↔ lithos.provenance ↔ lithos.search; lithos.server ↔ lithos.tools ↔ lithos.tools.agents ↔ lithos.tools.findings_stats ↔ lithos.tools.memory_edges ↔ lithos.tools.notes ↔ lithos.tools.read_search ↔ lithos.tools.tasks
 - Tier-skipping edges (Entrypoints → Foundation): 5 (Entrypoints -> Config, Entrypoints -> Errors, Entrypoints -> Events, Entrypoints -> Logging, Entrypoints -> Telemetry)
@@ -38,12 +38,12 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Config | 1 | 371 | 281 | 10 | 0 | 0.00 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 1 | 2675 | 2256 | 4 | 4 | 0.50 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
 | Entrypoints | 11 | 5203 | 4202 | 0 | 12 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 14 |
-| Errors | 2 | 182 | 129 | 7 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
+| Errors | 2 | 210 | 151 | 7 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 323 | 259 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1509 | 1223 | 7 | 3 | 0.30 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | Intake | 1 | 624 | 529 | 3 | 7 | 0.70 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
-| Knowledge | 3 | 3104 | 2507 | 7 | 6 | 0.46 | 71 (`lithos.knowledge.KnowledgeManager.update`) | 11 |
-| LCMA | 9 | 4524 | 3650 | 1 | 10 | 0.91 | 51 (`lithos.lcma.retrieve._run_retrieve_impl`) | 21 |
+| Knowledge | 3 | 3127 | 2524 | 7 | 6 | 0.46 | 71 (`lithos.knowledge.KnowledgeManager.update`) | 11 |
+| LCMA | 9 | 4534 | 3657 | 1 | 10 | 0.91 | 51 (`lithos.lcma.retrieve._run_retrieve_impl`) | 21 |
 | Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 1941 | 1576 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 5 |
@@ -51,7 +51,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **37**, lines: **23264**, SLOC: **18801**
+- Modules: **37**, lines: **23325**, SLOC: **18847**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -68,7 +68,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **665**, cyclomatic > 10: **64**
+- Functions: **666**, cyclomatic > 10: **64**
 
 Top 10 most complex functions:
 
@@ -157,4 +157,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **42** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.85** (43046 test lines / 23264 source lines)
+- Test-to-source line ratio: **1.85** (43266 test lines / 23325 source lines)

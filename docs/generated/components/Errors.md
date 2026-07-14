@@ -12,7 +12,7 @@ Standard error types and canonical MCP error envelopes.
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos.envelopes` | XS | 0 | 3 |
-| `lithos.errors` | S | 8 | 0 |
+| `lithos.errors` | S | 9 | 0 |
 
 ## Public API
 
@@ -26,6 +26,7 @@ Standard error types and canonical MCP error envelopes.
 - class `SearchBackendError` — One or more search backends failed.
 - class `SlugCollisionError` — Raised when a slug would collide with an existing document's slug.
 - class `IndexingError` — All search backends failed during a write operation (index or remove).
+- class `CorpusScanError` — An authoritative corpus scan could not read every known document.
 - class `CoordinationError` — A coordination operation failed validation.
 - class `CognitiveMemoryError` — Base error for any failure originating inside CognitiveMemory.
 - class `ScoutFailure` — A single retrieval scout's backend raised.

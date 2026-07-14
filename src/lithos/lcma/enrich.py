@@ -13,6 +13,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from lithos.errors import CorpusScanError
 from lithos.events import (
     EDGE_UPSERTED,
     ENRICH_SUBSCRIBER_QUEUE_SIZE,
@@ -607,8 +608,17 @@ class EnrichWorker:
         # Load the corpus once — shared by the provenance reconcile and the
         # entity heal below. _extract_entities short-circuits on current-marker
         # and agent-curated docs, so an up-to-date corpus costs one scan.
-        _, total = await self._knowledge.list_all(limit=0)
-        docs, _ = await self._knowledge.list_all(limit=total) if total else ([], 0)
+        try:
+            docs = await self._knowledge.scan_corpus()
+        except CorpusScanError:
+            # reconcile_corpus would read this partial snapshot as authoritative
+            # and delete derived_from edges for docs that merely failed to read.
+            # Decay and WM eviction above are already applied and unaffected.
+            logger.exception(
+                "EnrichWorker: corpus scan incomplete — skipping provenance "
+                "reconcile and entity heal for this sweep"
+            )
+            return
 
         # --- Reconcile provenance edges via the ProvenanceProjection Module ---
         prov_result = await self._projection.reconcile_corpus(docs)

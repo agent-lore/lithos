@@ -684,6 +684,102 @@ class TestSalienceDecay:
 # ---------------------------------------------------------------------------
 
 
+class TestEnrichNodeProvenanceHandoff:
+    """``_enrich_node`` resolves KnowledgeManager state into ``reconcile_node``.
+
+    TestReconcileNode below proves the projection given pre-resolved arguments;
+    these prove the *other* half — that the worker reads the real sources and
+    namespace off KnowledgeManager and hands them over correctly. A real
+    KnowledgeManager is used deliberately: the shared ``mock_knowledge`` fixture
+    returns MagicMocks from ``get_doc_sources``/``get_cached_meta``, which would
+    let a wrong-namespace or wrong-sources regression pass unnoticed.
+    """
+
+    async def _worker_with_real_km(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> tuple[EnrichWorker, KnowledgeManager]:
+        from lithos.coordination import CoordinationService
+
+        coord = CoordinationService(test_config)
+        await coord.initialize()
+        km = KnowledgeManager(test_config)
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            projection=projection,
+            knowledge=km,
+            coordination=coord,
+            intake=_make_intake(km, event_bus, edge_store, coord),
+        )
+        return worker, km
+
+    async def test_resolves_real_sources_and_namespace(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> None:
+        """The projected edge carries the doc's real source and namespace."""
+        worker, km = await self._worker_with_real_km(
+            test_config, lcma_config, event_bus, stats_store, edge_store, projection
+        )
+        source = await km.create(title="Source", content="src", agent="test-agent")
+        assert source.document is not None
+        derived = await km.create(
+            title="Derived",
+            content="derived",
+            agent="test-agent",
+            derived_from_ids=[source.document.id],
+            namespace="research",
+        )
+        assert derived.document is not None
+
+        await worker._enrich_node(derived.document.id, [NOTE_UPDATED])
+
+        edges = await edge_store.list_edges(from_id=derived.document.id, edge_type="derived_from")
+        assert len(edges) == 1
+        assert edges[0]["to_id"] == source.document.id
+        # The namespace must come from the doc's cached meta, not a default.
+        assert edges[0]["namespace"] == "research"
+
+    async def test_deleted_node_removes_its_derived_from_edges(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> None:
+        """A node absent from knowledge resolves to empty sources, so the
+        worker's reconcile_node call removes its frontmatter-owned edges."""
+        worker, _km = await self._worker_with_real_km(
+            test_config, lcma_config, event_bus, stats_store, edge_store, projection
+        )
+        await edge_store.upsert(
+            from_id="ghost-node",
+            to_id="some-source",
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+            provenance_type="frontmatter",
+        )
+
+        await worker._enrich_node("ghost-node", [NOTE_UPDATED])
+
+        assert await edge_store.list_edges(from_id="ghost-node", edge_type="derived_from") == []
+
+
 class TestReconcileNode:
     """ProvenanceProjection.reconcile_node — single-node derived_from sync.
 
@@ -1651,6 +1747,64 @@ class TestFullSweep:
             from_id=derived_id, to_id=source_id, edge_type="derived_from"
         )
         assert len(valid_edges) == 1
+
+    async def test_partial_corpus_scan_does_not_delete_provenance(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> None:
+        """An unreadable note aborts the sweep's reconcile instead of being
+        treated as absent from the corpus.
+
+        ``reconcile_corpus`` reads its docs as the authoritative snapshot and
+        removes derived_from edges for anything missing, so a doc that merely
+        failed to read must not reach it — that would evict the provenance of a
+        document that still exists. ``scan_corpus`` raises rather than return a
+        short list, and full_sweep skips the reconcile.
+        """
+        from lithos.coordination import CoordinationService
+
+        coord = CoordinationService(test_config)
+        await coord.initialize()
+        km = KnowledgeManager(test_config)
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            projection=projection,
+            knowledge=km,
+            coordination=coord,
+            intake=_make_intake(km, event_bus, edge_store, coord),
+        )
+
+        source = await km.create(title="Source", content="src", agent="test-agent")
+        assert source.document is not None
+        derived = await km.create(
+            title="Derived",
+            content="derived",
+            agent="test-agent",
+            derived_from_ids=[source.document.id],
+        )
+        assert derived.document is not None
+
+        # First sweep: the corpus is fully readable, so the edge is projected.
+        await worker.full_sweep()
+        assert len(await edge_store.list_edges(from_id=derived.document.id)) == 1
+
+        # Make the derived note unreadable *behind* the manager's back — the
+        # metadata cache still lists it, so list_all's per-doc read raises and
+        # the doc silently drops out of the returned snapshot.
+        (test_config.storage.knowledge_path / derived.document.path).unlink()
+
+        await worker.full_sweep()
+
+        # Pre-fix, reconcile_corpus saw a corpus without the derived note and
+        # deleted its still-valid provenance.
+        assert len(await edge_store.list_edges(from_id=derived.document.id)) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -68,6 +68,34 @@ class IndexingError(LithosError):
         return f"{super().__str__()} [{detail}]"
 
 
+class CorpusScanError(LithosError):
+    """An authoritative corpus scan could not read every known document.
+
+    Raised by :meth:`~lithos.knowledge.KnowledgeManager.scan_corpus` when the
+    number of documents read back is short of the number the metadata cache
+    says exist — i.e. at least one note was unreadable during the scan.
+
+    Distinguishing this from a genuinely smaller corpus is the key contract:
+    reconcile treats its scan as the authoritative snapshot and *deletes*
+    derived state for anything absent from it, so applying a plan built from a
+    partial scan would silently drop the search-index entries, graph nodes, and
+    ``derived_from`` edges of documents that still exist. Callers must fail or
+    skip rather than reconcile against an incomplete corpus.
+
+    Attributes:
+        expected: Documents the metadata cache says exist.
+        read: Documents actually read back.
+    """
+
+    def __init__(self, expected: int, read: int) -> None:
+        self.expected = expected
+        self.read = read
+        super().__init__(
+            f"corpus scan incomplete: read {read} of {expected} documents "
+            f"({expected - read} unreadable)"
+        )
+
+
 class CoordinationError(LithosError):
     """A coordination operation failed validation.
 
