@@ -3,7 +3,7 @@
 
 # Entrypoints
 
-CLI, MCP server, tool handlers, and filesystem watcher — the outward-facing surfaces.
+CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfaces — plus the composition root that wires the graph for a process.
 
 **Tier:** Entrypoints
 
@@ -12,6 +12,7 @@ CLI, MCP server, tool handlers, and filesystem watcher — the outward-facing su
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos.cli` | L | 0 | 15 |
+| `lithos.pipeline` | S | 1 | 1 |
 | `lithos.server` | L | 1 | 2 |
 | `lithos.tools` | XS | 0 | 1 |
 | `lithos.tools._seam` | XS | 0 | 1 |
@@ -41,6 +42,10 @@ CLI, MCP server, tool handlers, and filesystem watcher — the outward-facing su
 - def `inspect_doc` — Inspect a knowledge document by ID or path.
 - def `audit` — Show the read-access audit log.
 - def `main` — Main entry point.
+
+### `lithos.pipeline`
+- class `Pipeline` — A fully-wired, not-yet-running Lithos component graph.
+- def `build_pipeline` — Build the component graph for *config*, in dependency order.
 
 ### `lithos.server`
 - class `LithosServer` — Lithos MCP Server.

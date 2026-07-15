@@ -29,6 +29,7 @@ from lithos.intake import CorpusIntake
 from lithos.knowledge import (
     KnowledgeManager,
 )
+from lithos.pipeline import build_pipeline
 from lithos.provenance import ProvenanceProjection
 from lithos.search import Healthy, SearchEngine
 from lithos.telemetry import (
@@ -611,50 +612,36 @@ class LithosServer:
             span.set_attribute("lithos.server.port", self._config.server.port)
 
             try:
-                # Ensure directories exist
-                self.config.ensure_directories()
-
-                # Build the search engine eagerly so the embedding model is
-                # loaded before any request arrives. Tests may pre-inject a
-                # ``search`` instance (e.g. a MagicMock) to avoid the real
-                # backend cost.
-                if self.search is None:
-                    self.search = await SearchEngine.create(self._config)
-
-                # Construct the EdgeStore directly and inject the same
-                # instance into the projection and the intake (ADR-0006
-                # Slice 1, issue #263). The projection owns
-                # projection-class rows; ``CorpusIntake.assert_edge`` owns
-                # asserted-class rows. They share the SQLite handle so
-                # there is exactly one writer per server. Tests may
-                # pre-inject either ``self.edge_store`` or
-                # ``self.projection`` to skip real SQLite.
-                if self.edge_store is None:
-                    self.edge_store = EdgeStore(self._config)
-                    await self.edge_store.open()
-                if self.projection is None:
-                    self.projection = await ProvenanceProjection.create(
-                        self._config, edge_store=self.edge_store
-                    )
-
-                # Build the Corpus intake before the CognitiveMemory Module.
-                # ADR-0006 Slice 1 (#263) makes ``CognitiveMemory`` declare
-                # ``CorpusIntake`` as a constructor dependency so that
-                # ``edge_upsert`` routes through ``intake.assert_edge``.
-                # Tests that pre-inject ``self.intake`` keep that injection.
-                if self.intake is None:
-                    self.intake = CorpusIntake(
-                        knowledge=self.knowledge,
-                        search=self.search,
-                        graph=self.graph,
-                        coordination=self.coordination,
-                        event_bus=self.event_bus,
-                        edge_store=self.edge_store,
-                    )
+                # Build the component graph through the shared factory so the
+                # server and the CLI wire it identically — including the
+                # one-EdgeStore-writer invariant of ADR-0006 Slice 1 (#263).
+                # Passing the current attributes through preserves the
+                # test-injection seam: anything a test pre-injected (e.g. a
+                # MagicMock ``search``, to skip the real embedding backend) is
+                # adopted as-is rather than rebuilt.
+                pipeline = await build_pipeline(
+                    self._config,
+                    knowledge=self.knowledge,
+                    search=self.search,
+                    graph=self.graph,
+                    coordination=self.coordination,
+                    event_bus=self.event_bus,
+                    edge_store=self.edge_store,
+                    projection=self.projection,
+                    intake=self.intake,
+                    memory=self.memory,
+                )
+                self.search = pipeline.search
+                self.edge_store = pipeline.edge_store
+                self.projection = pipeline.projection
+                self.intake = pipeline.intake
+                self.memory = pipeline.memory
 
                 # Build the watcher intake — peer of CorpusIntake (ADR-0007).
-                # Same late-binding idiom: tests that pre-inject
-                # ``self.watch_intake`` keep their injection.
+                # Server-only: nothing outside a long-running process watches
+                # the filesystem, so it stays out of the shared factory. Same
+                # late-binding idiom — tests that pre-inject keep their
+                # injection.
                 if self.watch_intake is None:
                     self.watch_intake = WatchIntake(
                         knowledge=self.knowledge,
@@ -664,29 +651,10 @@ class LithosServer:
                         watch_path=self.config.storage.knowledge_path,
                     )
 
-                # Build the CognitiveMemory Module eagerly (ADR-0005, issue
-                # #255). The transitional ``attach_coordination`` setter
-                # supplies the CoordinationService that ``EnrichWorker``
-                # requires until coordination consolidates into the Module
-                # per ADR-0005's "Anticipated evolution" section.
-                if self.memory is None:
-                    self.memory = await CognitiveMemory.create(
-                        config=self._config,
-                        knowledge=self.knowledge,
-                        search=self.search,
-                        graph=self.graph,
-                        projection=self.projection,
-                        event_bus=self.event_bus,
-                        intake=self.intake,
-                    )
-                    self.memory.attach_coordination(self.coordination)
-
                 # Run LCMA schema migrations through the Module so the lcma
-                # boundary stays locked (issue #262).
+                # boundary stays locked (issue #262). Lifecycle, not
+                # construction — hence here rather than in the factory.
                 await self.memory.run_schema_migrations()
-
-                # Initialize coordination database
-                await self.coordination.initialize()
 
                 # Prime the coordination stats cache BEFORE registering OTEL
                 # gauges — otherwise the first scrape would read the initial

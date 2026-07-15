@@ -224,6 +224,17 @@ class CorpusIntake:
         self._event_bus = event_bus
         self._edge_store = edge_store
 
+    @property
+    def edge_store(self) -> EdgeStore:
+        """The underlying edge store backing ``assert_edge``.
+
+        Public so the composition root can verify the ADR-0006 Slice 1 (#263)
+        one-writer invariant — that this store is the same handle the
+        ``ProvenanceProjection`` holds — without reaching through a private
+        attribute. Mirrors :attr:`ProvenanceProjection.edge_store`.
+        """
+        return self._edge_store
+
     async def delete(self, agent: str, request: DeleteRequest) -> DeleteOutcome:
         """Delete a note from the Corpus and synchronise derived views.
 

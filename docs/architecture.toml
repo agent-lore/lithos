@@ -35,7 +35,7 @@ src_layout   = "src"
 # (docs/generated/components/<Component>.md). test_component_pages requires one
 # for every component in [components].
 [component_docs]
-Entrypoints     = "CLI, MCP server, tool handlers, and filesystem watcher — the outward-facing surfaces."
+Entrypoints     = "CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfaces — plus the composition root that wires the graph for a process."
 Knowledge       = "The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived views."
 Search          = "Full-text (Tantivy) and semantic (ChromaDB) search behind one engine that hides its backends."
 Graph           = "The wiki-link knowledge graph and the authoritative edges.db store."
@@ -51,7 +51,12 @@ Errors          = "Standard error types and canonical MCP error envelopes."
 Logging         = "Structured JSON logging setup."
 
 [components]
-Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__"]
+# lithos.pipeline is the composition root: it imports across Core to assemble the
+# graph, and only Entrypoints (server, cli) import it. It belongs at the outermost
+# layer for the same reason a DI container does — Core must stay unaware of who
+# wires it. Placing it in Core instead would add a Core module depending on nine
+# other Core components, which is the cycle-prone shape this model exists to catch.
+Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__", "lithos.pipeline"]
 Knowledge       = ["lithos.knowledge", "lithos.reconcile", "lithos._merge"]
 Search          = ["lithos.search"]
 Graph           = ["lithos.graph", "lithos.edge_store"]
@@ -135,9 +140,10 @@ include_modules = [
     "lithos.intake",
     "lithos.search",
 ]
-# Not domain entities: config/settings, error types, and LCMA-internal pipeline
-# working types (e.g. lcma.utils.Candidate).
-exclude_modules = ["lithos.config", "lithos.errors", "lithos.lcma"]
+# Not domain entities: config/settings, error types, LCMA-internal pipeline
+# working types (e.g. lcma.utils.Candidate), and the composition root's Pipeline
+# — a wiring container holding the built components, not a thing the domain has.
+exclude_modules = ["lithos.config", "lithos.errors", "lithos.lcma", "lithos.pipeline"]
 
 # Container / data-store view (docs/generated/containers.md). Store topology is
 # deployment knowledge, not derivable from imports — declared here, but every

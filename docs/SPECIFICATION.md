@@ -1607,7 +1607,7 @@ lithos --data-dir ./data serve --transport http --host 0.0.0.0 --port 8765
 lithos --data-dir ./data serve --no-watch
 
 # Route OTEL metrics + spans to stdout (local debugging without a collector)
-lithos --data-dir ./data serve --telemetry-console
+lithos --data-dir ./data --telemetry-console serve
 
 # Rebuild indices (incremental by default)
 lithos --data-dir ./data reindex

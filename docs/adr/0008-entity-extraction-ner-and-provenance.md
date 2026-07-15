@@ -49,3 +49,18 @@ The v3 staging sweep surfaced two residual classes the gate still let through:
 - **Junk wiki-link targets** (`[[\phi]]`, `[[IntegerPropertyFilter(...)]]`) — wiki-link targets were kept verbatim as author intent, bypassing every other gate. v4 still keeps them lenient but drops a target carrying code punctuation (`()[]{}=<>`), a leading backslash (LaTeX), or a filename extension. Real links (`[[Knowledge Graph]]`, `[[target-doc|display]]`) are unaffected.
 
 `ENTITY_EXTRACTOR_VERSION` → 4; the `--force` re-sweep heals the corpus via the marker contract.
+
+## Amendment — `extract-entities` no longer needs a follow-up reconcile (task ba8d7f25)
+
+The Consequences above say operators run `lithos reconcile` after
+`lithos extract-entities --force` to refresh derived views. That is no longer
+true, and the requirement was never by design: the command wrote through
+`KnowledgeManager.update`, which bypassed the Search/graph re-index and emitted
+no event, so the reconcile existed to repair drift the command itself had
+manufactured (the same bypass task 681ac952 removed from the enrich worker).
+
+The command now routes through `CorpusIntake.note_update`, which re-indexes the
+derived views inline and emits `NOTE_UPDATED` — stamped `origin=enrich` so a
+running worker drops the event rather than re-enqueueing the node. Extraction is
+still a corpus mutation and therefore still not a Reconcile (see CONTEXT.md);
+what changed is that it no longer leaves drift behind for one.
