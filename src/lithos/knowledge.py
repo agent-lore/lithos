@@ -20,7 +20,7 @@ import frontmatter
 
 from lithos._merge import merge_metadata
 from lithos.config import LithosConfig
-from lithos.errors import SlugCollisionError
+from lithos.errors import CorpusScanError, SlugCollisionError
 from lithos.telemetry import lithos_metrics, timed_write, traced
 
 if TYPE_CHECKING:
@@ -844,16 +844,25 @@ class KnowledgeManager:
             expires_at=(doc.metadata.expires_at.isoformat() if doc.metadata.expires_at else ""),
         )
 
-    async def _scan_corpus(self) -> list[KnowledgeDocument]:
+    async def scan_corpus(self) -> list[KnowledgeDocument]:
         """Return every document in the authoritative markdown corpus.
 
         Owned by KnowledgeManager because the corpus is its source of truth.
         Reconciliation reads through here; it never writes.
+
+        Raises :class:`~lithos.errors.CorpusScanError` if any known document
+        could not be read. Consumers treat this snapshot as authoritative and
+        delete derived state for anything missing from it, so a short read must
+        abort the scan rather than masquerade as a smaller corpus — otherwise a
+        single unreadable note silently evicts its own search-index entry,
+        graph node, and ``derived_from`` edges.
         """
         _, total = await self.list_all(limit=0)
         if total == 0:
             return []
         docs, _ = await self.list_all(limit=total)
+        if len(docs) != total:
+            raise CorpusScanError(expected=total, read=len(docs))
         return docs
 
     async def plan_reconcile(
@@ -865,8 +874,13 @@ class KnowledgeManager:
         """Plan a reconcile of every derived view against the corpus.
 
         Slices are populated for the engines that are passed in.
+
+        Propagates :class:`~lithos.errors.CorpusScanError` when the corpus
+        cannot be read in full: every slice below deletes derived state for
+        documents absent from *corpus*, so no plan is safer than a plan built
+        from a partial snapshot.
         """
-        corpus = await self._scan_corpus()
+        corpus = await self.scan_corpus()
         search_plan: SearchReconcilePlan | None = None
         graph_plan: GraphReconcilePlan | None = None
         provenance_plan: ProvenancePlan | None = None
@@ -2065,7 +2079,16 @@ class KnowledgeManager:
                 doc, _ = await self.read(id=doc_id)
                 docs.append(doc)
             except Exception:
-                pass
+                # One unreadable note must not break a listing, so the doc is
+                # skipped — but never silently: `scan_corpus` turns the
+                # resulting short read into a hard CorpusScanError, and this is
+                # the only place the underlying cause is recoverable.
+                logger.warning(
+                    "list_all: skipping unreadable document %s",
+                    doc_id,
+                    exc_info=True,
+                    extra={"doc_id": doc_id},
+                )
 
         logger.debug(
             "list_all: total=%d returned=%d offset=%d limit=%d",
@@ -2341,10 +2364,12 @@ class KnowledgeManager:
         lists are fresh copies — mutations to them never leak back into the
         manager.
 
-        This is the public bulk-read counterpart to :meth:`get_doc_sources`;
-        previously callers (the projection's full-sweep helper in
-        ``lcma/edges.py``) reached into ``_doc_to_sources`` directly. See
-        issue #264.
+        This is the public bulk-read counterpart to :meth:`get_doc_sources`
+        (issue #264) so callers don't reach into ``_doc_to_sources`` directly.
+        Now used only by provenance conformance tests to cross-check KM's
+        in-memory sources against the projected edges — the former full-sweep
+        helper that consumed it moved into ``ProvenanceProjection`` (task
+        681ac952 PR1c).
         """
         return [(doc_id, list(sources)) for doc_id, sources in self._doc_to_sources.items()]
 

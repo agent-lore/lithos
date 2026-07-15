@@ -47,7 +47,7 @@
         "max_function": "lithos.knowledge.KnowledgeManager.update"
       },
       "LCMA": {
-        "functions_over_10": 23,
+        "functions_over_10": 21,
         "max_complexity": 51,
         "max_function": "lithos.lcma.retrieve._run_retrieve_impl"
       },
@@ -57,9 +57,9 @@
         "max_function": "lithos.logging_config.setup_logging"
       },
       "Provenance": {
-        "functions_over_10": 1,
-        "max_complexity": 13,
-        "max_function": "lithos.provenance.ProvenanceProjection._plan_reconcile_to"
+        "functions_over_10": 0,
+        "max_complexity": 10,
+        "max_function": "lithos.provenance.ProvenanceProjection._apply_reconcile"
       },
       "Search": {
         "functions_over_10": 5,
@@ -72,7 +72,7 @@
         "max_function": "lithos.telemetry.setup_telemetry"
       }
     },
-    "functions_over_10": 67,
+    "functions_over_10": 64,
     "top_functions": [
       {
         "complexity": 71,
@@ -115,7 +115,7 @@
         "qualname": "lithos.server.LithosServer._validate_task_feedback"
       }
     ],
-    "total_functions": 663
+    "total_functions": 666
   },
   "domain": {
     "associations": 26,
@@ -125,11 +125,8 @@
   "graph": {
     "component_cycles": [
       [
-        "Coordination",
         "Graph",
-        "Intake",
         "Knowledge",
-        "LCMA",
         "Provenance",
         "Search"
       ]
@@ -181,9 +178,9 @@
         "instability": 0.46
       },
       "LCMA": {
-        "fan_in": 2,
+        "fan_in": 1,
         "fan_out": 10,
-        "instability": 0.83
+        "instability": 0.91
       },
       "Logging": {
         "fan_in": 1,
@@ -192,8 +189,8 @@
       },
       "Provenance": {
         "fan_in": 4,
-        "fan_out": 4,
-        "instability": 0.5
+        "fan_out": 3,
+        "instability": 0.43
       },
       "Search": {
         "fan_in": 5,
@@ -206,15 +203,14 @@
         "instability": 0.1
       }
     },
-    "cross_component_edges": 64,
-    "cross_component_module_edges": 133,
-    "longest_component_chain": 5,
+    "cross_component_edges": 63,
+    "cross_component_module_edges": 131,
+    "longest_component_chain": 7,
     "module_cycle_count": 2,
     "module_cycles": [
       [
         "lithos.graph",
         "lithos.knowledge",
-        "lithos.lcma.edges",
         "lithos.provenance",
         "lithos.search"
       ],
@@ -256,8 +252,6 @@
       "lithos.knowledge -> lithos.graph.KnowledgeGraph._plan_reconcile_to",
       "lithos.knowledge -> lithos.provenance.ProvenanceProjection._apply_reconcile",
       "lithos.knowledge -> lithos.provenance.ProvenanceProjection._plan_reconcile_to",
-      "lithos.lcma.enrich -> lithos.provenance._project_node_provenance",
-      "lithos.lcma.enrich -> lithos.provenance._project_provenance_to_edges",
       "lithos.lcma.enrich -> lithos.telemetry._LithosMetrics",
       "lithos.lcma.retrieve -> lithos.lcma.stats._generate_receipt_id",
       "lithos.lcma.retrieve -> lithos.telemetry._LithosMetrics",
@@ -265,8 +259,6 @@
       "lithos.lcma.scouts -> lithos.knowledge.KnowledgeManager._id_to_path",
       "lithos.lcma.scouts -> lithos.knowledge.KnowledgeManager._source_url_to_id",
       "lithos.lcma.stats -> lithos.telemetry._LithosMetrics",
-      "lithos.provenance -> lithos.lcma.edges._project_node_provenance",
-      "lithos.provenance -> lithos.lcma.edges._project_provenance_to_edges",
       "lithos.tools.agents -> lithos.knowledge._normalize_datetime",
       "lithos.tools.agents -> lithos.server.LithosServer._emit",
       "lithos.tools.findings_stats -> lithos.knowledge._normalize_datetime",
@@ -274,9 +266,12 @@
       "lithos.tools.findings_stats -> lithos.server.LithosServer._cached_agent_count",
       "lithos.tools.findings_stats -> lithos.server.LithosServer._emit",
       "lithos.tools.notes -> lithos.knowledge._UNSET",
-      "lithos.tools.notes -> lithos.knowledge._UnsetType"
+      "lithos.tools.notes -> lithos.knowledge._UnsetType",
+      "lithos.tools.read_search -> lithos.knowledge._normalize_datetime",
+      "lithos.tools.tasks -> lithos.server.LithosServer._apply_task_feedback",
+      "lithos.tools.tasks -> lithos.server.LithosServer._validate_task_feedback"
     ],
-    "cross_module_private_refs": 42,
+    "cross_module_private_refs": 38,
     "tests_private_detail": [
       "tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x18)",
       "tests/test_telemetry.py -> lithos.telemetry._lcma_metrics_registered (x8)",
@@ -298,7 +293,6 @@
       "tests/test_coactivation.py -> lithos.lcma.retrieve._run_retrieve_impl",
       "tests/test_config.py -> lithos.config._reset_config",
       "tests/test_enrich_worker.py -> lithos.lcma.enrich._resolve_node_id",
-      "tests/test_enrich_worker.py -> lithos.provenance._project_node_provenance",
       "tests/test_entities.py -> lithos.lcma.entities._NER_UNAVAILABLE",
       "tests/test_entities.py -> lithos.lcma.entities._VERSION_TOKEN_RE",
       "tests/test_entities.py -> lithos.lcma.entities._download_model",
@@ -307,9 +301,10 @@
       "tests/test_event_delivery.py -> lithos.server._format_sse",
       "tests/test_knowledge.py -> lithos.knowledge._atomic_write",
       "tests/test_lcma_config.py -> lithos.config._DEFAULT_NOTE_TYPE_PRIORS",
-      "tests/test_lcma_config.py -> lithos.config._DEFAULT_RERANK_WEIGHTS"
+      "tests/test_lcma_config.py -> lithos.config._DEFAULT_RERANK_WEIGHTS",
+      "tests/test_lcma_config.py -> lithos.config._LCMA_NOTE_TYPES"
     ],
-    "tests_private_imports": 88
+    "tests_private_imports": 87
   },
   "size": {
     "components": {
@@ -354,14 +349,14 @@
         "sloc": 4202
       },
       "Errors": {
-        "classes": 8,
-        "functions": 10,
+        "classes": 9,
+        "functions": 11,
         "largest_module": "lithos.errors",
-        "largest_module_lines": 118,
-        "lines": 182,
+        "largest_module_lines": 146,
+        "lines": 210,
         "modules": 2,
-        "public_symbols": 11,
-        "sloc": 129
+        "public_symbols": 12,
+        "sloc": 151
       },
       "Events": {
         "classes": 3,
@@ -397,21 +392,21 @@
         "classes": 10,
         "functions": 74,
         "largest_module": "lithos.knowledge",
-        "largest_module_lines": 2419,
-        "lines": 3102,
+        "largest_module_lines": 2444,
+        "lines": 3127,
         "modules": 3,
         "public_symbols": 25,
-        "sloc": 2505
+        "sloc": 2524
       },
       "LCMA": {
         "classes": 5,
-        "functions": 130,
+        "functions": 128,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1248,
-        "lines": 4695,
-        "modules": 10,
+        "lines": 4534,
+        "modules": 9,
         "public_symbols": 20,
-        "sloc": 3778
+        "sloc": 3657
       },
       "Logging": {
         "classes": 1,
@@ -425,13 +420,13 @@
       },
       "Provenance": {
         "classes": 5,
-        "functions": 12,
+        "functions": 16,
         "largest_module": "lithos.provenance",
-        "largest_module_lines": 415,
-        "lines": 415,
+        "largest_module_lines": 467,
+        "lines": 467,
         "modules": 1,
         "public_symbols": 5,
-        "sloc": 317
+        "sloc": 362
       },
       "Search": {
         "classes": 12,
@@ -469,13 +464,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23381,
-    "total_modules": 38,
-    "total_sloc": 18882
+    "total_lines": 23325,
+    "total_modules": 37,
+    "total_sloc": 18847
   },
   "tests": {
-    "ratio": 1.84,
-    "src_lines": 23381,
-    "test_lines": 43010
+    "ratio": 1.85,
+    "src_lines": 23325,
+    "test_lines": 43266
   }
 }

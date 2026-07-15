@@ -42,7 +42,7 @@ async def test_plan_reports_cache_missing_when_no_cache_exists(
     graph = KnowledgeGraph(test_config)
     assert not graph.graph_cache_path.exists()
 
-    corpus = await knowledge_manager._scan_corpus()
+    corpus = await knowledge_manager.scan_corpus()
     plan = graph._plan_reconcile_to(corpus)
 
     assert isinstance(plan, GraphReconcilePlan)
@@ -60,7 +60,7 @@ async def test_plan_is_noop_when_cache_matches_corpus(
     await _create_doc(knowledge_manager, "Beta", "Body beta links to [[alpha]].")
 
     graph = KnowledgeGraph(test_config)
-    corpus = await knowledge_manager._scan_corpus()
+    corpus = await knowledge_manager.scan_corpus()
 
     # First pass builds and saves the cache.
     first = graph._plan_reconcile_to(corpus)
@@ -83,7 +83,7 @@ async def test_plan_reports_stale_links_when_cache_is_consistent(
     doc_id = await _create_doc(knowledge_manager, "Source", "Points to [[NoSuchTarget]].")
 
     graph = KnowledgeGraph(test_config)
-    corpus = await knowledge_manager._scan_corpus()
+    corpus = await knowledge_manager.scan_corpus()
     graph._apply_reconcile(graph._plan_reconcile_to(corpus))
 
     # Replan from a fresh instance: cache loads, no rebuild, stale link reported.
@@ -105,12 +105,12 @@ async def test_plan_reports_node_set_mismatch_after_doc_added(
     await _create_doc(knowledge_manager, "Alpha", "Body alpha.")
 
     graph = KnowledgeGraph(test_config)
-    corpus_v1 = await knowledge_manager._scan_corpus()
+    corpus_v1 = await knowledge_manager.scan_corpus()
     graph._apply_reconcile(graph._plan_reconcile_to(corpus_v1))
 
     # Add a second doc — corpus moves but the cache does not.
     await _create_doc(knowledge_manager, "Beta", "Body beta.")
-    corpus_v2 = await knowledge_manager._scan_corpus()
+    corpus_v2 = await knowledge_manager.scan_corpus()
 
     fresh_graph = KnowledgeGraph(test_config)
     plan = fresh_graph._plan_reconcile_to(corpus_v2)
@@ -136,7 +136,7 @@ async def test_apply_round_trip_writes_cache_and_is_idempotent(
     await _create_doc(knowledge_manager, "Beta", "Body beta.")
 
     graph = KnowledgeGraph(test_config)
-    corpus = await knowledge_manager._scan_corpus()
+    corpus = await knowledge_manager.scan_corpus()
 
     plan = graph._plan_reconcile_to(corpus)
     result = graph._apply_reconcile(plan)
@@ -159,7 +159,7 @@ async def test_apply_is_noop_when_plan_only_has_stale_links(
     await _create_doc(knowledge_manager, "Source", "Links to [[NoSuchTarget]].")
 
     graph = KnowledgeGraph(test_config)
-    corpus = await knowledge_manager._scan_corpus()
+    corpus = await knowledge_manager.scan_corpus()
     graph._apply_reconcile(graph._plan_reconcile_to(corpus))
 
     fresh_graph = KnowledgeGraph(test_config)
@@ -183,7 +183,7 @@ async def test_apply_records_failure_when_save_cache_raises(
     await _create_doc(knowledge_manager, "Alpha", "Body alpha.")
 
     graph = KnowledgeGraph(test_config)
-    corpus = await knowledge_manager._scan_corpus()
+    corpus = await knowledge_manager.scan_corpus()
     plan = graph._plan_reconcile_to(corpus)
 
     def boom(self: KnowledgeGraph) -> None:

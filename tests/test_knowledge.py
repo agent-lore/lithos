@@ -8,6 +8,7 @@ import frontmatter as fm
 import pytest
 
 from lithos.config import LithosConfig
+from lithos.errors import CorpusScanError
 from lithos.knowledge import (
     KnowledgeManager,
     KnowledgeMetadata,
@@ -4535,3 +4536,68 @@ class TestUpdateSupersedes:
         assert result.status == "updated"
         assert result.document is not None
         assert result.document.metadata.supersedes == "old-note-id"
+
+
+class TestScanCorpus:
+    """``scan_corpus`` is the authoritative corpus read behind reconcile.
+
+    Reconcile deletes derived state (search-index entries, graph nodes,
+    derived_from edges) for any document absent from the snapshot, so the scan
+    must never let an unreadable note pass as a missing one.
+    """
+
+    async def test_returns_every_document(self, knowledge_manager: KnowledgeManager) -> None:
+        """A fully readable corpus scans to all its documents."""
+        first = (await knowledge_manager.create(title="One", content="a", agent="agent")).document
+        second = (await knowledge_manager.create(title="Two", content="b", agent="agent")).document
+        assert first is not None and second is not None
+
+        docs = await knowledge_manager.scan_corpus()
+
+        assert {d.id for d in docs} == {first.id, second.id}
+
+    async def test_empty_corpus_scans_clean(self, knowledge_manager: KnowledgeManager) -> None:
+        """An empty corpus is a legitimate empty scan, not an error."""
+        assert await knowledge_manager.scan_corpus() == []
+
+    async def test_unreadable_document_raises(
+        self,
+        test_config: LithosConfig,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        """A known-but-unreadable note fails the scan instead of vanishing."""
+        keep = (await knowledge_manager.create(title="Keep", content="a", agent="agent")).document
+        lost = (await knowledge_manager.create(title="Lost", content="b", agent="agent")).document
+        assert keep is not None and lost is not None
+
+        # Remove the file behind the manager's back: the metadata cache still
+        # lists the doc, so list_all's per-doc read raises and drops it.
+        (test_config.storage.knowledge_path / lost.path).unlink()
+
+        with pytest.raises(CorpusScanError) as excinfo:
+            await knowledge_manager.scan_corpus()
+
+        assert excinfo.value.expected == 2
+        assert excinfo.value.read == 1
+
+    async def test_plan_reconcile_propagates_scan_error(
+        self,
+        test_config: LithosConfig,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        """A partial corpus yields no reconcile plan at all.
+
+        Every slice of the plan is destructive toward documents missing from the
+        corpus, so planning against a short read would rebuild the search index
+        and graph without the unreadable note — silently evicting it.
+        """
+        from lithos.search import SearchEngine
+
+        engine = await SearchEngine.create(test_config)
+        engine.mark_needs_rebuild(False)
+        doc = (await knowledge_manager.create(title="Doomed", content="a", agent="agent")).document
+        assert doc is not None
+        (test_config.storage.knowledge_path / doc.path).unlink()
+
+        with pytest.raises(CorpusScanError):
+            await knowledge_manager.plan_reconcile(engine)

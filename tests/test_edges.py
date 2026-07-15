@@ -7,7 +7,7 @@ import pytest
 import pytest_asyncio
 
 from lithos.config import LithosConfig
-from lithos.lcma.edges import EdgeStore
+from lithos.edge_store import EdgeStore
 
 
 @pytest_asyncio.fixture

@@ -2,11 +2,13 @@
 
 See docs/adr/0004-provenance-projection-module.md.
 
-This Module wraps the SQLite-backed edge store and exposes a public
-**read-only** surface to callers plus a package-private plan/apply pair
-called only from :class:`~lithos.knowledge.KnowledgeManager`. The store
-and the projection helpers under ``lcma/edges.py`` are package-internal
-implementation details and must not be imported from outside this module.
+This Module wraps the SQLite-backed edge store. It exposes a public read
+surface, the public ``reconcile_corpus`` / ``reconcile_node`` entry points
+(used by the enrich worker to keep ``derived_from`` edges fresh between
+Reconciles), and a package-private plan/apply pair driven by
+:class:`~lithos.knowledge.KnowledgeManager` during whole-pipeline Reconcile.
+The underlying edge store is a package-internal detail reached only through
+this Module.
 """
 
 from __future__ import annotations
@@ -21,18 +23,11 @@ from lithos.config import LithosConfig
 # ``EdgeStore`` lives at the public peer module ``lithos.edge_store`` after
 # ADR-0006 Slice 1 (issue #263) — ``ProvenanceProjection`` owns the
 # projection-class rows, ``CorpusIntake.assert_edge`` owns the asserted-class
-# rows, and both share an injected store. The two corpus-to-edges projection
-# helpers stay in ``lcma/edges.py`` and are re-exported here as
-# **undocumented transitional internals** (NOT listed in ``__all__``). The
-# enrich worker's full sweep still consumes ``_project_provenance_to_edges``;
-# migrating that path through the projection's plan/apply is a separate
-# follow-up.
+# rows, and both share an injected store. The corpus-to-edges projection is now
+# owned entirely here (reconcile_corpus / reconcile_node); the former
+# ``lcma/edges.py`` helpers are gone (task 681ac952 PR1c).
 from lithos.edge_store import EdgeStore
 from lithos.knowledge import KnowledgeDocument, derive_namespace
-from lithos.lcma.edges import (
-    _project_node_provenance,  # noqa: F401  re-exported for transitional callers
-    _project_provenance_to_edges,  # noqa: F401  consumed by lcma/enrich.py full_sweep
-)
 
 logger = logging.getLogger(__name__)
 
@@ -218,15 +213,50 @@ class ProvenanceProjection:
                 desired.add((doc.id, source_id, ns))
 
         raw = await self._edge_store.list_edges(edge_type=self._CORPUS_DERIVED_EDGE_TYPE)
+        return self._plan_actions(desired, raw, len(snapshot))
+
+    async def _plan_reconcile_node(
+        self, node_id: str, sources: list[str], namespace: str
+    ) -> ProvenancePlan:
+        """Plan the ``derived_from`` reconcile for a single node.
+
+        The per-node analogue of :meth:`_plan_reconcile_to`: reads only the rows
+        with ``from_id == node_id`` and diffs them against the node's frontmatter
+        *sources*. An empty *sources* (a deleted node) plans removal of every
+        ``derived_from`` edge from the node. Same asserted-key-collision blocking
+        and column-drift resync as the corpus-wide planner.
+        """
+        if not self._edge_store.db_path.exists():
+            return ProvenancePlan(actions=(), scanned=1, supported=False)
+
+        desired = {(node_id, source_id, namespace) for source_id in sources}
+        raw = await self._edge_store.list_edges(
+            from_id=node_id, edge_type=self._CORPUS_DERIVED_EDGE_TYPE
+        )
+        return self._plan_actions(desired, raw, 1)
+
+    def _plan_actions(
+        self,
+        desired: set[tuple[str, str, str]],
+        raw: list[dict[str, object]],
+        scanned: int,
+    ) -> ProvenancePlan:
+        """Diff *desired* frontmatter edges against *raw* existing rows.
+
+        Shared core of :meth:`_plan_reconcile_to` and
+        :meth:`_plan_reconcile_node`: partitions raw rows into frontmatter-owned
+        vs asserted, then computes create / remove / resync actions, skipping any
+        desired key whose slot is held by an asserted row (creating it would
+        clobber the asserted row via the UNIQUE-key upsert; ADR-0004).
+        """
         existing_map: dict[tuple[str, str, str], str] = {}
         # Track stale-column rows so apply can re-canonicalise them
         # (ADR-0004 row-ownership invariant).
         drifted_keys: set[tuple[str, str, str]] = set()
-        # Asserted rows (outside the predicate) that share a natural key
-        # with the projection. The schema is UNIQUE on (from_id, to_id,
-        # type, namespace) so two rows cannot coexist; the asserted row
-        # blocks the projection from materialising. Such rows survive
-        # reconcile untouched (ADR-0004 predicate-scoping invariant).
+        # Asserted rows (outside the predicate) that share a natural key with
+        # the projection. The schema is UNIQUE on (from_id, to_id, type,
+        # namespace), so the asserted row blocks the projection from
+        # materialising; such rows survive reconcile untouched.
         asserted_keys: set[tuple[str, str, str]] = set()
         for e in raw:
             key = (str(e["from_id"]), str(e["to_id"]), str(e["namespace"]))
@@ -238,11 +268,6 @@ class ProvenanceProjection:
                 asserted_keys.add(key)
 
         existing_keys = set(existing_map.keys())
-        # Genuinely new desired keys — those with no row at all. Desired
-        # keys whose slot is held by an asserted row are EXCLUDED here:
-        # creating one would silently clobber the asserted row through
-        # the UNIQUE-key upsert path. We log it and let the asserted row
-        # stand.
         to_create = desired - existing_keys - asserted_keys
         blocked = desired & asserted_keys
         if blocked:
@@ -294,7 +319,7 @@ class ProvenanceProjection:
                 )
             )
 
-        return ProvenancePlan(actions=tuple(actions), scanned=len(snapshot), supported=True)
+        return ProvenancePlan(actions=tuple(actions), scanned=scanned, supported=True)
 
     def _has_column_drift(self, row: dict[str, object]) -> bool:
         """True when *row* deviates from canonical column values.
@@ -377,6 +402,33 @@ class ProvenanceProjection:
             scanned=plan.scanned,
             supported=True,
         )
+
+    # ---- public reconcile entry points (ADR-0004) ----
+    #
+    # ``KnowledgeManager.plan_reconcile`` / ``apply_reconcile`` drive the private
+    # pair above during whole-pipeline Reconcile. These public wrappers let the
+    # enrich worker reconcile provenance edges on its own cadence (per-node on
+    # drain, corpus-wide on sweep) without reaching through to private methods or
+    # re-implementing the canonical-row / asserted-key logic (task 681ac952 PR1c).
+
+    async def reconcile_corpus(self, docs: Iterable[KnowledgeDocument]) -> ProvenanceResult:
+        """Reconcile every ``derived_from`` edge against *docs*. Idempotent."""
+        plan = await self._plan_reconcile_to(docs)
+        return await self._apply_reconcile(plan)
+
+    async def reconcile_node(
+        self, node_id: str, *, sources: list[str], namespace: str
+    ) -> ProvenanceResult:
+        """Reconcile one node's ``derived_from`` edges against *sources*.
+
+        *sources* is the node's frontmatter ``derived_from_ids`` (empty for a
+        deleted node → every ``derived_from`` edge from the node is removed).
+        Callers pass pre-resolved ``sources`` / ``namespace`` so the projection
+        stays KnowledgeManager-decoupled; the projection owns the canonical row,
+        the asserted-key-collision blocking, and the column-drift resync.
+        """
+        plan = await self._plan_reconcile_node(node_id, sources, namespace)
+        return await self._apply_reconcile(plan)
 
     # ---- public read API ----
 

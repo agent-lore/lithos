@@ -10,6 +10,7 @@ import pytest
 import pytest_asyncio
 
 from lithos.config import LcmaConfig, LithosConfig
+from lithos.edge_store import EdgeStore
 from lithos.events import (
     EDGE_UPSERTED,
     EVENT_ORIGIN_ENRICH,
@@ -26,7 +27,7 @@ from lithos.knowledge import KnowledgeManager
 from lithos.lcma.enrich import ENRICH_AGENT, EnrichWorker, _resolve_node_id
 from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION
 from lithos.lcma.stats import StatsStore
-from lithos.provenance import EdgeStore, _project_node_provenance
+from lithos.provenance import ProvenanceProjection
 
 
 def _make_intake(
@@ -74,6 +75,18 @@ async def edge_store(test_config: LithosConfig):
 
 
 @pytest.fixture
+def projection(test_config: LithosConfig, edge_store: EdgeStore) -> ProvenanceProjection:
+    """A ProvenanceProjection sharing the test's EdgeStore, so the worker's
+    provenance reconcile lands in the same store the assertions read.
+
+    EnrichWorker takes the projection (not the raw store) after task 681ac952
+    PR1c — derived_from edges flow through ProvenanceProjection.reconcile_node /
+    reconcile_corpus; consolidation reaches the store via ``projection.edge_store``.
+    """
+    return ProvenanceProjection(test_config, edge_store=edge_store)
+
+
+@pytest.fixture
 def event_bus(test_config: LithosConfig) -> EventBus:
     return EventBus(test_config.events)
 
@@ -103,6 +116,7 @@ async def worker(
     event_bus: EventBus,
     stats_store: StatsStore,
     edge_store: EdgeStore,
+    projection: ProvenanceProjection,
     mock_knowledge: MagicMock,
     mock_coordination: AsyncMock,
 ) -> EnrichWorker:
@@ -110,7 +124,7 @@ async def worker(
         config=lcma_config,
         event_bus=event_bus,
         stats_store=stats_store,
-        edge_store=edge_store,
+        projection=projection,
         knowledge=mock_knowledge,
         coordination=mock_coordination,
         intake=_make_intake(mock_knowledge, event_bus, edge_store, mock_coordination),
@@ -670,22 +684,124 @@ class TestSalienceDecay:
 # ---------------------------------------------------------------------------
 
 
-class TestProjectNodeProvenance:
-    """Verify _project_node_provenance for single-node edge sync."""
+class TestEnrichNodeProvenanceHandoff:
+    """``_enrich_node`` resolves KnowledgeManager state into ``reconcile_node``.
+
+    TestReconcileNode below proves the projection given pre-resolved arguments;
+    these prove the *other* half — that the worker reads the real sources and
+    namespace off KnowledgeManager and hands them over correctly. A real
+    KnowledgeManager is used deliberately: the shared ``mock_knowledge`` fixture
+    returns MagicMocks from ``get_doc_sources``/``get_cached_meta``, which would
+    let a wrong-namespace or wrong-sources regression pass unnoticed.
+    """
+
+    async def _worker_with_real_km(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> tuple[EnrichWorker, KnowledgeManager]:
+        from lithos.coordination import CoordinationService
+
+        coord = CoordinationService(test_config)
+        await coord.initialize()
+        km = KnowledgeManager(test_config)
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            projection=projection,
+            knowledge=km,
+            coordination=coord,
+            intake=_make_intake(km, event_bus, edge_store, coord),
+        )
+        return worker, km
+
+    async def test_resolves_real_sources_and_namespace(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> None:
+        """The projected edge carries the doc's real source and namespace."""
+        worker, km = await self._worker_with_real_km(
+            test_config, lcma_config, event_bus, stats_store, edge_store, projection
+        )
+        source = await km.create(title="Source", content="src", agent="test-agent")
+        assert source.document is not None
+        derived = await km.create(
+            title="Derived",
+            content="derived",
+            agent="test-agent",
+            derived_from_ids=[source.document.id],
+            namespace="research",
+        )
+        assert derived.document is not None
+
+        await worker._enrich_node(derived.document.id, [NOTE_UPDATED])
+
+        edges = await edge_store.list_edges(from_id=derived.document.id, edge_type="derived_from")
+        assert len(edges) == 1
+        assert edges[0]["to_id"] == source.document.id
+        # The namespace must come from the doc's cached meta, not a default.
+        assert edges[0]["namespace"] == "research"
+
+    async def test_deleted_node_removes_its_derived_from_edges(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> None:
+        """A node absent from knowledge resolves to empty sources, so the
+        worker's reconcile_node call removes its frontmatter-owned edges."""
+        worker, _km = await self._worker_with_real_km(
+            test_config, lcma_config, event_bus, stats_store, edge_store, projection
+        )
+        await edge_store.upsert(
+            from_id="ghost-node",
+            to_id="some-source",
+            edge_type="derived_from",
+            weight=1.0,
+            namespace="default",
+            provenance_type="frontmatter",
+        )
+
+        await worker._enrich_node("ghost-node", [NOTE_UPDATED])
+
+        assert await edge_store.list_edges(from_id="ghost-node", edge_type="derived_from") == []
+
+
+class TestReconcileNode:
+    """ProvenanceProjection.reconcile_node — single-node derived_from sync.
+
+    Formerly the ``_project_node_provenance`` helper (deleted in task 681ac952
+    PR1c when the projection became the single owner of derived_from projection).
+    ``reconcile_node`` takes pre-resolved ``sources`` (the enrich worker resolves
+    them from KnowledgeManager); an empty list is the deleted-node case.
+    """
 
     async def test_deleted_node_removes_all_derived_from_edges(
         self,
         edge_store: EdgeStore,
-        mock_knowledge: MagicMock,
+        projection: ProvenanceProjection,
     ) -> None:
-        """Deleted node has all its derived_from edges removed."""
-        # Create some derived_from edges where from_id is the deleted node
+        """A deleted node (empty sources) has all its derived_from edges removed."""
         await edge_store.upsert(
             from_id="deleted-node",
             to_id="source-1",
             edge_type="derived_from",
             weight=1.0,
             namespace="default",
+            provenance_type="frontmatter",
         )
         await edge_store.upsert(
             from_id="deleted-node",
@@ -693,80 +809,88 @@ class TestProjectNodeProvenance:
             edge_type="derived_from",
             weight=1.0,
             namespace="default",
+            provenance_type="frontmatter",
         )
 
-        # Node no longer exists
-        mock_knowledge.has_document = MagicMock(return_value=False)
+        result = await projection.reconcile_node("deleted-node", sources=[], namespace="default")
+        assert result.created == 0
+        assert result.removed == 2
 
-        result = await _project_node_provenance(edge_store, mock_knowledge, "deleted-node")
-        assert result == {"created": 0, "removed": 2}
-
-        # Verify edges are gone
         remaining = await edge_store.list_edges(from_id="deleted-node", edge_type="derived_from")
         assert len(remaining) == 0
 
-    async def test_edge_projection_sync_for_existing_node(
+    async def test_sync_for_existing_node(
         self,
         edge_store: EdgeStore,
-        mock_knowledge: MagicMock,
+        projection: ProvenanceProjection,
     ) -> None:
-        """Existing node gets derived_from edges synced from frontmatter."""
+        """Sources create missing edges and remove ones no longer declared."""
         node_id = "sync-node"
-
-        # Pre-existing edge that should be removed (source-old is no longer in frontmatter)
         await edge_store.upsert(
             from_id=node_id,
             to_id="source-old",
             edge_type="derived_from",
             weight=1.0,
             namespace="default",
+            provenance_type="frontmatter",
         )
 
-        # Set up knowledge mock
-        mock_knowledge.has_document = MagicMock(return_value=True)
-        mock_knowledge.get_doc_sources = MagicMock(return_value=["source-new"])
+        result = await projection.reconcile_node(
+            node_id, sources=["source-new"], namespace="default"
+        )
+        assert result.created == 1
+        assert result.removed == 1
 
-        # Set up _meta_cache with a mock that has .namespace
-        cached_meta = MagicMock()
-        cached_meta.namespace = "default"
-        mock_knowledge._meta_cache = {node_id: cached_meta}
-        mock_knowledge.get_cached_meta = MagicMock(side_effect=mock_knowledge._meta_cache.get)
-
-        result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
-        assert result["created"] == 1
-        assert result["removed"] == 1
-
-        # Verify: source-old edge gone, source-new edge exists
         edges = await edge_store.list_edges(from_id=node_id, edge_type="derived_from")
         assert len(edges) == 1
         assert edges[0]["to_id"] == "source-new"
 
-    async def test_edge_projection_no_op_when_in_sync(
+    async def test_no_op_when_in_sync(
         self,
         edge_store: EdgeStore,
-        mock_knowledge: MagicMock,
+        projection: ProvenanceProjection,
     ) -> None:
-        """No changes when edges already match frontmatter."""
+        """No changes when edges already match sources."""
         node_id = "synced-node"
-
         await edge_store.upsert(
             from_id=node_id,
             to_id="source-1",
             edge_type="derived_from",
             weight=1.0,
             namespace="default",
+            provenance_type="frontmatter",
         )
 
-        mock_knowledge.has_document = MagicMock(return_value=True)
-        mock_knowledge.get_doc_sources = MagicMock(return_value=["source-1"])
+        result = await projection.reconcile_node(node_id, sources=["source-1"], namespace="default")
+        assert result.created == 0
+        assert result.removed == 0
 
-        cached_meta = MagicMock()
-        cached_meta.namespace = "default"
-        mock_knowledge._meta_cache = {node_id: cached_meta}
-        mock_knowledge.get_cached_meta = MagicMock(side_effect=mock_knowledge._meta_cache.get)
+    async def test_asserted_edge_at_same_key_is_not_clobbered(
+        self,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> None:
+        """Behaviour gained by the PR1c migration: an agent-asserted edge sharing
+        the natural key survives — the per-node reconcile skips it (the old helper
+        would have overwritten it via the UNIQUE-key upsert, dropping the actor)."""
+        node_id = "assert-node"
+        await edge_store.upsert(
+            from_id=node_id,
+            to_id="source-1",
+            edge_type="derived_from",
+            weight=0.7,
+            namespace="default",
+            provenance_type="manual",
+        )
 
-        result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
-        assert result == {"created": 0, "removed": 0}
+        result = await projection.reconcile_node(node_id, sources=["source-1"], namespace="default")
+        assert result.created == 0
+        assert result.removed == 0
+
+        edges = await edge_store.list_edges(from_id=node_id, edge_type="derived_from")
+        assert len(edges) == 1
+        assert edges[0]["provenance_type"] == "manual"  # asserted row untouched
+        assert edges[0]["weight"] == pytest.approx(0.7)
 
 
 # ---------------------------------------------------------------------------
@@ -1021,6 +1145,7 @@ class TestSelfOriginatedEventFilter:
         lcma_config: LcmaConfig,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> None:
         """End-to-end loop-break: the entity write emits a NOTE_UPDATED stamped
@@ -1049,7 +1174,7 @@ class TestSelfOriginatedEventFilter:
             config=lcma_config,
             event_bus=captured_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=mock_coordination,
             intake=intake,
@@ -1086,6 +1211,7 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> None:
         """Entity extraction writes entities to frontmatter when absent."""
@@ -1104,7 +1230,7 @@ class TestExtractEntities:
             config=lcma_config,
             event_bus=event_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
@@ -1126,6 +1252,7 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> None:
         """Drift regression (task 681ac952): the entity write flows through
@@ -1156,7 +1283,7 @@ class TestExtractEntities:
             config=lcma_config,
             event_bus=event_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=mock_coordination,
             intake=intake,
@@ -1179,13 +1306,14 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> EnrichWorker:
         return EnrichWorker(
             config=lcma_config,
             event_bus=event_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
@@ -1198,6 +1326,7 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> None:
         """Extractor-written entities with a stale version marker are re-extracted."""
@@ -1218,7 +1347,7 @@ class TestExtractEntities:
         )
 
         worker = self._make_worker(
-            km, lcma_config, event_bus, stats_store, edge_store, mock_coordination
+            km, lcma_config, event_bus, stats_store, edge_store, projection, mock_coordination
         )
         await worker._extract_entities(doc_id)
 
@@ -1234,6 +1363,7 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> None:
         """Entities written by the current extractor version are left alone."""
@@ -1254,7 +1384,7 @@ class TestExtractEntities:
         )
 
         worker = self._make_worker(
-            km, lcma_config, event_bus, stats_store, edge_store, mock_coordination
+            km, lcma_config, event_bus, stats_store, edge_store, projection, mock_coordination
         )
         await worker._extract_entities(doc_id)
 
@@ -1268,6 +1398,7 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> None:
         """Re-extraction yielding nothing still clears stale junk entities."""
@@ -1287,7 +1418,7 @@ class TestExtractEntities:
         )
 
         worker = self._make_worker(
-            km, lcma_config, event_bus, stats_store, edge_store, mock_coordination
+            km, lcma_config, event_bus, stats_store, edge_store, projection, mock_coordination
         )
         await worker._extract_entities(doc_id)
 
@@ -1302,6 +1433,7 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
     ) -> None:
         """The periodic full sweep re-extracts stale-marker entities corpus-wide."""
         from lithos.coordination import CoordinationService
@@ -1327,7 +1459,7 @@ class TestExtractEntities:
             config=lcma_config,
             event_bus=event_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=coord,
             intake=_make_intake(km, event_bus, edge_store, coord),
@@ -1346,6 +1478,7 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> None:
         """Agent-written entities are preserved and not overwritten."""
@@ -1368,7 +1501,7 @@ class TestExtractEntities:
             config=lcma_config,
             event_bus=event_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
@@ -1387,6 +1520,7 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> None:
         """_enrich_node only extracts entities when trigger_types includes note.created/updated."""
@@ -1404,7 +1538,7 @@ class TestExtractEntities:
             config=lcma_config,
             event_bus=event_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
@@ -1428,6 +1562,7 @@ class TestExtractEntities:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
         mock_coordination: AsyncMock,
     ) -> None:
         """Entity extraction should not extract identifiers from fenced code blocks."""
@@ -1453,7 +1588,7 @@ class TestExtractEntities:
             config=lcma_config,
             event_bus=event_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
@@ -1482,6 +1617,7 @@ class TestFullSweep:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
     ) -> None:
         """Full sweep applies decay to inactive nodes and evicts stale WM."""
         from lithos.coordination import CoordinationService
@@ -1494,7 +1630,7 @@ class TestFullSweep:
             config=lcma_config,
             event_bus=event_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=coord,
             intake=_make_intake(km, event_bus, edge_store, coord),
@@ -1543,6 +1679,7 @@ class TestFullSweep:
         event_bus: EventBus,
         stats_store: StatsStore,
         edge_store: EdgeStore,
+        projection: ProvenanceProjection,
     ) -> None:
         """Full sweep reconciles provenance edges, removing stale ones."""
         from lithos.coordination import CoordinationService
@@ -1555,7 +1692,7 @@ class TestFullSweep:
             config=lcma_config,
             event_bus=event_bus,
             stats_store=stats_store,
-            edge_store=edge_store,
+            projection=projection,
             knowledge=km,
             coordination=coord,
             intake=_make_intake(km, event_bus, edge_store, coord),
@@ -1579,13 +1716,16 @@ class TestFullSweep:
         assert derived_result.document is not None
         derived_id = derived_result.document.id
 
-        # Add a stale derived_from edge that doesn't match frontmatter
+        # Add a stale frontmatter-owned derived_from edge that doesn't match
+        # frontmatter (orphan) — reconcile must remove it. Asserted edges
+        # (other provenance_type) survive; that path is covered in TestReconcileNode.
         await edge_store.upsert(
             from_id=derived_id,
             to_id="nonexistent-source",
             edge_type="derived_from",
             weight=1.0,
             namespace="default",
+            provenance_type="frontmatter",
         )
 
         # Verify the stale edge exists
@@ -1607,6 +1747,64 @@ class TestFullSweep:
             from_id=derived_id, to_id=source_id, edge_type="derived_from"
         )
         assert len(valid_edges) == 1
+
+    async def test_partial_corpus_scan_does_not_delete_provenance(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> None:
+        """An unreadable note aborts the sweep's reconcile instead of being
+        treated as absent from the corpus.
+
+        ``reconcile_corpus`` reads its docs as the authoritative snapshot and
+        removes derived_from edges for anything missing, so a doc that merely
+        failed to read must not reach it — that would evict the provenance of a
+        document that still exists. ``scan_corpus`` raises rather than return a
+        short list, and full_sweep skips the reconcile.
+        """
+        from lithos.coordination import CoordinationService
+
+        coord = CoordinationService(test_config)
+        await coord.initialize()
+        km = KnowledgeManager(test_config)
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            projection=projection,
+            knowledge=km,
+            coordination=coord,
+            intake=_make_intake(km, event_bus, edge_store, coord),
+        )
+
+        source = await km.create(title="Source", content="src", agent="test-agent")
+        assert source.document is not None
+        derived = await km.create(
+            title="Derived",
+            content="derived",
+            agent="test-agent",
+            derived_from_ids=[source.document.id],
+        )
+        assert derived.document is not None
+
+        # First sweep: the corpus is fully readable, so the edge is projected.
+        await worker.full_sweep()
+        assert len(await edge_store.list_edges(from_id=derived.document.id)) == 1
+
+        # Make the derived note unreadable *behind* the manager's back — the
+        # metadata cache still lists it, so list_all's per-doc read raises and
+        # the doc silently drops out of the returned snapshot.
+        (test_config.storage.knowledge_path / derived.document.path).unlink()
+
+        await worker.full_sweep()
+
+        # Pre-fix, reconcile_corpus saw a corpus without the derived note and
+        # deleted its still-valid provenance.
+        assert len(await edge_store.list_edges(from_id=derived.document.id)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1738,51 +1936,43 @@ class TestRetryCapWarning:
         assert any(r.levelno == logging.WARNING for r in caplog.records if "exhausted" in r.message)
 
 
-class TestProjectNodeProvenanceUpsertStaleEdge:
-    """Verify _project_node_provenance upserts existing edges with stale metadata."""
+class TestReconcileNodeResync:
+    """reconcile_node re-canonicalises a drifted frontmatter-owned edge."""
 
-    async def test_stale_edge_metadata_resynced(
+    async def test_stale_frontmatter_edge_resynced(
         self,
         edge_store: EdgeStore,
-        mock_knowledge: MagicMock,
+        projection: ProvenanceProjection,
     ) -> None:
-        """A pre-existing derived_from edge with non-canonical metadata is resynced."""
-        node_id = "upsert-test-node"
+        """A frontmatter-owned derived_from edge whose non-key columns drifted is
+        re-canonicalised (weight → 1.0).
 
-        # Create a derived_from edge with stale metadata (wrong weight and provenance_type)
+        Behaviour note (task 681ac952 PR1c): this only applies to
+        projection-owned (``provenance_type='frontmatter'``) rows. A row with a
+        different provenance_type is an *asserted* edge and is left untouched —
+        the old ``_project_node_provenance`` helper would instead have clobbered
+        it via an unconditional upsert (see
+        ``TestReconcileNode.test_asserted_edge_at_same_key_is_not_clobbered``).
+        """
+        node_id = "resync-node"
         await edge_store.upsert(
             from_id=node_id,
             to_id="source-1",
             edge_type="derived_from",
-            weight=0.5,  # stale: canonical is 1.0
+            weight=0.5,  # drifted: canonical is 1.0
             namespace="default",
-            provenance_type="manual",  # stale: canonical is "frontmatter"
+            provenance_type="frontmatter",
         )
 
-        # Verify stale values
-        edges_before = await edge_store.list_edges(
-            from_id=node_id, to_id="source-1", edge_type="derived_from"
-        )
-        assert len(edges_before) == 1
-        assert edges_before[0]["weight"] == 0.5
-        assert edges_before[0]["provenance_type"] == "manual"
+        result = await projection.reconcile_node(node_id, sources=["source-1"], namespace="default")
+        # Desired & existing & drifted → resynced (not created, not removed).
+        assert result.created == 0
+        assert result.removed == 0
+        assert result.resynced == 1
 
-        # Set up knowledge mock
-        mock_knowledge.has_document = MagicMock(return_value=True)
-        mock_knowledge.get_doc_sources = MagicMock(return_value=["source-1"])
-        cached_meta = MagicMock()
-        cached_meta.namespace = "default"
-        mock_knowledge._meta_cache = {node_id: cached_meta}
-        mock_knowledge.get_cached_meta = MagicMock(side_effect=mock_knowledge._meta_cache.get)
-
-        result = await _project_node_provenance(edge_store, mock_knowledge, node_id)
-        # No new edges created, no orphans removed — but existing one was upserted
-        assert result == {"created": 0, "removed": 0}
-
-        # Verify the edge now has canonical metadata
         edges_after = await edge_store.list_edges(
             from_id=node_id, to_id="source-1", edge_type="derived_from"
         )
         assert len(edges_after) == 1
-        assert edges_after[0]["weight"] == 1.0
+        assert edges_after[0]["weight"] == pytest.approx(1.0)
         assert edges_after[0]["provenance_type"] == "frontmatter"

@@ -85,9 +85,9 @@ Foundation  = ["Events", "Config", "Telemetry", "Errors", "Logging"]
 # is deliberately NOT pinned to the exact current high-water mark. Ratchet the
 # *count* of oversized modules down via modules_over_800_lines instead.
 [budgets]
-cross_component_edges  = 64    # measured 2026-07; +1 (LCMA→Intake, task 681ac952: enrich/cognitive-memory note writes now route through CorpusIntake to fix Drift); direction: down
-component_cycles       = 1    # one 7-component SCC in Core (Coordination/Graph/Intake/Knowledge/LCMA/Provenance/Search); Intake joined via LCMA→Intake (681ac952); goal: shrink it
-module_cycles          = 2    # knowledge<->graph<->search<->provenance<->lcma.edges, server<->tools; goal: 0
+cross_component_edges  = 63    # measured 2026-07; task 681ac952 PR1c removed Provenance→LCMA (derived_from projection consolidated into ProvenanceProjection; lcma/edges.py deleted); direction: down
+component_cycles       = 1    # one 4-component SCC in Core (Graph/Knowledge/Provenance/Search); PR1c shrank it from 7 — Coordination/Intake/LCMA left the cycle once Provenance→LCMA was removed; goal: shrink it
+module_cycles          = 2    # knowledge<->graph<->search<->provenance, server<->tools; goal: 0
 modules_over_800_lines = 11   # incl. tools.tasks (985) split from server in #374; direction: down
 max_module_lines       = 2800 # stop-loss; largest today is coordination.py at 2675
 cross_module_private_refs = 42  # measured 2026-07; server._emit/_config x12, _normalize_datetime x3 etc.; goal: 0

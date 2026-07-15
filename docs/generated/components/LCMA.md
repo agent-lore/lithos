@@ -13,7 +13,6 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 |---|---|---:|---:|
 | `lithos.lcma` | XS | 0 | 0 |
 | `lithos.lcma.edge_reinforce` | XS | 0 | 1 |
-| `lithos.lcma.edges` | S | 0 | 0 |
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
@@ -63,11 +62,10 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 ## Dependencies
 
 - Depends on: [Config](Config.md), [Coordination](Coordination.md), [Errors](Errors.md), [Events](Events.md), [Graph](Graph.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
-- Used by: [CognitiveMemory](CognitiveMemory.md), [Provenance](Provenance.md)
+- Used by: [CognitiveMemory](CognitiveMemory.md)
 
 ## ADRs
 
-- [Provenance projection becomes its own Module, completing ADR-0001 step 3](../../adr/0004-provenance-projection-module.md)
 - [Cognitive memory becomes its own Module, decoupling `server.py` from LCMA internals](../../adr/0005-cognitive-memory-module.md)
 - [`WatchIntake` Module: filesystem-driven Corpus mutations as a peer of `CorpusIntake`](../../adr/0007-watch-intake.md)
 - [Entity extraction: spaCy NER + corroborated heuristics, with per-field extractor provenance](../../adr/0008-entity-extraction-ner-and-provenance.md)
