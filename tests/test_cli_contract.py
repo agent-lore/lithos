@@ -346,10 +346,17 @@ class TestCLIContracts:
         assert calls["watch_started"] == 1
         assert calls["watch_stopped"] == 0
 
-    def test_serve_telemetry_console_flag_sets_config_fields(self, temp_dir, monkeypatch):
+    def test_telemetry_console_flag_sets_config_fields(self, temp_dir, monkeypatch):
         """`--telemetry-console` must flip telemetry.enabled + console_fallback
         on the live config before ``setup_telemetry`` reads them, so metrics and
-        spans actually land on stdout without requiring an OTLP endpoint."""
+        spans actually land on stdout without requiring an OTLP endpoint.
+
+        The flag is on the ``cli`` group, not ``serve`` (task ba8d7f25 PR2a):
+        telemetry setup moved to the group entrypoint so every command exports,
+        and a serve-only flag could no longer be applied before setup ran.
+        Console-fallback now works for any command — `lithos --telemetry-console
+        reconcile` is the case that motivated it.
+        """
         config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
         config.ensure_directories()
         set_config(config)
@@ -384,13 +391,15 @@ class TestCLIContracts:
             # Snapshot the config at the moment setup_telemetry() would read it.
             captured["config"] = cfg
 
-        monkeypatch.setattr("lithos.telemetry.setup_telemetry", _capture_setup)
-        monkeypatch.setattr("lithos.telemetry.shutdown_telemetry", lambda: None)
+        # cli.py imports these at module scope, so patch the names it bound —
+        # patching lithos.telemetry.* would not affect the already-bound refs.
+        monkeypatch.setattr("lithos.cli.setup_telemetry", _capture_setup)
+        monkeypatch.setattr("lithos.cli.shutdown_telemetry", lambda: None)
 
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["--data-dir", str(temp_dir), "serve", "--no-watch", "--telemetry-console"],
+            ["--data-dir", str(temp_dir), "--telemetry-console", "serve", "--no-watch"],
         )
         assert result.exit_code == 0, result.output
         assert "Telemetry console-fallback enabled" in result.output
@@ -458,3 +467,104 @@ class TestCLIContracts:
         assert result.exit_code == 0, result.output
         assert "Shutting down..." in result.output
         assert calls["stop"] == 1
+
+
+class TestExtractEntitiesRoutesThroughIntake:
+    """`lithos extract-entities` must not manufacture Drift (task ba8d7f25 PR2a).
+
+    It used to call KnowledgeManager.update directly, which skipped the
+    Search/graph re-index and emitted no event — so the entities it wrote were
+    invisible to search until someone ran `lithos reconcile`. The command even
+    printed a note telling you to do exactly that. PR1a (task 681ac952) fixed
+    the identical bypass on the enrich worker's path; this was the other half.
+    """
+
+    # A token that appears in no document's content, so it can only ever reach
+    # the search index via the `entities` field. Extracted entities always
+    # appear in content (they are extracted *from* it), so proving a re-index
+    # means watching a stale entity disappear, not a fresh one appear.
+    STALE_ENTITY = "Zzyzxtown"
+
+    def _seed(self, temp_dir):
+        config = LithosConfig(storage=StorageConfig(data_dir=temp_dir))
+        config.ensure_directories()
+        # set_config() needed for CLI commands invoked via Click's test runner
+        # (see test_reindex_and_search_output_shape for the full explanation).
+        set_config(config)
+        knowledge = KnowledgeManager(config)
+
+        async def _create() -> str:
+            result = await knowledge.create(
+                title="Entity Drift Seed",
+                content="Ada Lovelace worked with Charles Babbage in London.",
+                agent="cli-test",
+            )
+            assert result.document is not None
+            # Plant a stale entity that no extractor would ever produce.
+            await knowledge.update(
+                id=result.document.id,
+                agent="cli-test",
+                entities=[self.STALE_ENTITY],
+            )
+            return result.document.id
+
+        return config, asyncio.run(_create())
+
+    def test_stale_entity_leaves_the_index_without_a_reconcile(self, temp_dir):
+        """The re-index happens inline, so the superseded entity stops matching.
+
+        Pre-fix, the markdown was rewritten but the index was not, leaving
+        `Zzyzxtown` searchable against a document that no longer claims it.
+        """
+        self._seed(temp_dir)
+        runner = CliRunner()
+
+        assert runner.invoke(cli, ["--data-dir", str(temp_dir), "reindex"]).exit_code == 0
+
+        # Baseline: the stale entity is genuinely in the index to begin with,
+        # so the post-condition below is a real change and not a vacuous pass.
+        before = runner.invoke(
+            cli,
+            ["--data-dir", str(temp_dir), "search", self.STALE_ENTITY, "--fulltext"],
+        )
+        assert "Entity Drift Seed" in before.output, before.output
+
+        extract = runner.invoke(cli, ["--data-dir", str(temp_dir), "extract-entities", "--force"])
+        assert extract.exit_code == 0, extract.output
+        assert "updated: 1" in extract.output
+
+        after = runner.invoke(
+            cli,
+            ["--data-dir", str(temp_dir), "search", self.STALE_ENTITY, "--fulltext"],
+        )
+        assert after.exit_code == 0, after.output
+        assert "Entity Drift Seed" not in after.output, (
+            "stale entity still indexed — the write bypassed the Search re-index"
+        )
+
+    def test_no_longer_tells_the_operator_to_reconcile(self, temp_dir):
+        """The advice was the bug admitting itself; routing through intake
+        leaves no drift to repair."""
+        self._seed(temp_dir)
+        runner = CliRunner()
+
+        result = runner.invoke(cli, ["--data-dir", str(temp_dir), "extract-entities", "--force"])
+
+        assert result.exit_code == 0, result.output
+        assert "run `lithos reconcile`" not in result.output
+
+    def test_dry_run_writes_nothing_and_builds_no_pipeline(self, temp_dir):
+        """A read-only question must not have side effects — notably it must not
+        create edges.db just to report what it *would* do."""
+        config, _doc_id = self._seed(temp_dir)
+        edges_db = config.storage.edges_db_path
+        assert not edges_db.exists()
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["--data-dir", str(temp_dir), "extract-entities", "--force", "--dry-run"]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "would update: 1" in result.output
+        assert not edges_db.exists(), "dry run created edges.db as a side effect"

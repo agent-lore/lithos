@@ -10,6 +10,7 @@ import click
 
 from lithos.config import LithosConfig, load_config, set_config
 from lithos.logging_config import setup_logging
+from lithos.telemetry import setup_telemetry, shutdown_telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,19 @@ logger = logging.getLogger(__name__)
     type=click.Path(path_type=Path),
     help="Data directory path",
 )
+@click.option(
+    "--telemetry-console",
+    is_flag=True,
+    default=False,
+    help="Route OTEL metrics + spans to stdout (local debugging without a collector)",
+)
 @click.pass_context
-def cli(ctx: click.Context, config: Path | None, data_dir: Path | None) -> None:
+def cli(
+    ctx: click.Context,
+    config: Path | None,
+    data_dir: Path | None,
+    telemetry_console: bool,
+) -> None:
     """Lithos - Local shared knowledge base for AI agents."""
     ctx.ensure_object(dict)
 
@@ -39,8 +51,27 @@ def cli(ctx: click.Context, config: Path | None, data_dir: Path | None) -> None:
     if data_dir:
         cfg.storage.data_dir = data_dir
 
+    # --telemetry-console: ensure telemetry runs in console-fallback mode so
+    # metrics/spans land on stdout even when no OTLP collector is configured.
+    # This is a DX shortcut for local debugging — see also #164. Must be applied
+    # before setup_telemetry() reads the config below.
+    if telemetry_console:
+        cfg.telemetry.enabled = True
+        cfg.telemetry.console_fallback = True
+        click.echo("Telemetry console-fallback enabled (metrics + spans will print to stdout).")
+
     set_config(cfg)
     ctx.obj["config"] = cfg
+
+    # Observability belongs to the whole CLI, not just ``serve``. Both calls
+    # used to live in the serve command body, so every other command ran with
+    # no-op providers: `lithos reconcile` — the operator's repair tool — emitted
+    # none of the spans and metrics its code path raises. Setting up here also
+    # means construction-time log records land in a configured root logger
+    # rather than being dropped.
+    setup_logging()
+    setup_telemetry(cfg)
+    ctx.call_on_close(shutdown_telemetry)
 
 
 @cli.command()
@@ -68,16 +99,6 @@ def cli(ctx: click.Context, config: Path | None, data_dir: Path | None) -> None:
     default=True,
     help="Watch for file changes (default: enabled)",
 )
-@click.option(
-    "--telemetry-console",
-    is_flag=True,
-    default=False,
-    help=(
-        "Route OTEL metrics and spans to stdout via console exporters. "
-        "Useful for local debugging when no OTEL collector is running. "
-        "Equivalent to setting telemetry.enabled=true + telemetry.console_fallback=true."
-    ),
-)
 @click.pass_context
 def serve(
     ctx: click.Context,
@@ -85,21 +106,11 @@ def serve(
     host: str,
     port: int,
     watch: bool,
-    telemetry_console: bool,
 ) -> None:
     """Start the Lithos MCP server."""
     from lithos.server import create_server
-    from lithos.telemetry import setup_telemetry, shutdown_telemetry
 
     config: LithosConfig = ctx.obj["config"]
-
-    # --telemetry-console: ensure telemetry runs in console-fallback mode so
-    # metrics/spans land on stdout even when no OTLP collector is configured.
-    # This is a DX shortcut for local debugging — see also #164.
-    if telemetry_console:
-        config.telemetry.enabled = True
-        config.telemetry.console_fallback = True
-        click.echo("Telemetry console-fallback enabled (metrics + spans will print to stdout).")
 
     server = create_server(config)
 
@@ -158,8 +169,6 @@ def serve(
             )
 
     try:
-        setup_logging()
-        setup_telemetry(config)
         asyncio.run(run_server())
     except KeyboardInterrupt:
         click.echo("\nShutting down...")
@@ -169,8 +178,6 @@ def serve(
         # (ADR-0007) — one call, no risk of forgetting a subsystem.
         asyncio.run(server.shutdown())
         logger.info("lithos server stopped")
-    finally:
-        shutdown_telemetry()
 
 
 @cli.command()
@@ -182,20 +189,18 @@ def serve(
 @click.pass_context
 def reindex(ctx: click.Context, clear: bool) -> None:
     """Rebuild search indices from knowledge files."""
-    from lithos.graph import KnowledgeGraph
-    from lithos.knowledge import KnowledgeManager
-    from lithos.provenance import ProvenanceProjection
-    from lithos.search import SearchEngine
+    from lithos.pipeline import build_pipeline
 
     config: LithosConfig = ctx.obj["config"]
-    config.ensure_directories()
-
-    knowledge = KnowledgeManager(config)
-    graph = KnowledgeGraph(config)
 
     async def do_reindex() -> None:
-        search = await SearchEngine.create(config)
-        projection = await ProvenanceProjection.create(config)
+        # One EdgeStore writer, shared by the projection and the intake
+        # (ADR-0006 Slice 1, #263). This command used to call
+        # ProvenanceProjection.create(config) with no injected store, which took
+        # the self-create branch and opened a second writer against edges.db.
+        pipeline = await build_pipeline(config)
+        knowledge, search, graph = pipeline.knowledge, pipeline.search, pipeline.graph
+        projection = pipeline.projection
         try:
             if clear:
                 click.echo("Clearing existing indices...")
@@ -240,7 +245,7 @@ def reindex(ctx: click.Context, clear: bool) -> None:
             click.echo(f"Graph nodes: {graph.node_count()}")
             click.echo(f"Graph edges: {graph.edge_count()}")
         finally:
-            await projection.close()
+            await pipeline.aclose()
 
     asyncio.run(do_reindex())
 
@@ -544,14 +549,31 @@ def extract_entities_cmd(ctx: click.Context, dry_run: bool, force: bool) -> None
     (no marker) are preserved. Use --force once to bootstrap a corpus written
     before extractor provenance existed.
     """
-    from lithos.cognitive_memory import ENTITY_EXTRACTOR_VERSION, extract_entities
+    from lithos.cognitive_memory import ENRICH_AGENT, ENTITY_EXTRACTOR_VERSION, extract_entities
+    from lithos.events import EVENT_ORIGIN_ENRICH
+    from lithos.intake import NoteUpdateRequest
     from lithos.knowledge import KnowledgeManager
+    from lithos.pipeline import Pipeline, build_pipeline
 
     config: LithosConfig = ctx.obj["config"]
     config.ensure_directories()
-    knowledge = KnowledgeManager(config)
 
     async def run() -> None:
+        # A dry run only reads, so it stays cheap: no pipeline, hence no
+        # embedding-model load and no edges.db created as a side effect of
+        # asking a read-only question.
+        pipeline = None if dry_run else await build_pipeline(config)
+        try:
+            await _extract(pipeline)
+        finally:
+            if pipeline is not None:
+                # Release the aiosqlite handle even if extraction raised —
+                # a leaked worker thread is the #172 "event loop is closed" hang.
+                await pipeline.aclose()
+
+    async def _extract(pipeline: "Pipeline | None") -> None:
+        knowledge = pipeline.knowledge if pipeline else KnowledgeManager(config)
+
         _, total = await knowledge.list_all(limit=0)
         docs, _ = (await knowledge.list_all(limit=total)) if total else ([], 0)
         click.echo(f"Scanning {len(docs)} documents (force={force}, dry_run={dry_run})")
@@ -585,12 +607,21 @@ def extract_entities_cmd(ctx: click.Context, dry_run: bool, force: bool) -> None
             before_count += len(doc.metadata.entities)
             after_count += len(extracted)
             updated += 1
-            if not dry_run:
-                result = await knowledge.update(
-                    id=doc.id,
-                    agent="lithos-enrich",
-                    entities=extracted,
-                    entities_extractor=ENTITY_EXTRACTOR_VERSION,
+            if pipeline is not None:
+                # Route through CorpusIntake, not KnowledgeManager.update: the
+                # direct call skipped the Search/graph re-index and emitted no
+                # event, manufacturing Drift (task 681ac952). PR1a fixed this on
+                # the enrich worker's path; this CLI copy was the other half.
+                # origin marks the write as enrich-originated so a running
+                # worker drops the event instead of re-enqueueing the node.
+                result = await pipeline.intake.note_update(
+                    ENRICH_AGENT,
+                    NoteUpdateRequest(
+                        id=doc.id,
+                        entities=extracted,
+                        entities_extractor=ENTITY_EXTRACTOR_VERSION,
+                    ),
+                    origin=EVENT_ORIGIN_ENRICH,
                 )
                 if result.status != "updated":
                     click.echo(f"  failed to update {doc.id}: {result.message}", err=True)
@@ -605,8 +636,9 @@ def extract_entities_cmd(ctx: click.Context, dry_run: bool, force: bool) -> None
                 f"entities on touched docs: {before_count} -> {after_count}"
                 f" (mean {before_count / updated:.1f} -> {after_count / updated:.1f} per doc)"
             )
-        if not dry_run and updated:
-            click.echo("\nNote: run `lithos reconcile` to refresh derived views.")
+        # The "now run `lithos reconcile`" advice that used to print here is
+        # gone: routing through the intake re-indexes the derived views inline,
+        # so there is no drift left to repair.
 
     asyncio.run(run())
 

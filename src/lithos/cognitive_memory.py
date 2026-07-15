@@ -50,7 +50,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ENTITY_EXTRACTOR_VERSION", "CognitiveMemory", "NodeStats", "extract_entities"]
+__all__ = [
+    "ENRICH_AGENT",
+    "ENTITY_EXTRACTOR_VERSION",
+    "CognitiveMemory",
+    "NodeStats",
+    "extract_entities",
+]
 
 
 # Default values for ``node_stats`` columns. Used both when a node is

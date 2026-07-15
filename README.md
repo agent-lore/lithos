@@ -263,14 +263,16 @@ Environment variables override `endpoint` per signal when needed:
 
 ### Local debugging without a collector
 
-Pass `--telemetry-console` to `lithos serve` to route metrics and spans to
-stdout via console exporters. This is equivalent to setting
-`telemetry.enabled=true` + `telemetry.console_fallback=true` in config, and is
-the shortest path to "is my instrumentation even firing?" when no collector is
-running.
+Pass `--telemetry-console` to `lithos` to route metrics and spans to stdout
+via console exporters. This is equivalent to setting `telemetry.enabled=true` +
+`telemetry.console_fallback=true` in config, and is the shortest path to "is my
+instrumentation even firing?" when no collector is running.
+
+It is a global option, so it works for any command — not just `serve`:
 
 ```bash
-lithos --data-dir ./data serve --telemetry-console
+lithos --data-dir ./data --telemetry-console serve
+lithos --data-dir ./data --telemetry-console reconcile
 ```
 
 ### Running the full observability stack locally

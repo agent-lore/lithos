@@ -34,9 +34,19 @@ These options apply to all commands:
 lithos [OPTIONS] COMMAND [ARGS]...
 
 Options:
-  -c, --config PATH    Path to config file (YAML)
-  -d, --data-dir PATH  Data directory path
-  --help               Show this message and exit.
+  -c, --config PATH     Path to config file (YAML)
+  -d, --data-dir PATH   Data directory path
+  --telemetry-console   Route OTEL metrics + spans to stdout (local debugging
+                        without a collector)
+  --help                Show this message and exit.
+```
+
+Logging and telemetry are set up once here, at the group entrypoint, so **every**
+command exports spans and metrics — not just `serve`. `--telemetry-console` is
+therefore global too, and works for any command:
+
+```bash
+lithos --telemetry-console reconcile
 ```
 
 ## Commands
@@ -61,9 +71,8 @@ lithos serve --no-watch
 | `--host` | `127.0.0.1` | Host for the HTTP transport |
 | `-p, --port` | `8765` | Port for the HTTP transport |
 | `--watch / --no-watch` | watch enabled | Watch for file changes |
-| `--telemetry-console` | off | Route OTEL metrics + spans to stdout (for local debugging without a collector) |
 
-> **Metrics:** Lithos exports metrics via OTLP push to a configured OTEL collector — there is no `/metrics` scrape endpoint on the process itself. See the "Telemetry & Observability" section in the main README for the full push→collector→Prometheus data flow, or use `--telemetry-console` above when no collector is available.
+> **Metrics:** Lithos exports metrics via OTLP push to a configured OTEL collector — there is no `/metrics` scrape endpoint on the process itself. See the "Telemetry & Observability" section in the main README for the full push→collector→Prometheus data flow, or use the global `--telemetry-console` option when no collector is available.
 
 ### `search` — Search the knowledge base
 
