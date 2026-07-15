@@ -68,6 +68,13 @@ class Pipeline:
         worker thread alive is what produced the "Event loop is closed"
         warnings and CI hangs of issue #172.
 
+        Closes the store regardless of who built it. A caller that *injected* an
+        ``edge_store`` (or a projection holding one) owns that store's lifecycle
+        and should close it itself rather than calling this — mirroring
+        :meth:`ProvenanceProjection.close`. In practice ownership is
+        unambiguous: production callers pass ``config`` alone, and injection is
+        a test affordance.
+
         Does *not* stop workers — a caller that ran ``memory.start()`` owns the
         matching ``stop()``.
         """
@@ -126,9 +133,18 @@ async def build_pipeline(
     if search is None:
         search = await SearchEngine.create(config)
 
+    # An injected projection or intake already holds a store; adopt it rather
+    # than opening a second one behind its back. Without this, injecting either
+    # one *without* an edge_store would leave the two holders on different
+    # handles — the exact defect this factory exists to prevent.
     if edge_store is None:
-        edge_store = EdgeStore(config)
-        await edge_store.open()
+        if projection is not None:
+            edge_store = projection.edge_store
+        elif intake is not None:
+            edge_store = intake.edge_store
+        else:
+            edge_store = EdgeStore(config)
+            await edge_store.open()
     if projection is None:
         projection = await ProvenanceProjection.create(config, edge_store=edge_store)
 
@@ -153,6 +169,21 @@ async def build_pipeline(
             intake=intake,
         )
         memory.attach_coordination(coordination)
+
+    # Enforce the one-writer rule rather than merely intending it. Deriving the
+    # store above fixes the cases that *can* be fixed; contradictory injection
+    # (a projection and an intake built against different stores) cannot be, and
+    # must not be papered over — a Pipeline that looks valid while holding two
+    # writers is worse than no Pipeline.
+    if projection.edge_store is not edge_store or intake.edge_store is not edge_store:
+        raise ValueError(
+            "build_pipeline: projection and intake must share one EdgeStore "
+            "(ADR-0006 Slice 1, #263) — got "
+            f"projection={id(projection.edge_store):#x}, "
+            f"intake={id(intake.edge_store):#x}, "
+            f"pipeline={id(edge_store):#x}. Pass the same edge_store to each, "
+            "or let the factory build it."
+        )
 
     await coordination.initialize()
 
