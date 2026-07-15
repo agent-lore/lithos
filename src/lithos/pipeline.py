@@ -36,6 +36,7 @@ from lithos.search import SearchEngine
 
 if TYPE_CHECKING:
     from lithos.config import LithosConfig
+    from lithos.knowledge import ReconcileResult
 
 __all__ = ["Pipeline", "build_pipeline"]
 
@@ -58,6 +59,42 @@ class Pipeline:
     projection: ProvenanceProjection
     intake: CorpusIntake
     memory: CognitiveMemory
+
+    async def rebuild_views(
+        self,
+        *,
+        clear: bool = False,
+        rescan: bool = False,
+    ) -> ReconcileResult:
+        """Rebuild the derived views from the corpus, through the ADR-0001 seam.
+
+        The server's startup rebuild and ``lithos reindex`` had drifted into two
+        copies of this. They differ for real reasons, so the differences are
+        options here rather than divergent code:
+
+        - ``clear`` resets the views first, so ``plan_reconcile`` sees an empty
+          world and re-emits an ``add`` per document — a true full rebuild. The
+          server always does this at startup; the CLI only on ``--clear``.
+        - ``rescan`` refreshes the manager's view of the corpus. The server's
+          manager has been alive and may be stale; a CLI run builds a fresh one
+          that scanned on construction, so it does not need this.
+
+        Reporting is deliberately left to the caller — a span for the server, a
+        progress echo for the CLI — since that is the only other thing the two
+        copies disagreed about.
+        """
+        if clear:
+            self.search.clear_all()
+            self.graph.clear()
+        if rescan:
+            self.knowledge.rescan()
+
+        plan = await self.knowledge.plan_reconcile(
+            search=self.search, graph=self.graph, projection=self.projection
+        )
+        return await self.knowledge.apply_reconcile(
+            plan, search=self.search, graph=self.graph, projection=self.projection
+        )
 
     async def aclose(self) -> None:
         """Release the pipeline's own resources. Idempotent.

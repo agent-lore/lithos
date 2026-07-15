@@ -194,19 +194,15 @@ def reindex(ctx: click.Context, clear: bool) -> None:
     config: LithosConfig = ctx.obj["config"]
 
     async def do_reindex() -> None:
-        # One EdgeStore writer, shared by the projection and the intake
-        # (ADR-0006 Slice 1, #263). This command used to call
-        # ProvenanceProjection.create(config) with no injected store, which took
-        # the self-create branch and opened a second writer against edges.db.
+        # Built through the shared factory so the graph is wired exactly as the
+        # server wires it — one EdgeStore backing both the projection and the
+        # intake (ADR-0006 Slice 1, #263).
         pipeline = await build_pipeline(config)
-        knowledge, search, graph = pipeline.knowledge, pipeline.search, pipeline.graph
-        projection = pipeline.projection
+        search, graph = pipeline.search, pipeline.graph
         try:
             if clear:
                 click.echo("Clearing existing indices...")
                 logger.info("reindex: clearing existing indices clear=True")
-                search.clear_all()
-                graph.clear()
 
             # --clear forces a full rebuild; otherwise plan_reconcile is the
             # single source of truth for what needs touching.
@@ -216,10 +212,10 @@ def reindex(ctx: click.Context, clear: bool) -> None:
             click.echo(f"Found {len(files)} markdown files")
             logger.info("reindex started: file_count=%d clear=%s", len(files), clear)
 
-            plan = await knowledge.plan_reconcile(search=search, graph=graph, projection=projection)
-            result = await knowledge.apply_reconcile(
-                plan, search=search, graph=graph, projection=projection
-            )
+            # Shares one seam with the server's startup rebuild. rescan=False:
+            # this manager was built moments ago and scanned on construction —
+            # only the server's long-lived manager can be stale.
+            result = await pipeline.rebuild_views(clear=clear, rescan=False)
 
             indexed = result.search.scanned if result.search else 0
             errors = len(result.search.failed) if result.search else 0
@@ -484,7 +480,7 @@ def reconcile(ctx: click.Context, scope: str, dry_run: bool, json_output: bool) 
     """
     import json
 
-    from lithos.reconcile import reconcile as _reconcile
+    from lithos.cli_reconcile import reconcile as _reconcile
 
     config: LithosConfig = ctx.obj["config"]
     config.ensure_directories()

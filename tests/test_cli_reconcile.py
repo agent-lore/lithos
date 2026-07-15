@@ -1,4 +1,8 @@
-"""Tests for reconcile module - Phase 6 drift detection and repair.
+"""Tests for the lithos reconcile operator surface (lithos.cli_reconcile).
+
+ADR-0001 moved reconciliation onto KnowledgeManager and retired the Core-tier
+lithos.reconcile peer (task ba8d7f25 PR2b); the scope policy and result shaping
+these tests pin now live beside the CLI.
 
 Tests cover all 8 required scenarios plus 3 additional drift-detection tests:
 1. indices dry-run: reports planned full rebuild without mutating indices
@@ -16,10 +20,10 @@ Tests cover all 8 required scenarios plus 3 additional drift-detection tests:
 
 import pytest
 
-import lithos.reconcile as reconcile_module
+from lithos.cli_reconcile import _make_result, reconcile
 from lithos.config import LithosConfig
+from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
-from lithos.reconcile import reconcile
 from lithos.search import SearchEngine
 
 # ---------------------------------------------------------------------------
@@ -101,8 +105,6 @@ async def test_graph_dry_run_no_cache_written(
     """Graph dry-run reports a planned rebuild but does not write the cache."""
     await _create_doc(knowledge_manager, "Gamma Doc", "Gamma content [[delta-doc]].")
 
-    from lithos.graph import KnowledgeGraph
-
     graph = KnowledgeGraph(test_config)
     cache_path = graph.graph_cache_path
     assert not cache_path.exists(), "Cache should not exist before the test"
@@ -129,8 +131,6 @@ async def test_graph_real_run_idempotent(
     """First graph run rebuilds; second run with no changes returns noop."""
     await _create_doc(knowledge_manager, "Gamma Doc", "Gamma content.")
     await _create_doc(knowledge_manager, "Delta Doc", "Delta content [[gamma-doc]].")
-
-    from lithos.graph import KnowledgeGraph
 
     graph = KnowledgeGraph(test_config)
     assert not graph.graph_cache_path.exists()
@@ -206,8 +206,8 @@ async def test_all_scope_partial_failure(
     """When one sub-scope fails and others succeed, all returns partial_failure."""
     await _create_doc(knowledge_manager, "Epsilon Doc", "Epsilon content.")
 
-    async def failing_indices(config: LithosConfig, dry_run: bool) -> dict:
-        return reconcile_module._make_result(
+    async def failing_indices(knowledge, plan, search, dry_run: bool) -> dict:
+        return _make_result(
             "indices",
             dry_run,
             status="failed",
@@ -215,7 +215,7 @@ async def test_all_scope_partial_failure(
             failures=[{"code": "index_rebuild_failed", "detail": "injected test error"}],
         )
 
-    monkeypatch.setattr(reconcile_module, "_reconcile_indices", failing_indices)
+    monkeypatch.setattr("lithos.cli_reconcile._finish_indices", failing_indices)
 
     result = await reconcile(scope="all", dry_run=False, config=test_config)
 
@@ -224,6 +224,69 @@ async def test_all_scope_partial_failure(
     # At least one failure recorded
     assert result["summary"]["failed"] >= 1
     assert any(f.get("code") == "index_rebuild_failed" for f in result["failures"])
+
+
+async def test_all_scope_isolates_a_raising_slice(
+    test_config: LithosConfig,
+    knowledge_manager: KnowledgeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slice that *raises* must not stop the other slices being applied.
+
+    Applies are isolated per slice — that is what partial_failure means for a
+    repair tool. Task ba8d7f25 PR2b collapsed the three per-scope corpus scans
+    into one shared plan, so this guards the isolation that survived that move.
+    """
+    await _create_doc(knowledge_manager, "Iota Doc", "Iota content with [[Broken Link]].")
+
+    async def exploding_indices(knowledge, plan, search, dry_run: bool) -> dict:
+        raise RuntimeError("injected slice explosion")
+
+    monkeypatch.setattr("lithos.cli_reconcile._finish_indices", exploding_indices)
+
+    result = await reconcile(scope="all", dry_run=False, config=test_config)
+
+    assert result["status"] == "partial_failure"
+    assert any(
+        f.get("code") == "internal_error" and "injected slice explosion" in f.get("detail", "")
+        for f in result["failures"]
+    ), result["failures"]
+    # The graph slice still ran despite the indices slice blowing up.
+    assert result["summary"]["repaired"] > 0
+
+
+async def test_plan_failure_fails_every_requested_scope(
+    test_config: LithosConfig,
+    knowledge_manager: KnowledgeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plan failure is deliberately *not* isolated per scope.
+
+    One plan_reconcile now covers every supported slice, and a plan failure is
+    almost always CorpusScanError — a statement about the corpus, not about any
+    one view. Task 681ac952 PR1c established that reconciling from a partial
+    corpus deletes live data, so failing all scopes is the correct blast radius.
+    """
+    from lithos.edge_store import EdgeStore
+
+    await _create_doc(knowledge_manager, "Kappa Doc", "Kappa content.")
+
+    # edges.db must exist or provenance is unsupported and never planned for —
+    # which would make this assert 2 and prove nothing about the blast radius.
+    store = EdgeStore(test_config)
+    await store.open()
+    await store.close()
+    assert test_config.storage.edges_db_path.exists()
+
+    async def exploding_plan(*_args, **_kwargs):
+        raise RuntimeError("injected plan failure")
+
+    monkeypatch.setattr(KnowledgeManager, "plan_reconcile", exploding_plan)
+
+    result = await reconcile(scope="all", dry_run=False, config=test_config)
+
+    assert result["status"] == "failed"
+    assert result["summary"]["failed"] == 3, "every supported scope should be marked failed"
 
 
 # ---------------------------------------------------------------------------
@@ -244,12 +307,12 @@ async def test_crash_safety_markdown_never_mutated(
     raw_before = doc_before.content
 
     # Inject a failure during graph cache save (simulates crash mid-apply)
-    original_save = reconcile_module.KnowledgeGraph.save_cache
+    original_save = KnowledgeGraph.save_cache
 
-    def crashing_save(self: reconcile_module.KnowledgeGraph) -> None:
+    def crashing_save(self: KnowledgeGraph) -> None:
         raise RuntimeError("simulated crash during save_cache")
 
-    monkeypatch.setattr(reconcile_module.KnowledgeGraph, "save_cache", crashing_save)
+    monkeypatch.setattr(KnowledgeGraph, "save_cache", crashing_save)
 
     # Graph reconcile should fail gracefully
     result_crash = await reconcile(scope="graph", dry_run=False, config=test_config)
@@ -260,7 +323,7 @@ async def test_crash_safety_markdown_never_mutated(
     assert doc_after_crash.content == raw_before, "Markdown must never be mutated by reconcile"
 
     # Restore the original save_cache
-    monkeypatch.setattr(reconcile_module.KnowledgeGraph, "save_cache", original_save)
+    monkeypatch.setattr(KnowledgeGraph, "save_cache", original_save)
 
     # Re-run without the injected failure — should now succeed
     result_rerun = await reconcile(scope="graph", dry_run=False, config=test_config)
@@ -420,3 +483,116 @@ class TestReconcileStaleWikiLinks:
 
         stale_actions = [a for a in result["actions"] if a.get("action") == "stale_link"]
         assert len(stale_actions) == 0
+
+
+# ---------------------------------------------------------------------------
+# Storage side effects — reconcile inspects, it does not initialise
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("scope", ["indices", "graph", "provenance_projection", "all"])
+@pytest.mark.parametrize("dry_run", [True, False])
+async def test_reconcile_never_creates_edges_db(
+    test_config: LithosConfig,
+    knowledge_manager: KnowledgeManager,
+    scope: str,
+    dry_run: bool,
+) -> None:
+    """No scope may initialise LCMA storage just to inspect it.
+
+    This is why the operator surface cannot route through ``build_pipeline``
+    (task ba8d7f25 PR2a), which opens the EdgeStore eagerly: a --dry-run that
+    leaves a file behind is not a dry run, and creating edges.db would silently
+    turn "LCMA was never enabled" into "LCMA is enabled and empty".
+    """
+    await _create_doc(knowledge_manager, "Lambda Doc", "Lambda content.")
+    assert not test_config.storage.edges_db_path.exists()
+
+    await reconcile(scope=scope, dry_run=dry_run, config=test_config)
+
+    assert not test_config.storage.edges_db_path.exists(), (
+        f"scope={scope} dry_run={dry_run} created edges.db"
+    )
+
+
+async def test_scope_all_scans_the_corpus_once(
+    test_config: LithosConfig,
+    knowledge_manager: KnowledgeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """scope=all plans every slice from a single corpus scan.
+
+    It used to build three KnowledgeManagers and scan three times. One
+    plan_reconcile covers all slices — the seam ADR-0001 established and the one
+    cli reindex and server._rebuild_indices already use.
+    """
+    await _create_doc(knowledge_manager, "Mu Doc", "Mu content.")
+
+    scans = {"count": 0}
+    original = KnowledgeManager.scan_corpus
+
+    async def counting_scan(self):
+        scans["count"] += 1
+        return await original(self)
+
+    monkeypatch.setattr(KnowledgeManager, "scan_corpus", counting_scan)
+
+    await reconcile(scope="all", dry_run=False, config=test_config)
+
+    assert scans["count"] == 1, f"expected one corpus scan, got {scans['count']}"
+
+
+# ---------------------------------------------------------------------------
+# Unsupported provenance is independent of the corpus
+# ---------------------------------------------------------------------------
+
+
+async def test_unsupported_provenance_does_not_plan(
+    test_config: LithosConfig,
+    knowledge_manager: KnowledgeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With edges.db absent, provenance_projection must not touch the corpus.
+
+    "Is LCMA storage initialised?" is a filesystem question, so its answer must
+    not depend on the corpus being readable. Planning first let a corpus problem
+    turn "LCMA was never enabled" into "reconcile failed".
+    """
+    await _create_doc(knowledge_manager, "Nu Doc", "Nu content.")
+    assert not test_config.storage.edges_db_path.exists()
+
+    async def exploding_plan(*_args, **_kwargs):
+        raise AssertionError("plan_reconcile must not be called for an unsupported scope")
+
+    monkeypatch.setattr(KnowledgeManager, "plan_reconcile", exploding_plan)
+
+    result = await reconcile(scope="provenance_projection", dry_run=False, config=test_config)
+
+    assert result["supported"] is False
+    assert result["status"] == "noop"
+    assert result["actions"] == [{"reason": "not_enabled"}]
+
+
+async def test_unsupported_provenance_survives_a_plan_failure_under_scope_all(
+    test_config: LithosConfig,
+    knowledge_manager: KnowledgeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """scope=all still reports provenance as not_enabled when the plan blows up.
+
+    The other scopes legitimately fail with the corpus; provenance's answer was
+    already known without it, and must not be retroactively downgraded.
+    """
+    await _create_doc(knowledge_manager, "Xi Doc", "Xi content.")
+    assert not test_config.storage.edges_db_path.exists()
+
+    async def exploding_plan(*_args, **_kwargs):
+        raise RuntimeError("injected plan failure")
+
+    monkeypatch.setattr(KnowledgeManager, "plan_reconcile", exploding_plan)
+
+    result = await reconcile(scope="all", dry_run=False, config=test_config)
+
+    # indices + graph failed; provenance was never in question.
+    assert result["summary"]["failed"] == 2
+    assert any(a.get("reason") == "not_enabled" for a in result["actions"])

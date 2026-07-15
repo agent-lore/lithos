@@ -12,6 +12,7 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos.cli` | L | 0 | 15 |
+| `lithos.cli_reconcile` | M | 0 | 1 |
 | `lithos.pipeline` | S | 1 | 1 |
 | `lithos.server` | L | 1 | 2 |
 | `lithos.tools` | XS | 0 | 1 |
@@ -42,6 +43,9 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 - def `inspect_doc` — Inspect a knowledge document by ID or path.
 - def `audit` — Show the read-access audit log.
 - def `main` — Main entry point.
+
+### `lithos.cli_reconcile`
+- def `reconcile` — Reconcile derived projections against the markdown source of truth.
 
 ### `lithos.pipeline`
 - class `Pipeline` — A fully-wired, not-yet-running Lithos component graph.

@@ -29,7 +29,7 @@ from lithos.intake import CorpusIntake
 from lithos.knowledge import (
     KnowledgeManager,
 )
-from lithos.pipeline import build_pipeline
+from lithos.pipeline import Pipeline, build_pipeline
 from lithos.provenance import ProvenanceProjection
 from lithos.search import Healthy, SearchEngine
 from lithos.telemetry import (
@@ -92,6 +92,12 @@ class LithosServer:
         # back-aliases to either (issue #262 — the lcma boundary lock):
         # callers route through ``self.memory.<method>`` instead.
         self.memory: CognitiveMemory = None  # type: ignore[assignment]
+
+        # The wired graph, kept so shared operations over it (e.g. the startup
+        # rebuild) go through one seam rather than re-listing the components.
+        # Assigned in initialize(); the public attributes above stay the
+        # canonical handles for everything else, including test injection.
+        self._pipeline: Pipeline = None  # type: ignore[assignment]
 
         # Cached count fields for synchronous OTEL observable gauge callbacks.
         # Primed at startup by _refresh_coordination_stats_cache() and kept fresh
@@ -631,6 +637,7 @@ class LithosServer:
                     intake=self.intake,
                     memory=self.memory,
                 )
+                self._pipeline = pipeline
                 self.search = pipeline.search
                 self.edge_store = pipeline.edge_store
                 self.projection = pipeline.projection
@@ -859,23 +866,11 @@ class LithosServer:
         """Rebuild all search indices from files."""
         tracer = get_tracer()
         with tracer.start_as_current_span("lithos.index.rebuild") as span:
-            # Hard reset so plan_reconcile sees an empty world and re-emits
-            # an `add` per doc — preserves today's full-rebuild semantics.
-            self.search.clear_all()
-            self.graph.clear()
-            self.knowledge.rescan()
-
-            plan = await self.knowledge.plan_reconcile(
-                search=self.search,
-                graph=self.graph,
-                projection=self.projection,
-            )
-            result = await self.knowledge.apply_reconcile(
-                plan,
-                search=self.search,
-                graph=self.graph,
-                projection=self.projection,
-            )
+            # clear: hard reset so plan_reconcile sees an empty world and
+            # re-emits an `add` per doc. rescan: this manager has been alive
+            # since startup and may be stale. `lithos reindex` shares this call
+            # with different options — see Pipeline.rebuild_views.
+            result = await self._pipeline.rebuild_views(clear=True, rescan=True)
 
             file_count = result.search.scanned if result.search else 0
             error_count = len(result.search.failed) if result.search else 0
