@@ -115,7 +115,7 @@
         "qualname": "lithos.server.LithosServer._validate_task_feedback"
       }
     ],
-    "total_functions": 673
+    "total_functions": 675
   },
   "domain": {
     "associations": 26,
@@ -340,13 +340,13 @@
       },
       "Entrypoints": {
         "classes": 4,
-        "functions": 136,
+        "functions": 138,
         "largest_module": "lithos.tools.tasks",
         "largest_module_lines": 985,
-        "lines": 5952,
+        "lines": 5982,
         "modules": 13,
         "public_symbols": 30,
-        "sloc": 4786
+        "sloc": 4808
       },
       "Errors": {
         "classes": 9,
@@ -464,13 +464,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23438,
+    "total_lines": 23468,
     "total_modules": 38,
-    "total_sloc": 18897
+    "total_sloc": 18919
   },
   "tests": {
     "ratio": 1.86,
-    "src_lines": 23438,
-    "test_lines": 43701
+    "src_lines": 23468,
+    "test_lines": 43766
   }
 }

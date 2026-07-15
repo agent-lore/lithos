@@ -335,15 +335,26 @@ async def _finish_provenance(
 # ---------------------------------------------------------------------------
 
 
-async def _run_slices(
+def _not_enabled(scope: str, dry_run: bool) -> dict[str, Any]:
+    """The deterministic result for a scope whose storage was never initialised."""
+    return _make_result(
+        scope,
+        dry_run,
+        supported=False,
+        status="noop",
+        actions=[{"reason": "not_enabled"}],
+    )
+
+
+async def _plan_and_apply(
     cfg: LithosConfig,
     dry_run: bool,
-    requested: tuple[str, ...],
-) -> list[dict[str, Any]]:
-    """Plan once, then apply each requested slice in isolation.
+    effective: tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    """Plan once for *effective*, then apply each of its slices in isolation.
 
-    One :meth:`KnowledgeManager.plan_reconcile` covers every requested slice —
-    the seam ADR-0001 established, and the one ``server._rebuild_indices`` and
+    One :meth:`KnowledgeManager.plan_reconcile` covers every slice — the seam
+    ADR-0001 established, and the one ``server._rebuild_indices`` and
     ``cli reindex`` already use. It scans the corpus once; the three per-scope
     functions this replaced scanned it three times over three managers.
 
@@ -352,6 +363,9 @@ async def _run_slices(
     isolated, and should not be: it is almost always ``CorpusScanError``, which
     is a statement about the corpus, not about any one view (see task 681ac952
     PR1c — reconciling from a partial corpus deletes live data).
+
+    Only ever called with slices that are actually supported — see
+    :func:`_run_slices`.
     """
     from lithos.edge_store import EdgeStore
     from lithos.provenance import ProvenanceProjection
@@ -359,15 +373,16 @@ async def _run_slices(
     tracer = get_tracer()
     knowledge = KnowledgeManager(config=cfg)
 
-    search = await SearchEngine.create(cfg) if "indices" in requested else None
-    graph = KnowledgeGraph(cfg) if "graph" in requested else None
+    search = await SearchEngine.create(cfg) if "indices" in effective else None
+    graph = KnowledgeGraph(cfg) if "graph" in effective else None
 
     projection: ProvenanceProjection | None = None
     edge_store: EdgeStore | None = None
-    if "provenance_projection" in requested and cfg.storage.edges_db_path.exists():
-        # Only opened once edges.db is known to exist — see the module docstring
-        # on why reconcile must not initialise storage. One store, injected, so
-        # the projection cannot self-create a second (ADR-0006 Slice 1, #263).
+    if "provenance_projection" in effective:
+        # Reaching here means edges.db was already found on disk, so opening it
+        # initialises nothing — see the module docstring on why reconcile must
+        # not create storage. One store, injected, so the projection cannot
+        # self-create a second (ADR-0006 Slice 1, #263).
         edge_store = EdgeStore(cfg)
         await edge_store.open()
         projection = await ProvenanceProjection.create(cfg, edge_store=edge_store)
@@ -375,7 +390,7 @@ async def _run_slices(
     try:
         try:
             with tracer.start_as_current_span("lithos.reconcile.plan") as plan_span:
-                plan_span.set_attribute("lithos.reconcile.scopes", ",".join(requested))
+                plan_span.set_attribute("lithos.reconcile.scopes", ",".join(effective))
                 plan = await knowledge.plan_reconcile(
                     search=search, graph=graph, projection=projection
                 )
@@ -383,39 +398,27 @@ async def _run_slices(
             logger.error(
                 "reconcile plan failed: %s",
                 exc,
-                extra={"scopes": list(requested), "dry_run": dry_run},
+                extra={"scopes": list(effective), "dry_run": dry_run},
             )
-            return [_internal_error(name, dry_run, exc) for name in requested]
+            return {name: _internal_error(name, dry_run, exc) for name in effective}
 
-        results: list[dict[str, Any]] = []
-        for name in requested:
-            if name == "provenance_projection" and projection is None:
-                # edges.db absent — LCMA storage was never initialised.
-                results.append(
-                    _make_result(
-                        name,
-                        dry_run,
-                        supported=False,
-                        status="noop",
-                        actions=[{"reason": "not_enabled"}],
-                    )
-                )
-                continue
+        results: dict[str, dict[str, Any]] = {}
+        for name in effective:
             try:
                 if name == "indices":
                     assert search is not None
-                    results.append(await _finish_indices(knowledge, plan, search, dry_run))
+                    results[name] = await _finish_indices(knowledge, plan, search, dry_run)
                 elif name == "graph":
                     assert graph is not None
-                    results.append(await _finish_graph(knowledge, plan, graph, dry_run))
+                    results[name] = await _finish_graph(knowledge, plan, graph, dry_run)
                 else:
                     assert projection is not None
-                    results.append(await _finish_provenance(knowledge, plan, projection, dry_run))
+                    results[name] = await _finish_provenance(knowledge, plan, projection, dry_run)
             except Exception as exc:
                 logger.error(
                     "reconcile %s failed: %s", name, exc, extra={"scope": name, "dry_run": dry_run}
                 )
-                results.append(_internal_error(name, dry_run, exc))
+                results[name] = _internal_error(name, dry_run, exc)
         return results
     finally:
         if edge_store is not None:
@@ -424,6 +427,33 @@ async def _run_slices(
             # touches a torn-down event loop, and emits "Event loop is closed"
             # warnings (and on CI, hangs the whole job until timeout) (#172).
             await edge_store.close()
+
+
+async def _run_slices(
+    cfg: LithosConfig,
+    dry_run: bool,
+    requested: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Resolve unsupported scopes first, then plan/apply whatever is left.
+
+    "Is LCMA storage initialised?" is answered by looking at the filesystem, so
+    an unsupported scope must not depend on the corpus at all: its noop is
+    deterministic, and planning first would let a corpus problem turn "LCMA was
+    never enabled" into "reconcile failed". When nothing supported remains,
+    there is no plan — the corpus is never scanned.
+    """
+    resolved: dict[str, dict[str, Any]] = {}
+    effective: list[str] = []
+    for name in requested:
+        if name == "provenance_projection" and not cfg.storage.edges_db_path.exists():
+            resolved[name] = _not_enabled(name, dry_run)
+        else:
+            effective.append(name)
+
+    if effective:
+        resolved.update(await _plan_and_apply(cfg, dry_run, tuple(effective)))
+
+    return [resolved[name] for name in requested]
 
 
 async def reconcile(

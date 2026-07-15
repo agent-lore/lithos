@@ -266,12 +266,21 @@ async def test_plan_failure_fails_every_requested_scope(
 ) -> None:
     """A plan failure is deliberately *not* isolated per scope.
 
-    One plan_reconcile now covers every requested slice, and a plan failure is
+    One plan_reconcile now covers every supported slice, and a plan failure is
     almost always CorpusScanError — a statement about the corpus, not about any
     one view. Task 681ac952 PR1c established that reconciling from a partial
     corpus deletes live data, so failing all scopes is the correct blast radius.
     """
+    from lithos.edge_store import EdgeStore
+
     await _create_doc(knowledge_manager, "Kappa Doc", "Kappa content.")
+
+    # edges.db must exist or provenance is unsupported and never planned for —
+    # which would make this assert 2 and prove nothing about the blast radius.
+    store = EdgeStore(test_config)
+    await store.open()
+    await store.close()
+    assert test_config.storage.edges_db_path.exists()
 
     async def exploding_plan(*_args, **_kwargs):
         raise RuntimeError("injected plan failure")
@@ -281,7 +290,7 @@ async def test_plan_failure_fails_every_requested_scope(
     result = await reconcile(scope="all", dry_run=False, config=test_config)
 
     assert result["status"] == "failed"
-    assert result["summary"]["failed"] == 3, "every requested scope should be marked failed"
+    assert result["summary"]["failed"] == 3, "every supported scope should be marked failed"
 
 
 # ---------------------------------------------------------------------------
@@ -535,3 +544,59 @@ async def test_scope_all_scans_the_corpus_once(
     await reconcile(scope="all", dry_run=False, config=test_config)
 
     assert scans["count"] == 1, f"expected one corpus scan, got {scans['count']}"
+
+
+# ---------------------------------------------------------------------------
+# Unsupported provenance is independent of the corpus
+# ---------------------------------------------------------------------------
+
+
+async def test_unsupported_provenance_does_not_plan(
+    test_config: LithosConfig,
+    knowledge_manager: KnowledgeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With edges.db absent, provenance_projection must not touch the corpus.
+
+    "Is LCMA storage initialised?" is a filesystem question, so its answer must
+    not depend on the corpus being readable. Planning first let a corpus problem
+    turn "LCMA was never enabled" into "reconcile failed".
+    """
+    await _create_doc(knowledge_manager, "Nu Doc", "Nu content.")
+    assert not test_config.storage.edges_db_path.exists()
+
+    async def exploding_plan(*_args, **_kwargs):
+        raise AssertionError("plan_reconcile must not be called for an unsupported scope")
+
+    monkeypatch.setattr(KnowledgeManager, "plan_reconcile", exploding_plan)
+
+    result = await reconcile(scope="provenance_projection", dry_run=False, config=test_config)
+
+    assert result["supported"] is False
+    assert result["status"] == "noop"
+    assert result["actions"] == [{"reason": "not_enabled"}]
+
+
+async def test_unsupported_provenance_survives_a_plan_failure_under_scope_all(
+    test_config: LithosConfig,
+    knowledge_manager: KnowledgeManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """scope=all still reports provenance as not_enabled when the plan blows up.
+
+    The other scopes legitimately fail with the corpus; provenance's answer was
+    already known without it, and must not be retroactively downgraded.
+    """
+    await _create_doc(knowledge_manager, "Xi Doc", "Xi content.")
+    assert not test_config.storage.edges_db_path.exists()
+
+    async def exploding_plan(*_args, **_kwargs):
+        raise RuntimeError("injected plan failure")
+
+    monkeypatch.setattr(KnowledgeManager, "plan_reconcile", exploding_plan)
+
+    result = await reconcile(scope="all", dry_run=False, config=test_config)
+
+    # indices + graph failed; provenance was never in question.
+    assert result["summary"]["failed"] == 2
+    assert any(a.get("reason") == "not_enabled" for a in result["actions"])
