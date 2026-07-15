@@ -20,9 +20,9 @@ Tests cover all 8 required scenarios plus 3 additional drift-detection tests:
 
 import pytest
 
-import lithos.cli_reconcile as reconcile_module
-from lithos.cli_reconcile import reconcile
+from lithos.cli_reconcile import _make_result, reconcile
 from lithos.config import LithosConfig
+from lithos.graph import KnowledgeGraph
 from lithos.knowledge import KnowledgeManager
 from lithos.search import SearchEngine
 
@@ -105,8 +105,6 @@ async def test_graph_dry_run_no_cache_written(
     """Graph dry-run reports a planned rebuild but does not write the cache."""
     await _create_doc(knowledge_manager, "Gamma Doc", "Gamma content [[delta-doc]].")
 
-    from lithos.graph import KnowledgeGraph
-
     graph = KnowledgeGraph(test_config)
     cache_path = graph.graph_cache_path
     assert not cache_path.exists(), "Cache should not exist before the test"
@@ -133,8 +131,6 @@ async def test_graph_real_run_idempotent(
     """First graph run rebuilds; second run with no changes returns noop."""
     await _create_doc(knowledge_manager, "Gamma Doc", "Gamma content.")
     await _create_doc(knowledge_manager, "Delta Doc", "Delta content [[gamma-doc]].")
-
-    from lithos.graph import KnowledgeGraph
 
     graph = KnowledgeGraph(test_config)
     assert not graph.graph_cache_path.exists()
@@ -211,7 +207,7 @@ async def test_all_scope_partial_failure(
     await _create_doc(knowledge_manager, "Epsilon Doc", "Epsilon content.")
 
     async def failing_indices(knowledge, plan, search, dry_run: bool) -> dict:
-        return reconcile_module._make_result(
+        return _make_result(
             "indices",
             dry_run,
             status="failed",
@@ -219,7 +215,7 @@ async def test_all_scope_partial_failure(
             failures=[{"code": "index_rebuild_failed", "detail": "injected test error"}],
         )
 
-    monkeypatch.setattr(reconcile_module, "_finish_indices", failing_indices)
+    monkeypatch.setattr("lithos.cli_reconcile._finish_indices", failing_indices)
 
     result = await reconcile(scope="all", dry_run=False, config=test_config)
 
@@ -246,7 +242,7 @@ async def test_all_scope_isolates_a_raising_slice(
     async def exploding_indices(knowledge, plan, search, dry_run: bool) -> dict:
         raise RuntimeError("injected slice explosion")
 
-    monkeypatch.setattr(reconcile_module, "_finish_indices", exploding_indices)
+    monkeypatch.setattr("lithos.cli_reconcile._finish_indices", exploding_indices)
 
     result = await reconcile(scope="all", dry_run=False, config=test_config)
 
@@ -311,12 +307,12 @@ async def test_crash_safety_markdown_never_mutated(
     raw_before = doc_before.content
 
     # Inject a failure during graph cache save (simulates crash mid-apply)
-    original_save = reconcile_module.KnowledgeGraph.save_cache
+    original_save = KnowledgeGraph.save_cache
 
-    def crashing_save(self: reconcile_module.KnowledgeGraph) -> None:
+    def crashing_save(self: KnowledgeGraph) -> None:
         raise RuntimeError("simulated crash during save_cache")
 
-    monkeypatch.setattr(reconcile_module.KnowledgeGraph, "save_cache", crashing_save)
+    monkeypatch.setattr(KnowledgeGraph, "save_cache", crashing_save)
 
     # Graph reconcile should fail gracefully
     result_crash = await reconcile(scope="graph", dry_run=False, config=test_config)
@@ -327,7 +323,7 @@ async def test_crash_safety_markdown_never_mutated(
     assert doc_after_crash.content == raw_before, "Markdown must never be mutated by reconcile"
 
     # Restore the original save_cache
-    monkeypatch.setattr(reconcile_module.KnowledgeGraph, "save_cache", original_save)
+    monkeypatch.setattr(KnowledgeGraph, "save_cache", original_save)
 
     # Re-run without the injected failure — should now succeed
     result_rerun = await reconcile(scope="graph", dry_run=False, config=test_config)

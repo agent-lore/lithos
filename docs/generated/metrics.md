@@ -157,4 +157,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **42** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.86** (43766 test lines / 23468 source lines)
+- Test-to-source line ratio: **1.86** (43762 test lines / 23468 source lines)
