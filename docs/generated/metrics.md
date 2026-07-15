@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **63** (142 module-level)
+- Cross-component edges: **63** (143 module-level)
 - Component cycles: Graph ↔ Knowledge ↔ Provenance ↔ Search
 - Module cycles: lithos.graph ↔ lithos.knowledge ↔ lithos.provenance ↔ lithos.search; lithos.server ↔ lithos.tools ↔ lithos.tools.agents ↔ lithos.tools.findings_stats ↔ lithos.tools.memory_edges ↔ lithos.tools.notes ↔ lithos.tools.read_search ↔ lithos.tools.tasks
 - Tier-skipping edges (Entrypoints → Foundation): 5 (Entrypoints -> Config, Entrypoints -> Errors, Entrypoints -> Events, Entrypoints -> Logging, Entrypoints -> Telemetry)
@@ -37,12 +37,12 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | CognitiveMemory | 1 | 998 | 820 | 1 | 11 | 0.92 | 25 (`lithos.cognitive_memory.CognitiveMemory.cache_lookup`) | 2 |
 | Config | 1 | 371 | 281 | 10 | 0 | 0.00 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 1 | 2675 | 2256 | 4 | 4 | 0.50 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
-| Entrypoints | 12 | 5404 | 4356 | 0 | 12 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 14 |
+| Entrypoints | 13 | 5952 | 4786 | 0 | 12 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 17 |
 | Errors | 2 | 210 | 151 | 7 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 323 | 259 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1509 | 1223 | 7 | 3 | 0.30 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | Intake | 1 | 635 | 538 | 3 | 7 | 0.70 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
-| Knowledge | 3 | 3127 | 2524 | 7 | 6 | 0.46 | 71 (`lithos.knowledge.KnowledgeManager.update`) | 11 |
+| Knowledge | 2 | 2474 | 1975 | 7 | 6 | 0.46 | 71 (`lithos.knowledge.KnowledgeManager.update`) | 10 |
 | LCMA | 9 | 4534 | 3657 | 1 | 10 | 0.91 | 51 (`lithos.lcma.retrieve._run_retrieve_impl`) | 21 |
 | Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
@@ -51,7 +51,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **38**, lines: **23543**, SLOC: **19016**
+- Modules: **38**, lines: **23438**, SLOC: **18897**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -68,7 +68,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **670**, cyclomatic > 10: **64**
+- Functions: **673**, cyclomatic > 10: **66**
 
 Top 10 most complex functions:
 
@@ -136,6 +136,7 @@ Private-name reaches across module seams. Both counts can be pinned as
   - `tests/test_telemetry.py -> lithos.telemetry._trace_context_filter (x2)`
   - `tests/conftest.py -> lithos.config._reset_config`
   - `tests/conftest.py -> lithos.logging_config._HANDLER_MARKER`
+  - `tests/test_cli_reconcile.py -> lithos.cli_reconcile._make_result`
   - `tests/test_coactivation.py -> lithos.config._reset_config`
   - `tests/test_coactivation.py -> lithos.lcma.retrieve._dominant_namespace`
   - `tests/test_coactivation.py -> lithos.lcma.retrieve._run_retrieve_impl`
@@ -150,11 +151,10 @@ Private-name reaches across module seams. Both counts can be pinned as
   - `tests/test_knowledge.py -> lithos.knowledge._atomic_write`
   - `tests/test_lcma_config.py -> lithos.config._DEFAULT_NOTE_TYPE_PRIORS`
   - `tests/test_lcma_config.py -> lithos.config._DEFAULT_RERANK_WEIGHTS`
-  - `tests/test_lcma_config.py -> lithos.config._LCMA_NOTE_TYPES`
   - … (list capped at 30 pairs)
 
 ## Domain, tools & tests
 
 - Domain models: **42** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.85** (43586 test lines / 23543 source lines)
+- Test-to-source line ratio: **1.86** (43701 test lines / 23438 source lines)

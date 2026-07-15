@@ -378,7 +378,7 @@ class TestReconcileWireUp:
         Regression test — before the MVP 1 cleanup this call returned
         supported=True/noop/reason=not_implemented without touching edges.db.
         """
-        from lithos.reconcile import reconcile
+        from lithos.cli_reconcile import reconcile
 
         # Ensure edges.db exists (and is empty) so the reconcile function
         # considers provenance_projection supported.
@@ -407,7 +407,7 @@ class TestReconcileWireUp:
         """Dry-run computes the planned create/remove counts using the
         same diff logic as a real run, but applies nothing.
         """
-        from lithos.reconcile import reconcile
+        from lithos.cli_reconcile import reconcile
 
         proj = await ProvenanceProjection.create(seeded_config)
         try:
@@ -436,7 +436,7 @@ class TestReconcileWireUp:
         """When the projection is already in sync, dry-run reports zero
         planned actions and status=noop.
         """
-        from lithos.reconcile import reconcile
+        from lithos.cli_reconcile import reconcile
 
         proj = await ProvenanceProjection.create(seeded_config)
         try:
@@ -462,7 +462,7 @@ class TestReconcileWireUp:
         self, seeded_config: LithosConfig, seeded_km: KnowledgeManager
     ) -> None:
         """When edges.db does not exist, supported=False and no action taken."""
-        from lithos.reconcile import reconcile
+        from lithos.cli_reconcile import reconcile
 
         _ = seeded_km
         edges_db = seeded_config.storage.data_dir / ".lithos" / "edges.db"

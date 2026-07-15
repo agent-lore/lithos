@@ -17,7 +17,7 @@
         "max_function": "lithos.coordination.CoordinationService.create_task"
       },
       "Entrypoints": {
-        "functions_over_10": 14,
+        "functions_over_10": 17,
         "max_complexity": 65,
         "max_function": "lithos.tools.notes.register.lithos_write"
       },
@@ -42,7 +42,7 @@
         "max_function": "lithos.intake.CorpusIntake.write"
       },
       "Knowledge": {
-        "functions_over_10": 11,
+        "functions_over_10": 10,
         "max_complexity": 71,
         "max_function": "lithos.knowledge.KnowledgeManager.update"
       },
@@ -72,7 +72,7 @@
         "max_function": "lithos.telemetry.setup_telemetry"
       }
     },
-    "functions_over_10": 64,
+    "functions_over_10": 66,
     "top_functions": [
       {
         "complexity": 71,
@@ -115,7 +115,7 @@
         "qualname": "lithos.server.LithosServer._validate_task_feedback"
       }
     ],
-    "total_functions": 670
+    "total_functions": 673
   },
   "domain": {
     "associations": 26,
@@ -204,7 +204,7 @@
       }
     },
     "cross_component_edges": 63,
-    "cross_component_module_edges": 142,
+    "cross_component_module_edges": 143,
     "longest_component_chain": 7,
     "module_cycle_count": 2,
     "module_cycles": [
@@ -288,6 +288,7 @@
       "tests/test_telemetry.py -> lithos.telemetry._trace_context_filter (x2)",
       "tests/conftest.py -> lithos.config._reset_config",
       "tests/conftest.py -> lithos.logging_config._HANDLER_MARKER",
+      "tests/test_cli_reconcile.py -> lithos.cli_reconcile._make_result",
       "tests/test_coactivation.py -> lithos.config._reset_config",
       "tests/test_coactivation.py -> lithos.lcma.retrieve._dominant_namespace",
       "tests/test_coactivation.py -> lithos.lcma.retrieve._run_retrieve_impl",
@@ -301,8 +302,7 @@
       "tests/test_event_delivery.py -> lithos.server._format_sse",
       "tests/test_knowledge.py -> lithos.knowledge._atomic_write",
       "tests/test_lcma_config.py -> lithos.config._DEFAULT_NOTE_TYPE_PRIORS",
-      "tests/test_lcma_config.py -> lithos.config._DEFAULT_RERANK_WEIGHTS",
-      "tests/test_lcma_config.py -> lithos.config._LCMA_NOTE_TYPES"
+      "tests/test_lcma_config.py -> lithos.config._DEFAULT_RERANK_WEIGHTS"
     ],
     "tests_private_imports": 87
   },
@@ -340,13 +340,13 @@
       },
       "Entrypoints": {
         "classes": 4,
-        "functions": 125,
+        "functions": 136,
         "largest_module": "lithos.tools.tasks",
         "largest_module_lines": 985,
-        "lines": 5404,
-        "modules": 12,
-        "public_symbols": 29,
-        "sloc": 4356
+        "lines": 5952,
+        "modules": 13,
+        "public_symbols": 30,
+        "sloc": 4786
       },
       "Errors": {
         "classes": 9,
@@ -390,13 +390,13 @@
       },
       "Knowledge": {
         "classes": 10,
-        "functions": 74,
+        "functions": 66,
         "largest_module": "lithos.knowledge",
         "largest_module_lines": 2444,
-        "lines": 3127,
-        "modules": 3,
-        "public_symbols": 25,
-        "sloc": 2524
+        "lines": 2474,
+        "modules": 2,
+        "public_symbols": 24,
+        "sloc": 1975
       },
       "LCMA": {
         "classes": 5,
@@ -464,13 +464,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23543,
+    "total_lines": 23438,
     "total_modules": 38,
-    "total_sloc": 19016
+    "total_sloc": 18897
   },
   "tests": {
-    "ratio": 1.85,
-    "src_lines": 23543,
-    "test_lines": 43586
+    "ratio": 1.86,
+    "src_lines": 23438,
+    "test_lines": 43701
   }
 }

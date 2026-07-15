@@ -132,7 +132,6 @@ source_modules = [
 ]
 forbidden_modules = [
     "lithos.knowledge",
-    "lithos.reconcile",
     "lithos.search",
     "lithos.graph",
     "lithos.coordination",
@@ -146,6 +145,7 @@ forbidden_modules = [
     "lithos.__main__",
     "lithos.tools",
     "lithos.pipeline",
+    "lithos.cli_reconcile",
 ]
 
 [[tool.importlinter.contracts]]
@@ -173,7 +173,6 @@ name = "Core must not import Entrypoints"
 type = "forbidden"
 source_modules = [
     "lithos.knowledge",
-    "lithos.reconcile",
     "lithos.search",
     "lithos.graph",
     "lithos.coordination",
@@ -189,6 +188,7 @@ forbidden_modules = [
     "lithos.__main__",
     "lithos.tools",
     "lithos.pipeline",
+    "lithos.cli_reconcile",
 ]
 
 [tool.pytest.ini_options]

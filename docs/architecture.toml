@@ -56,8 +56,14 @@ Logging         = "Structured JSON logging setup."
 # layer for the same reason a DI container does — Core must stay unaware of who
 # wires it. Placing it in Core instead would add a Core module depending on nine
 # other Core components, which is the cycle-prone shape this model exists to catch.
-Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__", "lithos.pipeline"]
-Knowledge       = ["lithos.knowledge", "lithos.reconcile", "lithos._merge"]
+#
+# lithos.cli_reconcile is the operator surface over KnowledgeManager's reconcile
+# (scope policy, status aggregation, the --json-output result shape). ADR-0001
+# moved reconciliation itself onto KnowledgeManager and killed the Core-tier
+# lithos.reconcile peer; what remained was never Core's — it serves exactly one
+# CLI command.
+Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__", "lithos.pipeline", "lithos.cli_reconcile"]
+Knowledge       = ["lithos.knowledge", "lithos._merge"]
 Search          = ["lithos.search"]
 Graph           = ["lithos.graph", "lithos.edge_store"]
 Coordination    = ["lithos.coordination"]

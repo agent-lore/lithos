@@ -13,7 +13,6 @@ The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived
 |---|---|---:|---:|
 | `lithos._merge` | XS | 0 | 1 |
 | `lithos.knowledge` | XL | 8 | 15 |
-| `lithos.reconcile` | M | 0 | 1 |
 
 ## Public API
 
@@ -45,9 +44,6 @@ The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived
 - class `ReconcileResult` — Outcome of applying a :class:`ReconcilePlan`.
 - class `KnowledgeManager` — Manages knowledge documents - CRUD operations.
 
-### `lithos.reconcile`
-- def `reconcile` — Reconcile derived projections against the markdown source of truth.
-
 ## Dependencies
 
 - Depends on: [Config](Config.md), [Errors](Errors.md), [Graph](Graph.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
@@ -59,8 +55,6 @@ The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived
 
 ## ADRs
 
-- [Reconciliation lives on KnowledgeManager, not as a peer module](../../adr/0001-reconciliation-lives-on-knowledge-manager.md)
-- [SearchEngine hides Tantivy and ChromaDB](../../adr/0002-search-engine-hides-its-backends.md)
 - [Provenance projection becomes its own Module, completing ADR-0001 step 3](../../adr/0004-provenance-projection-module.md)
 
 [← all generated docs](../README.md)
