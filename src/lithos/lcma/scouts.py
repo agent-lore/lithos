@@ -274,7 +274,7 @@ async def scout_exact_alias(
 
     # 2. UUID-prefix matching
     query_lower = query.lower().strip()
-    for doc_id in knowledge._id_to_path:
+    for doc_id in knowledge.iter_doc_ids():
         if doc_id.lower().startswith(query_lower) and doc_id not in found_ids:
             found_ids.append(doc_id)
 
@@ -759,7 +759,7 @@ async def scout_source_url(
 ) -> list[Candidate]:
     """Find notes from the same URL domain as seed notes."""
     seed_set = set(seed_ids)
-    url_map = knowledge._source_url_to_id
+    url_map = dict(knowledge.iter_source_urls())
 
     # 1. Collect domains from seed notes using the in-memory metadata cache
     #    (avoids synchronous disk I/O from frontmatter parsing). This handles

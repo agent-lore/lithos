@@ -12,12 +12,18 @@ The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos._merge` | XS | 0 | 1 |
-| `lithos.knowledge` | XL | 5 | 0 |
+| `lithos.corpus_index` | L | 3 | 0 |
+| `lithos.knowledge` | L | 5 | 0 |
 
 ## Public API
 
 ### `lithos._merge`
 - def `merge_metadata` — Apply an additive per-key patch to a metadata dict.
+
+### `lithos.corpus_index`
+- class `CachedMeta` — Lightweight metadata cache for filtering without disk I/O.
+- class `ScannedNote` — One note as seen by a startup scan — the input row to :meth:`CorpusIndex.rebuild`.
+- class `CorpusIndex` — The derived, in-memory view of the Corpus that KnowledgeManager queries.
 
 ### `lithos.knowledge`
 - class `DuplicateInfo` — Information about a duplicate document.

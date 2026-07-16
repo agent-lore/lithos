@@ -23,15 +23,13 @@ import frontmatter
 
 from lithos._merge import merge_metadata
 from lithos.config import LithosConfig
+from lithos.corpus_index import CachedMeta, CorpusIndex, ScannedNote
 from lithos.errors import CorpusScanError, SlugCollisionError
 from lithos.frontmatter_codec import (
     KnowledgeDocument,
     KnowledgeMetadata,
-    canonical_metadata_value,
     decode,
-    derive_namespace,
     encode,
-    extract_extra,
     normalize_datetime,
     normalize_derived_from_ids_lenient,
     normalize_url,
@@ -120,39 +118,6 @@ class WriteResult:
     duplicate_of: DuplicateInfo | None = None
     current_version: int | None = None
     path_collision_existing_id: str | None = None
-
-
-@dataclass
-class _CachedMeta:
-    """Lightweight metadata cache for filtering without disk I/O.
-
-    ``namespace`` is the resolved LCMA namespace — either an explicit value
-    from frontmatter or the path-derived default. Callers MUST read this
-    field rather than re-deriving from ``path`` so explicit overrides are
-    honored consistently across the retrieval pipeline.
-    """
-
-    title: str
-    author: str
-    tags: list[str]
-    updated_at: datetime
-    path: Path
-    namespace: str
-    expires_at: datetime | None = None
-    access_scope: str | None = None
-    source: str | None = None
-    note_type: str | None = None
-    status: str | None = None
-    source_url: str | None = None
-    # Extracted/curated entity names (#316) — kept here so the entities
-    # inverted index can be maintained without a disk read.
-    entities: list[str] = field(default_factory=list)
-    # Free-form key/value metadata (#305) — kept here so equality filtering and
-    # the inverted index (#306) work without a disk read.
-    extra: dict = field(default_factory=dict)
-    # Insertion ordinal — reproduces _meta_cache ordering in the index path so
-    # list pagination stays stable (#306).
-    seq: int = 0
 
 
 class _UnsetType:
@@ -307,300 +272,54 @@ class KnowledgeManager:
         """
         self.config = config
         self.knowledge_path = self.config.storage.knowledge_path
-        self._id_to_path: dict[str, Path] = {}
-        self._path_to_id: dict[Path, str] = {}
-        self._slug_to_id: dict[str, str] = {}
-        self._source_url_to_id: dict[str, str] = {}
         self._write_lock = asyncio.Lock()
-        self.duplicate_url_count: int = 0
-        # Provenance indexes
-        self._doc_to_sources: dict[str, list[str]] = {}
-        self._source_to_derived: dict[str, set[str]] = {}
-        self._unresolved_provenance: dict[str, set[str]] = {}
-        self._id_to_title: dict[str, str] = {}
-        self._meta_cache: dict[str, _CachedMeta] = {}
-        # Inverted indexes for sub-linear equality filtering (#306). All map a
-        # value to the set of doc ids carrying it; maintained beside _meta_cache.
-        self._author_index: dict[str, set[str]] = {}
-        self._status_index: dict[str, set[str]] = {}
-        self._tag_index: dict[str, set[str]] = {}
-        self._entities_index: dict[str, set[str]] = {}
-        self._metadata_index: dict[str, dict[str, set[str]]] = {}
-        self._meta_seq: int = 0
+        # The derived, in-memory query view over the Corpus (metadata cache,
+        # inverted indexes, path/slug/url maps, provenance graph). The manager
+        # owns files and policy; the index owns query acceleration.
+        self._index = CorpusIndex()
         self._scan_existing()
 
-    def _next_seq(self) -> int:
-        self._meta_seq += 1
-        return self._meta_seq
-
-    def _index_doc(self, doc_id: str, cached: _CachedMeta) -> None:
-        """Add a doc's equality-filter contributions to the inverted indexes."""
-        if cached.author:
-            self._author_index.setdefault(cached.author, set()).add(doc_id)
-        if cached.status:
-            self._status_index.setdefault(cached.status, set()).add(doc_id)
-        for tag in cached.tags:
-            self._tag_index.setdefault(tag, set()).add(doc_id)
-        for entity in cached.entities:
-            self._entities_index.setdefault(entity, set()).add(doc_id)
-        for key, value in cached.extra.items():
-            buckets = self._metadata_index.setdefault(key, {})
-            # A list value is matched element-wise (contains); a scalar by value.
-            elements = value if isinstance(value, list) else [value]
-            for element in elements:
-                buckets.setdefault(canonical_metadata_value(element), set()).add(doc_id)
-
-    def _deindex_doc(self, doc_id: str, cached: _CachedMeta) -> None:
-        """Remove a doc's contributions (using its *previous* cached meta)."""
-
-        def _discard(index: dict[str, set[str]], value: str | None) -> None:
-            if value is None:
-                return
-            bucket = index.get(value)
-            if bucket is not None:
-                bucket.discard(doc_id)
-                if not bucket:
-                    del index[value]
-
-        _discard(self._author_index, cached.author or None)
-        _discard(self._status_index, cached.status or None)
-        for tag in cached.tags:
-            _discard(self._tag_index, tag)
-        for entity in cached.entities:
-            _discard(self._entities_index, entity)
-        for key, value in cached.extra.items():
-            buckets = self._metadata_index.get(key)
-            if buckets is None:
-                continue
-            elements = value if isinstance(value, list) else [value]
-            for element in elements:
-                _discard(buckets, canonical_metadata_value(element))
-            if not buckets:
-                del self._metadata_index[key]
-
-    def _candidate_ids(
-        self,
-        *,
-        tags: list[str] | None,
-        author: str | None,
-        metadata_match: dict | None,
-        exclude_status: list[str] | None,
-        entities: list[str] | None = None,
-    ) -> set[str] | None:
-        """Resolve equality filters to a candidate id set via the inverted index.
-
-        Returns ``None`` when no equality/AND filter is supplied, signalling the
-        caller to use the existing full-scan path (correct for unfiltered /
-        prefix-only / since-only / exclude-only queries). Otherwise returns the
-        (possibly empty) intersected candidate set — never iterating all docs.
-        """
-        seed_sets: list[set[str]] = []
-        if author:
-            seed_sets.append(self._author_index.get(author, set()))
-        if tags:
-            for tag in tags:
-                seed_sets.append(self._tag_index.get(tag, set()))
-        if entities:
-            for entity in entities:
-                seed_sets.append(self._entities_index.get(entity, set()))
-        if metadata_match:
-            for key, value in metadata_match.items():
-                bucket = self._metadata_index.get(key, {})
-                seed_sets.append(bucket.get(canonical_metadata_value(value), set()))
-
-        if not seed_sets:
-            return None
-
-        # Intersect smallest-first; any empty seed short-circuits to empty.
-        seed_sets.sort(key=len)
-        candidates = set(seed_sets[0])
-        for s in seed_sets[1:]:
-            candidates &= s
-            if not candidates:
-                break
-
-        if candidates and exclude_status:
-            for status in exclude_status:
-                candidates -= self._status_index.get(status, set())
-
-        return candidates
+    @property
+    def duplicate_url_count(self) -> int:
+        """Number of duplicate source_urls skipped on the last scan."""
+        return self._index.duplicate_url_count
 
     def _scan_existing(self) -> None:
-        """Scan existing documents and build indices.
+        """Scan the Corpus from disk and rebuild the derived index.
 
-        Uses a two-pass approach:
-        - Pass 1: Walk files, populate core indexes and collect provenance pairs.
-        - Pass 2: Classify provenance references as resolved or unresolved.
+        The manager owns the file walk — which files, in what order, and
+        skipping any that won't parse — and hands the frontmatter it read to
+        :meth:`CorpusIndex.rebuild`, which owns the projection. Candidates are
+        walked in sorted order so the index's first-seen-wins tie-breaks
+        (slug and source-url collisions) are deterministic.
         """
-        # Clear all indexes before rebuilding (prevents stale accumulation).
-        self._id_to_path.clear()
-        self._path_to_id.clear()
-        self._slug_to_id.clear()
-        self._source_url_to_id.clear()
-        self._doc_to_sources.clear()
-        self._source_to_derived.clear()
-        self._unresolved_provenance.clear()
-        self._id_to_title.clear()
-        self._meta_cache.clear()
-        self._author_index.clear()
-        self._status_index.clear()
-        self._tag_index.clear()
-        self._entities_index.clear()
-        self._metadata_index.clear()
-        self._meta_seq = 0
-        self.duplicate_url_count = 0
-
-        if not self.knowledge_path.exists():
-            return
-
-        base_path = self.knowledge_path.resolve()
-        # Collect candidates in sorted order for deterministic first-seen-wins.
-        candidates: list[tuple[Path, Path]] = []
-        for md_file in self.knowledge_path.rglob("*.md"):
-            resolved = md_file.resolve()
-            if not resolved.is_relative_to(base_path):
-                continue
-            candidates.append((md_file.relative_to(self.knowledge_path), md_file))
-        candidates.sort(key=lambda t: t[0])
-        collisions: list[tuple[str, str, str]] = []  # (norm_url, first_id, dup_id)
-
-        # Pass 1: Walk files, populate core indexes, collect provenance.
-        deferred_provenance: list[tuple[str, list[str]]] = []
-
-        for rel_path, md_file in candidates:
-            try:
-                post = frontmatter.load(str(md_file))
-                doc_id: str | None = post.metadata.get("id")  # type: ignore[assignment]
-                title: str = post.metadata.get("title", "")  # type: ignore[assignment]
-                if doc_id:
-                    self._id_to_path[doc_id] = rel_path
-                    self._path_to_id[rel_path] = doc_id
-                    if title:
-                        slug = slugify(title)
-                        existing_slug_id = self._slug_to_id.get(slug)
-                        if existing_slug_id is not None and existing_slug_id != doc_id:
-                            logger.warning(
-                                "Slug collision detected: slug=%r already used by %r, also claimed by %r",
-                                slug,
-                                existing_slug_id,
-                                doc_id,
+        scanned: list[ScannedNote] = []
+        if self.knowledge_path.exists():
+            base_path = self.knowledge_path.resolve()
+            candidates: list[tuple[Path, Path]] = []
+            for md_file in self.knowledge_path.rglob("*.md"):
+                resolved = md_file.resolve()
+                if not resolved.is_relative_to(base_path):
+                    continue
+                candidates.append((md_file.relative_to(self.knowledge_path), md_file))
+            candidates.sort(key=lambda t: t[0])
+            for rel_path, md_file in candidates:
+                try:
+                    post = frontmatter.load(str(md_file))
+                    doc_id: str | None = post.metadata.get("id")  # type: ignore[assignment]
+                    if doc_id:
+                        title = post.metadata.get("title", "")
+                        scanned.append(
+                            ScannedNote(
+                                doc_id=doc_id,
+                                title=title if isinstance(title, str) else "",
+                                frontmatter=dict(post.metadata),
+                                rel_path=rel_path,
                             )
-                        else:
-                            self._slug_to_id[slug] = doc_id
-                            self._id_to_title[doc_id] = title
-
-                    # Populate metadata cache for filtering
-                    raw_updated = post.metadata.get("updated_at")
-                    if isinstance(raw_updated, str):
-                        updated_at = datetime.fromisoformat(raw_updated)
-                    elif isinstance(raw_updated, datetime):
-                        updated_at = raw_updated
-                    else:
-                        updated_at = datetime.now(UTC)
-                    raw_tags: list[str] = post.metadata.get("tags", [])  # type: ignore[assignment]
-                    raw_author: str = post.metadata.get("author", "")  # type: ignore[assignment]
-                    raw_expires: str | datetime | None = post.metadata.get("expires_at")  # type: ignore[assignment]
-                    if isinstance(raw_expires, str):
-                        try:
-                            cached_expires: datetime | None = datetime.fromisoformat(raw_expires)
-                        except ValueError:
-                            cached_expires = None
-                    elif isinstance(raw_expires, datetime):
-                        cached_expires = raw_expires
-                    else:
-                        cached_expires = None
-                    raw_access_scope: str | None = post.metadata.get("access_scope")  # type: ignore[assignment]
-                    raw_source: str | None = post.metadata.get("source")  # type: ignore[assignment]
-                    raw_note_type: str | None = post.metadata.get("note_type")  # type: ignore[assignment]
-                    raw_namespace: str | None = post.metadata.get("namespace")  # type: ignore[assignment]
-                    raw_status: str | None = post.metadata.get("status")  # type: ignore[assignment]
-                    raw_source_url: str | None = post.metadata.get("source_url")  # type: ignore[assignment]
-                    raw_entities: list[str] = post.metadata.get("entities", [])  # type: ignore[assignment]
-                    cached_namespace = (
-                        raw_namespace
-                        if isinstance(raw_namespace, str) and raw_namespace
-                        else derive_namespace(rel_path)
-                    )
-                    cached = _CachedMeta(
-                        title=title,
-                        author=raw_author if isinstance(raw_author, str) else "",
-                        tags=raw_tags if isinstance(raw_tags, list) else [],
-                        updated_at=updated_at,
-                        path=rel_path,
-                        namespace=cached_namespace,
-                        expires_at=cached_expires,
-                        access_scope=raw_access_scope
-                        if isinstance(raw_access_scope, str)
-                        else None,
-                        source=raw_source if isinstance(raw_source, str) else None,
-                        note_type=raw_note_type if isinstance(raw_note_type, str) else None,
-                        status=raw_status if isinstance(raw_status, str) else None,
-                        source_url=raw_source_url if isinstance(raw_source_url, str) else None,
-                        entities=raw_entities if isinstance(raw_entities, list) else [],
-                        extra=extract_extra(post.metadata),
-                        seq=self._next_seq(),
-                    )
-                    self._meta_cache[doc_id] = cached
-                    self._index_doc(doc_id, cached)
-
-                    # Populate source_url -> id map
-                    raw_url: str | None = post.metadata.get("source_url")  # type: ignore[assignment]
-                    if raw_url:
-                        try:
-                            norm = normalize_url(raw_url)
-                            if norm not in self._source_url_to_id:
-                                self._source_url_to_id[norm] = doc_id
-                            else:
-                                existing_id = self._source_url_to_id[norm]
-                                collisions.append((norm, existing_id, doc_id))
-                        except ValueError:
-                            pass  # Skip invalid URLs on load
-
-                    # Collect derived_from_ids for pass 2
-                    derived_from: list[str] = post.metadata.get("derived_from_ids", [])  # type: ignore[assignment]
-                    if isinstance(derived_from, list):
-                        deferred_provenance.append((doc_id, derived_from))
-                    else:
-                        deferred_provenance.append((doc_id, []))
-            except Exception as e:
-                logger.warning("Skipping invalid file %s: %s", md_file, e)
-
-        # Pass 2: Normalize and classify provenance references as resolved or unresolved.
-        for doc_id, source_ids in deferred_provenance:
-            normalized_ids = normalize_derived_from_ids_lenient(source_ids, self_id=doc_id)
-            self._doc_to_sources[doc_id] = normalized_ids
-            for source_id in normalized_ids:
-                if source_id in self._id_to_path:
-                    # Resolved: source document exists
-                    if source_id not in self._source_to_derived:
-                        self._source_to_derived[source_id] = set()
-                    self._source_to_derived[source_id].add(doc_id)
-                else:
-                    # Unresolved: source document not found
-                    if source_id not in self._unresolved_provenance:
-                        self._unresolved_provenance[source_id] = set()
-                    self._unresolved_provenance[source_id].add(doc_id)
-
-        resolved_count = sum(len(v) for v in self._source_to_derived.values())
-        unresolved_count = sum(len(v) for v in self._unresolved_provenance.values())
-        if resolved_count or unresolved_count:
-            logger.info(
-                "Provenance scan: %d resolved references, %d unresolved references",
-                resolved_count,
-                unresolved_count,
-            )
-
-        # Report collisions deterministically (sorted by normalized URL).
-        if collisions:
-            collisions.sort(key=lambda t: t[0])
-            self.duplicate_url_count = len(collisions)
-            for norm_url, first_id, dup_id in collisions:
-                logger.warning(
-                    "Duplicate source_url at startup: %s owned by %s, duplicate in %s (skipped)",
-                    norm_url,
-                    first_id,
-                    dup_id,
-                )
+                        )
+                except Exception as e:
+                    logger.warning("Skipping invalid file %s: %s", md_file, e)
+        self._index.rebuild(scanned)
 
     def _resolve_safe_path(self, path: Path) -> tuple[Path, Path]:
         """Resolve a path under knowledge root and prevent traversal."""
@@ -670,7 +389,7 @@ class KnowledgeManager:
                     )
 
                 # Check dedup map
-                existing_id = self._source_url_to_id.get(norm_url)
+                existing_id = self._index.id_by_source_url(norm_url)
                 if existing_id is not None:
                     try:
                         existing_doc, _ = await self.read(id=existing_id)
@@ -691,7 +410,7 @@ class KnowledgeManager:
                         )
                     except FileNotFoundError:
                         # Stale map entry; allow create
-                        del self._source_url_to_id[norm_url]
+                        self._index.remove_source_url(norm_url, existing_id)
 
             # Validate and normalize derived_from_ids
             normalized_provenance: list[str] = []
@@ -779,7 +498,7 @@ class KnowledgeManager:
             )
 
             # Check for slug collision before writing anything
-            existing_slug_id = self._slug_to_id.get(slug)
+            existing_slug_id = self._index.id_by_slug(slug)
             if existing_slug_id is not None and existing_slug_id != doc_id:
                 raise SlugCollisionError(slug, existing_slug_id)
 
@@ -796,7 +515,7 @@ class KnowledgeManager:
             # conflicts get their own machine-readable code with the existing
             # doc id carried in `path_collision_existing_id` (mirrors how
             # `slug_collision_existing_id` works at the intake layer).
-            existing_path_id = self._path_to_id.get(file_path)
+            existing_path_id = self._index.id_by_relpath(file_path)
             if existing_path_id is not None and existing_path_id != doc_id:
                 return WriteResult(
                     status="path_collision",
@@ -810,65 +529,17 @@ class KnowledgeManager:
             full_path.parent.mkdir(parents=True, exist_ok=True)
             _atomic_write(full_path, encode(doc))
 
-            # Update indices
-            self._id_to_path[doc_id] = file_path
-            self._path_to_id[file_path] = doc_id
-            self._slug_to_id[slug] = doc_id
-            if norm_url is not None:
-                self._source_url_to_id[norm_url] = doc_id
-
-            # Update provenance indexes
-            warnings: list[str] = []
-            self._doc_to_sources[doc_id] = normalized_provenance
-            self._id_to_title[doc_id] = title
-            for source_id in normalized_provenance:
-                if source_id in self._id_to_path:
-                    # Resolved: source document exists
-                    if source_id not in self._source_to_derived:
-                        self._source_to_derived[source_id] = set()
-                    self._source_to_derived[source_id].add(doc_id)
-                else:
-                    # Unresolved: source document not found
-                    if source_id not in self._unresolved_provenance:
-                        self._unresolved_provenance[source_id] = set()
-                    self._unresolved_provenance[source_id].add(doc_id)
-                    logger.warning(
-                        "Provenance resolution failed: source_id=%s dependent_doc_id=%s",
-                        source_id,
-                        doc_id,
-                    )
-                    warnings.append(f"derived_from_ids contains missing document: {source_id}")
-
-            # Auto-resolve: check if any existing docs had unresolved refs to this new doc
-            if doc_id in self._unresolved_provenance:
-                resolved_docs = self._unresolved_provenance.pop(doc_id)
-                if doc_id not in self._source_to_derived:
-                    self._source_to_derived[doc_id] = set()
-                self._source_to_derived[doc_id].update(resolved_docs)
-
-            # Resolve namespace: explicit override if set, otherwise derive
-            # from path (matches apply_lcma_defaults at read time).
-            cached_namespace = metadata.namespace or derive_namespace(file_path)
-
-            cached = _CachedMeta(
+            # Register across every derived index (id/path/slug/url maps,
+            # provenance graph, metadata cache). Warnings name any source that
+            # does not yet exist; the note still records the dangling reference.
+            cached = CachedMeta.from_metadata(metadata, file_path, seq=self._index.next_seq())
+            warnings = self._index.add_document(
+                doc_id,
+                cached,
                 title=title,
-                author=metadata.author,
-                tags=list(metadata.tags),
-                updated_at=metadata.updated_at,
-                path=file_path,
-                namespace=cached_namespace,
-                expires_at=metadata.expires_at,
-                access_scope=metadata.access_scope,
-                source=metadata.source,
-                note_type=metadata.note_type,
-                status=metadata.status,
-                source_url=metadata.source_url,
-                entities=list(metadata.entities),
-                extra=dict(metadata.extra),
-                seq=self._next_seq(),
+                norm_url=norm_url,
+                sources=normalized_provenance,
             )
-            self._meta_cache[doc_id] = cached
-            self._index_doc(doc_id, cached)
 
             logger.info(
                 "Document created: doc_id=%s title=%.60s agent=%s",
@@ -892,9 +563,9 @@ class KnowledgeManager:
         """
         lithos_metrics.knowledge_ops.add(1, {"op": "read"})
         if id:
-            if id not in self._id_to_path:
+            file_path = self._index.relpath_of(id)
+            if file_path is None:
                 raise FileNotFoundError(f"Document not found: {id}")
-            file_path = self._id_to_path[id]
         elif path:
             file_path = Path(path)
             if not file_path.suffix:
@@ -920,30 +591,11 @@ class KnowledgeManager:
         # Only overlay when the index has a non-empty list; an empty index
         # entry means the doc was created without provenance, so the on-disk
         # frontmatter (which may have been edited externally) takes precedence.
-        indexed_sources = self._doc_to_sources.get(doc.metadata.id)
+        indexed_sources = self._index.doc_sources(doc.metadata.id)
         if indexed_sources:
             doc.metadata.derived_from_ids = indexed_sources
 
         return doc, truncated
-
-    def _remove_provenance_entries(self, doc_id: str) -> None:
-        """Remove a document's provenance entries from reverse indexes.
-
-        Cleans up _source_to_derived and _unresolved_provenance for the given doc_id
-        based on its current _doc_to_sources entries.
-        """
-        old_sources = self._doc_to_sources.get(doc_id, [])
-        for source_id in old_sources:
-            # Remove from resolved index
-            if source_id in self._source_to_derived:
-                self._source_to_derived[source_id].discard(doc_id)
-                if not self._source_to_derived[source_id]:
-                    del self._source_to_derived[source_id]
-            # Remove from unresolved index
-            if source_id in self._unresolved_provenance:
-                self._unresolved_provenance[source_id].discard(doc_id)
-                if not self._unresolved_provenance[source_id]:
-                    del self._unresolved_provenance[source_id]
 
     @traced("lithos.knowledge.update")
     @timed_write("update")
@@ -1071,7 +723,7 @@ class KnowledgeManager:
             if title is not None:
                 new_slug = slugify(title)
                 if new_slug != old_slug:
-                    existing_owner = self._slug_to_id.get(new_slug)
+                    existing_owner = self._index.id_by_slug(new_slug)
                     if existing_owner is not None and existing_owner != id:
                         raise SlugCollisionError(new_slug, existing_owner)
 
@@ -1082,8 +734,7 @@ class KnowledgeManager:
                     if old_source_url:
                         try:
                             old_norm = normalize_url(old_source_url)
-                            if self._source_url_to_id.get(old_norm) == id:
-                                del self._source_url_to_id[old_norm]
+                            self._index.remove_source_url(old_norm, id)
                         except ValueError:
                             pass
                     doc.metadata.source_url = None
@@ -1097,7 +748,7 @@ class KnowledgeManager:
                             message=str(e),
                         )
 
-                    existing_owner = self._source_url_to_id.get(new_norm)
+                    existing_owner = self._index.id_by_source_url(new_norm)
                     if existing_owner is not None and existing_owner != id:
                         try:
                             existing_doc, _ = await self.read(id=existing_owner)
@@ -1117,28 +768,27 @@ class KnowledgeManager:
                                 message=f"URL already exists in document '{existing_doc.title}'",
                             )
                         except FileNotFoundError:
-                            del self._source_url_to_id[new_norm]
+                            self._index.remove_source_url(new_norm, existing_owner)
 
                     # Remove old mapping if URL changed
                     if old_source_url:
                         try:
                             old_norm = normalize_url(old_source_url)
-                            if old_norm != new_norm and self._source_url_to_id.get(old_norm) == id:
-                                del self._source_url_to_id[old_norm]
+                            if old_norm != new_norm:
+                                self._index.remove_source_url(old_norm, id)
                         except ValueError:
                             pass
 
                     doc.metadata.source_url = new_norm
-                    self._source_url_to_id[new_norm] = id
+                    self._index.set_source_url(new_norm, id)
 
             # Handle derived_from_ids update
             warnings: list[str] = []
             if not isinstance(derived_from_ids, _UnsetType):
                 if derived_from_ids is None or derived_from_ids == []:
                     # Clear provenance
-                    self._remove_provenance_entries(id)
                     doc.metadata.derived_from_ids = []
-                    self._doc_to_sources[id] = []
+                    self._index.replace_provenance(id, [])
                 else:
                     # Replace with new list — validate first
                     try:
@@ -1149,29 +799,8 @@ class KnowledgeManager:
                             message=str(e),
                         )
 
-                    # Remove old provenance entries
-                    self._remove_provenance_entries(id)
-
-                    # Add new entries
                     doc.metadata.derived_from_ids = normalized
-                    self._doc_to_sources[id] = normalized
-                    for source_id in normalized:
-                        if source_id in self._id_to_path:
-                            if source_id not in self._source_to_derived:
-                                self._source_to_derived[source_id] = set()
-                            self._source_to_derived[source_id].add(id)
-                        else:
-                            if source_id not in self._unresolved_provenance:
-                                self._unresolved_provenance[source_id] = set()
-                            self._unresolved_provenance[source_id].add(id)
-                            logger.warning(
-                                "Provenance resolution failed: source_id=%s dependent_doc_id=%s",
-                                source_id,
-                                id,
-                            )
-                            warnings.append(
-                                f"derived_from_ids contains missing document: {source_id}"
-                            )
+                    warnings = self._index.replace_provenance(id, normalized)
 
             # Handle expires_at update
             if not isinstance(expires_at, _UnsetType):
@@ -1250,40 +879,21 @@ class KnowledgeManager:
             _atomic_write(full_path, encode(doc))
 
             if new_slug != old_slug:
-                if self._slug_to_id.get(old_slug) == id:
-                    del self._slug_to_id[old_slug]
-                self._slug_to_id[new_slug] = id
+                self._index.reroute_slug(old_slug, new_slug, id)
 
             # Update _id_to_title if title changed
             if title is not None:
-                self._id_to_title[id] = title
+                self._index.set_title(id, title)
 
-            # Update metadata cache + inverted index. Deindex the previous entry
-            # first, then index the new one; preserve the insertion ordinal so
-            # list ordering/pagination is unchanged by an update.
-            cached_namespace = doc.metadata.namespace or derive_namespace(doc.path)
-            old_cached = self._meta_cache.get(id)
-            if old_cached is not None:
-                self._deindex_doc(id, old_cached)
-            cached = _CachedMeta(
-                title=doc.metadata.title,
-                author=doc.metadata.author,
-                tags=list(doc.metadata.tags),
-                updated_at=doc.metadata.updated_at,
-                path=doc.path,
-                namespace=cached_namespace,
-                expires_at=doc.metadata.expires_at,
-                access_scope=doc.metadata.access_scope,
-                source=doc.metadata.source,
-                note_type=doc.metadata.note_type,
-                status=doc.metadata.status,
-                source_url=doc.metadata.source_url,
-                entities=list(doc.metadata.entities),
-                extra=dict(doc.metadata.extra),
-                seq=old_cached.seq if old_cached is not None else self._next_seq(),
+            # Update metadata cache + inverted index. Preserve the insertion
+            # ordinal so list ordering/pagination is unchanged by an update.
+            old_cached = self._index.get_cached_meta(id)
+            cached = CachedMeta.from_metadata(
+                doc.metadata,
+                doc.path,
+                seq=old_cached.seq if old_cached is not None else self._index.next_seq(),
             )
-            self._meta_cache[id] = cached
-            self._index_doc(id, cached)
+            self._index.reindex_document(id, cached)
 
             if logger.isEnabledFor(logging.INFO):
                 changed: list[str] = []
@@ -1310,7 +920,7 @@ class KnowledgeManager:
         """
         async with self._write_lock:
             lithos_metrics.knowledge_ops.add(1, {"op": "delete"})
-            if id not in self._id_to_path:
+            if not self._index.has_document(id):
                 return False, ""
 
             # Read doc to get source_url before deleting
@@ -1319,39 +929,22 @@ class KnowledgeManager:
                 if doc.metadata.source_url:
                     try:
                         norm = normalize_url(doc.metadata.source_url)
-                        if self._source_url_to_id.get(norm) == id:
-                            del self._source_url_to_id[norm]
+                        self._index.remove_source_url(norm, id)
                     except ValueError:
                         pass
             except FileNotFoundError:
                 pass
 
-            file_path = self._id_to_path[id]
+            file_path = self._index.relpath_of(id)
+            assert file_path is not None  # has_document guaranteed it above
             _safe_path, full_path = self._resolve_safe_path(file_path)
 
             if full_path.exists():
                 full_path.unlink()
 
-            # Update indices
-            old_path = self._id_to_path.pop(id)
-            self._path_to_id.pop(old_path, None)
-            # Remove from slug index
-            self._slug_to_id = {k: v for k, v in self._slug_to_id.items() if v != id}
-
-            # Provenance cleanup
-            # 1. Remove this doc as a "derived" doc from reverse indexes
-            self._remove_provenance_entries(id)
-            # 2. Remove forward index entry
-            self._doc_to_sources.pop(id, None)
-            # 3. If this doc was a source for others, move those to unresolved
-            derived_docs = self._source_to_derived.pop(id, set())
-            if derived_docs:
-                self._unresolved_provenance[id] = derived_docs
-            # 4. Remove from title and metadata caches + inverted index
-            self._id_to_title.pop(id, None)
-            removed = self._meta_cache.pop(id, None)
-            if removed is not None:
-                self._deindex_doc(id, removed)
+            # Drop the document from every derived index (maps, provenance graph
+            # — re-orphaning anything that derived from it — and metadata cache).
+            self._index.remove_document(id)
 
             logger.info("Document deleted: doc_id=%s path=%s", id, file_path)
             return True, str(file_path)
@@ -1390,7 +983,7 @@ class KnowledgeManager:
         unfiltered / prefix-only / since-only listings).
         """
         normalized_since = normalize_datetime(since) if since else None
-        candidate_ids = self._candidate_ids(
+        candidate_ids = self._index.candidate_ids(
             tags=tags,
             author=author,
             metadata_match=metadata_match,
@@ -1401,7 +994,7 @@ class KnowledgeManager:
         if candidate_ids is None:
             # No equality filter — full scan (existing behaviour + ordering).
             matching_ids: list[str] = []
-            for doc_id, cached in self._meta_cache.items():
+            for doc_id, cached in self._index.iter_cached_meta():
                 if exclude_status and cached.status in exclude_status:
                     continue
                 if path_prefix and not str(cached.path).startswith(path_prefix):
@@ -1411,11 +1004,11 @@ class KnowledgeManager:
                 matching_ids.append(doc_id)
         else:
             # Index path — refine the (small) candidate set, then restore the
-            # _meta_cache insertion order via the stored seq for stable paging.
-            refined: list[_CachedMeta] = []
+            # cache insertion order via the stored seq for stable paging.
+            refined: list[CachedMeta] = []
             refined_ids: list[str] = []
             for doc_id in candidate_ids:
-                cached = self._meta_cache.get(doc_id)
+                cached = self._index.get_cached_meta(doc_id)
                 if cached is None:
                     continue
                 if path_prefix and not str(cached.path).startswith(path_prefix):
@@ -1463,11 +1056,7 @@ class KnowledgeManager:
         Used by the content-query path of ``lithos_list`` to intersect with
         full-text hits without scanning the cache.
         """
-        if not metadata_match:
-            return None
-        return self._candidate_ids(
-            tags=None, author=None, metadata_match=metadata_match, exclude_status=None
-        )
+        return self._index.metadata_candidate_ids(metadata_match)
 
     def entities_candidate_ids(self, entities: list[str] | None) -> set[str] | None:
         """Public wrapper: candidate ids for an ``entities`` filter (#316).
@@ -1477,19 +1066,11 @@ class KnowledgeManager:
         index-based). Used by ``lithos_search`` to post-filter hits without
         scanning the cache.
         """
-        if not entities:
-            return None
-        return self._candidate_ids(
-            tags=None, author=None, metadata_match=None, exclude_status=None, entities=entities
-        )
+        return self._index.entities_candidate_ids(entities)
 
     async def get_all_tags(self) -> dict[str, int]:
         """Get all tags with document counts (from in-memory cache)."""
-        tag_counts: dict[str, int] = {}
-        for cached in self._meta_cache.values():
-            for tag in cached.tags:
-                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-        return tag_counts
+        return self._index.all_tags()
 
     async def find_by_source_url(self, url: str) -> KnowledgeDocument | None:
         """Look up a document by source URL (internal only, not MCP-exposed).
@@ -1502,7 +1083,7 @@ class KnowledgeManager:
         except ValueError:
             return None
 
-        doc_id = self._source_url_to_id.get(norm)
+        doc_id = self._index.id_by_source_url(norm)
         if doc_id is None:
             return None
 
@@ -1539,38 +1120,19 @@ class KnowledgeManager:
         title = doc.title
 
         doc_id = doc.id
-        is_new = doc_id not in self._id_to_path
+        is_new = not self._index.has_document(doc_id)
 
-        # Update core indexes
-        if not is_new:
-            old_path = self._id_to_path.get(doc_id)
-            if old_path is not None:
-                self._path_to_id.pop(old_path, None)
-        self._id_to_path[doc_id] = file_path
-        self._path_to_id[file_path] = doc_id
-        old_slug = None
-        if not is_new:
-            # Find the old slug for this doc to clean it up
-            for s, sid in self._slug_to_id.items():
-                if sid == doc_id:
-                    old_slug = s
-                    break
-        new_slug = slugify(title)
-        if old_slug and old_slug != new_slug and self._slug_to_id.get(old_slug) == doc_id:
-            del self._slug_to_id[old_slug]
-        self._slug_to_id[new_slug] = doc_id
+        # Update the path and slug maps (the on-disk path/title may have moved).
+        self._index.set_path(doc_id, file_path)
+        self._index.reroute_slug_for(doc_id, slugify(title))
 
-        # Update source_url index
+        # Update source_url index (first-owner-wins; clear this doc's old urls).
         raw_url = metadata.source_url
         if raw_url:
             try:
                 norm = normalize_url(raw_url)
-                # Remove any old mapping for this doc
-                old_urls_to_remove = [k for k, v in self._source_url_to_id.items() if v == doc_id]
-                for k in old_urls_to_remove:
-                    del self._source_url_to_id[k]
-                # Check if another doc already owns this URL (first-owner-wins)
-                existing_owner = self._source_url_to_id.get(norm)
+                self._index.clear_source_urls_for(doc_id)
+                existing_owner = self._index.id_by_source_url(norm)
                 if existing_owner is not None and existing_owner != doc_id:
                     logger.warning(
                         "source_url collision in sync_from_disk: %s owned by %s, "
@@ -1580,91 +1142,40 @@ class KnowledgeManager:
                         doc_id,
                     )
                 else:
-                    self._source_url_to_id[norm] = doc_id
+                    self._index.set_source_url(norm, doc_id)
             except ValueError:
                 pass
         else:
-            # Clear any old source_url mapping for this doc
-            old_urls_to_remove = [k for k, v in self._source_url_to_id.items() if v == doc_id]
-            for k in old_urls_to_remove:
-                del self._source_url_to_id[k]
+            self._index.clear_source_urls_for(doc_id)
 
-        # Update _id_to_title
-        self._id_to_title[doc_id] = title
+        self._index.set_title(doc_id, title)
 
-        # Update provenance indexes
+        # Update provenance (diff for a modified note; classify + auto-resolve
+        # for a newly-seen one). Sync is silent — no missing-source warnings.
         new_sources = normalize_derived_from_ids_lenient(
             metadata.derived_from_ids or [], self_id=doc_id
         )
+        self._index.sync_provenance(doc_id, new_sources, is_new=is_new)
 
-        if not is_new:
-            # Modified file: diff against current state
-            old_sources = self._doc_to_sources.get(doc_id, [])
-            if old_sources != new_sources:
-                # Remove old reverse index entries
-                self._remove_provenance_entries(doc_id)
-                # Add new entries
-                self._doc_to_sources[doc_id] = list(new_sources)
-                for source_id in new_sources:
-                    if source_id in self._id_to_path:
-                        if source_id not in self._source_to_derived:
-                            self._source_to_derived[source_id] = set()
-                        self._source_to_derived[source_id].add(doc_id)
-                    else:
-                        if source_id not in self._unresolved_provenance:
-                            self._unresolved_provenance[source_id] = set()
-                        self._unresolved_provenance[source_id].add(doc_id)
-        else:
-            # New file: add provenance entries
-            self._doc_to_sources[doc_id] = list(new_sources)
-            for source_id in new_sources:
-                if source_id in self._id_to_path:
-                    if source_id not in self._source_to_derived:
-                        self._source_to_derived[source_id] = set()
-                    self._source_to_derived[source_id].add(doc_id)
-                else:
-                    if source_id not in self._unresolved_provenance:
-                        self._unresolved_provenance[source_id] = set()
-                    self._unresolved_provenance[source_id].add(doc_id)
-
-            # Auto-resolve: check if any existing docs had unresolved refs to this new doc
-            if doc_id in self._unresolved_provenance:
-                resolved_docs = self._unresolved_provenance.pop(doc_id)
-                if doc_id not in self._source_to_derived:
-                    self._source_to_derived[doc_id] = set()
-                self._source_to_derived[doc_id].update(resolved_docs)
-
-        # Update metadata cache + inverted index (deindex prior entry first;
-        # preserve insertion ordinal so list ordering stays stable).
-        cached_namespace = metadata.namespace or derive_namespace(file_path)
-        old_cached = self._meta_cache.get(doc_id)
-        if old_cached is not None:
-            self._deindex_doc(doc_id, old_cached)
-        cached = _CachedMeta(
-            title=title,
-            author=metadata.author,
-            tags=list(metadata.tags),
-            updated_at=metadata.updated_at,
-            path=file_path,
-            namespace=cached_namespace,
-            expires_at=metadata.expires_at,
-            access_scope=metadata.access_scope,
-            source=metadata.source,
-            note_type=metadata.note_type,
-            status=metadata.status,
-            source_url=metadata.source_url,
-            entities=list(metadata.entities),
-            extra=dict(metadata.extra),
-            seq=old_cached.seq if old_cached is not None else self._next_seq(),
+        # Update metadata cache + inverted index, preserving the insertion
+        # ordinal so list ordering stays stable.
+        old_cached = self._index.get_cached_meta(doc_id)
+        cached = CachedMeta.from_metadata(
+            metadata,
+            file_path,
+            seq=old_cached.seq if old_cached is not None else self._index.next_seq(),
         )
-        self._meta_cache[doc_id] = cached
-        self._index_doc(doc_id, cached)
+        self._index.reindex_document(doc_id, cached)
 
         return doc
 
+    # ==================== Derived-index read accessors ====================
+    # These delegate to the CorpusIndex so callers keep a stable manager-level
+    # API while the projection owns the state (issue #171/#264).
+
     def get_id_by_slug(self, slug: str) -> str | None:
         """Get document ID by slug."""
-        return self._slug_to_id.get(slug)
+        return self._index.id_by_slug(slug)
 
     def get_id_by_path(self, path: str | Path) -> str | None:
         """Get document ID by relative/absolute path (O(1) via reverse map)."""
@@ -1679,94 +1190,74 @@ class KnowledgeManager:
         if not candidate.suffix:
             candidate = candidate.with_suffix(".md")
 
-        return self._path_to_id.get(candidate)
+        return self._index.id_by_relpath(candidate)
 
     def get_all_slugs(self) -> dict[str, str]:
         """Get mapping of all slugs to IDs."""
-        return dict(self._slug_to_id)
+        return self._index.all_slugs()
 
     # ==================== Public Provenance Accessors ====================
 
     def get_doc_sources(self, doc_id: str) -> list[str]:
         """Get the source IDs this document derives from."""
-        return self._doc_to_sources.get(doc_id, [])
+        return self._index.doc_sources(doc_id)
 
     def iter_doc_sources(self) -> Iterable[tuple[str, list[str]]]:
         """Iterate over ``(doc_id, source_ids)`` pairs for every known document.
 
-        Snapshots the underlying ``_doc_to_sources`` index so callers can
-        iterate safely even if the cache is mutated concurrently (rare, but
-        possible via concurrent writes / file-watcher projections). Returned
-        lists are fresh copies — mutations to them never leak back into the
-        manager.
-
-        This is the public bulk-read counterpart to :meth:`get_doc_sources`
-        (issue #264) so callers don't reach into ``_doc_to_sources`` directly.
-        Now used only by provenance conformance tests to cross-check KM's
-        in-memory sources against the projected edges — the former full-sweep
-        helper that consumed it moved into ``ProvenanceProjection`` (task
-        681ac952 PR1c).
+        Snapshots the underlying index so callers can iterate safely even if the
+        cache is mutated concurrently; returned lists are fresh copies. The
+        public bulk-read counterpart to :meth:`get_doc_sources` (issue #264).
         """
-        return [(doc_id, list(sources)) for doc_id, sources in self._doc_to_sources.items()]
+        return self._index.iter_doc_sources()
 
     def get_derived_docs(self, doc_id: str) -> set[str]:
         """Get IDs of documents derived from this document."""
-        return self._source_to_derived.get(doc_id, set())
+        return self._index.derived_docs(doc_id)
 
     def get_unresolved_sources(self, doc_id: str) -> list[str]:
         """Get unresolved source IDs for a document."""
-        sources = self._doc_to_sources.get(doc_id, [])
-        return [
-            sid
-            for sid in sources
-            if sid in self._unresolved_provenance or sid not in self._id_to_path
-        ]
+        return self._index.unresolved_sources(doc_id)
 
     def get_title_by_id(self, doc_id: str) -> str:
         """Get document title by ID, returning empty string if unknown."""
-        return self._id_to_title.get(doc_id, "")
+        return self._index.title_by_id(doc_id)
 
     def has_document(self, doc_id: str) -> bool:
         """Check whether a document ID exists."""
-        return doc_id in self._id_to_path
+        return self._index.has_document(doc_id)
 
-    def get_cached_meta(self, node_id: str) -> _CachedMeta | None:
+    def iter_doc_ids(self) -> Iterable[str]:
+        """Snapshot every known document ID (for prefix/UUID resolution)."""
+        return self._index.iter_doc_ids()
+
+    def iter_source_urls(self) -> Iterable[tuple[str, str]]:
+        """Snapshot ``(normalized_source_url, doc_id)`` pairs."""
+        return self._index.iter_source_urls()
+
+    def get_cached_meta(self, node_id: str) -> CachedMeta | None:
         """Return cached metadata for a node, or ``None`` if unknown.
 
-        This is the public read accessor for the internal ``_meta_cache`` dict.
-        Callers outside ``KnowledgeManager`` — notably the LCMA scout, rerank,
-        reinforcement, and enrich paths, plus the MCP server's feedback and
-        node_stats handlers — should use this rather than touching
-        ``_meta_cache`` directly, so the cache's internal shape can evolve
-        without breaking every callsite. See #171.
+        The public read accessor for the derived metadata cache. Callers outside
+        ``KnowledgeManager`` — the LCMA scout, rerank, reinforcement, and enrich
+        paths, plus the MCP server's feedback and node_stats handlers — should
+        use this rather than the index directly (#171).
         """
-        return self._meta_cache.get(node_id)
+        return self._index.get_cached_meta(node_id)
 
-    def iter_cached_meta(self) -> Iterable[tuple[str, _CachedMeta]]:
-        """Iterate over ``(node_id, cached_meta)`` pairs.
-
-        Snapshots the view so the caller can iterate safely even if the
-        underlying cache is mutated during iteration (rare, but possible
-        via concurrent writes / file-watcher projections).
-        """
-        return list(self._meta_cache.items())
+    def iter_cached_meta(self) -> Iterable[tuple[str, CachedMeta]]:
+        """Iterate over ``(node_id, cached_meta)`` pairs (snapshot for safe iteration)."""
+        return self._index.iter_cached_meta()
 
     @property
     def document_count(self) -> int:
         """Synchronous count of known documents (from in-memory cache)."""
-        return len(self._meta_cache)
+        return self._index.document_count
 
     @property
     def stale_document_count(self) -> int:
         """Synchronous count of documents whose expires_at is set and in the past."""
-        now = datetime.now(UTC)
-        count = 0
-        for cached in self._meta_cache.values():
-            if cached.expires_at is not None:
-                exp = normalize_datetime(cached.expires_at)
-                if exp < now:
-                    count += 1
-        return count
+        return self._index.stale_document_count
 
     def rescan(self) -> None:
         """Public wrapper around _scan_existing() for index rebuilds."""

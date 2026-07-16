@@ -133,6 +133,7 @@ source_modules = [
 ]
 forbidden_modules = [
     "lithos.knowledge",
+    "lithos.corpus_index",
     "lithos.search",
     "lithos.graph",
     "lithos.coordination",
@@ -175,6 +176,7 @@ name = "Core must not import Entrypoints"
 type = "forbidden"
 source_modules = [
     "lithos.knowledge",
+    "lithos.corpus_index",
     "lithos.search",
     "lithos.graph",
     "lithos.coordination",
