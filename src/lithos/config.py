@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
-# Canonical LCMA note_type values — must match VALID_NOTE_TYPES in knowledge.py
+# Canonical LCMA note_type values — must match VALID_NOTE_TYPES in frontmatter_codec.py
 _LCMA_NOTE_TYPES = frozenset(
     {"observation", "agent_finding", "summary", "concept", "task_record", "hypothesis"}
 )
