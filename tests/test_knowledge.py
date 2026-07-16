@@ -3591,6 +3591,13 @@ class TestNormalizeDerivedFromIdsLenient:
         result = normalize_derived_from_ids_lenient([uid, other], self_id=uid)
         assert result == [other]
 
+    def test_invalid_self_id_is_skipped_not_raised(self):
+        """A malformed self_id can't match any UUID, so it is skipped leniently."""
+        other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        # No exception, and nothing is removed since the bad self_id matches nothing.
+        result = normalize_derived_from_ids_lenient([other], self_id="not-a-uuid")
+        assert result == [other]
+
 
 class TestScanExistingNormalization:
     """Tests for _scan_existing() provenance normalization."""

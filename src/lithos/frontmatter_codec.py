@@ -190,7 +190,10 @@ def normalize_derived_from_ids_lenient(ids: list[str], self_id: str | None = Non
                 logger.warning("Removing self-reference from derived_from_ids: %s", self_normalized)
                 result.remove(self_normalized)
         except ValueError:
-            pass
+            # A malformed self_id can't match any normalized UUID, so there is
+            # nothing to remove — skip lenient self-reference stripping. Logged
+            # for parity with the other skip branches above.
+            logger.warning("Skipping self-reference check for invalid self_id: %r", self_id)
 
     return result
 

@@ -305,8 +305,8 @@
         "classes": 3,
         "functions": 25,
         "largest_module": "lithos.frontmatter_codec",
-        "largest_module_lines": 774,
-        "lines": 774,
+        "largest_module_lines": 777,
+        "lines": 777,
         "modules": 1,
         "public_symbols": 20,
         "sloc": 583
@@ -467,13 +467,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23566,
+    "total_lines": 23569,
     "total_modules": 39,
     "total_sloc": 18972
   },
   "tests": {
     "ratio": 1.87,
-    "src_lines": 23566,
-    "test_lines": 44036
+    "src_lines": 23569,
+    "test_lines": 44043
   }
 }
