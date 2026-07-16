@@ -27,7 +27,7 @@ from lithos.config import LithosConfig
 # owned entirely here (reconcile_corpus / reconcile_node); the former
 # ``lcma/edges.py`` helpers are gone (task 681ac952 PR1c).
 from lithos.edge_store import EdgeStore
-from lithos.knowledge import KnowledgeDocument, derive_namespace
+from lithos.frontmatter_codec import KnowledgeDocument, derive_namespace
 
 logger = logging.getLogger(__name__)
 

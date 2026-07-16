@@ -108,7 +108,7 @@ def seeded_graph(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -> Kn
         full_path = seeded_config.storage.knowledge_path / rel_path
         if full_path.exists():
             post = fm.load(str(full_path))
-            from lithos.knowledge import KnowledgeDocument, KnowledgeMetadata
+            from lithos.frontmatter_codec import KnowledgeDocument, KnowledgeMetadata
 
             metadata = KnowledgeMetadata.from_dict(dict(post.metadata))
             doc = KnowledgeDocument(

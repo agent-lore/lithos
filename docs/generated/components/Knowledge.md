@@ -12,7 +12,7 @@ The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos._merge` | XS | 0 | 1 |
-| `lithos.knowledge` | XL | 8 | 15 |
+| `lithos.knowledge` | XL | 5 | 0 |
 
 ## Public API
 
@@ -20,34 +20,16 @@ The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived
 - def `merge_metadata` — Apply an additive per-key patch to a metadata dict.
 
 ### `lithos.knowledge`
-- class `WikiLink` — Represents a wiki-link in document content.
-- def `validate_extra_metadata` — Validate free-form document metadata before it is stored in ``extra`` (#305).
-- def `validate_confidence` — Validate a confidence value at the write boundary (#312).
-- def `validate_metadata_match` — Validate a ``metadata_match`` filter (#306).
-- def `extract_extra` — Return the free-form metadata: keys not recognised as known fields.
-- def `canonical_metadata_value` — Canonical, hashable bucket key for a metadata value (#306).
-- def `normalize_url` — Canonicalize a URL for dedup comparison.
-- def `validate_derived_from_ids` — Validate and normalize a list of derived-from document IDs.
-- def `normalize_derived_from_ids_lenient` — Normalize derived_from_ids leniently for disk ingestion.
-- class `KnowledgeMetadata` — Document metadata stored in YAML frontmatter.
-- class `KnowledgeDocument` — A knowledge document with content and metadata.
 - class `DuplicateInfo` — Information about a duplicate document.
 - class `WriteResult` — Structured result type for create/update operations.
-- def `slugify` — Convert text to URL-safe slug.
-- def `generate_slug` — Generate slug from title (alias for slugify).
-- def `derive_namespace` — Derive namespace from a note's path relative to knowledge_path.
-- def `apply_lcma_defaults` — Apply LCMA read-time defaults in-place.
-- def `parse_wiki_links` — Extract wiki-links from content.
-- def `extract_title_from_content` — Extract title from H1 header if present.
-- def `truncate_content` — Truncate content at paragraph or sentence boundary.
 - class `ReconcilePlan` — Aggregate reconcile plan owned by :class:`KnowledgeManager`.
 - class `ReconcileResult` — Outcome of applying a :class:`ReconcilePlan`.
 - class `KnowledgeManager` — Manages knowledge documents - CRUD operations.
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Errors](Errors.md), [Graph](Graph.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
-- Used by: [CognitiveMemory](CognitiveMemory.md), [Coordination](Coordination.md), [Entrypoints](Entrypoints.md), [Graph](Graph.md), [Intake](Intake.md), [LCMA](LCMA.md), [Provenance](Provenance.md)
+- Depends on: [Codec](Codec.md), [Config](Config.md), [Errors](Errors.md), [Graph](Graph.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
+- Used by: [CognitiveMemory](CognitiveMemory.md), [Coordination](Coordination.md), [Entrypoints](Entrypoints.md), [Intake](Intake.md), [LCMA](LCMA.md)
 
 ## Data stores
 

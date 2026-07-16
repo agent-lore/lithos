@@ -32,7 +32,7 @@ Do not edit these files by hand.
 
 ## Components
 
-Per-component drill-down pages: [CognitiveMemory](components/CognitiveMemory.md) · [Config](components/Config.md) · [Coordination](components/Coordination.md) · [Entrypoints](components/Entrypoints.md) · [Errors](components/Errors.md) · [Events](components/Events.md) · [Graph](components/Graph.md) · [Intake](components/Intake.md) · [Knowledge](components/Knowledge.md) · [LCMA](components/LCMA.md) · [Logging](components/Logging.md) · [Provenance](components/Provenance.md) · [Search](components/Search.md) · [Telemetry](components/Telemetry.md)
+Per-component drill-down pages: [Codec](components/Codec.md) · [CognitiveMemory](components/CognitiveMemory.md) · [Config](components/Config.md) · [Coordination](components/Coordination.md) · [Entrypoints](components/Entrypoints.md) · [Errors](components/Errors.md) · [Events](components/Events.md) · [Graph](components/Graph.md) · [Intake](components/Intake.md) · [Knowledge](components/Knowledge.md) · [LCMA](components/LCMA.md) · [Logging](components/Logging.md) · [Provenance](components/Provenance.md) · [Search](components/Search.md) · [Telemetry](components/Telemetry.md)
 
 ## Legend
 

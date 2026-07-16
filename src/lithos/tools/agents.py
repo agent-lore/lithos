@@ -10,7 +10,7 @@ from fastmcp import FastMCP
 
 from lithos.envelopes import invalid_input_envelope
 from lithos.events import AGENT_REGISTERED, LithosEvent
-from lithos.knowledge import _normalize_datetime
+from lithos.frontmatter_codec import normalize_datetime
 from lithos.telemetry import get_current_span, tool_metrics
 from lithos.tools._seam import tool_span
 
@@ -118,7 +118,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         since_dt = None
         if active_since:
             try:
-                since_dt = _normalize_datetime(datetime.fromisoformat(active_since))
+                since_dt = normalize_datetime(datetime.fromisoformat(active_since))
             except ValueError:
                 return invalid_input_envelope(f"Invalid active_since datetime: {active_since}")
 

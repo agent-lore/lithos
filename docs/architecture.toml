@@ -37,6 +37,7 @@ src_layout   = "src"
 [component_docs]
 Entrypoints     = "CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfaces — plus the composition root that wires the graph for a process."
 Knowledge       = "The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived views."
+Codec           = "The corpus file format: Markdown + YAML frontmatter <-> KnowledgeDocument, with the write-boundary validators. Pure and dependency-free."
 Search          = "Full-text (Tantivy) and semantic (ChromaDB) search behind one engine that hides its backends."
 Graph           = "The wiki-link knowledge graph and the authoritative edges.db store."
 Coordination    = "SQLite-backed task claiming, findings, and the agent registry for multi-agent work."
@@ -62,8 +63,18 @@ Logging         = "Structured JSON logging setup."
 # moved reconciliation itself onto KnowledgeManager and killed the Core-tier
 # lithos.reconcile peer; what remained was never Core's — it serves exactly one
 # CLI command.
+#
+# lithos.frontmatter_codec is the corpus file format (Markdown+YAML <-> document),
+# split from lithos.knowledge (task 4a3836a9). It gets its OWN component rather than
+# folding into Knowledge because it is what let Graph/Provenance/Search name the
+# document type without importing KnowledgeManager: filing it under Knowledge would
+# re-draw Graph->Knowledge / Provenance->Knowledge edges that no longer exist at the
+# module level, keeping the Graph/Knowledge/Provenance/Search SCC alive on the diagram
+# after the extraction actually broke it. It is pure and dependency-free, so it is held
+# to Foundation discipline by import-linter (as lithos._merge and lithos.edge_store are).
 Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__", "lithos.pipeline", "lithos.cli_reconcile"]
 Knowledge       = ["lithos.knowledge", "lithos._merge"]
+Codec           = ["lithos.frontmatter_codec"]
 Search          = ["lithos.search"]
 Graph           = ["lithos.graph", "lithos.edge_store"]
 Coordination    = ["lithos.coordination"]
@@ -81,7 +92,7 @@ Logging         = ["lithos.logging_config"]
 # Dependencies must only point downward (Entrypoints -> Core -> Foundation).
 [tiers]
 Entrypoints = ["Entrypoints"]
-Core        = ["Knowledge", "Search", "Graph", "Coordination", "Intake", "Provenance", "CognitiveMemory", "LCMA"]
+Core        = ["Knowledge", "Codec", "Search", "Graph", "Coordination", "Intake", "Provenance", "CognitiveMemory", "LCMA"]
 Foundation  = ["Events", "Config", "Telemetry", "Errors", "Logging"]
 
 # Hard architecture budgets, checked by tests/guardrail/test_metrics_budgets.py
@@ -96,12 +107,12 @@ Foundation  = ["Events", "Config", "Telemetry", "Errors", "Logging"]
 # is deliberately NOT pinned to the exact current high-water mark. Ratchet the
 # *count* of oversized modules down via modules_over_800_lines instead.
 [budgets]
-cross_component_edges  = 63    # measured 2026-07; task 681ac952 PR1c removed Provenance→LCMA (derived_from projection consolidated into ProvenanceProjection; lcma/edges.py deleted); direction: down
-component_cycles       = 1    # one 4-component SCC in Core (Graph/Knowledge/Provenance/Search); PR1c shrank it from 7 — Coordination/Intake/LCMA left the cycle once Provenance→LCMA was removed; goal: shrink it
-module_cycles          = 2    # knowledge<->graph<->search<->provenance, server<->tools; goal: 0
-modules_over_800_lines = 11   # incl. tools.tasks (985) split from server in #374; direction: down
+cross_component_edges  = 68    # measured 2026-07; task 4a3836a9 split lithos.frontmatter_codec into its own component (63→68) — no import changed; a component that imports BOTH the store and the format now counts as two edges where it was one. That split is what broke the Graph/Knowledge/Provenance/Search SCC (component_cycles 1→0); direction: down
+component_cycles       = 0    # measured 2026-07; task 4a3836a9 extracted the codec so graph.py/provenance.py import the pure format module, not KnowledgeManager — the 4-component Core SCC (Graph/Knowledge/Provenance/Search) is gone. PR1c had shrunk it from 7; goal: hold at 0
+module_cycles          = 1    # server<->tools; the knowledge<->graph<->search<->provenance SCC broke when the codec moved out (task 4a3836a9); goal: 0
+modules_over_800_lines = 11   # incl. tools.tasks (985) split from server in #374; knowledge.py 2444→1773 (codec out) but still over; direction: down
 max_module_lines       = 2800 # stop-loss; largest today is coordination.py at 2675
-cross_module_private_refs = 42  # measured 2026-07; server._emit/_config x12, _normalize_datetime x3 etc.; goal: 0
+cross_module_private_refs = 42  # measured 2026-07; server._emit/_config x12 etc. (normalize_datetime made public in task 4a3836a9); goal: 0
 tests_private_imports     = 88  # measured 2026-07; test_telemetry alone is 45; direction: down
 
 # MCP tool surface: modules scanned for @…tool()-decorated handlers (counted in
@@ -141,6 +152,7 @@ include_modules = [
     "lithos.graph",
     "lithos.events",
     "lithos.knowledge",
+    "lithos.frontmatter_codec",
     "lithos.provenance",
     "lithos.cognitive_memory",
     "lithos.intake",

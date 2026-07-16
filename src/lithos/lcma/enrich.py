@@ -32,8 +32,9 @@ if TYPE_CHECKING:
     from lithos.config import LcmaConfig
     from lithos.coordination import CoordinationService
     from lithos.events import EventBus
+    from lithos.frontmatter_codec import KnowledgeDocument
     from lithos.intake import CorpusIntake
-    from lithos.knowledge import KnowledgeDocument, KnowledgeManager
+    from lithos.knowledge import KnowledgeManager
     from lithos.lcma.stats import StatsStore
     from lithos.provenance import ProvenanceProjection
     from lithos.telemetry import _LithosMetrics

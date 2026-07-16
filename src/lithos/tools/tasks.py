@@ -20,7 +20,7 @@ from lithos.events import (
     TASK_UPDATED,
     LithosEvent,
 )
-from lithos.knowledge import validate_metadata_match
+from lithos.frontmatter_codec import validate_metadata_match
 from lithos.telemetry import get_current_span, tool_metrics
 from lithos.tools._seam import tool_span
 

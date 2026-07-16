@@ -3,6 +3,50 @@
 
 # Domain model
 
+## Codec
+
+```mermaid
+classDiagram
+  class KnowledgeDocument {
+    +id str
+    +title str
+    +content str
+    +path Path
+  }
+  class KnowledgeMetadata {
+    +id str
+    +title str
+    +author str
+    +created_at datetime
+    +updated_at datetime
+    +tags list[str]
+    +aliases list[str]
+    +confidence float
+    +contributors list[str]
+    +source str | None
+    +source_url str | None
+    +supersedes str | None
+    +derived_from_ids list[str]
+    +expires_at datetime | None
+    +extra dict
+    +version int
+    +schema_version int | None
+    +namespace str | None
+    +access_scope str | None
+    +note_type str | None
+    +status str | None
+    +summaries dict | None
+    +entities list[str]
+    +entities_extractor int | None
+  }
+  class WikiLink {
+    +target str
+    +display str | None
+  }
+  KnowledgeDocument "1" --> "1" KnowledgeMetadata : metadata
+  KnowledgeDocument "1" --> "0..*" WikiLink : links
+```
+
 ## CognitiveMemory
 
 ```mermaid
@@ -138,7 +182,7 @@ classDiagram
     +title str
   }
   class KnowledgeDocument
-  <<Knowledge>> KnowledgeDocument
+  <<Codec>> KnowledgeDocument
   GraphReconcilePlan "1" --> "0..*" GraphReconcileAction : actions
   GraphReconcilePlan "1" --> "0..*" KnowledgeDocument : docs
   GraphReconcileResult "1" --> "0..*" GraphReconcileAction : actions
@@ -215,7 +259,7 @@ classDiagram
   class DuplicateInfo
   <<Knowledge>> DuplicateInfo
   class KnowledgeDocument
-  <<Knowledge>> KnowledgeDocument
+  <<Codec>> KnowledgeDocument
   WriteOutcome "1" --> "0..1" DuplicateInfo : duplicate_of
   WriteOutcome "1" --> "0..1" KnowledgeDocument : document
 ```
@@ -229,44 +273,8 @@ classDiagram
     +title str
     +source_url str | None
   }
-  class KnowledgeDocument {
-    +id str
-    +title str
-    +content str
-    +path Path
-  }
-  class KnowledgeMetadata {
-    +id str
-    +title str
-    +author str
-    +created_at datetime
-    +updated_at datetime
-    +tags list[str]
-    +aliases list[str]
-    +confidence float
-    +contributors list[str]
-    +source str | None
-    +source_url str | None
-    +supersedes str | None
-    +derived_from_ids list[str]
-    +expires_at datetime | None
-    +extra dict
-    +version int
-    +schema_version int | None
-    +namespace str | None
-    +access_scope str | None
-    +note_type str | None
-    +status str | None
-    +summaries dict | None
-    +entities list[str]
-    +entities_extractor int | None
-  }
   class ReconcilePlan
   class ReconcileResult
-  class WikiLink {
-    +target str
-    +display str | None
-  }
   class WriteResult {
     +status Literal['created', 'updated', 'duplicate', 'error', 'invalid_input', 'version_conflict', 'content_too_large', 'path_collision']
     +warnings list[str]
@@ -278,6 +286,8 @@ classDiagram
   <<Graph>> GraphReconcilePlan
   class GraphReconcileResult
   <<Graph>> GraphReconcileResult
+  class KnowledgeDocument
+  <<Codec>> KnowledgeDocument
   class ProvenancePlan
   <<Provenance>> ProvenancePlan
   class ProvenanceResult
@@ -286,8 +296,6 @@ classDiagram
   <<Search>> SearchReconcilePlan
   class SearchReconcileResult
   <<Search>> SearchReconcileResult
-  KnowledgeDocument "1" --> "1" KnowledgeMetadata : metadata
-  KnowledgeDocument "1" --> "0..*" WikiLink : links
   ReconcilePlan "1" --> "0..1" GraphReconcilePlan : graph
   ReconcilePlan "1" --> "0..1" ProvenancePlan : provenance
   ReconcilePlan "1" --> "0..1" SearchReconcilePlan : search

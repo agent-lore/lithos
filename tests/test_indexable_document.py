@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from lithos.config import LithosConfig
-from lithos.knowledge import KnowledgeDocument, KnowledgeManager, KnowledgeMetadata
+from lithos.frontmatter_codec import KnowledgeDocument, KnowledgeMetadata
+from lithos.knowledge import KnowledgeManager
 from lithos.search import IndexableDocument, SearchEngine
 
 

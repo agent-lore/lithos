@@ -14,7 +14,7 @@ from typing import Literal
 import networkx as nx
 
 from lithos.config import LithosConfig, get_config
-from lithos.knowledge import KnowledgeDocument, parse_wiki_links
+from lithos.frontmatter_codec import KnowledgeDocument, parse_wiki_links
 from lithos.telemetry import StatusCode, get_tracer, traced
 
 logger = logging.getLogger(__name__)

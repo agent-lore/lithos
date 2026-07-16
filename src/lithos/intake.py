@@ -39,14 +39,9 @@ from lithos.events import (
     LithosEvent,
     make_edge_upserted_event,
 )
+from lithos.frontmatter_codec import KnowledgeDocument
 from lithos.graph import KnowledgeGraph
-from lithos.knowledge import (
-    _UNSET,
-    DuplicateInfo,
-    KnowledgeDocument,
-    KnowledgeManager,
-    _UnsetType,
-)
+from lithos.knowledge import _UNSET, DuplicateInfo, KnowledgeManager, _UnsetType
 from lithos.search import SearchEngine
 from lithos.telemetry import get_tracer
 

@@ -61,7 +61,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Coordination](Coordination.md), [Errors](Errors.md), [Events](Events.md), [Graph](Graph.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
+- Depends on: [Codec](Codec.md), [Config](Config.md), [Coordination](Coordination.md), [Errors](Errors.md), [Events](Events.md), [Graph](Graph.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
 - Used by: [CognitiveMemory](CognitiveMemory.md)
 
 ## ADRs
