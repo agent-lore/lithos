@@ -85,7 +85,7 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 
 ## Dependencies
 
-- Depends on: [CognitiveMemory](CognitiveMemory.md), [Config](Config.md), [Coordination](Coordination.md), [Errors](Errors.md), [Events](Events.md), [Graph](Graph.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [Logging](Logging.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
+- Depends on: [Codec](Codec.md), [CognitiveMemory](CognitiveMemory.md), [Config](Config.md), [Coordination](Coordination.md), [Errors](Errors.md), [Events](Events.md), [Graph](Graph.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [Logging](Logging.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
 - Used by: —
 
 ## ADRs

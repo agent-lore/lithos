@@ -15,8 +15,8 @@ from unittest.mock import patch
 import pytest
 
 from lithos.config import LithosConfig
+from lithos.frontmatter_codec import KnowledgeDocument, KnowledgeMetadata
 from lithos.graph import KnowledgeGraph
-from lithos.knowledge import KnowledgeDocument, KnowledgeMetadata
 
 
 def _make_doc(doc_id: str) -> KnowledgeDocument:

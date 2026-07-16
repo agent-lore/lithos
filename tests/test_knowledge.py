@@ -9,17 +9,16 @@ import pytest
 
 from lithos.config import LithosConfig
 from lithos.errors import CorpusScanError
-from lithos.knowledge import (
-    KnowledgeManager,
+from lithos.frontmatter_codec import (
     KnowledgeMetadata,
-    WriteResult,
-    _atomic_write,
-    generate_slug,
+    encode,
     normalize_derived_from_ids_lenient,
     normalize_url,
     parse_wiki_links,
+    slugify,
     validate_derived_from_ids,
 )
+from lithos.knowledge import KnowledgeManager, WriteResult, _atomic_write
 
 
 class TestAtomicWrite:
@@ -115,30 +114,30 @@ class TestSlugGeneration:
 
     def test_simple_title(self):
         """Generate slug from simple title."""
-        assert generate_slug("Hello World") == "hello-world"
+        assert slugify("Hello World") == "hello-world"
 
     def test_special_characters(self):
         """Remove special characters from slug."""
-        assert generate_slug("What's New in Python 3.11?") == "whats-new-in-python-311"
+        assert slugify("What's New in Python 3.11?") == "whats-new-in-python-311"
 
     def test_multiple_spaces(self):
         """Collapse multiple spaces/dashes."""
-        assert generate_slug("Too   Many   Spaces") == "too-many-spaces"
+        assert slugify("Too   Many   Spaces") == "too-many-spaces"
 
     def test_unicode_characters(self):
         """Handle unicode in titles."""
-        slug = generate_slug("Café & Résumé")
+        slug = slugify("Café & Résumé")
         assert "--" not in slug  # No double dashes
         assert slug.startswith("caf")  # Handles accents
 
     def test_empty_title(self):
         """Handle empty title gracefully."""
-        slug = generate_slug("")
+        slug = slugify("")
         assert slug == "untitled" or len(slug) > 0
 
     def test_numbers_only(self):
         """Handle numeric titles."""
-        slug = generate_slug("2024")
+        slug = slugify("2024")
         assert "2024" in slug
 
 
@@ -1381,7 +1380,7 @@ class TestSourceUrlField:
 
     def test_source_url_in_known_metadata_keys(self):
         """source_url is a recognised metadata key."""
-        from lithos.knowledge import _KNOWN_METADATA_KEYS
+        from lithos.frontmatter_codec import _KNOWN_METADATA_KEYS
 
         assert "source_url" in _KNOWN_METADATA_KEYS
 
@@ -1485,7 +1484,7 @@ class TestDerivedFromIdsField:
 
     def test_derived_from_ids_in_known_metadata_keys(self):
         """derived_from_ids is a recognised metadata key."""
-        from lithos.knowledge import _KNOWN_METADATA_KEYS
+        from lithos.frontmatter_codec import _KNOWN_METADATA_KEYS
 
         assert "derived_from_ids" in _KNOWN_METADATA_KEYS
 
@@ -1564,7 +1563,7 @@ class TestDerivedFromIdsField:
         # Manually set derived_from_ids and rewrite (create doesn't accept it yet)
         created.metadata.derived_from_ids = source_ids
         full_path = test_config.storage.knowledge_path / created.path
-        full_path.write_text(created.to_markdown())
+        full_path.write_text(encode(created))
 
         doc, _ = await knowledge_manager.read(id=created.id)
         assert doc.metadata.derived_from_ids == source_ids
@@ -3592,6 +3591,13 @@ class TestNormalizeDerivedFromIdsLenient:
         result = normalize_derived_from_ids_lenient([uid, other], self_id=uid)
         assert result == [other]
 
+    def test_invalid_self_id_is_skipped_not_raised(self):
+        """A malformed self_id can't match any UUID, so it is skipped leniently."""
+        other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        # No exception, and nothing is removed since the bad self_id matches nothing.
+        result = normalize_derived_from_ids_lenient([other], self_id="not-a-uuid")
+        assert result == [other]
+
 
 class TestScanExistingNormalization:
     """Tests for _scan_existing() provenance normalization."""
@@ -3763,7 +3769,7 @@ class TestExpiresAtField:
 
     def test_expires_at_in_known_metadata_keys(self):
         """expires_at is a recognised metadata key."""
-        from lithos.knowledge import _KNOWN_METADATA_KEYS
+        from lithos.frontmatter_codec import _KNOWN_METADATA_KEYS
 
         assert "expires_at" in _KNOWN_METADATA_KEYS
 
@@ -4448,7 +4454,7 @@ class TestSlugCollision:
         original_text = (kp / doc2.path).read_text()
 
         # Capture the source_url index state before the bad update.
-        from lithos.knowledge import normalize_url
+        from lithos.frontmatter_codec import normalize_url
 
         original_norm = normalize_url(original_source_url)
         assert knowledge_manager._source_url_to_id.get(original_norm) == doc2.id

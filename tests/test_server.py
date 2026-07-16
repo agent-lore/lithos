@@ -12,6 +12,7 @@ import pytest
 from starlette.routing import Mount
 
 from lithos.config import LithosConfig
+from lithos.frontmatter_codec import encode
 from lithos.knowledge import KnowledgeManager
 from lithos.search import SearchEngine
 from lithos.server import LithosServer, create_server, get_server
@@ -1938,7 +1939,7 @@ class TestCacheLookup:
         doc.metadata.updated_at = datetime.now(UTC) - timedelta(hours=48)
         # Re-write to disk to persist the old updated_at
         path = server.knowledge._resolve_safe_path(doc.path)[1]
-        path.write_text(doc.to_markdown())
+        path.write_text(encode(doc))
         # Re-read to reload from disk
         server.knowledge._id_to_path[doc.id] = doc.path
         server.search.index(KnowledgeManager.to_indexable(doc))

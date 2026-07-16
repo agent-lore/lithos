@@ -6,12 +6,8 @@ from pathlib import Path
 import frontmatter as fm
 
 from lithos.config import LithosConfig
-from lithos.knowledge import (
-    KnowledgeManager,
-    KnowledgeMetadata,
-    apply_lcma_defaults,
-    derive_namespace,
-)
+from lithos.frontmatter_codec import KnowledgeMetadata, apply_lcma_defaults, derive_namespace
+from lithos.knowledge import KnowledgeManager
 
 
 class TestDeriveNamespace:

@@ -30,7 +30,7 @@ The wiki-link knowledge graph and the authoritative edges.db store.
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Knowledge](Knowledge.md), [Telemetry](Telemetry.md)
+- Depends on: [Codec](Codec.md), [Config](Config.md), [Telemetry](Telemetry.md)
 - Used by: [CognitiveMemory](CognitiveMemory.md), [Entrypoints](Entrypoints.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [LCMA](LCMA.md), [Provenance](Provenance.md), [Search](Search.md)
 
 ## Data stores

@@ -177,7 +177,7 @@ def seeded_graph(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -> Kn
         full_path = seeded_config.storage.knowledge_path / rel_path
         if full_path.exists():
             post = fm.load(str(full_path))
-            from lithos.knowledge import KnowledgeDocument, KnowledgeMetadata
+            from lithos.frontmatter_codec import KnowledgeDocument, KnowledgeMetadata
 
             metadata = KnowledgeMetadata.from_dict(dict(post.metadata))
             doc = KnowledgeDocument(
@@ -675,7 +675,7 @@ _ID7 = "77777777-7777-4777-7777-777777777777"
 @pytest.fixture
 def graph_with_links(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -> KnowledgeGraph:
     """KnowledgeGraph where note-1 wiki-links to note-2."""
-    from lithos.knowledge import KnowledgeDocument, KnowledgeMetadata, parse_wiki_links
+    from lithos.frontmatter_codec import KnowledgeDocument, KnowledgeMetadata, parse_wiki_links
 
     graph = KnowledgeGraph(seeded_config)
     kp = seeded_config.storage.knowledge_path
@@ -1069,7 +1069,7 @@ class TestScoutSourceUrl:
         km._scan_existing()
 
         # Confirm B is NOT the owner in _source_url_to_id (A is)
-        from lithos.knowledge import normalize_url
+        from lithos.frontmatter_codec import normalize_url
 
         norm = normalize_url("https://example.com/same")
         assert km._source_url_to_id.get(norm) == _COLLISION_A

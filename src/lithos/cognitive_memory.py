@@ -27,8 +27,8 @@ from typing import TYPE_CHECKING, Any
 
 from lithos.errors import SearchBackendError
 from lithos.events import EVENT_ORIGIN_ENRICH, LithosEvent, make_edge_upserted_event
+from lithos.frontmatter_codec import normalize_datetime
 from lithos.intake import EdgeRequest, NoteUpdateRequest
-from lithos.knowledge import _normalize_datetime
 from lithos.lcma.edge_reinforce import RELATED_TO_STRENGTHEN_DELTA, reinforce_related_edge
 from lithos.lcma.enrich import ENRICH_AGENT, EnrichWorker
 
@@ -824,7 +824,7 @@ class CognitiveMemory:
 
                 # Check max_age_hours
                 if max_age_hours is not None:
-                    updated = _normalize_datetime(meta.updated_at)
+                    updated = normalize_datetime(meta.updated_at)
                     cutoff = now - timedelta(hours=max_age_hours)
                     if updated < cutoff:
                         if first_stale_id is None:

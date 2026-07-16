@@ -9,6 +9,7 @@ graph TD
     Entrypoints
   end
   subgraph tier_Core["Core"]
+    Codec
     CognitiveMemory
     Coordination
     Graph
@@ -25,6 +26,7 @@ graph TD
     Logging
     Telemetry
   end
+  click Codec "components/Codec.md"
   click CognitiveMemory "components/CognitiveMemory.md"
   click Config "components/Config.md"
   click Coordination "components/Coordination.md"
@@ -39,6 +41,7 @@ graph TD
   click Provenance "components/Provenance.md"
   click Search "components/Search.md"
   click Telemetry "components/Telemetry.md"
+  CognitiveMemory --> Codec
   CognitiveMemory --> Config
   CognitiveMemory --> Coordination
   CognitiveMemory --> Errors
@@ -54,6 +57,7 @@ graph TD
   Coordination --> Errors
   Coordination --> Knowledge
   Coordination --> Telemetry
+  Entrypoints --> Codec
   Entrypoints --> CognitiveMemory
   Entrypoints --> Config
   Entrypoints --> Coordination
@@ -68,9 +72,10 @@ graph TD
   Entrypoints --> Telemetry
   Events --> Config
   Events --> Telemetry
+  Graph --> Codec
   Graph --> Config
-  Graph --> Knowledge
   Graph --> Telemetry
+  Intake --> Codec
   Intake --> Coordination
   Intake --> Errors
   Intake --> Events
@@ -78,12 +83,14 @@ graph TD
   Intake --> Knowledge
   Intake --> Search
   Intake --> Telemetry
+  Knowledge --> Codec
   Knowledge --> Config
   Knowledge --> Errors
   Knowledge --> Graph
   Knowledge --> Provenance
   Knowledge --> Search
   Knowledge --> Telemetry
+  LCMA --> Codec
   LCMA --> Config
   LCMA --> Coordination
   LCMA --> Errors
@@ -94,43 +101,43 @@ graph TD
   LCMA --> Provenance
   LCMA --> Search
   LCMA --> Telemetry
+  Provenance --> Codec
   Provenance --> Config
   Provenance --> Graph
-  Provenance --> Knowledge
   Search --> Config
   Search --> Errors
   Search --> Graph
   Search --> Telemetry
   Telemetry --> Config
-  linkStyle 0 stroke:#bbb
-  linkStyle 2 stroke:#bbb
+  linkStyle 1 stroke:#bbb
   linkStyle 3 stroke:#bbb
-  linkStyle 10 stroke:#bbb
+  linkStyle 4 stroke:#bbb
   linkStyle 11 stroke:#bbb
   linkStyle 12 stroke:#bbb
-  linkStyle 14 stroke:#bbb
-  linkStyle 16 stroke:#999,stroke-dasharray:4
+  linkStyle 13 stroke:#bbb
+  linkStyle 15 stroke:#bbb
   linkStyle 18 stroke:#999,stroke-dasharray:4
-  linkStyle 19 stroke:#999,stroke-dasharray:4
-  linkStyle 23 stroke:#999,stroke-dasharray:4
-  linkStyle 26 stroke:#999,stroke-dasharray:4
-  linkStyle 27 stroke:#bbb
-  linkStyle 28 stroke:#bbb
+  linkStyle 20 stroke:#999,stroke-dasharray:4
+  linkStyle 21 stroke:#999,stroke-dasharray:4
+  linkStyle 25 stroke:#999,stroke-dasharray:4
+  linkStyle 28 stroke:#999,stroke-dasharray:4
   linkStyle 29 stroke:#bbb
-  linkStyle 31 stroke:#bbb
+  linkStyle 30 stroke:#bbb
+  linkStyle 32 stroke:#bbb
   linkStyle 33 stroke:#bbb
-  linkStyle 34 stroke:#bbb
-  linkStyle 38 stroke:#bbb
-  linkStyle 39 stroke:#bbb
-  linkStyle 40 stroke:#bbb
+  linkStyle 36 stroke:#bbb
+  linkStyle 37 stroke:#bbb
+  linkStyle 41 stroke:#bbb
+  linkStyle 43 stroke:#bbb
   linkStyle 44 stroke:#bbb
-  linkStyle 45 stroke:#bbb
-  linkStyle 47 stroke:#bbb
   linkStyle 48 stroke:#bbb
-  linkStyle 54 stroke:#bbb
-  linkStyle 55 stroke:#bbb
-  linkStyle 58 stroke:#bbb
+  linkStyle 50 stroke:#bbb
+  linkStyle 52 stroke:#bbb
+  linkStyle 53 stroke:#bbb
   linkStyle 59 stroke:#bbb
   linkStyle 61 stroke:#bbb
-  linkStyle 62 stroke:#bbb
+  linkStyle 63 stroke:#bbb
+  linkStyle 64 stroke:#bbb
+  linkStyle 66 stroke:#bbb
+  linkStyle 67 stroke:#bbb
 ```

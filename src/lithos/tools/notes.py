@@ -10,15 +10,14 @@ from typing import TYPE_CHECKING, Any
 from fastmcp import FastMCP
 
 from lithos.envelopes import error_envelope, invalid_input_envelope
-from lithos.intake import DeleteRequest, NoteUpdateRequest, WriteRequest
-from lithos.knowledge import (
-    _UNSET,
+from lithos.frontmatter_codec import (
     VALID_ACCESS_SCOPES,
     VALID_NOTE_TYPES,
     VALID_STATUSES,
-    _UnsetType,
     validate_extra_metadata,
 )
+from lithos.intake import DeleteRequest, NoteUpdateRequest, WriteRequest
+from lithos.knowledge import _UNSET, _UnsetType
 from lithos.telemetry import get_current_span, tool_metrics
 from lithos.tools._seam import tool_span
 

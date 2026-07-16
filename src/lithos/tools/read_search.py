@@ -14,7 +14,7 @@ from fastmcp import FastMCP
 
 from lithos.envelopes import error_envelope, invalid_input_envelope
 from lithos.errors import SearchBackendError
-from lithos.knowledge import _normalize_datetime, validate_metadata_match
+from lithos.frontmatter_codec import normalize_datetime, validate_metadata_match
 from lithos.telemetry import get_current_span, tool_metrics
 from lithos.tools._seam import tool_span
 
@@ -472,12 +472,12 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.limit", limit)
 
-        # Normalize to UTC so the comparison against _normalize_datetime'd
+        # Normalize to UTC so the comparison against normalize_datetime'd
         # document timestamps below never mixes naive and aware values.
         since_dt = None
         if since:
             try:
-                since_dt = _normalize_datetime(datetime.fromisoformat(since))
+                since_dt = normalize_datetime(datetime.fromisoformat(since))
             except ValueError:
                 return invalid_input_envelope(f"Invalid since datetime: {since}")
 
@@ -536,7 +536,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 if cached is None:
                     continue
                 if since_dt is not None:
-                    cached_updated = _normalize_datetime(cached.updated_at)
+                    cached_updated = normalize_datetime(cached.updated_at)
                     if cached_updated < since_dt:
                         continue
                 if (
