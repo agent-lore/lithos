@@ -104,7 +104,7 @@ def seeded_km(seeded_config: LithosConfig) -> KnowledgeManager:
 @pytest.fixture
 def seeded_graph(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -> KnowledgeGraph:
     graph = KnowledgeGraph(seeded_config)
-    for doc_id, rel_path in seeded_km._id_to_path.items():
+    for doc_id, rel_path in seeded_km._index._id_to_path.items():
         full_path = seeded_config.storage.knowledge_path / rel_path
         if full_path.exists():
             post = fm.load(str(full_path))

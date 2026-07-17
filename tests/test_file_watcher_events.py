@@ -21,7 +21,7 @@ class TestFileWatcherEventEmission:
         """A brand-new .md file appearing on disk triggers note.created with agent=\"watcher\".
 
         Pins the create-side attribution: an externally-written file that
-        is not yet in ``KnowledgeManager._id_to_path`` produces
+        is not yet in ``KnowledgeManager._index._id_to_path`` produces
         ``NOTE_CREATED`` (not ``NOTE_UPDATED``), and the event carries the
         watcher sentinel.
 
@@ -202,7 +202,7 @@ class TestFileWatcherEventEmission:
 
         # …while KnowledgeManager already reports the id as removed.
         assert server.knowledge.get_id_by_path(doc.path) is None
-        assert doc.id not in server.knowledge._meta_cache
+        assert doc.id not in server.knowledge._index._meta_cache
 
     async def test_non_markdown_file_emits_no_event(self, server: LithosServer) -> None:
         """Non-markdown files produce no event."""

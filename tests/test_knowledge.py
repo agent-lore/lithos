@@ -1079,8 +1079,8 @@ class TestMetadataFiltering:
         """Efficiency proof: an equality-filtered list_all never iterates _meta_cache."""
         for i in range(10):
             await self._mk(knowledge_manager, f"D{i}", extra={"k": "v" if i == 0 else "w"})
-        counting = _CountingDict(knowledge_manager._meta_cache)
-        knowledge_manager._meta_cache = counting
+        counting = _CountingDict(knowledge_manager._index._meta_cache)
+        knowledge_manager._index._meta_cache = counting
 
         counting.iter_count = 0
         _, total = await knowledge_manager.list_all(metadata_match={"k": "v"})
@@ -1614,8 +1614,8 @@ class TestDedupMapAndLock:
 
     def test_manager_has_source_url_map(self, knowledge_manager: KnowledgeManager):
         """KnowledgeManager has _source_url_to_id dict."""
-        assert hasattr(knowledge_manager, "_source_url_to_id")
-        assert isinstance(knowledge_manager._source_url_to_id, dict)
+        assert hasattr(knowledge_manager._index, "_source_url_to_id")
+        assert isinstance(knowledge_manager._index._source_url_to_id, dict)
 
     def test_manager_has_write_lock(self, knowledge_manager: KnowledgeManager):
         """KnowledgeManager has _write_lock asyncio.Lock."""
@@ -1637,7 +1637,7 @@ class TestDedupMapAndLock:
         # Create a new manager that scans on init
         mgr2 = KnowledgeManager(test_config)
         norm = normalize_url("https://example.com/scanned")
-        assert norm in mgr2._source_url_to_id
+        assert norm in mgr2._index._source_url_to_id
 
     @pytest.mark.asyncio
     async def test_scan_normalizes_urls_on_load(self, test_config):
@@ -1652,7 +1652,7 @@ class TestDedupMapAndLock:
 
         mgr2 = KnowledgeManager(test_config)
         # Should be stored with normalized URL
-        assert "https://example.com/Page" in mgr2._source_url_to_id
+        assert "https://example.com/Page" in mgr2._index._source_url_to_id
 
     @pytest.mark.asyncio
     async def test_scan_skips_docs_without_source_url(self, test_config):
@@ -1665,7 +1665,7 @@ class TestDedupMapAndLock:
         )
 
         mgr2 = KnowledgeManager(test_config)
-        assert len(mgr2._source_url_to_id) == 0
+        assert len(mgr2._index._source_url_to_id) == 0
 
 
 class TestStartupDuplicateAudit:
@@ -1731,7 +1731,7 @@ class TestStartupDuplicateAudit:
         mgr2 = KnowledgeManager(test_config)
         norm = normalize_url("https://example.com/collision")
         # First-seen (sorted path) should win
-        assert mgr2._source_url_to_id[norm] == doc_a.id
+        assert mgr2._index._source_url_to_id[norm] == doc_a.id
 
     @pytest.mark.asyncio
     async def test_startup_does_not_fail_on_collisions(self, test_config):
@@ -1868,7 +1868,7 @@ class TestDedupOnCreate:
             source_url="https://example.com/mapped",
         )
         norm = normalize_url("https://example.com/mapped")
-        assert knowledge_manager._source_url_to_id[norm] == result.document.id
+        assert knowledge_manager._index._source_url_to_id[norm] == result.document.id
 
 
 class TestDedupOnUpdate:
@@ -1902,13 +1902,13 @@ class TestDedupOnUpdate:
             )
         ).document
         norm = normalize_url("https://example.com/clear")
-        assert norm in knowledge_manager._source_url_to_id
+        assert norm in knowledge_manager._index._source_url_to_id
 
         result = await knowledge_manager.update(id=doc.id, agent="editor", source_url=None)
         assert result.status == "updated"
         assert result.document is not None
         assert result.document.metadata.source_url is None
-        assert norm not in knowledge_manager._source_url_to_id
+        assert norm not in knowledge_manager._index._source_url_to_id
 
     @pytest.mark.asyncio
     async def test_self_update_same_url_succeeds(self, knowledge_manager: KnowledgeManager):
@@ -1966,7 +1966,7 @@ class TestDedupOnUpdate:
             )
         ).document
         old_norm = normalize_url("https://example.com/old")
-        assert old_norm in knowledge_manager._source_url_to_id
+        assert old_norm in knowledge_manager._index._source_url_to_id
 
         result = await knowledge_manager.update(
             id=doc.id, agent="editor", source_url="https://example.com/new"
@@ -1974,8 +1974,8 @@ class TestDedupOnUpdate:
         assert result.status == "updated"
         assert result.document is not None
         new_norm = normalize_url("https://example.com/new")
-        assert new_norm in knowledge_manager._source_url_to_id
-        assert old_norm not in knowledge_manager._source_url_to_id
+        assert new_norm in knowledge_manager._index._source_url_to_id
+        assert old_norm not in knowledge_manager._index._source_url_to_id
 
     @pytest.mark.asyncio
     async def test_invalid_url_on_update_returns_error(self, knowledge_manager: KnowledgeManager):
@@ -2353,10 +2353,10 @@ class TestDeleteRemovesUrl:
             )
         ).document
         norm = normalize_url("https://example.com/deletable")
-        assert norm in knowledge_manager._source_url_to_id
+        assert norm in knowledge_manager._index._source_url_to_id
 
         await knowledge_manager.delete(doc.id)  # return value unused
-        assert norm not in knowledge_manager._source_url_to_id
+        assert norm not in knowledge_manager._index._source_url_to_id
 
     @pytest.mark.asyncio
     async def test_delete_then_create_same_url(self, knowledge_manager: KnowledgeManager):
@@ -2578,9 +2578,9 @@ class TestProvenanceIndexes:
         """
         assert list(knowledge_manager.iter_doc_sources()) == []
         assert knowledge_manager.get_doc_sources("unknown-id") == []
-        assert isinstance(knowledge_manager._source_to_derived, dict)
-        assert isinstance(knowledge_manager._unresolved_provenance, dict)
-        assert isinstance(knowledge_manager._id_to_title, dict)
+        assert isinstance(knowledge_manager._index._source_to_derived, dict)
+        assert isinstance(knowledge_manager._index._unresolved_provenance, dict)
+        assert isinstance(knowledge_manager._index._id_to_title, dict)
 
     @pytest.mark.asyncio
     async def test_scan_builds_provenance_indexes(self, test_config):
@@ -2652,16 +2652,16 @@ class TestProvenanceIndexes:
         assert mgr.get_doc_sources(id_b) == []
 
         # _source_to_derived: A -> {C}, B -> {C}
-        assert mgr._source_to_derived[id_a] == {id_c}
-        assert mgr._source_to_derived[id_b] == {id_c}
+        assert mgr.get_derived_docs(id_a) == {id_c}
+        assert mgr.get_derived_docs(id_b) == {id_c}
 
         # No unresolved provenance (all sources exist)
-        assert len(mgr._unresolved_provenance) == 0
+        assert len(mgr._index._unresolved_provenance) == 0
 
         # _id_to_title populated
-        assert mgr._id_to_title[id_a] == "Source A"
-        assert mgr._id_to_title[id_b] == "Source B"
-        assert mgr._id_to_title[id_c] == "Derived C"
+        assert mgr.get_title_by_id(id_a) == "Source A"
+        assert mgr.get_title_by_id(id_b) == "Source B"
+        assert mgr.get_title_by_id(id_c) == "Derived C"
 
     @pytest.mark.asyncio
     async def test_scan_forward_references(self, test_config):
@@ -2712,8 +2712,8 @@ class TestProvenanceIndexes:
 
         # A references B — B exists, so it's resolved
         assert mgr.get_doc_sources(id_a) == [id_b]
-        assert mgr._source_to_derived[id_b] == {id_a}
-        assert len(mgr._unresolved_provenance) == 0
+        assert mgr.get_derived_docs(id_b) == {id_a}
+        assert len(mgr._index._unresolved_provenance) == 0
 
     @pytest.mark.asyncio
     async def test_scan_unresolved_references(self, test_config):
@@ -2745,8 +2745,8 @@ class TestProvenanceIndexes:
         mgr = KnowledgeManager(test_config)
 
         assert mgr.get_doc_sources(id_a) == [missing_id]
-        assert missing_id not in mgr._source_to_derived
-        assert mgr._unresolved_provenance[missing_id] == {id_a}
+        assert not mgr.get_derived_docs(missing_id)
+        assert mgr._index._unresolved_provenance[missing_id] == {id_a}
 
     @pytest.mark.asyncio
     async def test_repeated_scan_produces_identical_state(self, test_config):
@@ -2796,18 +2796,18 @@ class TestProvenanceIndexes:
 
         # Capture state after first scan
         doc_to_sources_1 = dict(mgr.iter_doc_sources())
-        source_to_derived_1 = {k: set(v) for k, v in mgr._source_to_derived.items()}
-        unresolved_1 = {k: set(v) for k, v in mgr._unresolved_provenance.items()}
-        id_to_title_1 = dict(mgr._id_to_title)
+        source_to_derived_1 = {k: set(v) for k, v in mgr._index._source_to_derived.items()}
+        unresolved_1 = {k: set(v) for k, v in mgr._index._unresolved_provenance.items()}
+        id_to_title_1 = dict(mgr._index._id_to_title)
 
         # Run scan again
         mgr._scan_existing()
 
         # State should be identical
         assert dict(mgr.iter_doc_sources()) == doc_to_sources_1
-        assert {k: set(v) for k, v in mgr._source_to_derived.items()} == source_to_derived_1
-        assert {k: set(v) for k, v in mgr._unresolved_provenance.items()} == unresolved_1
-        assert mgr._id_to_title == id_to_title_1
+        assert {k: set(v) for k, v in mgr._index._source_to_derived.items()} == source_to_derived_1
+        assert {k: set(v) for k, v in mgr._index._unresolved_provenance.items()} == unresolved_1
+        assert mgr._index._id_to_title == id_to_title_1
 
     @pytest.mark.asyncio
     async def test_scan_no_provenance_has_empty_indexes(self, test_config):
@@ -2824,8 +2824,8 @@ class TestProvenanceIndexes:
         # Re-scan from disk
         mgr2 = KnowledgeManager(test_config)
         assert mgr2.get_doc_sources(doc.id) == []
-        assert len(mgr2._source_to_derived) == 0
-        assert len(mgr2._unresolved_provenance) == 0
+        assert len(mgr2._index._source_to_derived) == 0
+        assert len(mgr2._index._unresolved_provenance) == 0
 
     @pytest.mark.asyncio
     async def test_scan_clears_stale_indexes(self, test_config):
@@ -2852,15 +2852,15 @@ class TestProvenanceIndexes:
         (kp / "doc-a.md").write_text(fm.dumps(post_a))
 
         mgr = KnowledgeManager(test_config)
-        assert id_a in mgr._id_to_title
+        assert id_a in mgr._index._id_to_title
 
         # Remove file and re-scan — stale entry should be gone
         (kp / "doc-a.md").unlink()
         mgr._scan_existing()
 
-        assert id_a not in mgr._id_to_title
+        assert id_a not in mgr._index._id_to_title
         assert not mgr.has_document(id_a)
-        assert id_a not in mgr._id_to_path
+        assert not mgr.has_document(id_a)
 
 
 class TestCreateProvenance:
@@ -2879,8 +2879,8 @@ class TestCreateProvenance:
         assert doc is not None
         assert doc.metadata.derived_from_ids == []
         assert knowledge_manager.get_doc_sources(doc.id) == []
-        assert doc.id in knowledge_manager._id_to_title
-        assert knowledge_manager._id_to_title[doc.id] == "No Provenance"
+        assert doc.id in knowledge_manager._index._id_to_title
+        assert knowledge_manager.get_title_by_id(doc.id) == "No Provenance"
 
     @pytest.mark.asyncio
     async def test_create_with_valid_provenance(self, knowledge_manager: KnowledgeManager):
@@ -2911,8 +2911,8 @@ class TestCreateProvenance:
         assert sorted(knowledge_manager.get_doc_sources(doc.id)) == sorted([src1.id, src2.id])
 
         # _source_to_derived
-        assert doc.id in knowledge_manager._source_to_derived[src1.id]
-        assert doc.id in knowledge_manager._source_to_derived[src2.id]
+        assert doc.id in knowledge_manager.get_derived_docs(src1.id)
+        assert doc.id in knowledge_manager.get_derived_docs(src2.id)
 
         # No unresolved provenance
         assert len(result.warnings) == 0
@@ -2935,9 +2935,9 @@ class TestCreateProvenance:
         assert knowledge_manager.get_doc_sources(doc.id) == [missing_id]
 
         # In unresolved, not in source_to_derived
-        assert missing_id in knowledge_manager._unresolved_provenance
-        assert doc.id in knowledge_manager._unresolved_provenance[missing_id]
-        assert missing_id not in knowledge_manager._source_to_derived
+        assert missing_id in knowledge_manager._index._unresolved_provenance
+        assert doc.id in knowledge_manager._index._unresolved_provenance[missing_id]
+        assert not knowledge_manager.get_derived_docs(missing_id)
 
         # Warning emitted
         assert len(result.warnings) == 1
@@ -2973,8 +2973,8 @@ class TestCreateProvenance:
 
         # Re-scan so indexes pick up doc A with unresolved ref to B
         knowledge_manager._scan_existing()
-        assert id_b in knowledge_manager._unresolved_provenance
-        assert id_a in knowledge_manager._unresolved_provenance[id_b]
+        assert id_b in knowledge_manager._index._unresolved_provenance
+        assert id_a in knowledge_manager._index._unresolved_provenance[id_b]
 
         # Now create doc B — this should auto-resolve A's ref to B
         # We need to force doc B to have the specific ID id_b.
@@ -3002,9 +3002,9 @@ class TestCreateProvenance:
         knowledge_manager._scan_existing()
 
         # After re-scan, B should be resolved
-        assert id_b not in knowledge_manager._unresolved_provenance
-        assert id_b in knowledge_manager._source_to_derived
-        assert id_a in knowledge_manager._source_to_derived[id_b]
+        assert id_b not in knowledge_manager._index._unresolved_provenance
+        assert bool(knowledge_manager.get_derived_docs(id_b))
+        assert id_a in knowledge_manager.get_derived_docs(id_b)
 
     @pytest.mark.asyncio
     async def test_create_auto_resolve_via_create_path(self, knowledge_manager: KnowledgeManager):
@@ -3020,8 +3020,8 @@ class TestCreateProvenance:
         )
         doc_a = result_a.document
         assert doc_a is not None
-        assert missing_id in knowledge_manager._unresolved_provenance
-        assert doc_a.id in knowledge_manager._unresolved_provenance[missing_id]
+        assert missing_id in knowledge_manager._index._unresolved_provenance
+        assert doc_a.id in knowledge_manager._index._unresolved_provenance[missing_id]
 
         # Inject a file with the exact missing_id to simulate external creation,
         # then manually add to _id_to_path and trigger auto-resolve logic.
@@ -3032,13 +3032,13 @@ class TestCreateProvenance:
 
         # Let's set up _unresolved_provenance manually to simulate the scenario:
         fake_new_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
-        knowledge_manager._unresolved_provenance[fake_new_id] = {doc_a.id}
+        knowledge_manager._index._unresolved_provenance[fake_new_id] = {doc_a.id}
 
         # We can't force create() to mint a specific UUID, so let's directly test the
         # auto-resolve code path by manually calling the logic. Instead, let's verify
         # the scan-based auto-resolve works correctly in test_create_resolves_previously_unresolved.
         # Here we verify the _unresolved_provenance state is correct after create with missing ref.
-        assert missing_id in knowledge_manager._unresolved_provenance
+        assert missing_id in knowledge_manager._index._unresolved_provenance
 
     @pytest.mark.asyncio
     async def test_create_with_invalid_uuids(self, knowledge_manager: KnowledgeManager):
@@ -3053,7 +3053,7 @@ class TestCreateProvenance:
         assert result.document is None
 
         # No doc should have been created
-        assert len(knowledge_manager._id_to_path) == 0
+        assert len(knowledge_manager._index._id_to_path) == 0
 
     @pytest.mark.asyncio
     async def test_create_with_empty_string_uuid(self, knowledge_manager: KnowledgeManager):
@@ -3131,9 +3131,9 @@ class TestCreateProvenance:
         assert sorted(knowledge_manager.get_doc_sources(doc.id)) == sorted([src.id, missing_id])
 
         # src.id resolved, missing_id unresolved
-        assert doc.id in knowledge_manager._source_to_derived[src.id]
-        assert missing_id in knowledge_manager._unresolved_provenance
-        assert doc.id in knowledge_manager._unresolved_provenance[missing_id]
+        assert doc.id in knowledge_manager.get_derived_docs(src.id)
+        assert missing_id in knowledge_manager._index._unresolved_provenance
+        assert doc.id in knowledge_manager._index._unresolved_provenance[missing_id]
 
         # Warning only for missing
         assert len(result.warnings) == 1
@@ -3215,7 +3215,7 @@ class TestUpdateProvenance:
         assert result.document is not None
         assert result.document.metadata.derived_from_ids == [src.id]
         assert knowledge_manager.get_doc_sources(doc.id) == [src.id]
-        assert doc.id in knowledge_manager._source_to_derived[src.id]
+        assert doc.id in knowledge_manager.get_derived_docs(src.id)
 
     @pytest.mark.asyncio
     async def test_empty_list_clears_provenance(self, knowledge_manager: KnowledgeManager):
@@ -3239,8 +3239,8 @@ class TestUpdateProvenance:
         assert result.document.metadata.derived_from_ids == []
         assert knowledge_manager.get_doc_sources(doc.id) == []
         # src should no longer have doc in _source_to_derived
-        assert src.id not in knowledge_manager._source_to_derived or (
-            doc.id not in knowledge_manager._source_to_derived.get(src.id, set())
+        assert not knowledge_manager.get_derived_docs(src.id) or (
+            doc.id not in knowledge_manager.get_derived_docs(src.id)
         )
 
     @pytest.mark.asyncio
@@ -3292,11 +3292,11 @@ class TestUpdateProvenance:
         assert knowledge_manager.get_doc_sources(doc.id) == [src2.id]
 
         # src1 should no longer reference doc
-        assert src1.id not in knowledge_manager._source_to_derived or (
-            doc.id not in knowledge_manager._source_to_derived.get(src1.id, set())
+        assert not knowledge_manager.get_derived_docs(src1.id) or (
+            doc.id not in knowledge_manager.get_derived_docs(src1.id)
         )
         # src2 should now reference doc
-        assert doc.id in knowledge_manager._source_to_derived[src2.id]
+        assert doc.id in knowledge_manager.get_derived_docs(src2.id)
 
     @pytest.mark.asyncio
     async def test_replace_with_unresolved_ids(self, knowledge_manager: KnowledgeManager):
@@ -3313,7 +3313,7 @@ class TestUpdateProvenance:
         assert len(result.warnings) == 1
         assert missing_id in result.warnings[0]
         assert knowledge_manager.get_doc_sources(doc.id) == [missing_id]
-        assert doc.id in knowledge_manager._unresolved_provenance[missing_id]
+        assert doc.id in knowledge_manager._index._unresolved_provenance[missing_id]
 
     @pytest.mark.asyncio
     async def test_self_reference_rejected(self, knowledge_manager: KnowledgeManager):
@@ -3346,10 +3346,10 @@ class TestUpdateProvenance:
         doc = (
             await knowledge_manager.create(title="Old Title", content="Content.", agent="agent")
         ).document
-        assert knowledge_manager._id_to_title[doc.id] == "Old Title"
+        assert knowledge_manager.get_title_by_id(doc.id) == "Old Title"
 
         await knowledge_manager.update(id=doc.id, agent="editor", title="New Title")
-        assert knowledge_manager._id_to_title[doc.id] == "New Title"
+        assert knowledge_manager.get_title_by_id(doc.id) == "New Title"
 
     @pytest.mark.asyncio
     async def test_conformance_unset_vs_empty_vs_nonempty(
@@ -3403,8 +3403,8 @@ class TestDeleteProvenance:
         ).document
 
         # Verify initial state
-        assert derived.id in knowledge_manager._source_to_derived[src.id]
-        assert src.id not in knowledge_manager._unresolved_provenance
+        assert derived.id in knowledge_manager.get_derived_docs(src.id)
+        assert src.id not in knowledge_manager._index._unresolved_provenance
 
         # Delete source
         success, _path = await knowledge_manager.delete(id=src.id)
@@ -3412,12 +3412,12 @@ class TestDeleteProvenance:
 
         # Source removed from all provenance indexes
         assert not knowledge_manager.has_document(src.id)
-        assert src.id not in knowledge_manager._source_to_derived
-        assert src.id not in knowledge_manager._id_to_title
+        assert not knowledge_manager.get_derived_docs(src.id)
+        assert src.id not in knowledge_manager._index._id_to_title
 
         # Derived doc's relationship is now unresolved
-        assert src.id in knowledge_manager._unresolved_provenance
-        assert derived.id in knowledge_manager._unresolved_provenance[src.id]
+        assert src.id in knowledge_manager._index._unresolved_provenance
+        assert derived.id in knowledge_manager._index._unresolved_provenance[src.id]
 
         # Derived doc's forward index still exists (frontmatter not mutated)
         assert knowledge_manager.get_doc_sources(derived.id) == [src.id]
@@ -3440,7 +3440,7 @@ class TestDeleteProvenance:
         ).document
 
         # Verify initial state
-        assert derived.id in knowledge_manager._source_to_derived[src.id]
+        assert derived.id in knowledge_manager.get_derived_docs(src.id)
 
         # Delete derived
         success, _path = await knowledge_manager.delete(id=derived.id)
@@ -3448,11 +3448,11 @@ class TestDeleteProvenance:
 
         # Derived removed from all provenance indexes
         assert not knowledge_manager.has_document(derived.id)
-        assert derived.id not in knowledge_manager._id_to_title
+        assert derived.id not in knowledge_manager._index._id_to_title
 
         # Source's _source_to_derived no longer has the deleted derived doc
-        assert src.id not in knowledge_manager._source_to_derived or (
-            derived.id not in knowledge_manager._source_to_derived.get(src.id, set())
+        assert not knowledge_manager.get_derived_docs(src.id) or (
+            derived.id not in knowledge_manager.get_derived_docs(src.id)
         )
 
     @pytest.mark.asyncio
@@ -3465,8 +3465,8 @@ class TestDeleteProvenance:
         success, _path = await knowledge_manager.delete(id=doc.id)
         assert success
         assert not knowledge_manager.has_document(doc.id)
-        assert doc.id not in knowledge_manager._id_to_title
-        assert doc.id not in knowledge_manager._source_to_derived
+        assert doc.id not in knowledge_manager._index._id_to_title
+        assert not knowledge_manager.get_derived_docs(doc.id)
 
     @pytest.mark.asyncio
     async def test_delete_does_not_mutate_other_frontmatter(
@@ -3511,9 +3511,9 @@ class TestDeleteProvenance:
 
         await knowledge_manager.delete(id=src.id)
 
-        assert src.id in knowledge_manager._unresolved_provenance
-        assert d1.id in knowledge_manager._unresolved_provenance[src.id]
-        assert d2.id in knowledge_manager._unresolved_provenance[src.id]
+        assert src.id in knowledge_manager._index._unresolved_provenance
+        assert d1.id in knowledge_manager._index._unresolved_provenance[src.id]
+        assert d2.id in knowledge_manager._index._unresolved_provenance[src.id]
 
     @pytest.mark.asyncio
     async def test_delete_derived_with_multiple_sources(self, knowledge_manager: KnowledgeManager):
@@ -3532,11 +3532,11 @@ class TestDeleteProvenance:
         await knowledge_manager.delete(id=derived.id)
 
         # Neither source should reference the deleted derived doc
-        assert s1.id not in knowledge_manager._source_to_derived or (
-            derived.id not in knowledge_manager._source_to_derived.get(s1.id, set())
+        assert not knowledge_manager.get_derived_docs(s1.id) or (
+            derived.id not in knowledge_manager.get_derived_docs(s1.id)
         )
-        assert s2.id not in knowledge_manager._source_to_derived or (
-            derived.id not in knowledge_manager._source_to_derived.get(s2.id, set())
+        assert not knowledge_manager.get_derived_docs(s2.id) or (
+            derived.id not in knowledge_manager.get_derived_docs(s2.id)
         )
 
 
@@ -3627,8 +3627,8 @@ class TestScanExistingNormalization:
         # The stored derived_from_ids should be normalized (lowercase)
         assert mgr.get_doc_sources(derived_id) == [source_id]
         # The reference should resolve (since normalized matches the source)
-        assert derived_id in mgr._source_to_derived.get(source_id, set())
-        assert not mgr._unresolved_provenance
+        assert derived_id in mgr.get_derived_docs(source_id)
+        assert not mgr._index._unresolved_provenance
 
     async def test_scan_skips_invalid_derived_from_ids(self, test_config: LithosConfig):
         """Startup scan skips invalid UUIDs in derived_from_ids."""
@@ -3717,7 +3717,7 @@ class TestSyncFromDiskSourceUrlCollision:
 
         mgr = KnowledgeManager(test_config)
         norm = normalize_url(url)
-        assert mgr._source_url_to_id[norm] == id_a
+        assert mgr._index._source_url_to_id[norm] == id_a
 
         # Now externally edit B to claim A's URL
         post_b_steal = fm.Post("# B\n\nContent.", id=id_b, title="B", source_url=url)
@@ -3725,7 +3725,7 @@ class TestSyncFromDiskSourceUrlCollision:
 
         await mgr.sync_from_disk(Path("b.md"))
         # A should still own the URL
-        assert mgr._source_url_to_id[norm] == id_a
+        assert mgr._index._source_url_to_id[norm] == id_a
 
 
 class TestSyncFromDiskWriteLock:
@@ -3761,7 +3761,7 @@ class TestSyncFromDiskWriteLock:
 
         # Should be normalized
         assert mgr.get_doc_sources(derived_id) == [source_id]
-        assert derived_id in mgr._source_to_derived.get(source_id, set())
+        assert derived_id in mgr.get_derived_docs(source_id)
 
 
 class TestExpiresAtField:
@@ -4333,7 +4333,7 @@ class TestSlugCollision:
         # First-seen-wins: scan is sorted by relative path for determinism, but
         # which UUID comes first alphabetically is not guaranteed.  Assert that
         # exactly one of the two docs holds the slug rather than hard-coding doc1.
-        winner = mgr2._slug_to_id.get("my-document")
+        winner = mgr2.get_id_by_slug("my-document")
         assert winner in {doc1.id, doc2.id}, (
             f"Expected slug 'my-document' to be held by one of the two docs, got {winner!r}"
         )
@@ -4387,12 +4387,12 @@ class TestSlugCollision:
 
         # The new doc_id must not appear in the indices.
         # We can verify by checking no path maps to a doc with content "Second."
-        for doc_id, path in knowledge_manager._id_to_path.items():
+        for doc_id, path in knowledge_manager._index._id_to_path.items():
             full = kp / path
             if full.exists() and "Second." in full.read_text():
                 pytest.fail(f"_id_to_path still references zombie doc {doc_id}")
 
-        for path in knowledge_manager._path_to_id:
+        for path in knowledge_manager._index._path_to_id:
             full = kp / path
             if full.exists() and "Second." in full.read_text():
                 pytest.fail(f"_path_to_id still references zombie path {path}")
@@ -4457,7 +4457,7 @@ class TestSlugCollision:
         from lithos.frontmatter_codec import normalize_url
 
         original_norm = normalize_url(original_source_url)
-        assert knowledge_manager._source_url_to_id.get(original_norm) == doc2.id
+        assert knowledge_manager._index._source_url_to_id.get(original_norm) == doc2.id
 
         # Attempt update: rename to colliding title AND change source_url simultaneously.
         new_source_url = "https://example.com/new"
@@ -4475,13 +4475,13 @@ class TestSlugCollision:
         )
 
         # source_url index must still point to doc2 via the original URL.
-        assert knowledge_manager._source_url_to_id.get(original_norm) == doc2.id, (
+        assert knowledge_manager._index._source_url_to_id.get(original_norm) == doc2.id, (
             "_source_url_to_id lost original mapping after failed update"
         )
 
         # The new URL must NOT have been inserted into the index.
         new_norm = normalize_url(new_source_url)
-        assert knowledge_manager._source_url_to_id.get(new_norm) is None, (
+        assert knowledge_manager._index._source_url_to_id.get(new_norm) is None, (
             "_source_url_to_id was polluted with new URL after failed update"
         )
 

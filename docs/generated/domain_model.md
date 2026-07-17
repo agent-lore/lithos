@@ -268,6 +268,23 @@ classDiagram
 
 ```mermaid
 classDiagram
+  class CachedMeta {
+    +title str
+    +author str
+    +tags list[str]
+    +updated_at datetime
+    +path Path
+    +namespace str
+    +expires_at datetime | None
+    +access_scope str | None
+    +source str | None
+    +note_type str | None
+    +status str | None
+    +source_url str | None
+    +entities list[str]
+    +extra dict
+    +seq int
+  }
   class DuplicateInfo {
     +id str
     +title str
@@ -275,6 +292,12 @@ classDiagram
   }
   class ReconcilePlan
   class ReconcileResult
+  class ScannedNote {
+    +doc_id str
+    +title str
+    +frontmatter dict
+    +rel_path Path
+  }
   class WriteResult {
     +status Literal['created', 'updated', 'duplicate', 'error', 'invalid_input', 'version_conflict', 'content_too_large', 'path_collision']
     +warnings list[str]

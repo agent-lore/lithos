@@ -163,7 +163,7 @@ class TestUpdateConformance:
         assert result["status"] == "updated"
         assert server.knowledge.get_doc_sources(doc_id) == [s2]
         # s1 no longer in reverse index for this doc
-        assert doc_id not in server.knowledge._source_to_derived.get(s1, set())
+        assert doc_id not in server.knowledge._index._source_to_derived.get(s1, set())
 
     async def test_self_reference_rejected(self, server: LithosServer):
         """Self-reference on update is rejected with invalid_input."""
@@ -262,7 +262,7 @@ class TestIndexLifecycleConformance:
             },
         )
         doc_id = result["id"]
-        assert missing_id in server.knowledge._unresolved_provenance
+        assert missing_id in server.knowledge._index._unresolved_provenance
 
         # Externally create a file with that ID (simulating git restore / file watcher)
         knowledge_path = server.knowledge.knowledge_path
@@ -274,8 +274,8 @@ class TestIndexLifecycleConformance:
         assert doc.id == missing_id
 
         # Verify auto-resolution
-        assert missing_id not in server.knowledge._unresolved_provenance
-        assert doc_id in server.knowledge._source_to_derived.get(missing_id, set())
+        assert missing_id not in server.knowledge._index._unresolved_provenance
+        assert doc_id in server.knowledge._index._source_to_derived.get(missing_id, set())
 
     async def test_delete_source_marks_unresolved(self, server: LithosServer):
         """Deleting a source doc marks provenance as unresolved."""
@@ -301,8 +301,8 @@ class TestIndexLifecycleConformance:
         await call_tool(server, "lithos_delete", {"id": src_id, "agent": "conf-agent"})
 
         # Derived doc now has unresolved provenance
-        assert derived_id in server.knowledge._unresolved_provenance.get(src_id, set())
-        assert src_id not in server.knowledge._source_to_derived
+        assert derived_id in server.knowledge._index._unresolved_provenance.get(src_id, set())
+        assert src_id not in server.knowledge._index._source_to_derived
 
     async def test_cycles_no_infinite_traversal(self, server: LithosServer):
         """Provenance cycles don't cause infinite traversal."""
@@ -441,8 +441,8 @@ class TestScanConformance:
 
         # Forward reference resolved (A references B, B exists)
         assert mgr.get_doc_sources(id_a) == [id_b]
-        assert id_a in mgr._source_to_derived.get(id_b, set())
-        assert not mgr._unresolved_provenance  # no unresolved
+        assert id_a in mgr._index._source_to_derived.get(id_b, set())
+        assert not mgr._index._unresolved_provenance  # no unresolved
 
     async def test_repeated_scan_idempotent(self, test_config: LithosConfig):
         """Repeated _scan_existing() calls produce identical index state."""
@@ -464,17 +464,17 @@ class TestScanConformance:
         mgr = KnowledgeManager(test_config)
         snap1 = (
             dict(mgr.iter_doc_sources()),
-            {k: set(v) for k, v in mgr._source_to_derived.items()},
-            dict(mgr._unresolved_provenance),
-            dict(mgr._id_to_title),
+            {k: set(v) for k, v in mgr._index._source_to_derived.items()},
+            dict(mgr._index._unresolved_provenance),
+            dict(mgr._index._id_to_title),
         )
 
         mgr._scan_existing()
         snap2 = (
             dict(mgr.iter_doc_sources()),
-            {k: set(v) for k, v in mgr._source_to_derived.items()},
-            dict(mgr._unresolved_provenance),
-            dict(mgr._id_to_title),
+            {k: set(v) for k, v in mgr._index._source_to_derived.items()},
+            dict(mgr._index._unresolved_provenance),
+            dict(mgr._index._id_to_title),
         )
 
         assert snap1 == snap2
@@ -487,10 +487,10 @@ class TestScanConformance:
             {"title": "Old Title", "content": ".", "agent": "conf-agent"},
         )
         doc_id = result["id"]
-        assert server.knowledge._id_to_title[doc_id] == "Old Title"
+        assert server.knowledge._index._id_to_title[doc_id] == "Old Title"
 
         # Modify the file externally
-        rel_path = server.knowledge._id_to_path[doc_id]
+        rel_path = server.knowledge._index._id_to_path[doc_id]
         full_path = server.knowledge.knowledge_path / rel_path
         post = fm.load(str(full_path))
         post.metadata["title"] = "New Title"
@@ -500,7 +500,7 @@ class TestScanConformance:
         # Simulate file watcher
         await server.knowledge.sync_from_disk(rel_path)
 
-        assert server.knowledge._id_to_title[doc_id] == "New Title"
+        assert server.knowledge._index._id_to_title[doc_id] == "New Title"
 
 
 # ---------------------------------------------------------------------------

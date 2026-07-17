@@ -73,7 +73,7 @@ Logging         = "Structured JSON logging setup."
 # after the extraction actually broke it. It is pure and dependency-free, so it is held
 # to Foundation discipline by import-linter (as lithos._merge and lithos.edge_store are).
 Entrypoints     = ["lithos.cli", "lithos.server", "lithos.tools", "lithos.watch_intake", "lithos.__main__", "lithos.pipeline", "lithos.cli_reconcile"]
-Knowledge       = ["lithos.knowledge", "lithos._merge"]
+Knowledge       = ["lithos.knowledge", "lithos._merge", "lithos.corpus_index"]
 Codec           = ["lithos.frontmatter_codec"]
 Search          = ["lithos.search"]
 Graph           = ["lithos.graph", "lithos.edge_store"]
@@ -153,6 +153,7 @@ include_modules = [
     "lithos.events",
     "lithos.knowledge",
     "lithos.frontmatter_codec",
+    "lithos.corpus_index",
     "lithos.provenance",
     "lithos.cognitive_memory",
     "lithos.intake",

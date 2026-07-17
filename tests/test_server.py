@@ -785,8 +785,8 @@ class TestKnowledgeToolWorkflow:
         ).document
 
         # Backdate ``old`` so ``since`` filter excludes it.
-        old_meta = server.knowledge._meta_cache[old.id]
-        server.knowledge._meta_cache[old.id] = replace(
+        old_meta = server.knowledge._index._meta_cache[old.id]
+        server.knowledge._index._meta_cache[old.id] = replace(
             old_meta, updated_at=datetime.now(UTC) - timedelta(days=30)
         )
 
@@ -1941,7 +1941,7 @@ class TestCacheLookup:
         path = server.knowledge._resolve_safe_path(doc.path)[1]
         path.write_text(encode(doc))
         # Re-read to reload from disk
-        server.knowledge._id_to_path[doc.id] = doc.path
+        server.knowledge._index._id_to_path[doc.id] = doc.path
         server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(

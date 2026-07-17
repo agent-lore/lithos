@@ -173,7 +173,7 @@ def seeded_graph(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -> Kn
     """KnowledgeGraph built from seeded notes."""
     graph = KnowledgeGraph(seeded_config)
     # Add nodes for each doc in the KM
-    for doc_id, rel_path in seeded_km._id_to_path.items():
+    for doc_id, rel_path in seeded_km._index._id_to_path.items():
         full_path = seeded_config.storage.knowledge_path / rel_path
         if full_path.exists():
             post = fm.load(str(full_path))
@@ -696,7 +696,7 @@ def graph_with_links(seeded_config: LithosConfig, seeded_km: KnowledgeManager) -
     (kp / "note-one.md").write_text(fm.dumps(note1))
     seeded_km._scan_existing()
 
-    for doc_id, rel_path in seeded_km._id_to_path.items():
+    for doc_id, rel_path in seeded_km._index._id_to_path.items():
         full_path = kp / rel_path
         if full_path.exists():
             post = fm.load(str(full_path))
@@ -1072,7 +1072,7 @@ class TestScoutSourceUrl:
         from lithos.frontmatter_codec import normalize_url
 
         norm = normalize_url("https://example.com/same")
-        assert km._source_url_to_id.get(norm) == _COLLISION_A
+        assert km._index._source_url_to_id.get(norm) == _COLLISION_A
 
         # Use B as seed — it has source_url but is NOT in _source_url_to_id
         candidates = await scout_source_url([_COLLISION_B], km)
@@ -1431,7 +1431,7 @@ class TestExplicitNamespaceOverride:
         return km
 
     def test_cached_meta_keeps_explicit_namespace(self, override_km: KnowledgeManager) -> None:
-        cached = override_km._meta_cache["00000000-1111-4111-1111-111111111111"]
+        cached = override_km._index._meta_cache["00000000-1111-4111-1111-111111111111"]
         # Path-derived would be "projects"; explicit override is "research/alpha".
         assert cached.namespace == "research/alpha"
 

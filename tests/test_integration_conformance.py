@@ -275,7 +275,7 @@ class TestMCPToolContracts:
         # Pre-delete: verify presence in all subsystems.
         assert server.graph.has_node(doc_id)
         assert server.knowledge.get_id_by_slug("cascade-delete-target") == doc_id
-        assert doc_id in server.knowledge._id_to_path
+        assert doc_id in server.knowledge._index._id_to_path
 
         await call_tool(server, "lithos_delete", {"id": doc_id, "agent": "test-agent"})
 
@@ -305,7 +305,7 @@ class TestMCPToolContracts:
         assert server.knowledge.get_id_by_slug("cascade-delete-target") is None
 
         # Path index: absent.
-        assert doc_id not in server.knowledge._id_to_path
+        assert doc_id not in server.knowledge._index._id_to_path
 
 
 class TestRestartPersistence:
@@ -2732,8 +2732,8 @@ class TestSyncFromDisk:
         # Verify provenance indexes are updated
         assert server.knowledge.has_document(doc_id)
         assert server.knowledge.get_doc_sources(doc_id) == [src_id]
-        assert doc_id in server.knowledge._source_to_derived.get(src_id, set())
-        assert server.knowledge._id_to_title[doc_id] == "External Derived"
+        assert doc_id in server.knowledge._index._source_to_derived.get(src_id, set())
+        assert server.knowledge._index._id_to_title[doc_id] == "External Derived"
 
     @pytest.mark.asyncio
     async def test_external_modify_derived_from_ids(self, server: LithosServer):
@@ -2764,7 +2764,7 @@ class TestSyncFromDisk:
 
         # Verify initial provenance
         assert server.knowledge.get_doc_sources(derived_id) == [s1["id"]]
-        assert derived_id in server.knowledge._source_to_derived.get(s1["id"], set())
+        assert derived_id in server.knowledge._index._source_to_derived.get(s1["id"], set())
 
         # Externally modify the file's derived_from_ids on disk
         knowledge_path = server.config.storage.knowledge_path
@@ -2778,8 +2778,8 @@ class TestSyncFromDisk:
 
         # Verify indexes updated: s1 removed, s2 added
         assert server.knowledge.get_doc_sources(derived_id) == [s2["id"]]
-        assert derived_id not in server.knowledge._source_to_derived.get(s1["id"], set())
-        assert derived_id in server.knowledge._source_to_derived.get(s2["id"], set())
+        assert derived_id not in server.knowledge._index._source_to_derived.get(s1["id"], set())
+        assert derived_id in server.knowledge._index._source_to_derived.get(s2["id"], set())
 
     @pytest.mark.asyncio
     async def test_external_title_change_updates_id_to_title(self, server: LithosServer):
@@ -2796,7 +2796,7 @@ class TestSyncFromDisk:
         doc_id = doc["id"]
         doc_path_str = doc["path"]
 
-        assert server.knowledge._id_to_title[doc_id] == "Original Title"
+        assert server.knowledge._index._id_to_title[doc_id] == "Original Title"
 
         # Externally modify the title on disk
         knowledge_path = server.config.storage.knowledge_path
@@ -2809,7 +2809,7 @@ class TestSyncFromDisk:
 
         await server.watch_intake.upsert_from_disk(file_path)
 
-        assert server.knowledge._id_to_title[doc_id] == "Changed Title"
+        assert server.knowledge._index._id_to_title[doc_id] == "Changed Title"
 
     @pytest.mark.asyncio
     async def test_external_delete_source_marks_unresolved(self, server: LithosServer):
@@ -2836,7 +2836,7 @@ class TestSyncFromDisk:
         derived_id = derived["id"]
 
         # Verify initial state
-        assert derived_id in server.knowledge._source_to_derived.get(src_id, set())
+        assert derived_id in server.knowledge._index._source_to_derived.get(src_id, set())
 
         # Externally delete the source file
         knowledge_path = server.config.storage.knowledge_path
@@ -2846,12 +2846,12 @@ class TestSyncFromDisk:
         await server.watch_intake.delete_from_disk(src_file)
 
         # Source should be removed from indexes
-        assert src_id not in server.knowledge._id_to_path
-        assert src_id not in server.knowledge._id_to_title
+        assert src_id not in server.knowledge._index._id_to_path
+        assert src_id not in server.knowledge._index._id_to_title
 
         # Derived doc's provenance should now be unresolved
-        assert derived_id in server.knowledge._unresolved_provenance.get(src_id, set())
-        assert src_id not in server.knowledge._source_to_derived
+        assert derived_id in server.knowledge._index._unresolved_provenance.get(src_id, set())
+        assert src_id not in server.knowledge._index._source_to_derived
 
     @pytest.mark.asyncio
     async def test_sync_from_disk_auto_resolves_unresolved(self, server: LithosServer):
@@ -2873,7 +2873,9 @@ class TestSyncFromDisk:
         derived_id = derived["id"]
 
         # Verify unresolved
-        assert derived_id in server.knowledge._unresolved_provenance.get(future_source_id, set())
+        assert derived_id in server.knowledge._index._unresolved_provenance.get(
+            future_source_id, set()
+        )
 
         # Now externally create the source file with the matching ID
         post = frontmatter.Post(
@@ -2897,8 +2899,8 @@ class TestSyncFromDisk:
         await server.watch_intake.upsert_from_disk(file_path)
 
         # Unresolved should now be resolved
-        assert future_source_id not in server.knowledge._unresolved_provenance
-        assert derived_id in server.knowledge._source_to_derived.get(future_source_id, set())
+        assert future_source_id not in server.knowledge._index._unresolved_provenance
+        assert derived_id in server.knowledge._index._source_to_derived.get(future_source_id, set())
 
     @pytest.mark.asyncio
     async def test_sync_from_disk_error_does_not_crash_watcher(self, server: LithosServer):
@@ -2960,19 +2962,19 @@ class TestRebuildIndicesProvenance:
         # Verify provenance indexes before rebuild
         mgr = server.knowledge
         assert mgr.get_doc_sources(derived_id) == [source_id]
-        assert derived_id in mgr._source_to_derived.get(source_id, set())
-        assert mgr._id_to_title.get(source_id) == "Rebuild Source"
-        assert mgr._id_to_title.get(derived_id) == "Rebuild Derived"
+        assert derived_id in mgr._index._source_to_derived.get(source_id, set())
+        assert mgr._index._id_to_title.get(source_id) == "Rebuild Source"
+        assert mgr._index._id_to_title.get(derived_id) == "Rebuild Derived"
 
         # Rebuild indices
         await server._rebuild_indices()
 
         # Verify provenance indexes are restored after rebuild
         assert mgr.get_doc_sources(derived_id) == [source_id]
-        assert derived_id in mgr._source_to_derived.get(source_id, set())
-        assert mgr._id_to_title.get(source_id) == "Rebuild Source"
-        assert mgr._id_to_title.get(derived_id) == "Rebuild Derived"
-        assert not mgr._unresolved_provenance  # no unresolved refs
+        assert derived_id in mgr._index._source_to_derived.get(source_id, set())
+        assert mgr._index._id_to_title.get(source_id) == "Rebuild Source"
+        assert mgr._index._id_to_title.get(derived_id) == "Rebuild Derived"
+        assert not mgr._index._unresolved_provenance  # no unresolved refs
 
     async def test_rebuild_indices_detects_unresolved_provenance(self, server: LithosServer):
         """After _rebuild_indices(), unresolved references are correctly detected."""
@@ -2998,8 +3000,8 @@ class TestRebuildIndicesProvenance:
         # Verify unresolved provenance is detected
         mgr = server.knowledge
         assert mgr.get_doc_sources(doc_id) == [missing_id]
-        assert doc_id in mgr._unresolved_provenance.get(missing_id, set())
-        assert missing_id not in mgr._source_to_derived
+        assert doc_id in mgr._index._unresolved_provenance.get(missing_id, set())
+        assert missing_id not in mgr._index._source_to_derived
 
     async def test_rebuild_indices_clears_stale_provenance(self, server: LithosServer):
         """_rebuild_indices() clears stale provenance from a previous rebuild."""
@@ -3029,7 +3031,7 @@ class TestRebuildIndicesProvenance:
 
         # Delete the derived doc from disk (simulating external deletion)
         mgr = server.knowledge
-        derived_path = mgr._id_to_path[derived_id]
+        derived_path = mgr._index._id_to_path[derived_id]
         full_path = mgr.knowledge_path / derived_path
         full_path.unlink()
 
@@ -3038,8 +3040,8 @@ class TestRebuildIndicesProvenance:
 
         # The derived doc should no longer be in any indexes
         assert not mgr.has_document(derived_id)
-        assert derived_id not in mgr._source_to_derived.get(source_id, set())
-        assert derived_id not in mgr._id_to_title
+        assert derived_id not in mgr._index._source_to_derived.get(source_id, set())
+        assert derived_id not in mgr._index._id_to_title
 
 
 class TestRelatedProvenance:
