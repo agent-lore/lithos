@@ -393,11 +393,11 @@
         "classes": 9,
         "functions": 85,
         "largest_module": "lithos.knowledge",
-        "largest_module_lines": 1264,
-        "lines": 2004,
+        "largest_module_lines": 1267,
+        "lines": 2007,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1600
+        "sloc": 1602
       },
       "LCMA": {
         "classes": 5,
@@ -465,13 +465,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23770,
+    "total_lines": 23773,
     "total_modules": 40,
-    "total_sloc": 19122
+    "total_sloc": 19124
   },
   "tests": {
     "ratio": 1.85,
-    "src_lines": 23770,
+    "src_lines": 23773,
     "test_lines": 44047
   }
 }

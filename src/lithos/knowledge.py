@@ -1,10 +1,13 @@
 """Knowledge module - Markdown document CRUD with frontmatter.
 
 The corpus *file format* lives next door in :mod:`lithos.frontmatter_codec`;
-this module owns the corpus *store* — CRUD, the metadata cache and its inverted
-indexes, slug/path allocation, and the reconcile seam that rebuilds the derived
-views (ADR-0001). It reads and writes bytes; the codec turns those bytes into
-documents and back.
+this module owns the corpus *store* — CRUD, disk I/O, slug/path allocation, and
+the reconcile seam that rebuilds the derived views (ADR-0001). It reads and
+writes bytes; the codec turns those bytes into documents and back.
+
+The derived *query view* — the metadata cache, its inverted indexes, and the
+in-memory provenance maps — is delegated to :mod:`lithos.corpus_index`, held as
+``self._index`` and rebuilt from the corpus scan on construction.
 """
 
 import asyncio
