@@ -24,11 +24,13 @@ manager reads files and hands over frontmatter.
 
 from __future__ import annotations
 
+import collections
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from lithos.frontmatter_codec import (
     KnowledgeMetadata,
@@ -700,6 +702,58 @@ class CorpusIndex:
     def has_unresolved_source(self, source_id: str) -> bool:
         """Whether any document has an unresolved reference to ``source_id``."""
         return source_id in self._unresolved_provenance
+
+    def provenance_neighbours(
+        self, start_id: str, direction: Literal["sources", "derived"], depth: int
+    ) -> list[dict[str, str]]:
+        """BFS over the in-memory ``derived_from`` maps from *start_id*.
+
+        ``direction='sources'`` walks the edges *start_id* derives from, guarding
+        that each hop resolves to a known document; ``direction='derived'`` walks
+        the documents derived from *start_id*. *depth* is the maximum hop count
+        (callers clamp it to 1-3). *start_id* is excluded; the result is sorted by
+        id with titles resolved, so the set iteration in the ``derived`` direction
+        stays deterministic.
+        """
+        visited: set[str] = {start_id}
+        frontier: collections.deque[str] = collections.deque()
+
+        # Seed the frontier with immediate neighbours.
+        if direction == "sources":
+            for nid in self.doc_sources(start_id):
+                if self.has_document(nid) and nid not in visited:
+                    frontier.append(nid)
+                    visited.add(nid)
+        else:  # "derived"
+            for nid in self.derived_docs(start_id):
+                if nid not in visited:
+                    frontier.append(nid)
+                    visited.add(nid)
+
+        current_depth = 1
+        result_ids: list[str] = list(frontier)
+
+        while current_depth < depth and frontier:
+            next_frontier: list[str] = []
+            for node_id in frontier:
+                if direction == "sources":
+                    for nid in self.doc_sources(node_id):
+                        if self.has_document(nid) and nid not in visited:
+                            next_frontier.append(nid)
+                            visited.add(nid)
+                else:
+                    for nid in self.derived_docs(node_id):
+                        if nid not in visited:
+                            next_frontier.append(nid)
+                            visited.add(nid)
+            frontier = collections.deque(next_frontier)
+            result_ids.extend(next_frontier)
+            current_depth += 1
+
+        return sorted(
+            [{"id": nid, "title": self.title_by_id(nid)} for nid in result_ids],
+            key=lambda n: n["id"],
+        )
 
     def all_tags(self) -> dict[str, int]:
         """Tag → document-count over the whole cache."""

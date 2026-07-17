@@ -22,7 +22,7 @@
         "max_function": "lithos.coordination.CoordinationService.create_task"
       },
       "Entrypoints": {
-        "functions_over_10": 17,
+        "functions_over_10": 16,
         "max_complexity": 65,
         "max_function": "lithos.tools.notes.register.lithos_write"
       },
@@ -47,7 +47,7 @@
         "max_function": "lithos.intake.CorpusIntake.write"
       },
       "Knowledge": {
-        "functions_over_10": 6,
+        "functions_over_10": 7,
         "max_complexity": 62,
         "max_function": "lithos.knowledge.KnowledgeManager.update"
       },
@@ -120,7 +120,7 @@
         "qualname": "lithos.tools.notes.register.lithos_note_update"
       }
     ],
-    "total_functions": 719
+    "total_functions": 720
   },
   "domain": {
     "associations": 26,
@@ -341,13 +341,13 @@
       },
       "Entrypoints": {
         "classes": 4,
-        "functions": 138,
+        "functions": 137,
         "largest_module": "lithos.tools.tasks",
         "largest_module_lines": 985,
-        "lines": 5981,
+        "lines": 5915,
         "modules": 13,
         "public_symbols": 30,
-        "sloc": 4807
+        "sloc": 4751
       },
       "Errors": {
         "classes": 9,
@@ -391,23 +391,23 @@
       },
       "Knowledge": {
         "classes": 9,
-        "functions": 85,
+        "functions": 87,
         "largest_module": "lithos.knowledge",
-        "largest_module_lines": 1267,
-        "lines": 2007,
+        "largest_module_lines": 1273,
+        "lines": 2067,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1602
+        "sloc": 1654
       },
       "LCMA": {
-        "classes": 5,
+        "classes": 4,
         "functions": 128,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1248,
-        "lines": 4535,
+        "lines": 4513,
         "modules": 9,
         "public_symbols": 20,
-        "sloc": 3658
+        "sloc": 3639
       },
       "Logging": {
         "classes": 1,
@@ -465,13 +465,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23773,
+    "total_lines": 23745,
     "total_modules": 40,
-    "total_sloc": 19124
+    "total_sloc": 19101
   },
   "tests": {
-    "ratio": 1.85,
-    "src_lines": 23773,
-    "test_lines": 44047
+    "ratio": 1.87,
+    "src_lines": 23745,
+    "test_lines": 44345
   }
 }

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import collections
 import dataclasses
 import hashlib
 import logging
@@ -19,7 +18,6 @@ from lithos.telemetry import get_current_span, tool_metrics
 from lithos.tools._seam import tool_span
 
 if TYPE_CHECKING:
-    from lithos.knowledge import KnowledgeManager
     from lithos.server import LithosServer
 
 logger = logging.getLogger(__name__)
@@ -31,70 +29,6 @@ logger = logging.getLogger(__name__)
 _CONTENT_QUERY_FTS_CAP = 1_000_000
 
 _RELATED_INCLUDES = ("links", "provenance", "edges")
-
-
-def _bfs_provenance(
-    knowledge: KnowledgeManager, start_id: str, direction: str, depth: int
-) -> list[dict[str, str]]:
-    """BFS traversal over provenance indexes.
-
-    Args:
-        knowledge: The corpus manager owning the provenance indexes.
-        start_id: Starting document ID (excluded from results).
-        direction: "sources" or "derived".
-        depth: Maximum traversal depth (already clamped to 1-3).
-
-    Returns:
-        Sorted list of {id, title} dicts for discovered nodes.
-    """
-    visited: set[str] = {start_id}
-    frontier: collections.deque[str] = collections.deque()
-
-    # Seed the frontier with immediate neighbours
-    if direction == "sources":
-        for nid in knowledge.get_doc_sources(start_id):
-            if knowledge.has_document(nid) and nid not in visited:
-                frontier.append(nid)
-                visited.add(nid)
-    else:  # "derived"
-        for nid in knowledge.get_derived_docs(start_id):
-            if nid not in visited:
-                frontier.append(nid)
-                visited.add(nid)
-
-    current_depth = 1
-    result_ids: list[str] = list(frontier)
-
-    while current_depth < depth and frontier:
-        next_frontier: list[str] = []
-        for node_id in frontier:
-            if direction == "sources":
-                neighbours = knowledge.get_doc_sources(node_id)
-                for nid in neighbours:
-                    if knowledge.has_document(nid) and nid not in visited:
-                        next_frontier.append(nid)
-                        visited.add(nid)
-            else:
-                neighbours = knowledge.get_derived_docs(node_id)
-                for nid in neighbours:
-                    if nid not in visited:
-                        next_frontier.append(nid)
-                        visited.add(nid)
-        frontier = collections.deque(next_frontier)
-        result_ids.extend(next_frontier)
-        current_depth += 1
-
-    # Sort by ID for deterministic output, resolve titles
-    return sorted(
-        [
-            {
-                "id": nid,
-                "title": knowledge.get_title_by_id(nid),
-            }
-            for nid in result_ids
-        ],
-        key=lambda n: n["id"],
-    )
 
 
 def register(mcp: FastMCP, server: LithosServer) -> None:
@@ -709,8 +643,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
         # --- provenance (frontmatter derived_from_ids) -------------
         if "provenance" in selected:
-            sources = _bfs_provenance(server.knowledge, id, "sources", depth)
-            derived = _bfs_provenance(server.knowledge, id, "derived", depth)
+            sources = server.knowledge.provenance_neighbours(id, "sources", depth)
+            derived = server.knowledge.provenance_neighbours(id, "derived", depth)
             unresolved_sources = sorted(server.knowledge.get_unresolved_sources(id))
             result["provenance"] = {
                 "sources": sources,
