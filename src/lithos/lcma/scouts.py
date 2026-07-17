@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -24,6 +23,7 @@ from lithos.lcma.utils import Candidate
 
 if TYPE_CHECKING:
     from lithos.coordination import CoordinationService
+    from lithos.corpus_index import CachedMeta
     from lithos.graph import KnowledgeGraph
     from lithos.knowledge import KnowledgeManager
     from lithos.lcma.stats import StatsStore
@@ -906,44 +906,22 @@ async def scout_contradictions(
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _CachedMetaView:
-    """Typed view of cached metadata for gating decisions."""
-
-    namespace: str
-    access_scope: str
-    author: str
-    source: str | None
-    tags: list[str]
-    path: object  # Path, but kept loose to avoid an import cycle
-    status: str | None = None
-
-
 def _passes_status_filter(
-    view: _CachedMetaView | None,
+    meta: CachedMeta | None,
     exclude_status: list[str] | None = None,
 ) -> bool:
-    """Return False when the view's status is in the exclusion list."""
-    if exclude_status is None or view is None:
+    """Return False when the note's status is in the exclusion list."""
+    if exclude_status is None or meta is None:
         return True
-    return view.status not in exclude_status
+    return meta.status not in exclude_status
 
 
-def _get_cached_meta(knowledge: KnowledgeManager, doc_id: str) -> _CachedMetaView | None:
-    """Read lightweight metadata from KnowledgeManager's in-memory cache.
+def _get_cached_meta(knowledge: KnowledgeManager, doc_id: str) -> CachedMeta | None:
+    """Read the public cached-metadata value for gating decisions.
 
-    The namespace comes directly from the cache (which honors explicit
-    frontmatter overrides) — never re-derived from path here.
+    Namespace comes directly from the cache (which honors explicit frontmatter
+    overrides) — never re-derived from path here. ``access_scope`` may be ``None``
+    for a note with no explicit scope; :func:`_passes_access_scope` treats that
+    identically to ``"shared"``, so no normalisation is needed at the seam.
     """
-    cached = knowledge.get_cached_meta(doc_id)
-    if cached is None:
-        return None
-    return _CachedMetaView(
-        namespace=cached.namespace,
-        access_scope=cached.access_scope or "shared",
-        author=cached.author,
-        source=cached.source,
-        tags=list(cached.tags),
-        path=cached.path,
-        status=cached.status,
-    )
+    return knowledge.get_cached_meta(doc_id)

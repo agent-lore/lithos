@@ -38,13 +38,13 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | CognitiveMemory | 1 | 998 | 820 | 1 | 12 | 0.92 | 25 (`lithos.cognitive_memory.CognitiveMemory.cache_lookup`) | 2 |
 | Config | 1 | 371 | 281 | 10 | 0 | 0.00 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 1 | 2675 | 2256 | 4 | 4 | 0.50 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
-| Entrypoints | 13 | 5981 | 4807 | 0 | 13 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 17 |
+| Entrypoints | 13 | 5915 | 4751 | 0 | 13 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 16 |
 | Errors | 2 | 210 | 151 | 7 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 323 | 259 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1509 | 1223 | 7 | 3 | 0.30 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | Intake | 1 | 630 | 533 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
-| Knowledge | 3 | 2007 | 1602 | 5 | 7 | 0.58 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 6 |
-| LCMA | 9 | 4535 | 3658 | 1 | 11 | 0.92 | 51 (`lithos.lcma.retrieve._run_retrieve_impl`) | 21 |
+| Knowledge | 3 | 2067 | 1654 | 5 | 7 | 0.58 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
+| LCMA | 9 | 4513 | 3639 | 1 | 11 | 0.92 | 51 (`lithos.lcma.retrieve._run_retrieve_impl`) | 21 |
 | Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 1941 | 1576 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 5 |
@@ -52,7 +52,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **40**, lines: **23773**, SLOC: **19124**
+- Modules: **40**, lines: **23745**, SLOC: **19101**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -69,7 +69,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **719**, cyclomatic > 10: **65**
+- Functions: **720**, cyclomatic > 10: **65**
 
 Top 10 most complex functions:
 
@@ -152,4 +152,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.85** (44047 test lines / 23773 source lines)
+- Test-to-source line ratio: **1.87** (44345 test lines / 23745 source lines)

@@ -1222,6 +1222,12 @@ class KnowledgeManager:
         """Get unresolved source IDs for a document."""
         return self._index.unresolved_sources(doc_id)
 
+    def provenance_neighbours(
+        self, start_id: str, direction: Literal["sources", "derived"], depth: int
+    ) -> list[dict[str, str]]:
+        """BFS the provenance ``derived_from`` maps; see :meth:`CorpusIndex.provenance_neighbours`."""
+        return self._index.provenance_neighbours(start_id, direction, depth)
+
     def get_title_by_id(self, doc_id: str) -> str:
         """Get document title by ID, returning empty string if unknown."""
         return self._index.title_by_id(doc_id)
