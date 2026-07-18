@@ -1,6 +1,7 @@
 """Tests for LCMA edge store (edges.db)."""
 
 import asyncio
+import logging
 import sqlite3
 
 import pytest
@@ -153,6 +154,27 @@ class TestCorruptRecovery:
             # Quarantine file should exist
             quarantined = list(store.db_path.parent.glob("edges.db.corrupt-*"))
             assert len(quarantined) == 1
+        finally:
+            await store.close()
+
+    async def test_lifecycle_warning_logs_under_subclass_module(
+        self, test_config: LithosConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Lifecycle warnings extracted to AsyncSqliteStore must still log under the
+        concrete subclass's module (lithos.edge_store), not lithos.async_sqlite_store,
+        so operator filters keyed on the store's logger name keep seeing them."""
+        store = EdgeStore(test_config)
+        store.db_path.parent.mkdir(parents=True, exist_ok=True)
+        store.db_path.write_bytes(b"not a sqlite database at all")
+
+        with caplog.at_level(logging.WARNING):
+            await store.open()
+        try:
+            quarantine_records = [
+                r for r in caplog.records if "Quarantined corrupt" in r.getMessage()
+            ]
+            assert quarantine_records, "expected a quarantine warning"
+            assert quarantine_records[0].name == "lithos.edge_store"
         finally:
             await store.close()
 

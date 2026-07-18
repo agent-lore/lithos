@@ -125,7 +125,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 716
+    "total_functions": 717
   },
   "domain": {
     "associations": 26,
@@ -450,13 +450,13 @@
       },
       "SqliteStore": {
         "classes": 1,
-        "functions": 15,
+        "functions": 16,
         "largest_module": "lithos.async_sqlite_store",
-        "largest_module_lines": 272,
-        "lines": 272,
+        "largest_module_lines": 279,
+        "lines": 279,
         "modules": 1,
         "public_symbols": 1,
-        "sloc": 220
+        "sloc": 226
       },
       "Telemetry": {
         "classes": 8,
@@ -484,13 +484,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23641,
+    "total_lines": 23648,
     "total_modules": 41,
-    "total_sloc": 19000
+    "total_sloc": 19006
   },
   "tests": {
     "ratio": 1.88,
-    "src_lines": 23641,
-    "test_lines": 44504
+    "src_lines": 23648,
+    "test_lines": 44526
   }
 }

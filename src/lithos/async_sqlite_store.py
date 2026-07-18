@@ -31,8 +31,6 @@ import aiosqlite
 
 from lithos.config import LithosConfig, get_config
 
-logger = logging.getLogger(__name__)
-
 
 class AsyncSqliteStore(abc.ABC):
     """Base class owning the shared async-SQLite connection lifecycle.
@@ -55,6 +53,16 @@ class AsyncSqliteStore(abc.ABC):
     @property
     def config(self) -> LithosConfig:
         return self._config or get_config()
+
+    @property
+    def _logger(self) -> logging.Logger:
+        """Logger for lifecycle events, named for the *concrete* subclass's module.
+
+        Keeps warnings under their original logger name (``lithos.edge_store`` /
+        ``lithos.lcma.stats``) after the lifecycle moved to this base, so operator
+        filters and dashboards keyed on those names still see them.
+        """
+        return logging.getLogger(type(self).__module__)
 
     @property
     @abc.abstractmethod
@@ -130,7 +138,7 @@ class AsyncSqliteStore(abc.ABC):
         if self._opened and self._db is not None and getattr(self._db, "_running", True):
             return
         if self._db is not None and not getattr(self._db, "_running", True):
-            logger.warning(
+            self._logger.warning(
                 "%s connection worker is no longer running; reopening %s",
                 type(self).__name__,
                 self.db_path,
@@ -196,7 +204,7 @@ class AsyncSqliteStore(abc.ABC):
                     yield db
                 except Exception as exc:
                     if self._is_recoverable_connection_error(exc):
-                        logger.warning(
+                        self._logger.warning(
                             "%s operation hit a dead connection; reopening %s",
                             name,
                             self.db_path,
@@ -210,7 +218,7 @@ class AsyncSqliteStore(abc.ABC):
                 await db.execute("BEGIN IMMEDIATE")
             except Exception as exc:
                 if self._is_recoverable_connection_error(exc):
-                    logger.warning(
+                    self._logger.warning(
                         "%s transaction could not begin; reopening %s",
                         name,
                         self.db_path,
@@ -225,7 +233,7 @@ class AsyncSqliteStore(abc.ABC):
                 with contextlib.suppress(Exception):
                     await db.execute("ROLLBACK")
                 if self._is_recoverable_connection_error(exc):
-                    logger.warning(
+                    self._logger.warning(
                         "%s transaction lost its connection; reopening %s",
                         name,
                         self.db_path,
@@ -238,7 +246,7 @@ class AsyncSqliteStore(abc.ABC):
                 await db.execute("COMMIT")
             except Exception as exc:
                 if self._is_recoverable_connection_error(exc):
-                    logger.warning(
+                    self._logger.warning(
                         "%s transaction could not commit; reopening %s",
                         name,
                         self.db_path,
@@ -258,8 +266,7 @@ class AsyncSqliteStore(abc.ABC):
         except Exception:
             return False
 
-    @staticmethod
-    def _quarantine(path: Path) -> Path:
+    def _quarantine(self, path: Path) -> Path:
         """Rename a corrupt database file and return the backup path."""
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         backup = path.with_name(f"{path.name}.corrupt-{timestamp}")
@@ -268,5 +275,5 @@ class AsyncSqliteStore(abc.ABC):
             backup = path.with_name(f"{path.name}.corrupt-{timestamp}-{suffix}")
             suffix += 1
         path.rename(backup)
-        logger.warning("Quarantined corrupt %s → %s", path.name, backup)
+        self._logger.warning("Quarantined corrupt %s → %s", path.name, backup)
         return backup

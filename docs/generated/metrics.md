@@ -48,12 +48,12 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 1941 | 1576 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 5 |
-| SqliteStore | 1 | 272 | 220 | 2 | 1 | 0.33 | 10 (`lithos.async_sqlite_store.AsyncSqliteStore._session`) | 0 |
+| SqliteStore | 1 | 279 | 226 | 2 | 1 | 0.33 | 10 (`lithos.async_sqlite_store.AsyncSqliteStore._session`) | 0 |
 | Telemetry | 1 | 1202 | 925 | 9 | 1 | 0.10 | 19 (`lithos.telemetry.setup_telemetry`) | 1 |
 
 ## Size
 
-- Modules: **41**, lines: **23641**, SLOC: **19000**
+- Modules: **41**, lines: **23648**, SLOC: **19006**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -70,7 +70,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **716**, cyclomatic > 10: **60**
+- Functions: **717**, cyclomatic > 10: **60**
 
 Top 10 most complex functions:
 
@@ -152,4 +152,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.88** (44504 test lines / 23641 source lines)
+- Test-to-source line ratio: **1.88** (44526 test lines / 23648 source lines)
