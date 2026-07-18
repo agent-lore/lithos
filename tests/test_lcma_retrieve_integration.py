@@ -230,9 +230,10 @@ class TestWorkingMemoryIntegration:
 
 class TestScoutsFiredReceipt:
     @pytest.mark.asyncio
-    async def test_scouts_fired_contains_all_seven(self, server: LithosServer) -> None:
-        """receipts.scouts_fired contains all seven scout names when conditions met."""
-        # We need task_id for task_context scout, and a refresh keyword for freshness
+    async def test_scouts_fired_recorded(self, server: LithosServer) -> None:
+        """receipts.scouts_fired records the scouts that ran (10 candidate scouts
+        plus the contradiction audit scout are the canonical set)."""
+        # task_id enables scout_task_context; a refresh keyword enables freshness.
         await _seed_notes(server)
 
         result = await call_tool(
@@ -255,9 +256,11 @@ class TestScoutsFiredReceipt:
             row = await cursor.fetchone()
             assert row is not None
             scouts_fired = json.loads(row[0])
-            # All seven scouts should have fired (search may return empty but still fire)
-            # We check that at least the scouts that don't depend on search results are present
             assert isinstance(scouts_fired, list)
+            # The search-independent Phase A scouts always fire (they query the
+            # corpus/coordination directly, so an empty backend can't stop them).
+            for name in ("scout_tags_recency", "scout_freshness", "scout_task_context"):
+                assert name in scouts_fired
 
 
 class TestLcmaDisabled:
