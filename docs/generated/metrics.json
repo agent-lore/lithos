@@ -312,11 +312,11 @@
         "classes": 2,
         "functions": 27,
         "largest_module": "lithos.cognitive_memory",
-        "largest_module_lines": 998,
-        "lines": 998,
+        "largest_module_lines": 1000,
+        "lines": 1000,
         "modules": 1,
         "public_symbols": 2,
-        "sloc": 820
+        "sloc": 822
       },
       "Config": {
         "classes": 9,
@@ -464,13 +464,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23782,
+    "total_lines": 23784,
     "total_modules": 40,
-    "total_sloc": 19114
+    "total_sloc": 19116
   },
   "tests": {
     "ratio": 1.87,
-    "src_lines": 23782,
-    "test_lines": 44455
+    "src_lines": 23784,
+    "test_lines": 44504
   }
 }

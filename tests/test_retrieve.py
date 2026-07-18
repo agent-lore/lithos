@@ -1902,6 +1902,55 @@ class TestDegradedMode:
         # The scout-failure counter was bumped with the scout label.
         metrics.lcma_scout_failures.add.assert_any_call(1, {"scout": "scout_vector"})
 
+    @pytest.mark.asyncio
+    async def test_multiple_failed_scouts_ordered_canonically(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+        stats_store: StatsStore,
+    ) -> None:
+        """failed_scouts is ordered by ALL_SCOUT_NAMES, not by failure order — a
+        Phase A (vector) and a Phase B (graph) failure come out vector-then-graph."""
+        from lithos.search import SearchResult
+
+        # scout_lexical still returns a hit, so Phase A produces a seed and Phase B
+        # (where scout_graph runs and fails) actually executes.
+        tantivy_hits = [
+            SearchResult(id=_ID1, title="Alpha Note", snippet="", score=0.9, path="alpha-note.md"),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
+            patch(
+                "lithos.lcma.scouts.scout_vector",
+                new=AsyncMock(side_effect=RuntimeError("vector boom")),
+            ),
+            patch(
+                "lithos.lcma.scouts.scout_graph",
+                new=AsyncMock(side_effect=RuntimeError("graph boom")),
+            ),
+        ):
+            result = await _run_retrieve_impl(
+                query="alpha",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                projection=projection,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        assert result["degraded"] is True
+        # scout_vector (Phase A) precedes scout_graph (Phase B) in ALL_SCOUT_NAMES.
+        assert result["failed_scouts"] == ["scout_vector", "scout_graph"]
+
 
 class TestFinallyBlockRobustness:
     @pytest.mark.asyncio
