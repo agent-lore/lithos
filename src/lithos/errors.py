@@ -121,10 +121,11 @@ class CognitiveMemoryError(LithosError):
 class ScoutFailure(CognitiveMemoryError):
     """A single retrieval scout's backend raised.
 
-    Caught and logged inside CognitiveMemory.retrieve so one bad scout does
-    not kill the whole retrieve. Carried as an exception type (rather than a
-    log line) so future code can branch on it — e.g. degraded-mode reporting
-    in the result envelope.
+    Caught inside the retrieve orchestrator so one bad scout does not kill the
+    whole retrieve. Carried as an exception type (rather than a bare log line) so
+    the boundary can both log it with context and report degraded mode — the
+    failed scout surfaces in the envelope's ``degraded``/``failed_scouts`` fields
+    and bumps the ``lcma_scout_failures`` counter.
 
     Attributes:
         scout: The canonical scout name (e.g. ``"scout_vector"``).

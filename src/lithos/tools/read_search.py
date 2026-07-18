@@ -304,7 +304,9 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
         Returns:
             Dict with results list (superset of lithos_search result
-            schema), temperature, terrace_reached, and receipt_id.
+            schema), temperature, terrace_reached, receipt_id, and the
+            degraded-mode signal ``degraded`` (bool) / ``failed_scouts`` (names
+            of any scouts whose backend raised — empty when all scouts ran).
         """
         logger.info(
             "lithos_retrieve: called",
@@ -350,6 +352,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 "receipt_id": result.get("receipt_id"),  # type: ignore[union-attr]
                 "temperature": result.get("temperature"),  # type: ignore[union-attr]
                 "terrace_reached": result.get("terrace_reached"),  # type: ignore[union-attr]
+                "degraded": result.get("degraded"),  # type: ignore[union-attr]
+                "failed_scouts": result.get("failed_scouts"),  # type: ignore[union-attr]
                 "agent_id": agent_id,
                 "task_id": task_id,
             },

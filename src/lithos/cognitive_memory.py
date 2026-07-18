@@ -327,9 +327,11 @@ class CognitiveMemory:
         around it.
 
         Errors:
-            - ``ScoutFailure`` is raised inside the orchestrator when a single
-              scout's backend fails, then **caught and logged** at one
-              documented boundary inside this method. Callers do not see it.
+            - ``ScoutFailure`` is raised when a single scout's backend fails,
+              then **caught, logged, and reported** at one documented boundary
+              inside the retrieve orchestrator (``_run_retrieve_impl``). Callers
+              never see the exception — the failed scout surfaces in the
+              envelope's ``degraded``/``failed_scouts`` fields instead.
             - ``CognitiveMemoryError`` (other subtypes — e.g. RetrieveTimeout)
               **propagates** to the caller. The MCP envelope translates it to
               an error response.
