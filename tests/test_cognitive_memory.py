@@ -392,25 +392,26 @@ class TestRetrieve:
         await memory.start()
 
         # Make every scout return [] except scout_vector which raises. The
-        # scouts are imported into ``lithos.lcma.retrieve`` at module load,
-        # so we patch them in *that* namespace, not in lithos.lcma.scouts.
+        # orchestrator invokes scouts through SCOUT_REGISTRY, whose adapters
+        # resolve the scout functions in ``lithos.lcma.scouts`` — so we patch
+        # them there, not in lithos.lcma.retrieve.
         empty_scout = AsyncMock(return_value=[])
         # Stub the projection's edge_store.compute_temperature to a no-op
         # so we don't hit the real backend either.
 
         with (
             patch(
-                "lithos.lcma.retrieve.scout_vector",
+                "lithos.lcma.scouts.scout_vector",
                 new=AsyncMock(side_effect=RuntimeError("backend down")),
             ),
-            patch("lithos.lcma.retrieve.scout_lexical", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_exact_alias", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_tags_recency", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_freshness", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_provenance", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_graph", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_coactivation", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_source_url", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_lexical", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_exact_alias", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_tags_recency", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_freshness", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_provenance", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_graph", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_coactivation", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_source_url", new=empty_scout),
             caplog.at_level(logging.WARNING, logger="lithos.lcma.retrieve"),
         ):
             result = await memory.retrieve("alpha", limit=5)
@@ -419,10 +420,10 @@ class TestRetrieve:
         assert result["receipt_id"]
         assert result["results"] == []
 
-        # The phase A scout warning is present; the captured exc chain is a
+        # The scout-failure warning is present; the captured exc chain is a
         # ScoutFailure naming the failed scout.
-        scout_records = [r for r in caplog.records if "phase A scout failed" in r.getMessage()]
-        assert scout_records, "expected a phase A scout failure log record"
+        scout_records = [r for r in caplog.records if "scout failed" in r.getMessage()]
+        assert scout_records, "expected a scout failure log record"
         record = scout_records[0]
         assert record.exc_info is not None
         exc = record.exc_info[1]
@@ -444,11 +445,11 @@ class TestRetrieve:
         empty_scout = AsyncMock(return_value=[])
 
         with (
-            patch("lithos.lcma.retrieve.scout_vector", new=vector_spy),
-            patch("lithos.lcma.retrieve.scout_lexical", new=lexical_spy),
-            patch("lithos.lcma.retrieve.scout_exact_alias", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_tags_recency", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_freshness", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_vector", new=vector_spy),
+            patch("lithos.lcma.scouts.scout_lexical", new=lexical_spy),
+            patch("lithos.lcma.scouts.scout_exact_alias", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_tags_recency", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_freshness", new=empty_scout),
         ):
             await memory.retrieve(
                 "alpha",
@@ -493,17 +494,17 @@ class TestRetrieve:
 
         with (
             patch(
-                "lithos.lcma.retrieve.scout_vector",
+                "lithos.lcma.scouts.scout_vector",
                 new=AsyncMock(return_value=candidates),
             ),
-            patch("lithos.lcma.retrieve.scout_lexical", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_exact_alias", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_tags_recency", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_freshness", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_provenance", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_graph", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_coactivation", new=empty_scout),
-            patch("lithos.lcma.retrieve.scout_source_url", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_lexical", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_exact_alias", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_tags_recency", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_freshness", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_provenance", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_graph", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_coactivation", new=empty_scout),
+            patch("lithos.lcma.scouts.scout_source_url", new=empty_scout),
         ):
             result = await memory.retrieve("alpha", limit=5)
 

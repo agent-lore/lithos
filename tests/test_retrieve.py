@@ -1083,7 +1083,7 @@ class TestMaxContextNodes:
         with (
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
-            patch("lithos.lcma.retrieve.scout_provenance", new_callable=AsyncMock) as mock_prov,
+            patch("lithos.lcma.scouts.scout_provenance", new_callable=AsyncMock) as mock_prov,
         ):
             mock_prov.return_value = []
             await _run_retrieve_impl(
@@ -1478,19 +1478,23 @@ class TestContradictionSurfacing:
         eids = [c["edge_id"] for c in conflicts]  # type: ignore[union-attr]
         assert edge_id in eids
 
-        # Receipt should also record conflicts_surfaced
+        # Receipt should also record conflicts_surfaced, and scout_contradictions
+        # must appear in scouts_fired now that it ran (it was silently absent from
+        # the audit trail before the registry fix — it was never in ALL_SCOUT_NAMES
+        # nor recorded in executed_scouts).
         import aiosqlite
 
         async with aiosqlite.connect(stats_store.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT conflicts_surfaced FROM receipts WHERE id = ?",
+                "SELECT conflicts_surfaced, scouts_fired FROM receipts WHERE id = ?",
                 (result["receipt_id"],),
             )
             row = await cursor.fetchone()
         assert row is not None
         surfaced = json.loads(row["conflicts_surfaced"])
         assert len(surfaced) >= 1
+        assert "scout_contradictions" in json.loads(row["scouts_fired"])
 
     @pytest.mark.asyncio
     async def test_surface_conflicts_false_is_noop(
@@ -1768,7 +1772,7 @@ class TestNewScoutsWiredInPhaseB:
         with (
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
-            patch("lithos.lcma.retrieve.scout_graph", side_effect=RuntimeError("graph boom")),
+            patch("lithos.lcma.scouts.scout_graph", side_effect=RuntimeError("graph boom")),
         ):
             result = await _run_retrieve_impl(
                 query="alpha",

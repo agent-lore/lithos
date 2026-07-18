@@ -16,8 +16,8 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
-| `lithos.lcma.retrieve` | L | 0 | 1 |
-| `lithos.lcma.scouts` | L | 0 | 11 |
+| `lithos.lcma.retrieve` | M | 0 | 1 |
+| `lithos.lcma.scouts` | L | 2 | 11 |
 | `lithos.lcma.stats` | L | 1 | 0 |
 | `lithos.lcma.utils` | S | 1 | 1 |
 
@@ -51,6 +51,8 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 - def `scout_coactivation` — Find nodes frequently co-occurring with seed nodes in past retrievals.
 - def `scout_source_url` — Find notes from the same URL domain as seed notes.
 - def `scout_contradictions` — Query contradiction edges connected to seed nodes.
+- class `ScoutContext` — The uniform input every scout receives from the retrieve orchestrator.
+- class `ScoutSpec` — One entry in the scout registry.
 
 ### `lithos.lcma.stats`
 - class `StatsStore` — Lazily-created SQLite store for LCMA retrieval statistics.

@@ -16,7 +16,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, TypedDict
 from urllib.parse import urlparse
 
 from lithos.lcma.utils import Candidate
@@ -43,19 +45,10 @@ SCOUT_TASK_CONTEXT = "scout_task_context"
 SCOUT_GRAPH = "scout_graph"
 SCOUT_COACTIVATION = "scout_coactivation"
 SCOUT_SOURCE_URL = "scout_source_url"
+SCOUT_CONTRADICTIONS = "scout_contradictions"
 
-ALL_SCOUT_NAMES = [
-    SCOUT_VECTOR,
-    SCOUT_LEXICAL,
-    SCOUT_EXACT_ALIAS,
-    SCOUT_TAGS_RECENCY,
-    SCOUT_FRESHNESS,
-    SCOUT_PROVENANCE,
-    SCOUT_TASK_CONTEXT,
-    SCOUT_GRAPH,
-    SCOUT_COACTIVATION,
-    SCOUT_SOURCE_URL,
-]
+# ``ALL_SCOUT_NAMES`` and the registry that drives the orchestrator are defined
+# at the foot of this module, once every scout function exists — see SCOUT_REGISTRY.
 
 # Keywords that trigger freshness boost
 _FRESHNESS_KEYWORDS = re.compile(r"\b(update|refresh|recheck|verify|latest)\b", re.IGNORECASE)
@@ -130,6 +123,44 @@ def _passes_path_prefix(meta_path: object | None, path_prefix: str | None) -> bo
     return str(meta_path).startswith(path_prefix)
 
 
+def _gate(
+    meta: CachedMeta | None,
+    *,
+    namespace_filter: list[str] | None,
+    agent_id: str | None,
+    task_id: str | None,
+    tags: list[str] | None = None,
+    path_prefix: str | None = None,
+    check_tags: bool = True,
+    check_path: bool = True,
+) -> bool:
+    """Apply the standard candidate-gating chain to one hit's cached metadata.
+
+    Consolidates the status → namespace → access_scope → tags → path_prefix chain
+    that every candidate-producing scout runs on each hit (the block was copied
+    verbatim in eight scouts). ``check_tags``/``check_path`` default on; the
+    contradiction scout turns them off because its request shape carries no
+    ``tags``/``path_prefix``. Returns True when the note passes every enabled
+    check.
+    """
+    if not _passes_status_filter(meta, ["quarantined"]):
+        return False
+    ns = meta.namespace if meta else None
+    if not _passes_namespace_filter(ns, namespace_filter):
+        return False
+    if not _passes_access_scope(
+        meta.access_scope if meta else None,
+        meta.author if meta else None,
+        meta.source if meta else None,
+        agent_id,
+        task_id,
+    ):
+        return False
+    if check_tags and not _passes_tags_filter(meta.tags if meta else None, tags):
+        return False
+    return not (check_path and not _passes_path_prefix(meta.path if meta else None, path_prefix))
+
+
 # ---------------------------------------------------------------------------
 # Scout implementations
 # ---------------------------------------------------------------------------
@@ -159,22 +190,14 @@ async def scout_vector(
     for r in results:
         doc_id = r.id
         meta = _get_cached_meta(knowledge, doc_id)
-        if not _passes_status_filter(meta, ["quarantined"]):
-            continue
-        ns = meta.namespace if meta else None
-        if not _passes_namespace_filter(ns, namespace_filter):
-            continue
-        if not _passes_access_scope(
-            meta.access_scope if meta else None,
-            meta.author if meta else None,
-            meta.source if meta else None,
-            agent_id,
-            task_id,
+        if not _gate(
+            meta,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            tags=tags,
+            path_prefix=path_prefix,
         ):
-            continue
-        if not _passes_tags_filter(meta.tags if meta else None, tags):
-            continue
-        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         candidates.append(
             Candidate(
@@ -218,22 +241,14 @@ async def scout_lexical(
     for r in results:
         doc_id = r.id
         meta = _get_cached_meta(knowledge, doc_id)
-        if not _passes_status_filter(meta, ["quarantined"]):
-            continue
-        ns = meta.namespace if meta else None
-        if not _passes_namespace_filter(ns, namespace_filter):
-            continue
-        if not _passes_access_scope(
-            meta.access_scope if meta else None,
-            meta.author if meta else None,
-            meta.source if meta else None,
-            agent_id,
-            task_id,
+        if not _gate(
+            meta,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            tags=tags,
+            path_prefix=path_prefix,
         ):
-            continue
-        if not _passes_tags_filter(meta.tags if meta else None, tags):
-            continue
-        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         candidates.append(
             Candidate(
@@ -267,8 +282,8 @@ async def scout_exact_alias(
     """Resolve query via wiki-link resolution, UUID-prefix, and slug matching."""
     found_ids: list[str] = []
 
-    # 1. KnowledgeGraph._resolve_link (node_id == doc_id in graph)
-    resolved = graph._resolve_link(query)
+    # 1. KnowledgeGraph.resolve_link (node_id == doc_id in graph)
+    resolved = graph.resolve_link(query)
     if resolved and knowledge.has_document(resolved):
         found_ids.append(resolved)
 
@@ -287,22 +302,14 @@ async def scout_exact_alias(
     candidates: list[Candidate] = []
     for doc_id in found_ids:
         meta = _get_cached_meta(knowledge, doc_id)
-        if not _passes_status_filter(meta, ["quarantined"]):
-            continue
-        ns = meta.namespace if meta else None
-        if not _passes_namespace_filter(ns, namespace_filter):
-            continue
-        if not _passes_access_scope(
-            meta.access_scope if meta else None,
-            meta.author if meta else None,
-            meta.source if meta else None,
-            agent_id,
-            task_id,
+        if not _gate(
+            meta,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            tags=tags,
+            path_prefix=path_prefix,
         ):
-            continue
-        if not _passes_tags_filter(meta.tags if meta else None, tags):
-            continue
-        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         candidates.append(
             Candidate(
@@ -458,22 +465,14 @@ async def scout_provenance(
         if not knowledge.has_document(doc_id):
             continue
         meta = _get_cached_meta(knowledge, doc_id)
-        if not _passes_status_filter(meta, ["quarantined"]):
-            continue
-        ns = meta.namespace if meta else None
-        if not _passes_namespace_filter(ns, namespace_filter):
-            continue
-        if not _passes_access_scope(
-            meta.access_scope if meta else None,
-            meta.author if meta else None,
-            meta.source if meta else None,
-            agent_id,
-            task_id,
+        if not _gate(
+            meta,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            tags=tags,
+            path_prefix=path_prefix,
         ):
-            continue
-        if not _passes_tags_filter(meta.tags if meta else None, tags):
-            continue
-        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         # All provenance hits get equal raw score
         candidates.append(
@@ -536,22 +535,14 @@ async def scout_task_context(
         if not knowledge.has_document(doc_id):
             continue
         meta = _get_cached_meta(knowledge, doc_id)
-        if not _passes_status_filter(meta, ["quarantined"]):
-            continue
-        ns = meta.namespace if meta else None
-        if not _passes_namespace_filter(ns, namespace_filter):
-            continue
-        if not _passes_access_scope(
-            meta.access_scope if meta else None,
-            meta.author if meta else None,
-            meta.source if meta else None,
-            agent_id,
-            task_id,
+        if not _gate(
+            meta,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            tags=tags,
+            path_prefix=path_prefix,
         ):
-            continue
-        if not _passes_tags_filter(meta.tags if meta else None, tags):
-            continue
-        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         candidates.append(
             Candidate(
@@ -627,22 +618,14 @@ async def scout_graph(
         if not knowledge.has_document(nid):
             continue
         meta = _get_cached_meta(knowledge, nid)
-        if not _passes_status_filter(meta, ["quarantined"]):
-            continue
-        ns = meta.namespace if meta else None
-        if not _passes_namespace_filter(ns, namespace_filter):
-            continue
-        if not _passes_access_scope(
-            meta.access_scope if meta else None,
-            meta.author if meta else None,
-            meta.source if meta else None,
-            agent_id,
-            task_id,
+        if not _gate(
+            meta,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            tags=tags,
+            path_prefix=path_prefix,
         ):
-            continue
-        if not _passes_tags_filter(meta.tags if meta else None, tags):
-            continue
-        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         candidates.append(
             Candidate(
@@ -699,22 +682,14 @@ async def scout_coactivation(
         if not knowledge.has_document(node_id):
             continue
         meta = _get_cached_meta(knowledge, node_id)
-        if not _passes_status_filter(meta, ["quarantined"]):
-            continue
-        ns = meta.namespace if meta else None
-        if not _passes_namespace_filter(ns, namespace_filter):
-            continue
-        if not _passes_access_scope(
-            meta.access_scope if meta else None,
-            meta.author if meta else None,
-            meta.source if meta else None,
-            agent_id,
-            task_id,
+        if not _gate(
+            meta,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            tags=tags,
+            path_prefix=path_prefix,
         ):
-            continue
-        if not _passes_tags_filter(meta.tags if meta else None, tags):
-            continue
-        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         candidates.append(
             Candidate(
@@ -790,22 +765,14 @@ async def scout_source_url(
         if not knowledge.has_document(doc_id):
             continue
         meta = _get_cached_meta(knowledge, doc_id)
-        if not _passes_status_filter(meta, ["quarantined"]):
-            continue
-        ns = meta.namespace if meta else None
-        if not _passes_namespace_filter(ns, namespace_filter):
-            continue
-        if not _passes_access_scope(
-            meta.access_scope if meta else None,
-            meta.author if meta else None,
-            meta.source if meta else None,
-            agent_id,
-            task_id,
+        if not _gate(
+            meta,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            tags=tags,
+            path_prefix=path_prefix,
         ):
-            continue
-        if not _passes_tags_filter(meta.tags if meta else None, tags):
-            continue
-        if not _passes_path_prefix(meta.path if meta else None, path_prefix):
             continue
         candidates.append(
             Candidate(
@@ -871,17 +838,13 @@ async def scout_contradictions(
 
             # Apply gating filters on the counterpart
             meta = _get_cached_meta(knowledge, counterpart_id)
-            if not _passes_status_filter(meta, ["quarantined"]):
-                continue
-            ns = meta.namespace if meta else None
-            if not _passes_namespace_filter(ns, namespace_filter):
-                continue
-            if not _passes_access_scope(
-                meta.access_scope if meta else None,
-                meta.author if meta else None,
-                meta.source if meta else None,
-                agent_id,
-                task_id,
+            if not _gate(
+                meta,
+                namespace_filter=namespace_filter,
+                agent_id=agent_id,
+                task_id=task_id,
+                check_tags=False,
+                check_path=False,
             ):
                 continue
 
@@ -925,3 +888,138 @@ def _get_cached_meta(knowledge: KnowledgeManager, doc_id: str) -> CachedMeta | N
     identically to ``"shared"``, so no normalisation is needed at the seam.
     """
     return knowledge.get_cached_meta(doc_id)
+
+
+# ---------------------------------------------------------------------------
+# Scout registry — the single source of truth the orchestrator loops over
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ScoutContext:
+    """The uniform input every scout receives from the retrieve orchestrator.
+
+    Bundles the query inputs (``query`` for Phase A, ``seed_ids`` for Phase B),
+    the store dependencies, and the caller-supplied filters, so a registry entry
+    is invocable as ``run(ctx)`` regardless of which subset a given scout consumes.
+    """
+
+    query: str
+    seed_ids: list[str]
+    search: SearchEngine
+    knowledge: KnowledgeManager
+    graph: KnowledgeGraph
+    projection: ProvenanceProjection
+    stats_store: StatsStore
+    coordination: CoordinationService
+    limit: int
+    namespace_filter: list[str] | None = None
+    agent_id: str | None = None
+    task_id: str | None = None
+    tags: list[str] | None = None
+    path_prefix: str | None = None
+
+
+@dataclass(frozen=True)
+class ScoutSpec:
+    """One entry in the scout registry.
+
+    ``phase`` is ``"A"`` (parallel, query-seeded) or ``"B"`` (sequential, seeded
+    from Phase A output). ``run`` adapts the uniform :class:`ScoutContext` to the
+    scout's native call. ``requires_task_id`` marks a scout that only fires when
+    the caller supplied a ``task_id`` (scout_task_context).
+    """
+
+    name: str
+    phase: Literal["A", "B"]
+    run: Callable[[ScoutContext], Awaitable[list[Candidate]]]
+    requires_task_id: bool = False
+
+
+class _ScoutFilters(TypedDict):
+    """The caller-supplied filter kwargs shared by every scout signature."""
+
+    namespace_filter: list[str] | None
+    agent_id: str | None
+    task_id: str | None
+    tags: list[str] | None
+    path_prefix: str | None
+
+
+def _filters(ctx: ScoutContext) -> _ScoutFilters:
+    """The caller-supplied filters every scout forwards, as kwargs."""
+    return {
+        "namespace_filter": ctx.namespace_filter,
+        "agent_id": ctx.agent_id,
+        "task_id": ctx.task_id,
+        "tags": ctx.tags,
+        "path_prefix": ctx.path_prefix,
+    }
+
+
+# Order is load-bearing: it fixes Phase A gather order and Phase B execution order
+# (and therefore seed/candidate determinism). scout_task_context is last in Phase A
+# and only fires when a task_id is present.
+SCOUT_REGISTRY: list[ScoutSpec] = [
+    ScoutSpec(
+        SCOUT_VECTOR,
+        "A",
+        lambda c: scout_vector(c.query, c.search, c.knowledge, limit=c.limit, **_filters(c)),
+    ),
+    ScoutSpec(
+        SCOUT_LEXICAL,
+        "A",
+        lambda c: scout_lexical(c.query, c.search, c.knowledge, limit=c.limit, **_filters(c)),
+    ),
+    ScoutSpec(
+        SCOUT_EXACT_ALIAS,
+        "A",
+        lambda c: scout_exact_alias(c.query, c.graph, c.knowledge, limit=c.limit, **_filters(c)),
+    ),
+    ScoutSpec(
+        SCOUT_TAGS_RECENCY,
+        "A",
+        lambda c: scout_tags_recency(c.query, c.knowledge, limit=c.limit, **_filters(c)),
+    ),
+    ScoutSpec(
+        SCOUT_FRESHNESS,
+        "A",
+        lambda c: scout_freshness(c.query, c.knowledge, limit=c.limit, **_filters(c)),
+    ),
+    ScoutSpec(
+        SCOUT_TASK_CONTEXT,
+        "A",
+        lambda c: scout_task_context(c.coordination, c.knowledge, limit=c.limit, **_filters(c)),
+        requires_task_id=True,
+    ),
+    ScoutSpec(
+        SCOUT_PROVENANCE,
+        "B",
+        lambda c: scout_provenance(c.seed_ids, c.knowledge, limit=c.limit, **_filters(c)),
+    ),
+    ScoutSpec(
+        SCOUT_GRAPH,
+        "B",
+        lambda c: scout_graph(
+            c.seed_ids, c.graph, c.projection, c.knowledge, limit=c.limit, **_filters(c)
+        ),
+    ),
+    ScoutSpec(
+        SCOUT_COACTIVATION,
+        "B",
+        lambda c: scout_coactivation(
+            c.seed_ids, c.stats_store, c.knowledge, limit=c.limit, **_filters(c)
+        ),
+    ),
+    ScoutSpec(
+        SCOUT_SOURCE_URL,
+        "B",
+        lambda c: scout_source_url(c.seed_ids, c.knowledge, limit=c.limit, **_filters(c)),
+    ),
+]
+
+# scout_contradictions is not a candidate producer (it emits conflict rows, not
+# Candidates), so it stays outside the registry loop — but it IS a canonical scout
+# for audit purposes, appended here so ``scouts_fired`` can report it. It was
+# previously absent from ALL_SCOUT_NAMES, so it could never appear in a receipt.
+ALL_SCOUT_NAMES: list[str] = [spec.name for spec in SCOUT_REGISTRY] + [SCOUT_CONTRADICTIONS]

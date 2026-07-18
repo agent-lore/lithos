@@ -18,6 +18,7 @@ from lithos.knowledge import KnowledgeManager
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
     SCOUT_COACTIVATION,
+    SCOUT_CONTRADICTIONS,
     SCOUT_EXACT_ALIAS,
     SCOUT_FRESHNESS,
     SCOUT_GRAPH,
@@ -1231,8 +1232,12 @@ class TestScoutContradictions:
 
 
 class TestScoutConstants:
-    def test_all_scout_names_has_ten_entries(self) -> None:
-        assert len(ALL_SCOUT_NAMES) == 10
+    def test_all_scout_names_has_eleven_entries(self) -> None:
+        # 10 candidate scouts in SCOUT_REGISTRY + scout_contradictions (a
+        # conflict producer that lives outside the registry but is a canonical
+        # scout for audit purposes).
+        assert len(ALL_SCOUT_NAMES) == 11
+        assert SCOUT_CONTRADICTIONS in ALL_SCOUT_NAMES
 
     def test_canonical_names(self) -> None:
         assert SCOUT_VECTOR == "scout_vector"
@@ -1245,6 +1250,7 @@ class TestScoutConstants:
         assert SCOUT_GRAPH == "scout_graph"
         assert SCOUT_COACTIVATION == "scout_coactivation"
         assert SCOUT_SOURCE_URL == "scout_source_url"
+        assert SCOUT_CONTRADICTIONS == "scout_contradictions"
 
 
 # ---------------------------------------------------------------------------
