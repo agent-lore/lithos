@@ -297,7 +297,7 @@ class KnowledgeGraph:
 
         # Add edges for wiki-links
         for link in doc.links:
-            target_node = self._resolve_link(link.target)
+            target_node = self.resolve_link(link.target)
             if target_node:
                 self.graph.add_edge(node_id, target_node, link_text=link.target)
             else:
@@ -411,7 +411,7 @@ class KnowledgeGraph:
             logger.debug("graph remove_document: doc_id=%s not found (no-op)", doc_id)
 
     @traced("lithos.graph.resolve_link")
-    def _resolve_link(self, target: str) -> str | None:
+    def resolve_link(self, target: str) -> str | None:
         """Resolve a wiki-link target to a node ID.
 
         Resolution precedence:

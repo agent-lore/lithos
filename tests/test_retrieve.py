@@ -1083,7 +1083,7 @@ class TestMaxContextNodes:
         with (
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=[]),
-            patch("lithos.lcma.retrieve.scout_provenance", new_callable=AsyncMock) as mock_prov,
+            patch("lithos.lcma.scouts.scout_provenance", new_callable=AsyncMock) as mock_prov,
         ):
             mock_prov.return_value = []
             await _run_retrieve_impl(
@@ -1768,7 +1768,7 @@ class TestNewScoutsWiredInPhaseB:
         with (
             patch.object(seeded_search, "semantic_search", return_value=[]),
             patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
-            patch("lithos.lcma.retrieve.scout_graph", side_effect=RuntimeError("graph boom")),
+            patch("lithos.lcma.scouts.scout_graph", side_effect=RuntimeError("graph boom")),
         ):
             result = await _run_retrieve_impl(
                 query="alpha",

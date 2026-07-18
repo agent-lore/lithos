@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import dataclasses
 import itertools
 import logging
 import re
@@ -27,17 +28,10 @@ from typing import TYPE_CHECKING
 from lithos.errors import ScoutFailure
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
-    scout_coactivation,
+    SCOUT_CONTRADICTIONS,
+    SCOUT_REGISTRY,
+    ScoutContext,
     scout_contradictions,
-    scout_exact_alias,
-    scout_freshness,
-    scout_graph,
-    scout_lexical,
-    scout_provenance,
-    scout_source_url,
-    scout_tags_recency,
-    scout_task_context,
-    scout_vector,
 )
 from lithos.lcma.stats import StatsStore, _generate_receipt_id
 from lithos.lcma.utils import Candidate, merge_and_normalize
@@ -297,6 +291,47 @@ async def compute_temperature(
     return temperature
 
 
+def _log_scout_failure(name: str, cause: BaseException) -> None:
+    """Record a per-scout backend failure (ADR-0005: one bad scout can't kill retrieve).
+
+    Raised-and-caught so the log line carries :class:`ScoutFailure` context. This is
+    the single seam where degraded-mode reporting will collect failed scouts.
+    """
+    try:
+        raise ScoutFailure(scout=name, cause=cause) from cause
+    except ScoutFailure as exc:
+        logger.warning(
+            "run_retrieve: scout failed",
+            extra={"scout": name, "error": str(exc.cause)},
+            exc_info=True,
+        )
+
+
+def _record_scout_success(
+    name: str,
+    result: list[Candidate],
+    duration_ms: float,
+    *,
+    all_candidates: list[Candidate],
+    executed_scouts: set[str],
+) -> None:
+    """Fold one scout's candidates into the pool and mark it fired.
+
+    ``duration_ms`` is the scout's Phase B latency, or its share of the Phase A
+    wall-clock (all Phase A scouts share one gather duration). A scout that ran and
+    returned ``[]`` still counts as fired in the audit trail.
+    """
+    executed_scouts.add(name)
+    all_candidates.extend(result)
+    if _HAS_TELEMETRY and _lithos_metrics is not None:
+        _lithos_metrics.lcma_scout_duration.record(duration_ms, {"scout": name})
+        _lithos_metrics.lcma_scout_candidates.record(len(result), {"scout": name})
+    logger.debug(
+        "run_retrieve: scout completed",
+        extra={"scout": name, "candidates": len(result)},
+    )
+
+
 async def _run_retrieve_impl(
     *,
     query: str,
@@ -363,78 +398,53 @@ async def _run_retrieve_impl(
 
     try:
         # ── Phase A: parallel scouts ──────────────────────────────
-        # All scouts receive the same set of caller-supplied filters
-        # (namespace, scope, tags, path_prefix) so they enforce a
-        # consistent global view, regardless of which backend they wrap.
-        scout_kw = {
-            "namespace_filter": namespace_filter,
-            "agent_id": agent_id,
-            "task_id": task_id,
-            "tags": tags,
-            "path_prefix": path_prefix,
-        }
-
-        # Phase A scout list — keep names parallel to coros so we can mark
-        # each one as "executed" if it ran without raising. A scout that
-        # ran and returned [] still counts as fired in the audit trail.
-        from collections.abc import Awaitable
-
-        phase_a_names: list[str] = [
-            "scout_vector",
-            "scout_lexical",
-            "scout_exact_alias",
-            "scout_tags_recency",
-            "scout_freshness",
-        ]
-        phase_a_coros: list[Awaitable[list[Candidate]]] = [
-            scout_vector(query, search, knowledge, limit=limit, **scout_kw),
-            scout_lexical(query, search, knowledge, limit=limit, **scout_kw),
-            scout_exact_alias(query, graph, knowledge, limit=limit, **scout_kw),
-            scout_tags_recency(query, knowledge, limit=limit, **scout_kw),
-            scout_freshness(query, knowledge, limit=limit, **scout_kw),
-        ]
-        # task_context only when task_id provided
-        if task_id is not None:
-            phase_a_names.append("scout_task_context")
-            phase_a_coros.append(
-                scout_task_context(coordination, knowledge, limit=limit, **scout_kw)
-            )
-
-        _phase_a_start = time.perf_counter()
-        phase_a_results = await asyncio.gather(*phase_a_coros, return_exceptions=True)
-        _phase_a_elapsed = time.perf_counter() - _phase_a_start
-
-        # Collect successful results AND track which scouts ran cleanly.
+        # Every scout receives the same caller-supplied filters (namespace, scope,
+        # tags, path_prefix) via the shared ScoutContext, so they enforce a
+        # consistent global view regardless of which backend they wrap.
+        base_ctx = ScoutContext(
+            query=query,
+            seed_ids=[],
+            search=search,
+            knowledge=knowledge,
+            graph=graph,
+            projection=projection,
+            stats_store=stats_store,
+            coordination=coordination,
+            limit=limit,
+            namespace_filter=namespace_filter,
+            agent_id=agent_id,
+            task_id=task_id,
+            tags=tags,
+            path_prefix=path_prefix,
+        )
         executed_scouts: set[str] = set()
         all_candidates: list[Candidate] = []
-        for name, result in zip(phase_a_names, phase_a_results, strict=True):
+
+        # scout_task_context only participates when a task_id was supplied.
+        phase_a = [
+            spec
+            for spec in SCOUT_REGISTRY
+            if spec.phase == "A" and (not spec.requires_task_id or task_id is not None)
+        ]
+        _phase_a_start = time.perf_counter()
+        phase_a_results = await asyncio.gather(
+            *(spec.run(base_ctx) for spec in phase_a), return_exceptions=True
+        )
+        _phase_a_elapsed = time.perf_counter() - _phase_a_start
+
+        # Phase A scouts run concurrently, so they share one wall-clock
+        # (_phase_a_elapsed): each scout's telemetry records its *share* of that
+        # duration, not an individual latency (only Phase B latencies are per-scout).
+        for spec, result in zip(phase_a, phase_a_results, strict=True):
             if isinstance(result, BaseException):
-                # ADR-0005 contract: per-scout failures are caught here so a
-                # single misbehaving backend cannot kill the whole retrieve.
-                # Anything escaping is a CognitiveMemoryError and propagates
-                # to the caller.
-                try:
-                    raise ScoutFailure(scout=name, cause=result) from result
-                except ScoutFailure as scout_err:
-                    logger.warning(
-                        "run_retrieve: phase A scout failed",
-                        extra={"scout": name, "error": str(scout_err.cause)},
-                        exc_info=True,
-                    )
+                _log_scout_failure(spec.name, result)
                 continue
-            executed_scouts.add(name)
-            all_candidates.extend(result)
-            if _HAS_TELEMETRY and _lithos_metrics is not None:
-                # Phase A scouts run concurrently via asyncio.gather, so all scouts
-                # share the same wall-clock elapsed time (_phase_a_elapsed). This
-                # records each scout's *share* of the Phase A wall-clock duration,
-                # NOT its individual latency. Per-scout latencies are only meaningful
-                # for Phase B scouts, which run sequentially.
-                _lithos_metrics.lcma_scout_duration.record(_phase_a_elapsed * 1000, {"scout": name})
-                _lithos_metrics.lcma_scout_candidates.record(len(result), {"scout": name})
-            logger.debug(
-                "run_retrieve: phase A scout completed",
-                extra={"scout": name, "candidates": len(result)},
+            _record_scout_success(
+                spec.name,
+                result,
+                _phase_a_elapsed * 1000,
+                all_candidates=all_candidates,
+                executed_scouts=executed_scouts,
             )
 
         # ── Phase A normalisation for provenance seeding ──────────
@@ -458,127 +468,25 @@ async def _run_retrieve_impl(
             extra={"receipt_id": receipt_id, "seed_count": len(seed_ids)},
         )
         if seed_ids:
-            try:
+            seeded_ctx = dataclasses.replace(base_ctx, seed_ids=seed_ids)
+            for spec in (s for s in SCOUT_REGISTRY if s.phase == "B"):
                 _t = time.perf_counter()
-                prov_candidates = await scout_provenance(
-                    seed_ids, knowledge, limit=limit, **scout_kw
-                )
-                executed_scouts.add("scout_provenance")
-                all_candidates.extend(prov_candidates)
-                if _HAS_TELEMETRY and _lithos_metrics is not None:
-                    _lithos_metrics.lcma_scout_duration.record(
-                        (time.perf_counter() - _t) * 1000, {"scout": "scout_provenance"}
-                    )
-                    _lithos_metrics.lcma_scout_candidates.record(
-                        len(prov_candidates), {"scout": "scout_provenance"}
-                    )
-                logger.debug(
-                    "run_retrieve: phase B scout completed",
-                    extra={"scout": "scout_provenance", "candidates": len(prov_candidates)},
-                )
-            except Exception as exc:
-                # ADR-0005 contract: per-scout failures are caught here so a
-                # single misbehaving backend cannot kill the whole retrieve.
-                # Anything escaping is a CognitiveMemoryError and propagates
-                # to the caller.
                 try:
-                    raise ScoutFailure(scout="scout_provenance", cause=exc) from exc
-                except ScoutFailure:
-                    logger.warning(
-                        "run_retrieve: phase B scout failed",
-                        extra={"scout": "scout_provenance"},
-                        exc_info=True,
-                    )
+                    result = await spec.run(seeded_ctx)
+                except Exception as exc:
+                    _log_scout_failure(spec.name, exc)
+                    continue
+                _record_scout_success(
+                    spec.name,
+                    result,
+                    (time.perf_counter() - _t) * 1000,
+                    all_candidates=all_candidates,
+                    executed_scouts=executed_scouts,
+                )
 
-            try:
-                _t = time.perf_counter()
-                graph_candidates = await scout_graph(
-                    seed_ids, graph, projection, knowledge, limit=limit, **scout_kw
-                )
-                executed_scouts.add("scout_graph")
-                all_candidates.extend(graph_candidates)
-                if _HAS_TELEMETRY and _lithos_metrics is not None:
-                    _lithos_metrics.lcma_scout_duration.record(
-                        (time.perf_counter() - _t) * 1000, {"scout": "scout_graph"}
-                    )
-                    _lithos_metrics.lcma_scout_candidates.record(
-                        len(graph_candidates), {"scout": "scout_graph"}
-                    )
-                logger.debug(
-                    "run_retrieve: phase B scout completed",
-                    extra={"scout": "scout_graph", "candidates": len(graph_candidates)},
-                )
-            except Exception as exc:
-                # ADR-0005 contract: per-scout failures are caught here.
-                try:
-                    raise ScoutFailure(scout="scout_graph", cause=exc) from exc
-                except ScoutFailure:
-                    logger.warning(
-                        "run_retrieve: phase B scout failed",
-                        extra={"scout": "scout_graph"},
-                        exc_info=True,
-                    )
-
-            try:
-                _t = time.perf_counter()
-                coact_candidates = await scout_coactivation(
-                    seed_ids, stats_store, knowledge, limit=limit, **scout_kw
-                )
-                executed_scouts.add("scout_coactivation")
-                all_candidates.extend(coact_candidates)
-                if _HAS_TELEMETRY and _lithos_metrics is not None:
-                    _lithos_metrics.lcma_scout_duration.record(
-                        (time.perf_counter() - _t) * 1000, {"scout": "scout_coactivation"}
-                    )
-                    _lithos_metrics.lcma_scout_candidates.record(
-                        len(coact_candidates), {"scout": "scout_coactivation"}
-                    )
-                logger.debug(
-                    "run_retrieve: phase B scout completed",
-                    extra={"scout": "scout_coactivation", "candidates": len(coact_candidates)},
-                )
-            except Exception as exc:
-                # ADR-0005 contract: per-scout failures are caught here.
-                try:
-                    raise ScoutFailure(scout="scout_coactivation", cause=exc) from exc
-                except ScoutFailure:
-                    logger.warning(
-                        "run_retrieve: phase B scout failed",
-                        extra={"scout": "scout_coactivation"},
-                        exc_info=True,
-                    )
-
-            try:
-                _t = time.perf_counter()
-                src_url_candidates = await scout_source_url(
-                    seed_ids, knowledge, limit=limit, **scout_kw
-                )
-                executed_scouts.add("scout_source_url")
-                all_candidates.extend(src_url_candidates)
-                if _HAS_TELEMETRY and _lithos_metrics is not None:
-                    _lithos_metrics.lcma_scout_duration.record(
-                        (time.perf_counter() - _t) * 1000, {"scout": "scout_source_url"}
-                    )
-                    _lithos_metrics.lcma_scout_candidates.record(
-                        len(src_url_candidates), {"scout": "scout_source_url"}
-                    )
-                logger.debug(
-                    "run_retrieve: phase B scout completed",
-                    extra={"scout": "scout_source_url", "candidates": len(src_url_candidates)},
-                )
-            except Exception as exc:
-                # ADR-0005 contract: per-scout failures are caught here.
-                try:
-                    raise ScoutFailure(scout="scout_source_url", cause=exc) from exc
-                except ScoutFailure:
-                    logger.warning(
-                        "run_retrieve: phase B scout failed",
-                        extra={"scout": "scout_source_url"},
-                        exc_info=True,
-                    )
-
-        # Contradictions — only fire when surface_conflicts is True
-        conflicts_found: list[dict[str, object]] = []
+        # Contradictions — a conflict producer (not a candidate scout), fired only
+        # when surface_conflicts is set. Recorded in executed_scouts so it shows up
+        # in the scouts_fired audit trail (it was previously never recorded).
         if surface_conflicts:
             try:
                 conflicts_found = await scout_contradictions(
@@ -589,25 +497,17 @@ async def _run_retrieve_impl(
                     agent_id=agent_id,
                     task_id=task_id,
                 )
+                executed_scouts.add(SCOUT_CONTRADICTIONS)
                 logger.debug(
                     "run_retrieve: contradictions surfaced",
                     extra={"conflict_count": len(conflicts_found)},
                 )
             except Exception as exc:
-                # ADR-0005 contract: per-scout failures are caught here.
-                try:
-                    raise ScoutFailure(scout="scout_contradictions", cause=exc) from exc
-                except ScoutFailure:
-                    logger.warning(
-                        "run_retrieve: phase B scout failed",
-                        extra={"scout": "scout_contradictions"},
-                        exc_info=True,
-                    )
+                _log_scout_failure(SCOUT_CONTRADICTIONS, exc)
 
-        # Record scouts_fired using canonical names in order. A scout
-        # appears here iff it executed without raising — empty result
-        # sets still count as "fired" so the audit trail accurately
-        # reflects what the pipeline did.
+        # Record scouts_fired using canonical names in order. A scout appears here
+        # iff it executed without raising — empty result sets still count as "fired"
+        # so the audit trail accurately reflects what the pipeline did.
         scouts_fired = [s for s in ALL_SCOUT_NAMES if s in executed_scouts]
 
         # ── Merge & Normalise all candidates ──────────────────────
