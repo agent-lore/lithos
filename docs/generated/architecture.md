@@ -24,6 +24,7 @@ graph TD
     Errors
     Events
     Logging
+    SqliteStore
     Telemetry
   end
   click Codec "components/Codec.md"
@@ -40,6 +41,7 @@ graph TD
   click Logging "components/Logging.md"
   click Provenance "components/Provenance.md"
   click Search "components/Search.md"
+  click SqliteStore "components/SqliteStore.md"
   click Telemetry "components/Telemetry.md"
   CognitiveMemory --> Codec
   CognitiveMemory --> Config
@@ -74,6 +76,7 @@ graph TD
   Events --> Telemetry
   Graph --> Codec
   Graph --> Config
+  Graph --> SqliteStore
   Graph --> Telemetry
   Intake --> Codec
   Intake --> Coordination
@@ -100,6 +103,7 @@ graph TD
   LCMA --> Knowledge
   LCMA --> Provenance
   LCMA --> Search
+  LCMA --> SqliteStore
   LCMA --> Telemetry
   Provenance --> Codec
   Provenance --> Config
@@ -108,6 +112,7 @@ graph TD
   Search --> Errors
   Search --> Graph
   Search --> Telemetry
+  SqliteStore --> Config
   Telemetry --> Config
   linkStyle 1 stroke:#bbb
   linkStyle 3 stroke:#bbb
@@ -125,19 +130,22 @@ graph TD
   linkStyle 30 stroke:#bbb
   linkStyle 32 stroke:#bbb
   linkStyle 33 stroke:#bbb
-  linkStyle 36 stroke:#bbb
+  linkStyle 34 stroke:#bbb
   linkStyle 37 stroke:#bbb
-  linkStyle 41 stroke:#bbb
-  linkStyle 43 stroke:#bbb
+  linkStyle 38 stroke:#bbb
+  linkStyle 42 stroke:#bbb
   linkStyle 44 stroke:#bbb
-  linkStyle 48 stroke:#bbb
-  linkStyle 50 stroke:#bbb
-  linkStyle 52 stroke:#bbb
+  linkStyle 45 stroke:#bbb
+  linkStyle 49 stroke:#bbb
+  linkStyle 51 stroke:#bbb
   linkStyle 53 stroke:#bbb
-  linkStyle 59 stroke:#bbb
+  linkStyle 54 stroke:#bbb
+  linkStyle 60 stroke:#bbb
   linkStyle 61 stroke:#bbb
   linkStyle 63 stroke:#bbb
-  linkStyle 64 stroke:#bbb
+  linkStyle 65 stroke:#bbb
   linkStyle 66 stroke:#bbb
-  linkStyle 67 stroke:#bbb
+  linkStyle 68 stroke:#bbb
+  linkStyle 69 stroke:#bbb
+  linkStyle 70 stroke:#bbb
 ```
