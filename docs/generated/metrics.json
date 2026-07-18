@@ -53,7 +53,7 @@
       },
       "LCMA": {
         "functions_over_10": 16,
-        "max_complexity": 39,
+        "max_complexity": 41,
         "max_function": "lithos.lcma.retrieve._run_retrieve_impl"
       },
       "Logging": {
@@ -88,7 +88,7 @@
         "qualname": "lithos.knowledge.KnowledgeManager.update"
       },
       {
-        "complexity": 39,
+        "complexity": 41,
         "qualname": "lithos.lcma.retrieve._run_retrieve_impl"
       },
       {
@@ -120,7 +120,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 724
+    "total_functions": 725
   },
   "domain": {
     "associations": 26,
@@ -343,20 +343,20 @@
         "functions": 137,
         "largest_module": "lithos.tools.tasks",
         "largest_module_lines": 985,
-        "lines": 5915,
+        "lines": 5919,
         "modules": 13,
         "public_symbols": 30,
-        "sloc": 4751
+        "sloc": 4755
       },
       "Errors": {
         "classes": 9,
         "functions": 11,
         "largest_module": "lithos.errors",
-        "largest_module_lines": 146,
-        "lines": 210,
+        "largest_module_lines": 147,
+        "lines": 211,
         "modules": 2,
         "public_symbols": 12,
-        "sloc": 151
+        "sloc": 152
       },
       "Events": {
         "classes": 3,
@@ -403,10 +403,10 @@
         "functions": 132,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1248,
-        "lines": 4511,
+        "lines": 4526,
         "modules": 9,
         "public_symbols": 22,
-        "sloc": 3620
+        "sloc": 3631
       },
       "Logging": {
         "classes": 1,
@@ -440,13 +440,13 @@
       },
       "Telemetry": {
         "classes": 8,
-        "functions": 68,
+        "functions": 69,
         "largest_module": "lithos.telemetry",
-        "largest_module_lines": 1183,
-        "lines": 1183,
+        "largest_module_lines": 1202,
+        "lines": 1202,
         "modules": 1,
         "public_symbols": 13,
-        "sloc": 909
+        "sloc": 925
       }
     },
     "max_module": "lithos.coordination",
@@ -464,13 +464,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23743,
+    "total_lines": 23782,
     "total_modules": 40,
-    "total_sloc": 19082
+    "total_sloc": 19114
   },
   "tests": {
     "ratio": 1.87,
-    "src_lines": 23743,
-    "test_lines": 44359
+    "src_lines": 23782,
+    "test_lines": 44455
   }
 }

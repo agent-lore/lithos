@@ -639,6 +639,7 @@ class _LithosMetrics:
         self._lcma_temperature_cold_start: Any = None
         self._lcma_scout_duration: Any = None
         self._lcma_scout_candidates: Any = None
+        self._lcma_scout_failures: Any = None
         self._lcma_salience_updates: Any = None
 
     @property
@@ -938,6 +939,24 @@ class _LithosMetrics:
                 description="Number of candidates returned per scout invocation",
             )
         return self._lcma_scout_candidates
+
+    @property
+    def lcma_scout_failures(self) -> Any:
+        """Counter incremented when a scout's backend raises during retrieve.
+
+        A rising rate signals degraded retrieval — one backend down while the
+        pipeline still returns partial results (cf. the retrieve envelope's
+        ``degraded``/``failed_scouts`` fields).
+
+        Attributes:
+            scout: the scout name (e.g. ``"scout_vector"``)
+        """
+        if self._lcma_scout_failures is None:
+            self._lcma_scout_failures = get_meter().create_counter(
+                "lithos.lcma.scout.failures",
+                description="Number of per-scout backend failures during run_retrieve",
+            )
+        return self._lcma_scout_failures
 
     @property
     def lcma_salience_updates(self) -> Any:

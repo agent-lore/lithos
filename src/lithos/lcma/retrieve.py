@@ -291,12 +291,17 @@ async def compute_temperature(
     return temperature
 
 
-def _log_scout_failure(name: str, cause: BaseException) -> None:
+def _log_scout_failure(name: str, cause: BaseException, *, failed_scouts: set[str]) -> None:
     """Record a per-scout backend failure (ADR-0005: one bad scout can't kill retrieve).
 
-    Raised-and-caught so the log line carries :class:`ScoutFailure` context. This is
-    the single seam where degraded-mode reporting will collect failed scouts.
+    Adds *name* to *failed_scouts* (surfaced as the retrieve envelope's
+    ``degraded``/``failed_scouts`` fields), bumps the ``lcma_scout_failures``
+    counter, and logs with :class:`ScoutFailure` context (raised-and-caught so the
+    log line carries that context).
     """
+    failed_scouts.add(name)
+    if _HAS_TELEMETRY and _lithos_metrics is not None:
+        _lithos_metrics.lcma_scout_failures.add(1, {"scout": name})
     try:
         raise ScoutFailure(scout=name, cause=cause) from cause
     except ScoutFailure as exc:
@@ -360,13 +365,15 @@ async def _run_retrieve_impl(
     this implementation function under its private name.
 
     Returns the response envelope with results, temperature, terrace_reached,
-    and receipt_id.
+    receipt_id, and the degraded-mode signal ``degraded`` (bool) / ``failed_scouts``
+    (canonical names of scouts that ran and raised).
 
     Errors:
         - Per-scout backend failures are wrapped in :class:`ScoutFailure` and
           caught at one documented boundary inside this function (so a single
           misbehaving backend cannot kill the whole retrieve). The audit trail
-          (``scouts_fired``) reflects which scouts ran cleanly.
+          (``scouts_fired``) reflects which scouts ran cleanly; ``failed_scouts``
+          reflects which ran and raised.
         - All other exceptions (e.g. ``StatsStore`` I/O failures) propagate
           to the caller; they are not wrapped in ``ScoutFailure``.
     """
@@ -375,6 +382,7 @@ async def _run_retrieve_impl(
 
     receipt_id = _generate_receipt_id()
     scouts_fired: list[str] = []
+    failed_scout_names: set[str] = set()
     final_nodes: list[dict[str, object]] = []
     final_node_ids: list[str] = []
     candidates_considered = 0
@@ -437,7 +445,7 @@ async def _run_retrieve_impl(
         # duration, not an individual latency (only Phase B latencies are per-scout).
         for spec, result in zip(phase_a, phase_a_results, strict=True):
             if isinstance(result, BaseException):
-                _log_scout_failure(spec.name, result)
+                _log_scout_failure(spec.name, result, failed_scouts=failed_scout_names)
                 continue
             _record_scout_success(
                 spec.name,
@@ -474,7 +482,7 @@ async def _run_retrieve_impl(
                 try:
                     result = await spec.run(seeded_ctx)
                 except Exception as exc:
-                    _log_scout_failure(spec.name, exc)
+                    _log_scout_failure(spec.name, exc, failed_scouts=failed_scout_names)
                     continue
                 _record_scout_success(
                     spec.name,
@@ -503,12 +511,14 @@ async def _run_retrieve_impl(
                     extra={"conflict_count": len(conflicts_found)},
                 )
             except Exception as exc:
-                _log_scout_failure(SCOUT_CONTRADICTIONS, exc)
+                _log_scout_failure(SCOUT_CONTRADICTIONS, exc, failed_scouts=failed_scout_names)
 
         # Record scouts_fired using canonical names in order. A scout appears here
         # iff it executed without raising — empty result sets still count as "fired"
-        # so the audit trail accurately reflects what the pipeline did.
+        # so the audit trail accurately reflects what the pipeline did. failed_scouts
+        # is the disjoint set that ran and raised (degraded-mode signal).
         scouts_fired = [s for s in ALL_SCOUT_NAMES if s in executed_scouts]
+        failed_scouts = [s for s in ALL_SCOUT_NAMES if s in failed_scout_names]
 
         # ── Merge & Normalise all candidates ──────────────────────
         merged = merge_and_normalize(all_candidates)
@@ -617,6 +627,11 @@ async def _run_retrieve_impl(
             "temperature": temperature,
             "terrace_reached": terrace_reached,
             "receipt_id": receipt_id,
+            # Degraded-mode signal: which scouts ran and raised (empty normally).
+            # A caller can tell partial results from a bad backend apart from a
+            # genuinely empty corpus. Always present for a stable envelope shape.
+            "degraded": bool(failed_scouts),
+            "failed_scouts": failed_scouts,
         }
         if surface_conflicts:
             envelope["conflicts"] = conflicts_found

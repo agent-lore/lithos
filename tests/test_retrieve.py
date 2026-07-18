@@ -1806,6 +1806,102 @@ class TestNewScoutsWiredInPhaseB:
         fired = json.loads(row["scouts_fired"])
         assert "scout_graph" not in fired
 
+        # ...and it surfaces as the degraded-mode signal in the envelope.
+        assert result["degraded"] is True
+        assert result["failed_scouts"] == ["scout_graph"]
+
+
+class TestDegradedMode:
+    """The retrieve envelope reports degraded mode when a scout backend raises."""
+
+    @pytest.mark.asyncio
+    async def test_healthy_retrieve_reports_not_degraded(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+        stats_store: StatsStore,
+    ) -> None:
+        """With every scout healthy, degraded is False and failed_scouts is empty
+        — and the fields are always present, not conditional."""
+        from lithos.search import SearchResult
+
+        tantivy_hits = [
+            SearchResult(id=_ID1, title="Alpha Note", snippet="", score=0.9, path="alpha-note.md"),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
+        ):
+            result = await _run_retrieve_impl(
+                query="alpha",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                projection=projection,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        assert result["degraded"] is False
+        assert result["failed_scouts"] == []
+
+    @pytest.mark.asyncio
+    async def test_failing_scout_marks_degraded_and_increments_metric(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+        stats_store: StatsStore,
+    ) -> None:
+        """A Phase A scout that raises marks the retrieve degraded, names the scout
+        in failed_scouts, and bumps the lcma_scout_failures counter."""
+        from lithos.search import SearchResult
+
+        tantivy_hits = [
+            SearchResult(id=_ID1, title="Alpha Note", snippet="", score=0.9, path="alpha-note.md"),
+        ]
+        metrics = MagicMock()
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=[]),
+            patch.object(seeded_search, "full_text_search", return_value=tantivy_hits),
+            patch(
+                "lithos.lcma.scouts.scout_vector",
+                new=AsyncMock(side_effect=RuntimeError("vector boom")),
+            ),
+            patch("lithos.lcma.retrieve._HAS_TELEMETRY", True),
+            patch("lithos.lcma.retrieve._lithos_metrics", metrics),
+        ):
+            result = await _run_retrieve_impl(
+                query="alpha",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                projection=projection,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        # Degraded signal in the envelope; the pipeline still returned.
+        assert result["degraded"] is True
+        assert result["failed_scouts"] == ["scout_vector"]
+        assert "receipt_id" in result
+
+        # The scout-failure counter was bumped with the scout label.
+        metrics.lcma_scout_failures.add.assert_any_call(1, {"scout": "scout_vector"})
+
 
 class TestFinallyBlockRobustness:
     @pytest.mark.asyncio
