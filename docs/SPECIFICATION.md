@@ -1501,6 +1501,8 @@ For `task.completed`, the current implementation emits `cited_nodes`, `misleadin
 
 The event bus maintains an in-memory ring buffer of the last N events using `collections.deque(maxlen=N)`. SSE replay uses `get_buffered_since(event_id)` to replay buffered events after a known event ID. Buffer size is configurable via `events.event_buffer_size` (default: 500).
 
+When the reconnect id is not in the ring — evicted past the buffer horizon, carried over from a previous server run, or otherwise unknown — replay cannot be proven complete. Rather than silently under-deliver, `get_buffered_since` reports a gap and the SSE surface emits a `resync` control event (see §8.7) so the client re-fetches current state instead of trusting a truncated replay.
+
 ### 8.7 SSE Delivery Surface
 
 Lithos exposes a best-effort Server-Sent Events endpoint at `GET /events`.
@@ -1523,6 +1525,7 @@ Lithos exposes a best-effort Server-Sent Events endpoint at `GET /events`.
 
 - Returns `text/event-stream`.
 - Replays buffered events first when `since` or `Last-Event-ID` is supplied, then streams live events.
+- When the supplied id is not in the ring buffer (evicted, from a previous server run, or unknown), emits an `event: resync` control message (no `id:` line, so it never becomes the client's next `Last-Event-ID`) instructing the client to resync from current state, then continues streaming live events.
 - Emits periodic keepalive comments when idle.
 - Returns `503` when `events.sse_enabled=false`.
 - Returns `429` when `events.max_sse_clients` is exceeded.

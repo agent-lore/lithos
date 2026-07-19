@@ -440,9 +440,21 @@ class LithosServer:
                     # Replay buffered events if a since_id was provided
                     if since_id:
                         with tracer.start_as_current_span("lithos.sse.replay") as replay_span:
-                            replayed = self.event_bus.get_buffered_since(since_id)
+                            replay = self.event_bus.get_buffered_since(since_id)
                             replay_count = 0
-                            for evt in replayed:
+                            if replay.gapped:
+                                # since_id is not in the ring (evicted, from a previous
+                                # server run, or unknown) — the replay cannot be proven
+                                # complete, so tell the client to resync instead of
+                                # silently under-delivering.
+                                logger.warning(
+                                    "SSE replay gap: since_id=%s not in the replay buffer; "
+                                    "signalling resync",
+                                    since_id,
+                                )
+                                replay_span.set_attribute("lithos.sse.gapped", True)
+                                yield _format_resync_sse(since_id)
+                            for evt in replay.events:
                                 # Apply the same filters to replayed events
                                 if event_types and evt.type not in event_types:
                                     continue
@@ -840,6 +852,32 @@ def _format_sse(event: LithosEvent) -> str:
     }
     data = json.dumps(payload, default=str)
     return f"id: {event.id}\nevent: {event.type}\ndata: {data}\n\n"
+
+
+# SSE control event emitted when the replay buffer cannot prove continuity from the
+# reconnecting client's Last-Event-ID (it was evicted, is from a previous server run,
+# or is unknown). The client should discard its assumed position and resync from
+# current state rather than trust a silently-truncated replay.
+SSE_RESYNC_EVENT = "resync"
+
+
+def _format_resync_sse(since_id: str) -> str:
+    """Format an SSE ``resync`` control message (a buffered-replay gap was detected).
+
+    No ``id:`` line — this is a control signal, not a replayable event, so it must
+    not become the client's next ``Last-Event-ID``.
+    """
+    data = json.dumps(
+        {
+            "reason": "replay_gap",
+            "since_id": since_id,
+            "message": (
+                "Cannot replay from the given id (evicted, from a previous server run, "
+                "or unknown); resync from current state."
+            ),
+        }
+    )
+    return f"event: {SSE_RESYNC_EVENT}\ndata: {data}\n\n"
 
 
 # Global server instance

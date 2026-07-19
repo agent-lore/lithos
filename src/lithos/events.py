@@ -16,7 +16,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from lithos.config import EventsConfig
@@ -133,6 +133,23 @@ class _Subscriber:
     tag_filter: list[str] | None
     subscriber_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     drops: int = 0
+
+
+class BufferedReplay(NamedTuple):
+    """Result of :meth:`EventBus.get_buffered_since`.
+
+    ``events`` are the buffered events after the reconnect id (in emission
+    order). ``gapped`` is True when the id is not found in the ring, meaning the
+    bus cannot prove continuity from it — the id was evicted, belongs to a
+    previous server run (a fresh buffer after restart), or was never emitted —
+    so the SSE stream should tell the client to resync rather than silently
+    under-deliver. A previously-delivered id that is still buffered yields
+    ``gapped=False``; a spurious resync for a fabricated id is harmless (it just
+    re-fetches current state).
+    """
+
+    events: list[LithosEvent]
+    gapped: bool
 
 
 class EventBus:
@@ -291,24 +308,34 @@ class EventBus:
                 result.append((sub.subscriber_id, sub.queue.qsize() / maxsize))
         return result
 
-    def get_buffered_since(self, since_id: str) -> list[LithosEvent]:
-        """Return buffered events that occurred after the event with the given ID.
+    def get_buffered_since(self, since_id: str) -> BufferedReplay:
+        """Return buffered events after *since_id*, with a replay-gap signal.
 
-        Used for SSE replay on reconnect. Events are returned in emission order.
-        If since_id is not found in the buffer, returns an empty list.
+        Used for SSE replay on reconnect. Events are returned in emission order,
+        exclusive of *since_id*. Continuity is decided purely by whether
+        *since_id* is still in the ring:
+
+        - **Found** — the caller's position is known; return the events after it.
+          A caught-up client (its id is the newest buffered event) gets
+          ``([], gapped=False)``.
+        - **Absent** — the bus cannot prove continuity: the id was evicted from
+          the ring, belongs to a previous server run (a fresh buffer after a
+          restart), or was never emitted. All three mean events may have been
+          missed, so ``gapped=True`` and the SSE layer tells the client to
+          resync. A spurious resync for a fabricated id is harmless (it just
+          re-fetches current state); a silent under-delivery is not.
 
         Args:
-            since_id: The event ID to replay from (exclusive — the named event
-                      is NOT included; only events emitted after it are returned).
+            since_id: The event ID to replay from (exclusive).
 
         Returns:
-            Ordered list of LithosEvent items emitted after the given ID.
+            A :class:`BufferedReplay` — ``events`` after *since_id* and ``gapped``.
         """
         events = list(self._buffer)
         for i, event in enumerate(events):
             if event.id == since_id:
-                return events[i + 1 :]
-        return []
+                return BufferedReplay(events[i + 1 :], gapped=False)
+        return BufferedReplay([], gapped=True)
 
     @property
     def active_subscriber_count(self) -> int:
