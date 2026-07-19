@@ -71,6 +71,11 @@
         "max_complexity": 33,
         "max_function": "lithos.search.SearchEngine.graph_search"
       },
+      "SqliteStore": {
+        "functions_over_10": 0,
+        "max_complexity": 10,
+        "max_function": "lithos.async_sqlite_store.AsyncSqliteStore._session"
+      },
       "Telemetry": {
         "functions_over_10": 1,
         "max_complexity": 19,
@@ -120,7 +125,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 725
+    "total_functions": 717
   },
   "domain": {
     "associations": 26,
@@ -141,7 +146,7 @@
         "instability": 0.92
       },
       "Config": {
-        "fan_in": 10,
+        "fan_in": 11,
         "fan_out": 0,
         "instability": 0.0
       },
@@ -167,8 +172,8 @@
       },
       "Graph": {
         "fan_in": 7,
-        "fan_out": 3,
-        "instability": 0.3
+        "fan_out": 4,
+        "instability": 0.36
       },
       "Intake": {
         "fan_in": 3,
@@ -182,7 +187,7 @@
       },
       "LCMA": {
         "fan_in": 1,
-        "fan_out": 11,
+        "fan_out": 12,
         "instability": 0.92
       },
       "Logging": {
@@ -200,14 +205,19 @@
         "fan_out": 4,
         "instability": 0.44
       },
+      "SqliteStore": {
+        "fan_in": 2,
+        "fan_out": 1,
+        "instability": 0.33
+      },
       "Telemetry": {
         "fan_in": 9,
         "fan_out": 1,
         "instability": 0.1
       }
     },
-    "cross_component_edges": 68,
-    "cross_component_module_edges": 150,
+    "cross_component_edges": 71,
+    "cross_component_module_edges": 152,
     "longest_component_chain": 9,
     "module_cycle_count": 1,
     "module_cycles": [
@@ -370,13 +380,13 @@
       },
       "Graph": {
         "classes": 8,
-        "functions": 59,
+        "functions": 46,
         "largest_module": "lithos.graph",
         "largest_module_lines": 954,
-        "lines": 1509,
+        "lines": 1315,
         "modules": 2,
         "public_symbols": 8,
-        "sloc": 1223
+        "sloc": 1059
       },
       "Intake": {
         "classes": 8,
@@ -400,13 +410,13 @@
       },
       "LCMA": {
         "classes": 7,
-        "functions": 132,
+        "functions": 121,
         "largest_module": "lithos.lcma.stats",
-        "largest_module_lines": 1248,
-        "lines": 4526,
+        "largest_module_lines": 1027,
+        "lines": 4305,
         "modules": 9,
         "public_symbols": 22,
-        "sloc": 3631
+        "sloc": 3459
       },
       "Logging": {
         "classes": 1,
@@ -438,6 +448,16 @@
         "public_symbols": 15,
         "sloc": 1576
       },
+      "SqliteStore": {
+        "classes": 1,
+        "functions": 16,
+        "largest_module": "lithos.async_sqlite_store",
+        "largest_module_lines": 279,
+        "lines": 279,
+        "modules": 1,
+        "public_symbols": 1,
+        "sloc": 226
+      },
       "Telemetry": {
         "classes": 8,
         "functions": 69,
@@ -464,13 +484,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23784,
-    "total_modules": 40,
-    "total_sloc": 19116
+    "total_lines": 23648,
+    "total_modules": 41,
+    "total_sloc": 19006
   },
   "tests": {
-    "ratio": 1.87,
-    "src_lines": 23784,
-    "test_lines": 44504
+    "ratio": 1.88,
+    "src_lines": 23648,
+    "test_lines": 44526
   }
 }

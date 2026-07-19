@@ -13,19 +13,17 @@ Tables (MVP 1):
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import aiosqlite
 
-from lithos.config import LithosConfig, get_config
+from lithos.async_sqlite_store import AsyncSqliteStore
+from lithos.config import LithosConfig
 
 if TYPE_CHECKING:
     from lithos.telemetry import _LithosMetrics
@@ -40,7 +38,7 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = """
+_SCHEMA = """
 CREATE TABLE IF NOT EXISTS node_stats (
     node_id TEXT PRIMARY KEY,
     salience REAL NOT NULL DEFAULT 0.5,
@@ -147,228 +145,32 @@ def _extract_final_node_ids(final_nodes_json: object) -> list[str]:
     return [entry["id"] for entry in entries if isinstance(entry, dict) and "id" in entry]
 
 
-class StatsStore:
+class StatsStore(AsyncSqliteStore):
     """Lazily-created SQLite store for LCMA retrieval statistics.
 
-    The database file is created on the first call to :meth:`open`.
-    Corrupt databases are quarantined (renamed) and recreated with an
-    empty schema.
+    The database file is created on the first call to :meth:`open`. Corrupt
+    databases are quarantined (renamed) and recreated with an empty schema; the
+    connection lifecycle lives in
+    :class:`~lithos.async_sqlite_store.AsyncSqliteStore`.
     """
 
+    SCHEMA = _SCHEMA
+
     def __init__(self, config: LithosConfig | None = None) -> None:
-        self._config = config
-        self._opened = False
-        # Persistent SQLite connection (#172). One handle per StatsStore;
-        # WAL mode enables concurrent readers, and amortising the open cost
-        # across the dozens of method calls per retrieval / drain cycle is
-        # the whole point of this lifecycle.
-        self._db: aiosqlite.Connection | None = None
-        # Serialise every operation on the shared connection (#172).
-        #
-        # A single sqlite3 connection cannot safely emulate the old
-        # per-call isolation unless each method keeps exclusive ownership
-        # of the handle for its full duration. Serialising only writes is
-        # not enough: a read can otherwise slip between BEGIN/UPDATE/COMMIT
-        # awaits on another coroutine and observe uncommitted state from
-        # that same connection. The operation lock restores per-method
-        # isolation while still amortising connection-open overhead.
-        self._op_lock: asyncio.Lock | None = None
+        super().__init__(config)
         self._cached_enrich_queue_depth: int = 0
         self._cached_coactivation_pairs: int = 0
         self._cached_working_memory_active_tasks: int = 0
 
     @property
-    def config(self) -> LithosConfig:
-        return self._config or get_config()
-
-    @property
     def db_path(self) -> Path:
         return self.config.storage.stats_db_path
 
-    async def open(self) -> None:
-        """Ensure stats.db exists with the correct schema and a live connection.
-
-        Idempotent — safe to call multiple times.  If the file is corrupt
-        it is quarantined and a fresh database is created. After this returns
-        :attr:`_db` is a persistent ``aiosqlite.Connection`` in WAL mode that
-        every method reuses (#172).
-        """
-        if self._opened:
-            return
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if self.db_path.exists():
-            healthy = await self._probe(self.db_path)
-            if not healthy:
-                self._quarantine(self.db_path)
-
-        # ``isolation_level=None`` puts the connection in autocommit-per-
-        # statement mode. With per-call connections the default
-        # ``isolation_level=""`` was safe — each coroutine had its own
-        # implicit transaction. With one shared connection across many
-        # coroutines, the implicit-tx state is shared too: coroutine B's
-        # DML can join coroutine A's open tx, and either commit can flush
-        # the other's pending writes. Autocommit makes single-statement
-        # writes self-contained; multi-statement transactions (drains,
-        # batched executemany) are bracketed with explicit BEGIN/COMMIT
-        # inside :meth:`_session`.
-        db = await aiosqlite.connect(self.db_path, isolation_level=None)
-        # Row access by name everywhere — sets default for the lifetime of
-        # this connection. Methods that index by position keep working too.
-        db.row_factory = aiosqlite.Row
-        # WAL gives us concurrent readers and bounded fsync cost. Foreign-key
-        # enforcement matches the constraints declared in SCHEMA.
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute("PRAGMA foreign_keys=ON")
-        await db.executescript(SCHEMA)
+    async def _run_migrations(self, db: aiosqlite.Connection) -> None:
+        """Apply StatsStore's additive column migrations after the base schema."""
         await self._migrate_add_cited_count(db)
         await self._migrate_add_last_decay_applied_at(db)
         await self._migrate_add_enrich_queue_attempts(db)
-        self._db = db
-        self._opened = True
-
-    async def close(self) -> None:
-        """Close the persistent connection. Idempotent."""
-        if self._db is not None:
-            await self._db.close()
-            self._db = None
-        self._opened = False
-
-    async def _ensure_open(self) -> None:
-        """Lazily (re-)open the database on first use, after close, or after a dead worker.
-
-        Three recovery cases are handled here:
-
-        1. Never opened — call :meth:`open`.
-        2. :meth:`close` ran but the store was reused — re-open transparently.
-        3. The aiosqlite worker thread is no longer running (the connection
-           was closed externally, the loop was torn down underneath us, etc.)
-           — drop the stale handle and re-open. Callers no longer need to
-           reason about connection lifecycle.
-
-        A later operation may still discover a "live" handle that has gone
-        bad underneath us. Those failures are healed in :meth:`_session`
-        so the next call starts from a fresh connection automatically.
-        """
-        if self._opened and self._db is not None and getattr(self._db, "_running", True):
-            return
-        if self._db is not None and not getattr(self._db, "_running", True):
-            logger.warning(
-                "StatsStore connection worker is no longer running; reopening %s",
-                self.db_path,
-            )
-            # Drop the dead handle so open() reconstructs from scratch.
-            self._db = None
-        self._opened = False
-        await self.open()
-
-    async def reconnect(self) -> None:
-        """Force a close + re-open of the underlying connection.
-
-        Recovery primitive for callers that have detected the live handle is
-        misbehaving (operational errors, lock-stuck transactions, etc.) and
-        want to start fresh without waiting for the next garbage collection.
-        Idempotent.
-        """
-        await self.close()
-        await self.open()
-
-    def _conn(self) -> aiosqlite.Connection:
-        """Return the live connection. ``open()`` must have run first."""
-        assert self._db is not None, "StatsStore.open() must be called before use"
-        return self._db
-
-    def _operation_mutex(self) -> asyncio.Lock:
-        """Return the lock that serialises store methods on the shared handle."""
-        if self._op_lock is None:
-            self._op_lock = asyncio.Lock()
-        return self._op_lock
-
-    @staticmethod
-    def _is_recoverable_connection_error(exc: BaseException) -> bool:
-        """Return True when *exc* indicates the persistent handle is no longer usable."""
-        if not isinstance(exc, (ValueError, RuntimeError, aiosqlite.Error)):
-            return False
-        message = str(exc).lower()
-        return any(
-            fragment in message
-            for fragment in (
-                "closed database",
-                "closed connection",
-                "event loop is closed",
-                "no active connection",
-                "cannot operate on a closed database",
-            )
-        )
-
-    async def _reconnect_after_error(self) -> None:
-        """Drop the current handle and open a fresh one after a connection-liveness failure."""
-        db = self._db
-        self._db = None
-        self._opened = False
-        if db is not None:
-            with contextlib.suppress(Exception):
-                await db.close()
-        await self.open()
-
-    @contextlib.asynccontextmanager
-    async def _session(self, *, transactional: bool = False) -> AsyncIterator[aiosqlite.Connection]:
-        """Yield exclusive access to the shared connection, optionally in a transaction."""
-        async with self._operation_mutex():
-            await self._ensure_open()
-            db = self._conn()
-
-            if not transactional:
-                try:
-                    yield db
-                except Exception as exc:
-                    if self._is_recoverable_connection_error(exc):
-                        logger.warning(
-                            "StatsStore operation hit a dead connection; reopening %s",
-                            self.db_path,
-                            exc_info=True,
-                        )
-                        await self._reconnect_after_error()
-                    raise
-                return
-
-            try:
-                await db.execute("BEGIN IMMEDIATE")
-            except Exception as exc:
-                if self._is_recoverable_connection_error(exc):
-                    logger.warning(
-                        "StatsStore transaction could not begin; reopening %s",
-                        self.db_path,
-                        exc_info=True,
-                    )
-                    await self._reconnect_after_error()
-                raise
-
-            try:
-                yield db
-            except Exception as exc:
-                with contextlib.suppress(Exception):
-                    await db.execute("ROLLBACK")
-                if self._is_recoverable_connection_error(exc):
-                    logger.warning(
-                        "StatsStore transaction lost its connection; reopening %s",
-                        self.db_path,
-                        exc_info=True,
-                    )
-                    await self._reconnect_after_error()
-                raise
-
-            try:
-                await db.execute("COMMIT")
-            except Exception as exc:
-                if self._is_recoverable_connection_error(exc):
-                    logger.warning(
-                        "StatsStore transaction could not commit; reopening %s",
-                        self.db_path,
-                        exc_info=True,
-                    )
-                    await self._reconnect_after_error()
-                raise
 
     # ------------------------------------------------------------------
     # Receipt operations
@@ -1223,26 +1025,3 @@ class StatsStore:
                 "ALTER TABLE enrich_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
             )
             logger.info("stats.db migration applied: added enrich_queue.attempts")
-
-    @staticmethod
-    async def _probe(path: Path) -> bool:
-        """Return True if *path* is a usable SQLite database."""
-        try:
-            async with aiosqlite.connect(path) as db:
-                await db.execute("PRAGMA integrity_check")
-            return True
-        except Exception:
-            return False
-
-    @staticmethod
-    def _quarantine(path: Path) -> Path:
-        """Rename a corrupt database file and return the backup path."""
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        backup = path.with_name(f"{path.name}.corrupt-{timestamp}")
-        suffix = 1
-        while backup.exists():
-            backup = path.with_name(f"{path.name}.corrupt-{timestamp}-{suffix}")
-            suffix += 1
-        path.rename(backup)
-        logger.warning("Quarantined corrupt stats.db → %s", backup)
-        return backup

@@ -130,6 +130,7 @@ source_modules = [
     "lithos.edge_store",
     "lithos.frontmatter_codec",
     "lithos.logging_config",
+    "lithos.async_sqlite_store",
 ]
 forbidden_modules = [
     "lithos.knowledge",
@@ -164,6 +165,7 @@ source_modules = [
     "lithos.envelopes",
     "lithos.events",
     "lithos.logging_config",
+    "lithos.async_sqlite_store",
 ]
 forbidden_modules = [
     "lithos._merge",

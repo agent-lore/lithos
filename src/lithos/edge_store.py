@@ -13,21 +13,33 @@ SQLite handle is opened exactly once per server.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import logging
 import uuid
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
 
-from lithos.config import LithosConfig, get_config
+from lithos.async_sqlite_store import AsyncSqliteStore
 
 logger = logging.getLogger(__name__)
 
-SCHEMA = """
+
+def _generate_edge_id() -> str:
+    """Generate a short edge ID in the form ``edge_<short-uuid>``."""
+    return f"edge_{uuid.uuid4().hex[:12]}"
+
+
+class EdgeStore(AsyncSqliteStore):
+    """Lazily-created SQLite store for typed edges.
+
+    The database file is created on the first call to :meth:`open`. Corrupt
+    databases are quarantined (renamed) and recreated with an empty schema; the
+    connection lifecycle lives in
+    :class:`~lithos.async_sqlite_store.AsyncSqliteStore`.
+    """
+
+    SCHEMA = """
 CREATE TABLE IF NOT EXISTS edges (
     edge_id TEXT PRIMARY KEY,
     from_id TEXT NOT NULL,
@@ -50,215 +62,9 @@ CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
 CREATE INDEX IF NOT EXISTS idx_edges_namespace ON edges(namespace);
 """
 
-
-def _generate_edge_id() -> str:
-    """Generate a short edge ID in the form ``edge_<short-uuid>``."""
-    return f"edge_{uuid.uuid4().hex[:12]}"
-
-
-class EdgeStore:
-    """Lazily-created SQLite store for typed edges.
-
-    The database file is created on the first call to :meth:`open`.
-    Corrupt databases are quarantined (renamed) and recreated with an
-    empty schema.
-    """
-
-    def __init__(self, config: LithosConfig | None = None) -> None:
-        self._config = config
-        self._opened = False
-        # Persistent SQLite connection (#172). Same lifecycle as StatsStore.
-        self._db: aiosqlite.Connection | None = None
-        # Serialise every operation on the shared connection — see
-        # StatsStore for the full rationale.
-        self._op_lock: asyncio.Lock | None = None
-
-    @property
-    def config(self) -> LithosConfig:
-        return self._config or get_config()
-
     @property
     def db_path(self) -> Path:
         return self.config.storage.edges_db_path
-
-    async def open(self) -> None:
-        """Ensure edges.db exists with the correct schema and a live connection.
-
-        Idempotent — safe to call multiple times.  If the file is corrupt
-        it is quarantined and a fresh database is created. After this returns
-        :attr:`_db` is a persistent ``aiosqlite.Connection`` in WAL mode that
-        every method reuses (#172).
-        """
-        if self._opened:
-            return
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if self.db_path.exists():
-            healthy = await self._probe(self.db_path)
-            if not healthy:
-                self._quarantine(self.db_path)
-
-        # autocommit-per-statement on the shared connection — see StatsStore.
-        db = await aiosqlite.connect(self.db_path, isolation_level=None)
-        db.row_factory = aiosqlite.Row
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute("PRAGMA foreign_keys=ON")
-        await db.executescript(SCHEMA)
-        self._db = db
-        self._opened = True
-
-    async def close(self) -> None:
-        """Close the persistent connection. Idempotent."""
-        if self._db is not None:
-            await self._db.close()
-            self._db = None
-        self._opened = False
-
-    async def _ensure_open(self) -> None:
-        """Lazily (re-)open the database on first use, after close, or after a dead worker.
-
-        See :meth:`StatsStore._ensure_open` for the full recovery rationale (#172).
-        """
-        if self._opened and self._db is not None and getattr(self._db, "_running", True):
-            return
-        if self._db is not None and not getattr(self._db, "_running", True):
-            logger.warning(
-                "EdgeStore connection worker is no longer running; reopening %s",
-                self.db_path,
-            )
-            self._db = None
-        self._opened = False
-        await self.open()
-
-    async def reconnect(self) -> None:
-        """Force a close + re-open of the underlying connection. Idempotent."""
-        await self.close()
-        await self.open()
-
-    def _conn(self) -> aiosqlite.Connection:
-        """Return the live connection. ``open()`` must have run first."""
-        assert self._db is not None, "EdgeStore.open() must be called before use"
-        return self._db
-
-    def _operation_mutex(self) -> asyncio.Lock:
-        """Return the lock that serialises store methods on the shared handle."""
-        if self._op_lock is None:
-            self._op_lock = asyncio.Lock()
-        return self._op_lock
-
-    @staticmethod
-    def _is_recoverable_connection_error(exc: BaseException) -> bool:
-        """Return True when *exc* indicates the persistent handle is no longer usable."""
-        if not isinstance(exc, (ValueError, RuntimeError, aiosqlite.Error)):
-            return False
-        message = str(exc).lower()
-        return any(
-            fragment in message
-            for fragment in (
-                "closed database",
-                "closed connection",
-                "event loop is closed",
-                "no active connection",
-                "cannot operate on a closed database",
-            )
-        )
-
-    async def _reconnect_after_error(self) -> None:
-        """Drop the current handle and open a fresh one after a connection-liveness failure."""
-        db = self._db
-        self._db = None
-        self._opened = False
-        if db is not None:
-            with contextlib.suppress(Exception):
-                await db.close()
-        await self.open()
-
-    @contextlib.asynccontextmanager
-    async def _session(self, *, transactional: bool = False) -> AsyncIterator[aiosqlite.Connection]:
-        """Yield exclusive access to the shared connection, optionally in a transaction."""
-        async with self._operation_mutex():
-            await self._ensure_open()
-            db = self._conn()
-
-            if not transactional:
-                try:
-                    yield db
-                except Exception as exc:
-                    if self._is_recoverable_connection_error(exc):
-                        logger.warning(
-                            "EdgeStore operation hit a dead connection; reopening %s",
-                            self.db_path,
-                            exc_info=True,
-                        )
-                        await self._reconnect_after_error()
-                    raise
-                return
-
-            try:
-                await db.execute("BEGIN IMMEDIATE")
-            except Exception as exc:
-                if self._is_recoverable_connection_error(exc):
-                    logger.warning(
-                        "EdgeStore transaction could not begin; reopening %s",
-                        self.db_path,
-                        exc_info=True,
-                    )
-                    await self._reconnect_after_error()
-                raise
-
-            try:
-                yield db
-            except Exception as exc:
-                with contextlib.suppress(Exception):
-                    await db.execute("ROLLBACK")
-                if self._is_recoverable_connection_error(exc):
-                    logger.warning(
-                        "EdgeStore transaction lost its connection; reopening %s",
-                        self.db_path,
-                        exc_info=True,
-                    )
-                    await self._reconnect_after_error()
-                raise
-
-            try:
-                await db.execute("COMMIT")
-            except Exception as exc:
-                if self._is_recoverable_connection_error(exc):
-                    logger.warning(
-                        "EdgeStore transaction could not commit; reopening %s",
-                        self.db_path,
-                        exc_info=True,
-                    )
-                    await self._reconnect_after_error()
-                raise
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    async def _probe(path: Path) -> bool:
-        """Return True if *path* is a usable SQLite database."""
-        try:
-            async with aiosqlite.connect(path) as db:
-                # integrity_check actually reads the file, unlike SELECT 1
-                await db.execute("PRAGMA integrity_check")
-            return True
-        except Exception:
-            return False
-
-    @staticmethod
-    def _quarantine(path: Path) -> Path:
-        """Rename a corrupt database file and return the backup path."""
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        backup = path.with_name(f"{path.name}.corrupt-{timestamp}")
-        suffix = 1
-        while backup.exists():
-            backup = path.with_name(f"{path.name}.corrupt-{timestamp}-{suffix}")
-            suffix += 1
-        path.rename(backup)
-        logger.warning("Quarantined corrupt edges.db → %s", backup)
-        return backup
 
     # ------------------------------------------------------------------
     # Public data access helpers (used by lithos_edge_upsert / list)
