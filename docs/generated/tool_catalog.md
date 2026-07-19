@@ -99,7 +99,7 @@ lithos_tags(prefix: str | None = None)
 | `lithos_task_cancel` | Cancel a task, releasing all claims. | Coordination, Events |
 | `lithos_task_children` | Return the child tasks of a parent/epic (via ``parent_child`` edges). | Coordination |
 | `lithos_task_claim` | Claim an aspect of a task. | Coordination, Events |
-| `lithos_task_complete` | Mark a task as completed. | Coordination, Events |
+| `lithos_task_complete` | Mark a task as completed. | CognitiveMemory, Coordination, Events |
 | `lithos_task_create` | Create a new coordination task. | Coordination, Events |
 | `lithos_task_edge_list` | List edges touching a task. | Coordination |
 | `lithos_task_edge_upsert` | Create or update a typed relation between two tasks. | Coordination |

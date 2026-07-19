@@ -17,9 +17,6 @@ from lithos.cognitive_memory import CognitiveMemory
 from lithos.config import LithosConfig, get_config, set_config
 from lithos.coordination import CoordinationService
 from lithos.edge_store import EdgeStore
-from lithos.envelopes import (
-    error_envelope,
-)
 from lithos.events import (
     EventBus,
     LithosEvent,
@@ -237,109 +234,6 @@ class LithosServer:
             await self.event_bus.emit(event)
         except Exception:
             logger.exception("Failed to emit %s event", event.type)
-
-    async def _validate_task_feedback(
-        self,
-        *,
-        task_id: str,
-        agent: str,
-        cited_nodes: list[str] | None,
-        misleading_nodes: list[str] | None,
-        receipt_id: str | None,
-    ) -> tuple[dict[str, Any], None] | tuple[None, dict[str, Any]]:
-        """Validate receipt and compute filtered node sets without side effects.
-
-        Returns ``(error_envelope, None)`` on hard failure, or
-        ``(None, validated_data)`` on success.  ``validated_data`` contains the
-        keys ``cited``, ``misleading``, ``ignored`` (each a list[str] or None)
-        and ``skip`` (bool — True when feedback should be silently dropped).
-        """
-        # -- Resolve receipt --
-        receipt: dict[str, object] | None
-        if receipt_id is not None:
-            receipt = await self.memory.get_receipt(receipt_id, task_id)
-            if receipt is None:
-                return (
-                    error_envelope(
-                        "receipt_not_found",
-                        f"Receipt '{receipt_id}' not found or does not belong to task '{task_id}'.",
-                    ),
-                    None,
-                )
-        else:
-            receipt = await self.memory.get_latest_receipt(task_id, agent)
-            if receipt is None:
-                logger.warning(
-                    "No receipt found for task=%s agent=%s — dropping all feedback",
-                    task_id,
-                    agent,
-                )
-                return (None, {"skip": True, "cited": None, "misleading": None, "ignored": []})
-
-        receipt_node_ids: set[str] = set()
-        raw_ids = receipt.get("final_node_ids")
-        if isinstance(raw_ids, list):
-            receipt_node_ids = {str(nid) for nid in raw_ids}
-
-        # -- Intersect with receipt node IDs --
-        cited = list(receipt_node_ids & set(cited_nodes)) if cited_nodes is not None else None
-        misleading = (
-            list(receipt_node_ids & set(misleading_nodes)) if misleading_nodes is not None else None
-        )
-
-        # Log dropped IDs
-        if cited_nodes is not None:
-            dropped = set(cited_nodes) - receipt_node_ids
-            for nid in dropped:
-                logger.debug("Dropped cited node %s — not in receipt", nid)
-        if misleading_nodes is not None:
-            dropped = set(misleading_nodes) - receipt_node_ids
-            for nid in dropped:
-                logger.debug("Dropped misleading node %s — not in receipt", nid)
-
-        # -- Intersect with existing knowledge (prevent writes for deleted notes) --
-        existing_ids: set[str] = set()
-        for nid in receipt_node_ids:
-            if self.knowledge.get_cached_meta(nid) is not None:
-                existing_ids.add(nid)
-
-        if cited is not None:
-            cited = [nid for nid in cited if nid in existing_ids]
-        if misleading is not None:
-            misleading = [nid for nid in misleading if nid in existing_ids]
-
-        # -- Compute ignored: receipt nodes not in cited or misleading --
-        cited_set = set(cited) if cited is not None else set()
-        misleading_set = set(misleading) if misleading is not None else set()
-        ignored = [
-            nid
-            for nid in receipt_node_ids
-            if nid not in cited_set and nid not in misleading_set and nid in existing_ids
-        ]
-
-        return (
-            None,
-            {"skip": False, "cited": cited, "misleading": misleading, "ignored": ignored},
-        )
-
-    async def _apply_task_feedback(self, validated: dict[str, Any]) -> None:
-        """Apply reinforcement side-effects using pre-validated data."""
-        if validated.get("skip"):
-            return
-
-        cited = validated["cited"]
-        misleading = validated["misleading"]
-        ignored = validated["ignored"]
-
-        if cited:
-            await self.memory.reinforce_cited(cited)
-            await self.memory.reinforce_between(cited)
-
-        if misleading:
-            await self.memory.reinforce_misleading(misleading)
-
-        if ignored:
-            await self.memory.reinforce_ignored(ignored)
 
     async def _get_health(self) -> dict[str, Any]:
         """Run health checks and return a status dict (shared by HTTP and any callers)."""

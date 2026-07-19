@@ -13,7 +13,7 @@ lower a budget after improving the code to lock in the gain.
 |---|---:|---:|---:|
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 71 | 71 | 0 |
-| `cross_module_private_refs` | 31 | 42 | 11 |
+| `cross_module_private_refs` | 29 | 42 | 13 |
 | `max_module_lines` | 2675 | 2800 | 125 |
 | `module_cycles` | 1 | 1 | 0 |
 | `modules_over_800_lines` | 11 | 11 | 0 |
@@ -35,10 +35,10 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
 | Codec | 1 | 777 | 583 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
-| CognitiveMemory | 1 | 1000 | 822 | 1 | 12 | 0.92 | 25 (`lithos.cognitive_memory.CognitiveMemory.cache_lookup`) | 2 |
+| CognitiveMemory | 1 | 1121 | 920 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 371 | 281 | 11 | 0 | 0.00 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 1 | 2675 | 2256 | 4 | 4 | 0.50 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
-| Entrypoints | 13 | 5919 | 4755 | 0 | 13 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 16 |
+| Entrypoints | 13 | 5813 | 4668 | 0 | 13 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 15 |
 | Errors | 2 | 211 | 152 | 7 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 323 | 259 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1315 | 1059 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
@@ -53,7 +53,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **41**, lines: **23648**, SLOC: **19006**
+- Modules: **41**, lines: **23663**, SLOC: **19017**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -70,7 +70,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **717**, cyclomatic > 10: **60**
+- Functions: **718**, cyclomatic > 10: **60**
 
 Top 10 most complex functions:
 
@@ -81,8 +81,8 @@ Top 10 most complex functions:
 | 41 | `lithos.lcma.retrieve._run_retrieve_impl` |
 | 33 | `lithos.search.SearchEngine.graph_search` |
 | 30 | `lithos.tools.read_search.register.lithos_list` |
+| 26 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
 | 26 | `lithos.knowledge.KnowledgeManager.create` |
-| 26 | `lithos.server.LithosServer._validate_task_feedback` |
 | 25 | `lithos.cognitive_memory.CognitiveMemory.cache_lookup` |
 | 25 | `lithos.tools.notes.register.lithos_note_update` |
 | 23 | `lithos.search.TantivyIndex.search` |
@@ -92,7 +92,7 @@ Top 10 most complex functions:
 Private-name reaches across module seams. Both counts can be pinned as
 `[budgets]` ratchets (`cross_module_private_refs`, `tests_private_imports`).
 
-- Cross-module private refs (src): **31**
+- Cross-module private refs (src): **29**
   - `lithos.tools.tasks -> lithos.server.LithosServer._emit (x8)`
   - `lithos.tools.findings_stats -> lithos.server.LithosServer._config (x2)`
   - `lithos.tools.read_search -> lithos.server.LithosServer._config (x2)`
@@ -113,8 +113,6 @@ Private-name reaches across module seams. Both counts can be pinned as
   - `lithos.tools.findings_stats -> lithos.server.LithosServer._emit`
   - `lithos.tools.notes -> lithos.knowledge._UNSET`
   - `lithos.tools.notes -> lithos.knowledge._UnsetType`
-  - `lithos.tools.tasks -> lithos.server.LithosServer._apply_task_feedback`
-  - `lithos.tools.tasks -> lithos.server.LithosServer._validate_task_feedback`
 - Tests importing src privates: **87**
   - `tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x18)`
   - `tests/test_telemetry.py -> lithos.telemetry._lcma_metrics_registered (x8)`
@@ -152,4 +150,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.88** (44526 test lines / 23648 source lines)
+- Test-to-source line ratio: **1.88** (44522 test lines / 23663 source lines)
