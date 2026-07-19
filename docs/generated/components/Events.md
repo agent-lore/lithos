@@ -11,13 +11,14 @@ Internal event bus decoupling producers from consumers.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.events` | M | 2 | 1 |
+| `lithos.events` | M | 3 | 1 |
 
 ## Public API
 
 ### `lithos.events`
 - class `LithosEvent` — A typed event emitted by the Lithos event bus.
 - def `make_edge_upserted_event` — Build the canonical :data:`EDGE_UPSERTED` event.
+- class `BufferedReplay` — Result of :meth:`EventBus.get_buffered_since`.
 - class `EventBus` — In-memory event bus with filtered subscriptions and ring buffer history.
 
 ## Dependencies

@@ -440,9 +440,19 @@ class LithosServer:
                     # Replay buffered events if a since_id was provided
                     if since_id:
                         with tracer.start_as_current_span("lithos.sse.replay") as replay_span:
-                            replayed = self.event_bus.get_buffered_since(since_id)
+                            replay = self.event_bus.get_buffered_since(since_id)
                             replay_count = 0
-                            for evt in replayed:
+                            if replay.gapped:
+                                # The client's position fell off the ring — tell it to
+                                # resync instead of silently under-delivering the replay.
+                                logger.warning(
+                                    "SSE replay gap: since_id=%s not in buffer and events "
+                                    "were evicted; signalling resync",
+                                    since_id,
+                                )
+                                replay_span.set_attribute("lithos.sse.gapped", True)
+                                yield _format_resync_sse(since_id)
+                            for evt in replay.events:
                                 # Apply the same filters to replayed events
                                 if event_types and evt.type not in event_types:
                                     continue
@@ -840,6 +850,30 @@ def _format_sse(event: LithosEvent) -> str:
     }
     data = json.dumps(payload, default=str)
     return f"id: {event.id}\nevent: {event.type}\ndata: {data}\n\n"
+
+
+# SSE control event emitted when the replay buffer dropped events the reconnecting
+# client needs. The client should discard its assumed position and resync from
+# current state rather than trust a silently-truncated replay.
+SSE_RESYNC_EVENT = "resync"
+
+
+def _format_resync_sse(since_id: str) -> str:
+    """Format an SSE ``resync`` control message (a buffered-replay gap was detected).
+
+    No ``id:`` line — this is a control signal, not a replayable event, so it must
+    not become the client's next ``Last-Event-ID``.
+    """
+    data = json.dumps(
+        {
+            "reason": "buffer_evicted",
+            "since_id": since_id,
+            "message": (
+                "Replay buffer dropped events since the given id; resync from current state."
+            ),
+        }
+    )
+    return f"event: {SSE_RESYNC_EVENT}\ndata: {data}\n\n"
 
 
 # Global server instance

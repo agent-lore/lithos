@@ -33,7 +33,7 @@
       },
       "Events": {
         "functions_over_10": 0,
-        "max_complexity": 7,
+        "max_complexity": 9,
         "max_function": "lithos.events.EventBus.emit"
       },
       "Graph": {
@@ -125,7 +125,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 718
+    "total_functions": 719
   },
   "domain": {
     "associations": 26,
@@ -297,12 +297,12 @@
       "tests/test_entities.py -> lithos.lcma.entities._download_model",
       "tests/test_entities.py -> lithos.lcma.entities._get_nlp",
       "tests/test_entities.py -> lithos.lcma.entities._load_model",
+      "tests/test_event_delivery.py -> lithos.server._format_resync_sse",
       "tests/test_event_delivery.py -> lithos.server._format_sse",
       "tests/test_knowledge.py -> lithos.knowledge._atomic_write",
-      "tests/test_lcma_config.py -> lithos.config._DEFAULT_NOTE_TYPE_PRIORS",
-      "tests/test_lcma_config.py -> lithos.config._DEFAULT_RERANK_WEIGHTS"
+      "tests/test_lcma_config.py -> lithos.config._DEFAULT_NOTE_TYPE_PRIORS"
     ],
-    "tests_private_imports": 87
+    "tests_private_imports": 88
   },
   "size": {
     "components": {
@@ -348,13 +348,13 @@
       },
       "Entrypoints": {
         "classes": 4,
-        "functions": 135,
+        "functions": 136,
         "largest_module": "lithos.tools.tasks",
         "largest_module_lines": 985,
-        "lines": 5813,
+        "lines": 5847,
         "modules": 13,
         "public_symbols": 30,
-        "sloc": 4668
+        "sloc": 4692
       },
       "Errors": {
         "classes": 9,
@@ -367,14 +367,14 @@
         "sloc": 152
       },
       "Events": {
-        "classes": 3,
+        "classes": 4,
         "functions": 12,
         "largest_module": "lithos.events",
-        "largest_module_lines": 323,
-        "lines": 323,
+        "largest_module_lines": 353,
+        "lines": 353,
         "modules": 1,
-        "public_symbols": 3,
-        "sloc": 259
+        "public_symbols": 4,
+        "sloc": 279
       },
       "Graph": {
         "classes": 8,
@@ -482,13 +482,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23663,
+    "total_lines": 23727,
     "total_modules": 41,
-    "total_sloc": 19017
+    "total_sloc": 19061
   },
   "tests": {
-    "ratio": 1.88,
-    "src_lines": 23663,
-    "test_lines": 44522
+    "ratio": 1.89,
+    "src_lines": 23727,
+    "test_lines": 44830
   }
 }

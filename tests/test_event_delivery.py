@@ -34,7 +34,7 @@ from lithos.events import (
     EventBus,
     LithosEvent,
 )
-from lithos.server import LithosServer, _format_sse
+from lithos.server import LithosServer, _format_resync_sse, _format_sse
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -157,6 +157,17 @@ class TestFormatSSE:
         )
         result = _format_sse(evt)
         assert "origin" not in result
+
+    def test_resync_format_has_no_id_line(self) -> None:
+        """The resync control signal must carry no ``id:`` line (it must not become
+        the client's next Last-Event-ID) and names the gap reason."""
+        result = _format_resync_sse("evt-123")
+        assert "id: " not in result
+        assert "event: resync\n" in result
+        data = json.loads(result.split("data: ")[1].strip())
+        assert data["reason"] == "buffer_evicted"
+        assert data["since_id"] == "evt-123"
+        assert result.endswith("\n\n")
         assert EVENT_ORIGIN_ENRICH not in result
         data = json.loads(result.split("data: ")[1].strip())
         assert "origin" not in data
@@ -179,22 +190,40 @@ class TestGetBufferedSince:
         await bus.emit(e3)
 
         result = bus.get_buffered_since(e1.id)
-        assert [e.id for e in result] == [e2.id, e3.id]
+        assert [e.id for e in result.events] == [e2.id, e3.id]
+        assert result.gapped is False
 
     @pytest.mark.asyncio
-    async def test_unknown_id_returns_empty(self) -> None:
+    async def test_unknown_id_no_eviction_is_not_a_gap(self) -> None:
+        # An id that was never buffered, with no eviction, means nothing was lost.
         bus = EventBus()
         await bus.emit(LithosEvent(type=NOTE_CREATED))
         result = bus.get_buffered_since("nonexistent-id")
-        assert result == []
+        assert result.events == []
+        assert result.gapped is False
 
     @pytest.mark.asyncio
-    async def test_last_event_returns_empty(self) -> None:
+    async def test_last_event_is_caught_up_not_a_gap(self) -> None:
         bus = EventBus()
         e = LithosEvent(type=NOTE_CREATED)
         await bus.emit(e)
         result = bus.get_buffered_since(e.id)
-        assert result == []
+        assert result.events == []
+        assert result.gapped is False
+
+    @pytest.mark.asyncio
+    async def test_evicted_id_signals_gap(self) -> None:
+        # A reconnect id that fell off the ring must report a gap so the SSE
+        # client resyncs instead of silently under-delivering the replay.
+        bus = EventBus(EventsConfig(event_buffer_size=2))
+        e1 = LithosEvent(type=NOTE_CREATED)
+        await bus.emit(e1)
+        await bus.emit(LithosEvent(type=NOTE_UPDATED))
+        await bus.emit(LithosEvent(type=NOTE_DELETED))  # evicts e1 (maxlen=2)
+
+        result = bus.get_buffered_since(e1.id)
+        assert result.events == []
+        assert result.gapped is True
 
 
 # ---------------------------------------------------------------------------

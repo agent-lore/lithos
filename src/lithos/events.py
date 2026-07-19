@@ -16,7 +16,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from lithos.config import EventsConfig
@@ -135,6 +135,22 @@ class _Subscriber:
     drops: int = 0
 
 
+class BufferedReplay(NamedTuple):
+    """Result of :meth:`EventBus.get_buffered_since`.
+
+    ``events`` are the buffered events after the reconnect id (in emission
+    order). ``gapped`` is True when the id was not found in the ring *and* the
+    ring has dropped events — i.e. the caller's position most likely fell off
+    it and the SSE stream should tell the client to resync. A never-seen id
+    cannot be distinguished from an evicted one here, but the only real
+    reconnect token is a previously-delivered id and a spurious resync is safe;
+    when nothing was ever evicted there is no lost data and ``gapped`` is False.
+    """
+
+    events: list[LithosEvent]
+    gapped: bool
+
+
 class EventBus:
     """In-memory event bus with filtered subscriptions and ring buffer history."""
 
@@ -149,6 +165,10 @@ class EventBus:
             self._queue_size = 100
 
         self._buffer: deque[LithosEvent] = deque(maxlen=self._buffer_size)
+        # Set once the ring first drops an event on overflow, so a later
+        # get_buffered_since can tell "your position fell off the ring" (gap)
+        # from "you're caught up / never-seen id" (no gap).
+        self._has_evicted = False
         self._subscribers: list[_Subscriber] = []
         register_event_bus_metrics(self)
 
@@ -186,6 +206,10 @@ class EventBus:
             )
 
             try:
+                # A full ring evicts its oldest event on the next append; record
+                # that so replay can signal a gap instead of a silent under-delivery.
+                if self._buffer.maxlen is not None and len(self._buffer) == self._buffer.maxlen:
+                    self._has_evicted = True
                 self._buffer.append(event)
             except Exception:
                 logger.exception("EventBus.emit: buffer append failed")
@@ -291,24 +315,30 @@ class EventBus:
                 result.append((sub.subscriber_id, sub.queue.qsize() / maxsize))
         return result
 
-    def get_buffered_since(self, since_id: str) -> list[LithosEvent]:
-        """Return buffered events that occurred after the event with the given ID.
+    def get_buffered_since(self, since_id: str) -> BufferedReplay:
+        """Return buffered events after *since_id*, with a replay-gap signal.
 
-        Used for SSE replay on reconnect. Events are returned in emission order.
-        If since_id is not found in the buffer, returns an empty list.
+        Used for SSE replay on reconnect. Events are returned in emission order,
+        exclusive of *since_id*.
+
+        When *since_id* is not found in the ring, the result's ``gapped`` flag
+        distinguishes the two cases the old ``[]`` conflated: if the ring has
+        dropped events (``_has_evicted``), the caller's position most likely fell
+        off it — ``gapped=True`` so the SSE layer can tell the client to resync;
+        otherwise nothing was lost and ``gapped=False``. A caught-up client (its
+        id is the newest buffered event) matches and gets ``([], gapped=False)``.
 
         Args:
-            since_id: The event ID to replay from (exclusive — the named event
-                      is NOT included; only events emitted after it are returned).
+            since_id: The event ID to replay from (exclusive).
 
         Returns:
-            Ordered list of LithosEvent items emitted after the given ID.
+            A :class:`BufferedReplay` — ``events`` after *since_id* and ``gapped``.
         """
         events = list(self._buffer)
         for i, event in enumerate(events):
             if event.id == since_id:
-                return events[i + 1 :]
-        return []
+                return BufferedReplay(events[i + 1 :], gapped=False)
+        return BufferedReplay([], gapped=self._has_evicted)
 
     @property
     def active_subscriber_count(self) -> int:
