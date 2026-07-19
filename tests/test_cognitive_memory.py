@@ -841,9 +841,9 @@ class TestReinforceCited:
 
         await memory_with_knowledge.reinforce_cited([nid])
 
-        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
-        assert stats is not None
-        assert stats["cited_count"] == 1
+        stats = await memory_with_knowledge.node_stats(nid)
+        assert isinstance(stats, NodeStats)
+        assert stats.cited_count == 1
 
     async def test_bumps_salience_by_0_02(
         self,
@@ -854,10 +854,10 @@ class TestReinforceCited:
 
         await memory_with_knowledge.reinforce_cited([nid])
 
-        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
-        assert stats is not None
+        stats = await memory_with_knowledge.node_stats(nid)
+        assert isinstance(stats, NodeStats)
         # Default salience 0.5 + 0.02
-        assert stats["salience"] == pytest.approx(0.52)
+        assert stats.salience == pytest.approx(0.52)
 
     async def test_bumps_spaced_rep_strength_by_0_05(
         self,
@@ -868,9 +868,9 @@ class TestReinforceCited:
 
         await memory_with_knowledge.reinforce_cited([nid])
 
-        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
-        assert stats is not None
-        assert stats["spaced_rep_strength"] == pytest.approx(0.05)
+        stats = await memory_with_knowledge.node_stats(nid)
+        assert isinstance(stats, NodeStats)
+        assert stats.spaced_rep_strength == pytest.approx(0.05)
 
     async def test_accumulates_across_calls(
         self,
@@ -882,11 +882,11 @@ class TestReinforceCited:
         await memory_with_knowledge.reinforce_cited([nid])
         await memory_with_knowledge.reinforce_cited([nid])
 
-        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
-        assert stats is not None
-        assert stats["cited_count"] == 2
-        assert stats["salience"] == pytest.approx(0.54)
-        assert stats["spaced_rep_strength"] == pytest.approx(0.10)
+        stats = await memory_with_knowledge.node_stats(nid)
+        assert isinstance(stats, NodeStats)
+        assert stats.cited_count == 2
+        assert stats.salience == pytest.approx(0.54)
+        assert stats.spaced_rep_strength == pytest.approx(0.10)
 
 
 class TestReinforceIgnored:
@@ -901,9 +901,9 @@ class TestReinforceIgnored:
 
         await memory_with_knowledge.reinforce_ignored([nid])
 
-        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
-        assert stats is not None
-        assert stats["ignored_count"] == 1
+        stats = await memory_with_knowledge.node_stats(nid)
+        assert isinstance(stats, NodeStats)
+        assert stats.ignored_count == 1
 
     async def test_does_not_decay_salience_under_threshold(
         self,
@@ -916,10 +916,10 @@ class TestReinforceIgnored:
         for _ in range(5):
             await memory_with_knowledge.reinforce_ignored([nid])
 
-        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
-        assert stats is not None
-        assert stats["ignored_count"] == 5
-        assert stats["salience"] == pytest.approx(0.5)
+        stats = await memory_with_knowledge.node_stats(nid)
+        assert isinstance(stats, NodeStats)
+        assert stats.ignored_count == 5
+        assert stats.salience == pytest.approx(0.5)
 
     async def test_decays_salience_when_chronic(
         self,
@@ -932,10 +932,10 @@ class TestReinforceIgnored:
         for _ in range(6):
             await memory_with_knowledge.reinforce_ignored([nid])
 
-        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
-        assert stats is not None
-        assert stats["ignored_count"] == 6
-        assert stats["salience"] == pytest.approx(0.5 - 0.02)
+        stats = await memory_with_knowledge.node_stats(nid)
+        assert isinstance(stats, NodeStats)
+        assert stats.ignored_count == 6
+        assert stats.salience == pytest.approx(0.5 - 0.02)
 
 
 class TestReinforceBetween:
@@ -952,7 +952,7 @@ class TestReinforceBetween:
         await memory_with_knowledge.reinforce_between([n1, n2])
 
         from_id, to_id = sorted([n1, n2])
-        edges = await memory_with_knowledge._projection._edge_store.list_edges(
+        edges = await memory_with_knowledge.edge_list(
             from_id=from_id, to_id=to_id, edge_type="related_to"
         )
         assert len(edges) == 1
@@ -972,7 +972,7 @@ class TestReinforceBetween:
         await memory_with_knowledge.reinforce_between([n1, n2])
 
         from_id, to_id = sorted([n1, n2])
-        edges = await memory_with_knowledge._projection._edge_store.list_edges(
+        edges = await memory_with_knowledge.edge_list(
             from_id=from_id, to_id=to_id, edge_type="related_to"
         )
         assert len(edges) == 1
@@ -988,9 +988,7 @@ class TestReinforceBetween:
 
         await memory_with_knowledge.reinforce_between([n1, n2])
 
-        all_edges = await memory_with_knowledge._projection._edge_store.list_edges(
-            edge_type="related_to"
-        )
+        all_edges = await memory_with_knowledge.edge_list(edge_type="related_to")
         assert len(all_edges) == 0
 
     async def test_canonicalises_pair_order(
@@ -1004,9 +1002,7 @@ class TestReinforceBetween:
 
         await memory_with_knowledge.reinforce_between([n1, n2])
 
-        edges = await memory_with_knowledge._projection._edge_store.list_edges(
-            edge_type="related_to"
-        )
+        edges = await memory_with_knowledge.edge_list(edge_type="related_to")
         assert len(edges) == 1
         edge = edges[0]
         assert str(edge["from_id"]) <= str(edge["to_id"])
@@ -1024,10 +1020,10 @@ class TestReinforceMisleading:
 
         await memory_with_knowledge.reinforce_misleading([nid])
 
-        stats = await memory_with_knowledge._stats_store.get_node_stats(nid)
-        assert stats is not None
-        assert stats["misleading_count"] == 1
-        assert stats["salience"] == pytest.approx(0.5 - 0.05)
+        stats = await memory_with_knowledge.node_stats(nid)
+        assert isinstance(stats, NodeStats)
+        assert stats.misleading_count == 1
+        assert stats.salience == pytest.approx(0.5 - 0.05)
 
     async def test_quarantines_after_three_hits(
         self,
@@ -1078,7 +1074,7 @@ class TestReinforceMisleading:
         await memory_with_knowledge.reinforce_misleading([n1, n2])
 
         from_id, to_id = sorted([n1, n2])
-        edges = await memory_with_knowledge._projection._edge_store.list_edges(
+        edges = await memory_with_knowledge.edge_list(
             from_id=from_id, to_id=to_id, edge_type="related_to"
         )
         assert len(edges) == 1
@@ -1284,7 +1280,7 @@ class TestConflictResolve:
             "conflict_state": "accepted_dual",
         }
 
-        roundtrip = await memory._projection.get_edge(edge_id)
+        roundtrip = await memory.get_edge(edge_id)
         assert roundtrip is not None
         assert roundtrip["conflict_state"] == "accepted_dual"
         assert roundtrip["provenance_actor"] == "agent-x"

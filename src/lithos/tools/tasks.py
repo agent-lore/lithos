@@ -387,7 +387,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         feedback_supplied = cited_nodes is not None or misleading_nodes is not None
         validated: dict[str, Any] | None = None
         if feedback_supplied:
-            error, validated = await server._validate_task_feedback(
+            error, validated = await server.memory.validate_task_feedback(
                 task_id=task_id,
                 agent=agent,
                 cited_nodes=cited_nodes,
@@ -421,7 +421,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                     "ignored_count": len(validated.get("ignored") or []),
                 },
             )
-            await server._apply_task_feedback(validated)
+            await server.memory.apply_task_feedback(validated)
 
         await server._emit(
             LithosEvent(

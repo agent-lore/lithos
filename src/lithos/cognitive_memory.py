@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from lithos.envelopes import error_envelope
 from lithos.errors import SearchBackendError
 from lithos.events import EVENT_ORIGIN_ENRICH, LithosEvent, make_edge_upserted_event
 from lithos.frontmatter_codec import normalize_datetime
@@ -267,6 +268,117 @@ class CognitiveMemory:
         """
         return await self._stats_store.get_latest_receipt(task_id, agent_id)
 
+    async def validate_task_feedback(
+        self,
+        *,
+        task_id: str,
+        agent: str,
+        cited_nodes: list[str] | None,
+        misleading_nodes: list[str] | None,
+        receipt_id: str | None,
+    ) -> tuple[dict[str, Any], None] | tuple[None, dict[str, Any]]:
+        """Validate receipt and compute filtered node sets without side effects.
+
+        Returns ``(error_envelope, None)`` on hard failure, or
+        ``(None, validated_data)`` on success.  ``validated_data`` contains the
+        keys ``cited``, ``misleading``, ``ignored`` (each a list[str] or None)
+        and ``skip`` (bool — True when feedback should be silently dropped).
+
+        The ``lithos_task_complete`` handler calls this *before* completing the
+        task so invalid feedback fails fast without completing it; the paired
+        :meth:`apply_task_feedback` runs *after* completion.
+        """
+        # -- Resolve receipt --
+        receipt: dict[str, object] | None
+        if receipt_id is not None:
+            receipt = await self.get_receipt(receipt_id, task_id)
+            if receipt is None:
+                return (
+                    error_envelope(
+                        "receipt_not_found",
+                        f"Receipt '{receipt_id}' not found or does not belong to task '{task_id}'.",
+                    ),
+                    None,
+                )
+        else:
+            receipt = await self.get_latest_receipt(task_id, agent)
+            if receipt is None:
+                logger.warning(
+                    "No receipt found for task=%s agent=%s — dropping all feedback",
+                    task_id,
+                    agent,
+                )
+                return (None, {"skip": True, "cited": None, "misleading": None, "ignored": []})
+
+        receipt_node_ids: set[str] = set()
+        raw_ids = receipt.get("final_node_ids")
+        if isinstance(raw_ids, list):
+            receipt_node_ids = {str(nid) for nid in raw_ids}
+
+        # -- Intersect with receipt node IDs --
+        cited = list(receipt_node_ids & set(cited_nodes)) if cited_nodes is not None else None
+        misleading = (
+            list(receipt_node_ids & set(misleading_nodes)) if misleading_nodes is not None else None
+        )
+
+        # Log dropped IDs
+        if cited_nodes is not None:
+            dropped = set(cited_nodes) - receipt_node_ids
+            for nid in dropped:
+                logger.debug("Dropped cited node %s — not in receipt", nid)
+        if misleading_nodes is not None:
+            dropped = set(misleading_nodes) - receipt_node_ids
+            for nid in dropped:
+                logger.debug("Dropped misleading node %s — not in receipt", nid)
+
+        # -- Intersect with existing knowledge (prevent writes for deleted notes) --
+        existing_ids: set[str] = set()
+        for nid in receipt_node_ids:
+            if self._knowledge.get_cached_meta(nid) is not None:
+                existing_ids.add(nid)
+
+        if cited is not None:
+            cited = [nid for nid in cited if nid in existing_ids]
+        if misleading is not None:
+            misleading = [nid for nid in misleading if nid in existing_ids]
+
+        # -- Compute ignored: receipt nodes not in cited or misleading --
+        cited_set = set(cited) if cited is not None else set()
+        misleading_set = set(misleading) if misleading is not None else set()
+        ignored = [
+            nid
+            for nid in receipt_node_ids
+            if nid not in cited_set and nid not in misleading_set and nid in existing_ids
+        ]
+
+        return (
+            None,
+            {"skip": False, "cited": cited, "misleading": misleading, "ignored": ignored},
+        )
+
+    async def apply_task_feedback(self, validated: dict[str, Any]) -> None:
+        """Apply reinforcement side-effects using pre-validated data.
+
+        *validated* is the second element of a :meth:`validate_task_feedback`
+        success tuple. Runs after the task is completed (see that method).
+        """
+        if validated.get("skip"):
+            return
+
+        cited = validated["cited"]
+        misleading = validated["misleading"]
+        ignored = validated["ignored"]
+
+        if cited:
+            await self.reinforce_cited(cited)
+            await self.reinforce_between(cited)
+
+        if misleading:
+            await self.reinforce_misleading(misleading)
+
+        if ignored:
+            await self.reinforce_ignored(ignored)
+
     async def refresh_cached_counts(self) -> None:
         """Refresh the cached LCMA gauge values from the database.
 
@@ -478,6 +590,15 @@ class CognitiveMemory:
             namespace=namespace,
         )
 
+    async def get_edge(self, edge_id: str) -> dict[str, object] | None:
+        """Return a single edge's current state (weight, conflict_state, …), or None.
+
+        Public single-edge read-back through the projection (ADR-0004), so
+        callers and tests read edge state through this interface instead of
+        reaching into ``_projection`` / the edge store.
+        """
+        return await self._projection.get_edge(edge_id)
+
     async def edge_delete(self, *, edge_ids: list[str]) -> int:
         """Delete edges by id. Returns the number of rows deleted.
 
@@ -641,7 +762,7 @@ class CognitiveMemory:
         """Penalise misleading nodes and weaken their adjacent edges.
 
         Folds the two helpers that always fired together against the same
-        node set in :meth:`LithosServer._apply_task_feedback`
+        node set in :meth:`apply_task_feedback`
         (``penalize_misleading`` + ``weaken_edges_for_bad_context``).
 
         For each *node_id*:
@@ -920,7 +1041,7 @@ class CognitiveMemory:
                     ),
                 }
 
-            edge = await self._projection.get_edge(edge_id)
+            edge = await self.get_edge(edge_id)
             if edge is None:
                 return {
                     "status": "error",
