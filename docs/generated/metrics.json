@@ -33,7 +33,7 @@
       },
       "Events": {
         "functions_over_10": 0,
-        "max_complexity": 9,
+        "max_complexity": 7,
         "max_function": "lithos.events.EventBus.emit"
       },
       "Graph": {
@@ -351,10 +351,10 @@
         "functions": 136,
         "largest_module": "lithos.tools.tasks",
         "largest_module_lines": 985,
-        "lines": 5847,
+        "lines": 5851,
         "modules": 13,
         "public_symbols": 30,
-        "sloc": 4692
+        "sloc": 4693
       },
       "Errors": {
         "classes": 9,
@@ -370,11 +370,11 @@
         "classes": 4,
         "functions": 12,
         "largest_module": "lithos.events",
-        "largest_module_lines": 353,
-        "lines": 353,
+        "largest_module_lines": 350,
+        "lines": 350,
         "modules": 1,
         "public_symbols": 4,
-        "sloc": 279
+        "sloc": 281
       },
       "Graph": {
         "classes": 8,
@@ -482,13 +482,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 23727,
+    "total_lines": 23728,
     "total_modules": 41,
-    "total_sloc": 19061
+    "total_sloc": 19064
   },
   "tests": {
     "ratio": 1.89,
-    "src_lines": 23727,
-    "test_lines": 44830
+    "src_lines": 23728,
+    "test_lines": 44880
   }
 }

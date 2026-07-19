@@ -139,12 +139,13 @@ class BufferedReplay(NamedTuple):
     """Result of :meth:`EventBus.get_buffered_since`.
 
     ``events`` are the buffered events after the reconnect id (in emission
-    order). ``gapped`` is True when the id was not found in the ring *and* the
-    ring has dropped events — i.e. the caller's position most likely fell off
-    it and the SSE stream should tell the client to resync. A never-seen id
-    cannot be distinguished from an evicted one here, but the only real
-    reconnect token is a previously-delivered id and a spurious resync is safe;
-    when nothing was ever evicted there is no lost data and ``gapped`` is False.
+    order). ``gapped`` is True when the id is not found in the ring, meaning the
+    bus cannot prove continuity from it — the id was evicted, belongs to a
+    previous server run (a fresh buffer after restart), or was never emitted —
+    so the SSE stream should tell the client to resync rather than silently
+    under-deliver. A previously-delivered id that is still buffered yields
+    ``gapped=False``; a spurious resync for a fabricated id is harmless (it just
+    re-fetches current state).
     """
 
     events: list[LithosEvent]
@@ -165,10 +166,6 @@ class EventBus:
             self._queue_size = 100
 
         self._buffer: deque[LithosEvent] = deque(maxlen=self._buffer_size)
-        # Set once the ring first drops an event on overflow, so a later
-        # get_buffered_since can tell "your position fell off the ring" (gap)
-        # from "you're caught up / never-seen id" (no gap).
-        self._has_evicted = False
         self._subscribers: list[_Subscriber] = []
         register_event_bus_metrics(self)
 
@@ -206,10 +203,6 @@ class EventBus:
             )
 
             try:
-                # A full ring evicts its oldest event on the next append; record
-                # that so replay can signal a gap instead of a silent under-delivery.
-                if self._buffer.maxlen is not None and len(self._buffer) == self._buffer.maxlen:
-                    self._has_evicted = True
                 self._buffer.append(event)
             except Exception:
                 logger.exception("EventBus.emit: buffer append failed")
@@ -319,14 +312,18 @@ class EventBus:
         """Return buffered events after *since_id*, with a replay-gap signal.
 
         Used for SSE replay on reconnect. Events are returned in emission order,
-        exclusive of *since_id*.
+        exclusive of *since_id*. Continuity is decided purely by whether
+        *since_id* is still in the ring:
 
-        When *since_id* is not found in the ring, the result's ``gapped`` flag
-        distinguishes the two cases the old ``[]`` conflated: if the ring has
-        dropped events (``_has_evicted``), the caller's position most likely fell
-        off it — ``gapped=True`` so the SSE layer can tell the client to resync;
-        otherwise nothing was lost and ``gapped=False``. A caught-up client (its
-        id is the newest buffered event) matches and gets ``([], gapped=False)``.
+        - **Found** — the caller's position is known; return the events after it.
+          A caught-up client (its id is the newest buffered event) gets
+          ``([], gapped=False)``.
+        - **Absent** — the bus cannot prove continuity: the id was evicted from
+          the ring, belongs to a previous server run (a fresh buffer after a
+          restart), or was never emitted. All three mean events may have been
+          missed, so ``gapped=True`` and the SSE layer tells the client to
+          resync. A spurious resync for a fabricated id is harmless (it just
+          re-fetches current state); a silent under-delivery is not.
 
         Args:
             since_id: The event ID to replay from (exclusive).
@@ -338,7 +335,7 @@ class EventBus:
         for i, event in enumerate(events):
             if event.id == since_id:
                 return BufferedReplay(events[i + 1 :], gapped=False)
-        return BufferedReplay([], gapped=self._has_evicted)
+        return BufferedReplay([], gapped=True)
 
     @property
     def active_subscriber_count(self) -> int:

@@ -165,7 +165,7 @@ class TestFormatSSE:
         assert "id: " not in result
         assert "event: resync\n" in result
         data = json.loads(result.split("data: ")[1].strip())
-        assert data["reason"] == "buffer_evicted"
+        assert data["reason"] == "replay_gap"
         assert data["since_id"] == "evt-123"
         assert result.endswith("\n\n")
         assert EVENT_ORIGIN_ENRICH not in result
@@ -194,13 +194,26 @@ class TestGetBufferedSince:
         assert result.gapped is False
 
     @pytest.mark.asyncio
-    async def test_unknown_id_no_eviction_is_not_a_gap(self) -> None:
-        # An id that was never buffered, with no eviction, means nothing was lost.
+    async def test_unknown_id_signals_gap(self) -> None:
+        # An id the bus cannot locate — never emitted, or carried over from a
+        # previous server run — means continuity cannot be proven. Signal a gap
+        # so the SSE client resyncs instead of silently believing it is caught up.
         bus = EventBus()
         await bus.emit(LithosEvent(type=NOTE_CREATED))
-        result = bus.get_buffered_since("nonexistent-id")
+        result = bus.get_buffered_since("id-from-a-previous-run")
         assert result.events == []
-        assert result.gapped is False
+        assert result.gapped is True
+
+    @pytest.mark.asyncio
+    async def test_fresh_bus_with_prior_id_signals_gap(self) -> None:
+        # Restart case: a brand-new bus (empty ring, nothing evicted yet) asked
+        # to replay from a real pre-restart id cannot replay it. This must be a
+        # gap, not a silent "caught up" — the client missed everything before and
+        # during the downtime.
+        bus = EventBus()
+        result = bus.get_buffered_since("pre-restart-id")
+        assert result.events == []
+        assert result.gapped is True
 
     @pytest.mark.asyncio
     async def test_last_event_is_caught_up_not_a_gap(self) -> None:
@@ -407,16 +420,53 @@ class TestReplay:
         assert e1.id not in ids  # since= is exclusive
 
     @pytest.mark.asyncio
-    async def test_since_unknown_id_yields_no_replay(self, sse_server: LithosServer) -> None:
-        """Unknown since= ID yields no buffered replay (just live events)."""
+    async def test_unknown_since_id_emits_resync_and_streams(
+        self, sse_server: LithosServer
+    ) -> None:
+        """An unknown since= id (e.g. a Last-Event-ID from before a restart) makes
+        the endpoint emit a ``resync`` control event, then keep streaming live
+        events — fail-safe, not a silent no-replay.
+        """
         live = LithosEvent(type=NOTE_CREATED, agent="live")
         request = _make_mock_request(sse_server, since="no-such-id")
         lines = await _collect_sse_lines(sse_server, request, emit_events=[live])
-        events = _parse_sse_events(lines)
 
-        # Only the live event should appear
-        ids = [e["id"] for e in events]
-        assert live.id in ids
+        # The endpoint signalled a resync (control event, no id: line).
+        resync_chunks = [c for c in lines if "event: resync" in c]
+        assert len(resync_chunks) == 1
+        assert "id: " not in resync_chunks[0]
+
+        # And the stream still delivered the live event after the resync signal.
+        events = _parse_sse_events(lines)
+        assert any(e.get("id") == live.id for e in events)
+
+    @pytest.mark.asyncio
+    async def test_evicted_since_id_emits_resync(self, temp_dir: Path) -> None:
+        """End-to-end: an evicted reconnect id makes ``_sse_endpoint`` emit resync.
+
+        Covers the endpoint's gap branch, not just ``get_buffered_since``: with a
+        tiny ring, pre-populate past the reconnect id so it is evicted, connect
+        with ``since=<evicted-id>``, and assert the wire carries an ``event:
+        resync`` control message with no ``id:`` line.
+        """
+        config = _make_config(temp_dir)
+        config.events.event_buffer_size = 2
+        server = LithosServer(config)
+        await server.initialize()
+        try:
+            e1 = LithosEvent(type=NOTE_CREATED, agent="old")
+            await server.event_bus.emit(e1)
+            await server.event_bus.emit(LithosEvent(type=NOTE_UPDATED))
+            await server.event_bus.emit(LithosEvent(type=NOTE_DELETED))  # evicts e1
+
+            request = _make_mock_request(server, since=e1.id)
+            lines = await _collect_sse_lines(server, request, emit_events=[])
+
+            resync_chunks = [c for c in lines if "event: resync" in c]
+            assert len(resync_chunks) == 1
+            assert "id: " not in resync_chunks[0]  # must not become next Last-Event-ID
+        finally:
+            await server.shutdown()
 
     @pytest.mark.asyncio
     async def test_last_event_id_header_replay(self, sse_server: LithosServer) -> None:

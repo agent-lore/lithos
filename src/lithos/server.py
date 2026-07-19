@@ -443,11 +443,13 @@ class LithosServer:
                             replay = self.event_bus.get_buffered_since(since_id)
                             replay_count = 0
                             if replay.gapped:
-                                # The client's position fell off the ring — tell it to
-                                # resync instead of silently under-delivering the replay.
+                                # since_id is not in the ring (evicted, from a previous
+                                # server run, or unknown) — the replay cannot be proven
+                                # complete, so tell the client to resync instead of
+                                # silently under-delivering.
                                 logger.warning(
-                                    "SSE replay gap: since_id=%s not in buffer and events "
-                                    "were evicted; signalling resync",
+                                    "SSE replay gap: since_id=%s not in the replay buffer; "
+                                    "signalling resync",
                                     since_id,
                                 )
                                 replay_span.set_attribute("lithos.sse.gapped", True)
@@ -852,8 +854,9 @@ def _format_sse(event: LithosEvent) -> str:
     return f"id: {event.id}\nevent: {event.type}\ndata: {data}\n\n"
 
 
-# SSE control event emitted when the replay buffer dropped events the reconnecting
-# client needs. The client should discard its assumed position and resync from
+# SSE control event emitted when the replay buffer cannot prove continuity from the
+# reconnecting client's Last-Event-ID (it was evicted, is from a previous server run,
+# or is unknown). The client should discard its assumed position and resync from
 # current state rather than trust a silently-truncated replay.
 SSE_RESYNC_EVENT = "resync"
 
@@ -866,10 +869,11 @@ def _format_resync_sse(since_id: str) -> str:
     """
     data = json.dumps(
         {
-            "reason": "buffer_evicted",
+            "reason": "replay_gap",
             "since_id": since_id,
             "message": (
-                "Replay buffer dropped events since the given id; resync from current state."
+                "Cannot replay from the given id (evicted, from a previous server run, "
+                "or unknown); resync from current state."
             ),
         }
     )

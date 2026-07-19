@@ -38,9 +38,9 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | CognitiveMemory | 1 | 1121 | 920 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 371 | 281 | 11 | 0 | 0.00 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 1 | 2675 | 2256 | 4 | 4 | 0.50 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
-| Entrypoints | 13 | 5847 | 4692 | 0 | 13 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 15 |
+| Entrypoints | 13 | 5851 | 4693 | 0 | 13 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 15 |
 | Errors | 2 | 211 | 152 | 7 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
-| Events | 1 | 353 | 279 | 4 | 2 | 0.33 | 9 (`lithos.events.EventBus.emit`) | 0 |
+| Events | 1 | 350 | 281 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1315 | 1059 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | Intake | 1 | 630 | 533 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 2067 | 1654 | 5 | 7 | 0.58 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
@@ -53,7 +53,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **41**, lines: **23727**, SLOC: **19061**
+- Modules: **41**, lines: **23728**, SLOC: **19064**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -150,4 +150,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.89** (44830 test lines / 23727 source lines)
+- Test-to-source line ratio: **1.89** (44880 test lines / 23728 source lines)
