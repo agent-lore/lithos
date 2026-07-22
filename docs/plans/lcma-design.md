@@ -246,6 +246,8 @@ When no weights/stats exist:
 
 ### G) Embedding model versioning
 
+> **Superseded (revised MVP-3, 2026-07): dropped.** Embedding-space versioning is no longer part of MVP-3 — spun out to a separate low-priority infra task, revisited only if the embedding model changes. See the "MVP 3 — Advanced Cognition (revised 2026-07)" section.
+
 Support multiple embedding spaces:
 
 - store `embedding_space_id` per embedding
@@ -266,6 +268,8 @@ MVP 1 boundary:
 - Existing direct-access tools remain unchanged until a separate caller-context contract is introduced.
 
 ### I) Temperature is operationalized
+
+> **Superseded (revised MVP-3, 2026-07):** coherence is computed from **embedding dispersion** of the top candidates, not edge strength (the typed-edge graph is too sparse). See the revised MVP-3 section (WS3).
 
 Per query:
 
@@ -536,6 +540,8 @@ Indexes: `(ts)`, `(task_id)`, `(agent_id)` for filtered queries via `lithos_rece
 
 Lithos already uses **ChromaDB** (`data/.chroma/`) with `all-MiniLM-L6-v2` (sentence-transformers) and cosine similarity. Documents are chunked (~500 char target, ~1000 max) and stored with metadata (`doc_id`, `chunk_index`, `title`, `path`, `author`, `tags`).
 
+> **Superseded (revised MVP-3, 2026-07): dropped.** Embedding-space versioning (multi-collection Chroma) is deferred to a separate infra task; MVP-3 uses the single `knowledge` collection. The description below is retained as deferred design.
+
 LCMA extends this with embedding space versioning via **separate ChromaDB collections** per space:
 
 - Current collection: `knowledge` (existing, preserved)
@@ -738,7 +744,8 @@ def scout_analogy(q: QueryContext, k: int) -> list[Candidate]:
     ...
 
 def scout_exploration(q: QueryContext, k: int, mode: str) -> list[Candidate]:
-    # NEW: mode in {"novelty","random","mixed"}, temperature-guided
+    # NEW: novelty + graph-frontier modes, temperature-guided
+    # (revised MVP-3, 2026-07: pure-"random" mode dropped — see WS3)
     ...
 
 def scout_contradictions(q: QueryContext, seed_nodes: list[str]) -> list[str]:
@@ -756,6 +763,8 @@ Notes:
 ---
 
 ## 5.3 Temperature (Coherence)
+
+> **Superseded (revised MVP-3, 2026-07):** coherence is computed from **embedding dispersion** of the top candidates, not edge strength. See the revised MVP-3 section (WS3). The edge-coherence design below is retained for history.
 
 Reviewer suggestion, implemented as coherence among top candidates (by edges).
 
@@ -1140,6 +1149,8 @@ def consolidate(task_id: str, agent_id: str):
 
 ## 5.8 Concept Formation + Damping
 
+> **Superseded (revised MVP-3, 2026-07):** concepts are seeded from **semantic (embedding) clusters validated by coactivation**, not coactivation clusters alone (coactivation is too sparse to seed); density clustering (HDBSCAN), not fixed-K. See the revised MVP-3 section (WS4). The damping/gateway mechanics below still apply.
+
 > **Note**: This function runs inside `lithos-enrich`, not in the `lithos_retrieve` hot path.
 
 Concepts emerge in two phases: derived clusters first, then explicit promotion to notes (see §1.1 Concept Node).
@@ -1210,6 +1221,8 @@ def resolve_conflict(edge_id: str, resolution: str, resolver: str):
 ---
 
 ## 5.10 Embedding Space Versioning / Migration
+
+> **Superseded (revised MVP-3, 2026-07): dropped from MVP-3.** Deferred to a separate low-priority infra task, revisited only if the embedding model changes. Retained below as deferred design.
 
 Lithos currently uses a single ChromaDB collection `"knowledge"` with `all-MiniLM-L6-v2`. LCMA adds versioning via separate ChromaDB collections per embedding space.
 
@@ -1504,8 +1517,10 @@ Write-contract note for LCMA params:
 ## MVP 3 — Advanced Cognition (revised 2026-07)
 
 > **Supersedes the earlier Hofstadter-framed MVP-3 sketch** and the MVP-3 mechanism notes woven
-> into §5.2 (analogy/exploration scouts), §5.3 (edge-based temperature) and §5.8
-> (coactivation-seeded concepts) **wherever they conflict**. Grounded in a read-only substrate
+> into §2.G / §4.5 / §5.10 (embedding-space versioning — **dropped**), §2.I / §5.3 (edge-based
+> temperature — now embedding-dispersion), §5.2 (analogy/exploration scouts — pure-random dropped)
+> and §5.8 (coactivation-seeded concepts — now semantic clusters) **wherever they conflict; those
+> sections carry inline `Superseded` markers**. Grounded in a read-only substrate
 > measurement of production (2026-07); full findings + numbers in the KB note
 > `analysis/lcma-substrate-measurement-phase-3-re-plan-2026-07.md`.
 
@@ -1598,10 +1613,15 @@ change).** `lithos_related` already merges links + provenance + typed edges + `r
   `min_weight` / `limit` / `order` params; upgrade `related_ids` → a ranked flat `neighbours` list.
 - **`lithos_edge_list`:** add `source` / `min_weight` filters + endpoint titles.
 - **`lithos_edge_upsert`:** no change (WS2 uses the existing provenance args).
-- **Data discipline:** give `provenance_type` a controlled vocabulary
-  (`asserted` · `inferred` · `consolidation` · `frontmatter`) so the read layer maps `→ source`.
+- **`source` is a read-time normalised view — no persisted vocabulary change, no migration.** The
+  existing `provenance_type` column is free-form (`human`/`agent`/`rule`/`manual`/`frontmatter`/
+  `reinforcement`/`consolidation`, per SPECIFICATION.md); `lithos_related` maps it to `source` at
+  read time: `human`/`agent`/`rule`/`manual` → `asserted`; `reinforcement`/`consolidation` →
+  `consolidation`; `frontmatter` → `provenance`; WS2's new `inferred` → `inferred`; unknown →
+  passthrough. WS2 writes `provenance_type="inferred"` (a new free-form value), so the write path
+  and schema are unchanged — the normalisation lives only in the read layer, for Lens.
 
-Freeze the neighbour shape + `source` vocabulary alongside WS2 so Lens builds against it while
+Freeze the neighbour shape + the `source` mapping alongside WS2 so Lens builds against it while
 enrichment fills `edges.db`. Lens then becomes MVP-3's external validation.
 
 ### Sequence & dependencies

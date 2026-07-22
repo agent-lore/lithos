@@ -184,7 +184,7 @@ Exit criteria (all MVPs):
 
 - [ ] `lithos_related`: resolve edge titles; normalised neighbour shape + `source`; opt-in `semantic`/`coactivation` includes; `relation_types`/`sources`/`min_weight`/`limit`/`order`; ranked `neighbours` list
 - [ ] `lithos_edge_list`: `source`/`min_weight` filters + endpoint titles
-- [ ] `provenance_type` controlled vocabulary (`asserted`·`inferred`·`consolidation`·`frontmatter`)
+- [ ] Read-time `source` mapping over existing free-form `provenance_type` (human/agent/rule/manual→asserted, reinforcement/consolidation→consolidation, frontmatter→provenance, inferred→inferred) — no persisted-vocab change/migration
 - [ ] `lithos_receipts` — query retrieval audit history from `receipts`
 
 **Dropped:** embedding-space versioning + multi-space vector scout (→ separate infra task).
