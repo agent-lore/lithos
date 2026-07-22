@@ -140,23 +140,58 @@ Exit criteria (all MVPs):
 
 ---
 
-## MVP 3 — Advanced Cognition
+## MVP 3 — Advanced Cognition (revised 2026-07)
 
-- [ ] Analogy scout: frame extraction (`{problem, constraints, actions, outcome, lessons}`) + structural matching
-- [ ] Computed temperature in `lithos_retrieve` Terrace 1: `temperature = 1 - coherence` (coherence = mean edge strength among top candidates) — activated when edges exceed threshold; MVP 1 returns fixed default (0.5)
-- [ ] Temperature-guided exploration depth (high temp → deeper exploration, more `scout_exploration` weight)
-- [ ] `scout_exploration` with novelty/random/mixed modes
-- [ ] Concept nodes: regular notes with `note_type: "concept"` created via `lithos_write` — concepts are derived clusters first, with explicit promotion/materialization (not auto-materialized early)
-- [ ] Concept node formation from stable coactivation clusters (`maybe_update_concepts`) — runs inside `lithos-enrich`, not `lithos_retrieve` hot path
-- [ ] Concept node damping: salience ceiling + diversity penalty for repeated concept retrieval
-- [ ] Embedding space versioning via separate ChromaDB collections per space (`knowledge_<space_id>`)
-- [ ] Multi-space vector scout during embedding migration
-- [ ] `lithos_receipts` tool — query retrieval audit history from `receipts` table in `stats.db`
-- [ ] Background LLM synthesis in `lithos-enrich` (requires `LithosConfig.lcma.llm_provider` config) — produces persistent artifacts (summaries, concept notes, edge annotations), not query-time reranking
+> Revised plan grounded in the 2026-07 substrate measurement (see the MVP-3 section of
+> `lcma-design.md` and KB note `analysis/lcma-substrate-measurement-phase-3-re-plan-2026-07.md`).
+> Embedding-space versioning dropped; analogy/concepts/temperature re-grounded; Lithos Lens added
+> as a consumer.
+
+**Gated prerequisites (separate tasks, not MVP-3 work):**
+
+- [ ] Salience recalibration — task `e7d8ef60` (HIGH; `blocks` this epic)
+- [ ] Feedback capture — task `fc4b0669`
+- [ ] (operational) Semantic-index coverage reconcile — task `97cd00bb`
+
+**WS1 — LLM-synthesis backbone**
+
+- [ ] Optional `LcmaConfig.llm_provider` (local or external) wired into `lithos-enrich`; background, budget-bounded, provenance-stamped, idempotent
+
+**WS2 — Typed-edge inference**
+
+- [ ] Infer `supports`/`contradicts`/`refines`/`is_example_of`/`depends_on`/`analogy_to` over semantic-neighbour pairs (LLM-adjudicated), written to `edges.db` with `provenance_type=inferred`
+- [ ] Governance: inferred ≠ asserted, confidence floor, `contradicts` surfaced not auto-applied
+
+**WS3 — Coherence / temperature / exploration**
+
+- [ ] `coherence = 1 − semantic dispersion` (embedding variance); `temperature = 1 − coherence`
+- [ ] `scout_exploration` (novelty + graph-frontier, temperature-weighted); no pure-random mode
+
+**WS4 — Concept nodes**
+
+- [ ] Density-cluster embeddings (HDBSCAN; tight eps ≈ 0.18–0.22 / min_size ≈ 4–8), validate by coactivation, promote stable clusters to `note_type: concept` (gateway model)
+- [ ] Damping (salience ceiling — needs `e7d8ef60` — + diversity + promotion threshold); provenance-stamped + reversible
+
+**WS5 — Analogy scout**
+
+- [ ] LLM frame extraction `{problem, constraints, actions, outcome, lessons}` from task outcomes/findings; `scout_analogy` structural match (incl. cross-namespace)
+
+**WS6 — Metamemory (implicit)**
+
+- [ ] Tune `rerank_weights` from receipts/coactivation/outcomes (no explicit labels); apply behind a flag; folds `ac6ddb9f`
+
+**WS7 — Lithos Lens surface**
+
+- [ ] `lithos_related`: resolve edge titles; normalised neighbour shape + `source`; opt-in `semantic`/`coactivation` includes; `relation_types`/`sources`/`min_weight`/`limit`/`order`; ranked `neighbours` list
+- [ ] `lithos_edge_list`: `source`/`min_weight` filters + endpoint titles
+- [ ] `provenance_type` controlled vocabulary (`asserted`·`inferred`·`consolidation`·`frontmatter`)
+- [ ] `lithos_receipts` — query retrieval audit history from `receipts`
+
+**Dropped:** embedding-space versioning + multi-space vector scout (→ separate infra task).
 
 **Exit criteria:**
 
 - Analogy scout returns structurally similar notes across domains
-- Temperature operationalized and controlling exploration depth
+- Temperature operationalized (embedding-based) and controlling exploration depth
 - Concept nodes emerge from usage patterns without manual curation
-- Embedding model can be upgraded without losing retrieval quality during transition
+- `lithos_related` renders a typed, provenanced neighbourhood for Lens

@@ -1501,15 +1501,136 @@ Write-contract note for LCMA params:
 - `lithos-enrich` pseudocode finalized (§5.12) before implementation begins
 - Differentiated `note_type_priors` tuning based on MVP 1 learning data
 
-## MVP 3 (Hofstadter-flavored)
+## MVP 3 — Advanced Cognition (revised 2026-07)
 
-> **Note**: Background LLM synthesis is part of `lithos-enrich`, not `lithos_retrieve`. It runs asynchronously and produces persistent artifacts. `lithos_retrieve` remains Terrace 0 + Terrace 1 only.
+> **Supersedes the earlier Hofstadter-framed MVP-3 sketch** and the MVP-3 mechanism notes woven
+> into §5.2 (analogy/exploration scouts), §5.3 (edge-based temperature) and §5.8
+> (coactivation-seeded concepts) **wherever they conflict**. Grounded in a read-only substrate
+> measurement of production (2026-07); full findings + numbers in the KB note
+> `analysis/lcma-substrate-measurement-phase-3-re-plan-2026-07.md`.
 
-- Analogy scout (frame extraction — new, no existing equivalent)
-- Exploration scout (novelty/random/mixed modes, temperature-guided)
-- Temperature-based exploration depth
-- Concept nodes (regular notes with `note_type: "concept"`) + damping
-- Embedding space versioning via ChromaDB collections
+MVP-3 was conceived in 2026-03, before the KB had content or interaction, and framed around
+Hofstadter's Copycat (analogy / temperature / terraces as *query-time search*). Two things
+invalidate parts of that framing: (1) the measured substrate below, and (2) a new consumer —
+**Lithos Lens**, a knowledge-*browsing* UI that must render a document's linked + related
+neighbours, which turns MVP-3's graph enrichment into a **product surface**.
+
+**Reframed goal:** from "clever query-time search" to **"LLM-assisted background enrichment over a
+semantic substrate, surfaced as explainable typed relationships."** `lithos_retrieve` stays fast
+(Terrace-0 union + Terrace-1 rerank only); the intelligence accrues in the `lithos-enrich`
+background worker as persistent artifacts (typed edges, concept notes, analogy frames) read by
+*both* `lithos_retrieve` and Lens (via `lithos_related`).
+
+### Measured substrate (production, 2026-07)
+
+| signal | measurement | consequence |
+|---|---|---|
+| typed edges | 2,302 edges, but 2 genuine relation types (`contradicts`/`summarizes`); 88% weight-≤0.05 `related_to`; 17% node coverage | graph is *semantically empty* → WS2 typed-edge inference is the top lever |
+| coactivation | 8,175 pairs, 295 with count ≥5 | real but modest → *validates* clusters, doesn't seed them |
+| temperature | 0.5 on all 1,946 receipts | inert → WS3 recomputes on embeddings |
+| salience 🔴 | avg 0.076, 86% of nodes ≤0.30 | collapsed (live bug) → prereq `e7d8ef60` |
+| explicit feedback 🔴 | cited 8 / misleading 0 over 1,486 tasks | empty → WS6 uses implicit signals; prereq `fc4b0669` |
+| analogy material | 1,348 task outcomes (91% of completed) | abundant → WS5 is well-supported |
+| semantic coverage 🔴 | chroma holds 935 / 3,115 docs (reading-pile skewed) | operational drift → task `97cd00bb`; embedding-driven WS assume it is repaired |
+
+### Gated prerequisites (external tasks — not MVP-3 workstreams)
+
+- **Salience recalibration** — `e7d8ef60` (HIGH, live retrieval bug). Wired as a `blocks`
+  predecessor of this epic (`d921d168`); WS4 damping + WS6 depend on a meaningful salience spread.
+- **Feedback capture** — `fc4b0669`. Start early to bank labels for WS6.
+- **Semantic-index coverage (operational)** — `97cd00bb`. A `plan_reconcile(search=)` / re-embed
+  backfills the ~2,180 unindexed docs. Not a design workstream; the embedding-driven workstreams
+  below assume coverage is repaired.
+
+### Workstreams
+
+**WS1 — LLM-synthesis worker (backbone).** `lithos-enrich` gains an **optional** LLM provider
+(`LcmaConfig.llm_provider`, local or external — local keeps privacy-first deployments whole).
+Query-independent, background, budget-bounded; never on the retrieve hot path. Emits provenance-
+stamped, idempotent artifacts (the `enrich_queue` already sequences work). Enables WS2/WS4/WS5.
+
+**WS2 — Typed-edge inference (top lever + Lens enabler).** For each node, take its top semantic
+neighbours as candidate pairs, cheap-pre-filter (similarity + entity/tag overlap), then have WS1
+adjudicate **relation type + direction + confidence**: `supports`, `contradicts`, `refines`,
+`is_example_of`, `depends_on`, `analogy_to`. Write to `edges.db` **reusing the existing provenance
+columns** (no migration): `provenance_type="inferred"`, `provenance_actor="lithos-enrich"`,
+`weight=confidence`, `evidence={rationale, model, confidence}`. Lifts coverage from 17% with *real*
+semantic types and — because `lithos_related` already surfaces `edges.db` — feeds Lens for free.
+Governance: inferred ≠ asserted (marked + filterable); confidence floor; `contradicts` is surfaced,
+never auto-mutating.
+
+**WS3 — Embedding-based coherence + temperature + exploration.** Edge-based coherence is dead (17%
+coverage); redefine **coherence = 1 − normalised semantic dispersion** of the top candidates
+(embedding variance). `temperature = 1 − coherence` then varies and drives an **exploration scout**
+(novelty: semantically adjacent but low-salience / rarely-retrieved + graph-frontier). Drop
+pure-random.
+
+**WS4 — Concept nodes (semantic clusters + Memora gateway).** Cluster document embeddings and
+**validate** clusters with coactivation + entity/tag cohesion; promote stable clusters to
+`note_type: concept` notes (WS1 writes a summary + member links; gateway model — retrieval returns
+concept + specifics). Damping (needs `e7d8ef60`): salience ceiling + diversity penalty + promotion
+threshold. Governance: provenance-stamped, reviewable, reversible; never overwrite human notes.
+*Measured thresholds (2026-07, over the currently-embedded content — provisional until `97cd00bb`):*
+semantic separation is weak (silhouette ~0.05), so **use density clustering (HDBSCAN), not fixed-K
+KMeans**; tight params (cosine eps ≈ 0.18–0.22, min_cluster_size ≈ 4–8) yield **~15–30 concept
+candidates over ~20–30%** of docs, with noise treated as a feature (don't force a concept for
+everything); coactivation validation is load-bearing given the weak separation.
+
+**WS5 — Analogy scout (task-outcome frames).** WS1 extracts `{problem, constraints, actions,
+outcome, lessons}` frames from the 1,348 task outcomes + 117 findings; `scout_analogy` structurally
+matches a query/task against frame slots, surfacing structurally-similar prior work (incl.
+cross-namespace). Registers via `SCOUT_REGISTRY`.
+
+**WS6 — Metamemory (implicit signals).** Explicit feedback is empty, so tune from receipt
+`final_nodes` recurrence, coactivation strength, task-outcome success, and staleness; periodically
+fit `LcmaConfig.rerank_weights`, apply behind a flag, measure. Folds the open calibration
+observation `ac6ddb9f` (#179). Depends on `e7d8ef60`.
+
+**WS7 — Lithos Lens integration surface (read-shape enrichment; no migration, no write-tool
+change).** `lithos_related` already merges links + provenance + typed edges + `related_ids`, and
+`edges.db` / `lithos_edge_upsert` already carry provenance — so the work is:
+
+- **`lithos_related`:** resolve **titles** on edge entries (currently raw ids); normalise every
+  neighbour to `{id, title, note_type, namespace, relation, source, direction, weight, rationale?}`
+  where `source ∈ asserted | provenance | inferred | semantic | coactivation` (mapped from
+  `provenance_type`); add opt-in `include` values `semantic` (ChromaDB k-NN) + `coactivation`
+  (default stays the structural three — backward compatible); add `relation_types` / `sources` /
+  `min_weight` / `limit` / `order` params; upgrade `related_ids` → a ranked flat `neighbours` list.
+- **`lithos_edge_list`:** add `source` / `min_weight` filters + endpoint titles.
+- **`lithos_edge_upsert`:** no change (WS2 uses the existing provenance args).
+- **Data discipline:** give `provenance_type` a controlled vocabulary
+  (`asserted` · `inferred` · `consolidation` · `frontmatter`) so the read layer maps `→ source`.
+
+Freeze the neighbour shape + `source` vocabulary alongside WS2 so Lens builds against it while
+enrichment fills `edges.db`. Lens then becomes MVP-3's external validation.
+
+### Sequence & dependencies
+
+`WS0 prereqs (e7d8ef60, fc4b0669; + operational 97cd00bb)` → `WS1` → `WS2` (freeze the WS7 contract
+here) → { `WS3`, `WS4` (needs e7d8ef60), `WS5`, `WS7` } → `WS6` (needs e7d8ef60). Prerequisites are
+gated via task-edges, not folded into this epic.
+
+### Non-goals / dropped
+
+- **Embedding-space versioning + transition querying** — dropped from MVP-3; spin to a separate
+  low-priority infra task, revisited only if the embedding model changes.
+- Pure-random exploration; LLM synthesis on the retrieve hot path; auto-overwriting human notes.
+
+### Success criteria
+
+- Salience distribution recovers (no longer 86% floored).
+- Typed-edge coverage 17% → majority, with real semantic types.
+- `lithos_related` returns a typed, provenanced, explainable neighbourhood Lens can render.
+- `scout_analogy` surfaces a structurally-similar prior task on a held-out set.
+- Rerank weights improve on the implicit-relevance metric; `contradicts` edges exist and surface.
+
+### Decisions (Dave, 2026-07)
+
+LLM synthesis = backbone with a **local/optional** provider; coherence redefined on **embedding
+dispersion** + **typed-edge inference** to densify; **embedding-versioning dropped**; prerequisites
+kept as **separate gated tasks**, not folded; **Lens is a first-class consumer** (the
+`lithos_related` neighbourhood is the browse surface); coverage reconcile handled **operationally**,
+not as a design workstream.
 
 ---
 
@@ -1547,8 +1668,12 @@ Write-contract note for LCMA params:
 - `lithos_node_stats` — view/query salience and usage stats
 - `lithos_conflict_resolve` — contradiction resolution
 
-**MVP 3:**
+**MVP 3 (revised — see the MVP-3 section above):**
 
+- **Extended, not new (WS7 Lens surface):** `lithos_related` gains title resolution, a normalised
+  neighbour shape with `source`, opt-in `semantic`/`coactivation` includes, and rank/filter params;
+  `lithos_edge_list` gains `source`/`min_weight` filters + endpoint titles. `lithos_edge_upsert` is
+  unchanged.
 - `lithos_receipts` — query retrieval audit history
 
   ```python
