@@ -32,6 +32,15 @@ def test_auc_handles_ties() -> None:
     assert cs.auc([0.5, 0.5], [0.5, 0.5]) == 0.5
 
 
+def test_parse_ts_handles_z_and_garbage() -> None:
+    parsed = cs._parse_ts("2026-01-01T00:00:00Z")
+    assert parsed is not None
+    assert parsed.tzinfo is not None  # Z normalised to +00:00
+    assert cs._parse_ts("2026-01-01 00:00:00") is not None  # sqlite CURRENT_TIMESTAMP shape
+    assert cs._parse_ts("not-a-timestamp") is None  # unparseable -> dropped, not raised
+    assert cs._parse_ts(None) is None
+
+
 async def _seed(store: StatsStore) -> None:
     for _ in range(15):
         await store.increment_node_stats(node_id="hot")
@@ -110,6 +119,57 @@ async def test_floor_projection_matches_store_backfill(test_config: LithosConfig
         assert actually_lifted == expected_lift
     finally:
         await store.close()
+
+
+async def test_load_receipts_parses_production_shape(test_config: LithosConfig) -> None:
+    """final_nodes is a list of objects; the harness must key on `id`, not the whole dict.
+
+    Two receipts for the same node with different reasons/scouts must aggregate under one
+    node id rather than fragmenting into two pseudo-identifiers.
+    """
+    store = StatsStore(test_config)
+    await store.open()
+    try:
+        for i, reason in enumerate(("q1", "q2")):
+            await store.insert_receipt(
+                receipt_id=f"rcpt_{i}",
+                query=reason,
+                limit=10,
+                namespace_filter=None,
+                scouts_fired=["scout_vector"],
+                candidates_considered=1,
+                final_nodes=[{"id": "node-1", "reasons": [reason], "scouts": ["scout_vector"]}],
+                conflicts_surfaced=[],
+                surface_conflicts=False,
+                temperature=0.5,
+                terrace_reached=1,
+            )
+    finally:
+        await store.close()
+
+    receipts = cs.load_receipts(str(store.db_path))
+    assert len(receipts) == 2
+    for _ts, node_ids in receipts:
+        assert node_ids == ["node-1"]  # id extracted, not str(dict)
+
+    split = cs.build_time_split(receipts, 0.5)
+    assert split is not None
+    # Both objects collapse to the single node id across the past/future boundary.
+    assert set(split.past_count) | set(split.future_nodes) == {"node-1"}
+
+
+def test_build_time_split_is_position_based() -> None:
+    """A 0.7 split of 10 receipts puts exactly 7 in the past, not 8 (no boundary leak)."""
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    receipts = [(base + timedelta(days=i), [f"n{i}"]) for i in range(10)]
+    split = cs.build_time_split(receipts, 0.7)
+    assert split is not None
+    assert len(split.past_count) == 7  # n0..n6
+    assert split.future_nodes == frozenset(f"n{i}" for i in range(7, 10))
+    # Degenerate splits fall back to None (descriptive-only).
+    assert cs.build_time_split(receipts, 0.0) is None
+    assert cs.build_time_split(receipts, 1.0) is None
+    assert cs.build_time_split(receipts[:1], 0.5) is None
 
 
 def test_future_auc_distinguishes_recency_configs() -> None:

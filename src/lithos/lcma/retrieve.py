@@ -141,7 +141,9 @@ def _days_since(ts: object, now: datetime) -> float | None:
     if not isinstance(ts, str) or not ts:
         return None
     try:
-        dt = datetime.fromisoformat(ts)
+        # Normalise a trailing 'Z' to +00:00 (as server.py / coordination.py do) so
+        # older/alternate stored formats parse rather than silently dropping recency.
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except ValueError:
         return None
     if dt.tzinfo is None:

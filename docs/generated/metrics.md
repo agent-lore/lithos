@@ -44,7 +44,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Graph | 2 | 1315 | 1059 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | Intake | 1 | 630 | 533 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 2067 | 1654 | 5 | 7 | 0.58 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
-| LCMA | 10 | 4628 | 3730 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 16 |
+| LCMA | 10 | 4630 | 3730 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 16 |
 | Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 1941 | 1576 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 5 |
@@ -53,7 +53,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **42**, lines: **24225**, SLOC: **19470**
+- Modules: **42**, lines: **24227**, SLOC: **19470**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -150,4 +150,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.88** (45579 test lines / 24225 source lines)
+- Test-to-source line ratio: **1.88** (45652 test lines / 24227 source lines)

@@ -34,7 +34,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sqlite3
 import statistics
 import sys
@@ -43,6 +42,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from lithos.lcma.salience import recalibration_eligible, usage_score
+
+# Reuse the store's own receipt parser so the harness reads `final_nodes` exactly as
+# production does (objects with an `id` field, per retrieve.py / design §4.6) and can
+# never drift from it.
+from lithos.lcma.stats import _extract_final_node_ids
 
 # Candidate usage-signal parameter sets, expanded from these axes by default.
 _FREQ_RECENCY_SPLITS: tuple[tuple[float, float], ...] = (
@@ -108,7 +112,7 @@ def _parse_ts(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     try:
-        dt = datetime.fromisoformat(value)
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
@@ -158,10 +162,16 @@ def load_nodes(db_path: str) -> list[NodeRow]:
 
 
 def load_receipts(db_path: str) -> list[tuple[datetime, list[str]]]:
-    """Read (ts, returned node_ids) from the receipts log of a stats.db copy."""
+    """Read (ts, returned node_ids) from the receipts log of a stats.db copy.
+
+    ``final_nodes`` is a JSON list of *objects* (``{"id", "reasons", "scouts"}``); the
+    node ids are pulled via the store's own :func:`_extract_final_node_ids` so a node is
+    never fragmented by its explainability payload. Ordered by ``(ts, rowid)`` for a
+    deterministic split boundary when receipts share a second-resolution timestamp.
+    """
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        rows = conn.execute("SELECT ts, final_nodes FROM receipts").fetchall()
+        rows = conn.execute("SELECT ts, final_nodes FROM receipts ORDER BY ts, rowid").fetchall()
     finally:
         conn.close()
 
@@ -170,36 +180,43 @@ def load_receipts(db_path: str) -> list[tuple[datetime, list[str]]]:
         ts = _parse_ts(ts_raw)
         if ts is None:
             continue
-        try:
-            node_ids = json.loads(nodes_raw) if nodes_raw else []
-        except (TypeError, ValueError):
-            continue
-        if isinstance(node_ids, list):
-            out.append((ts, [str(n) for n in node_ids]))
+        node_ids = _extract_final_node_ids(nodes_raw)
+        if node_ids:
+            out.append((ts, node_ids))
     return out
 
 
 def build_time_split(
     receipts: Sequence[tuple[datetime, list[str]]], split_quantile: float
 ) -> TimeSplit | None:
-    """Partition receipts by time: earlier fraction = past (scored), rest = future (label)."""
-    if not receipts:
+    """Partition receipts by position into past (scored) and future (label).
+
+    The earlier ``split_quantile`` fraction of receipts (by ``(ts, rowid)`` order) is the
+    past window, the remainder the held-out future. Slicing by *position* — not by a
+    ``ts <= boundary`` comparison — means a 70% split puts exactly 70% in the past and
+    keeps ties from leaking a whole timestamp group across the boundary. Returns ``None``
+    when the split is degenerate (fewer than two receipts, or ``split_quantile`` outside
+    ``(0, 1)``), so the caller falls back to descriptive-only output.
+    """
+    if len(receipts) < 2 or not (0.0 < split_quantile < 1.0):
         return None
     ordered = sorted(receipts, key=lambda r: r[0])
-    idx = min(len(ordered) - 1, max(0, int(split_quantile * len(ordered))))
-    split_time = ordered[idx][0]
+    past_count_n = min(len(ordered) - 1, max(1, int(split_quantile * len(ordered))))
+    past = ordered[:past_count_n]
+    future = ordered[past_count_n:]
+    split_time = past[-1][0]
+
     past_count: dict[str, int] = {}
     past_last: dict[str, datetime] = {}
+    for ts, node_ids in past:
+        for nid in node_ids:
+            past_count[nid] = past_count.get(nid, 0) + 1
+            prev = past_last.get(nid)
+            if prev is None or ts > prev:
+                past_last[nid] = ts
     future_nodes: set[str] = set()
-    for ts, node_ids in ordered:
-        if ts <= split_time:
-            for nid in node_ids:
-                past_count[nid] = past_count.get(nid, 0) + 1
-                prev = past_last.get(nid)
-                if prev is None or ts > prev:
-                    past_last[nid] = ts
-        else:
-            future_nodes.update(node_ids)
+    for _ts, node_ids in future:
+        future_nodes.update(node_ids)
     return TimeSplit(split_time, past_count, past_last, frozenset(future_nodes))
 
 

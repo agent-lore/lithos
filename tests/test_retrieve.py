@@ -540,6 +540,19 @@ class TestConfigWiring:
         # A longer half-life keeps a 14-day-old use fresher -> higher usage score.
         assert _usage_from_stats(stats, now, long_hl) > _usage_from_stats(stats, now, short_hl)
 
+        # A 'Z'-suffixed timestamp must parse (recent -> higher usage than long-ago),
+        # not silently drop the recency term.
+        cfg = LcmaConfig()
+        recent_z: dict[str, object] = {
+            "retrieval_count": 5,
+            "last_used_at": (now - timedelta(days=1)).isoformat().replace("+00:00", "Z"),
+        }
+        old_z: dict[str, object] = {
+            "retrieval_count": 5,
+            "last_used_at": (now - timedelta(days=400)).isoformat().replace("+00:00", "Z"),
+        }
+        assert _usage_from_stats(recent_z, now, cfg) > _usage_from_stats(old_z, now, cfg)
+
     def test_rerank_usage_weight_is_wired(self) -> None:
         from lithos.lcma.retrieve import _rerank_fast
         from lithos.lcma.utils import Candidate

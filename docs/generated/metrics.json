@@ -411,7 +411,7 @@
         "functions": 130,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1130,
-        "lines": 4628,
+        "lines": 4630,
         "modules": 10,
         "public_symbols": 25,
         "sloc": 3730
@@ -482,13 +482,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 24225,
+    "total_lines": 24227,
     "total_modules": 42,
     "total_sloc": 19470
   },
   "tests": {
     "ratio": 1.88,
-    "src_lines": 24225,
-    "test_lines": 45579
+    "src_lines": 24227,
+    "test_lines": 45652
   }
 }
