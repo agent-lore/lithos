@@ -652,7 +652,7 @@ class _LithosMetrics:
         self._lcma_scout_failures: Any = None
         self._lcma_salience_updates: Any = None
         self._lcma_salience_mean: Any = None
-        self._lcma_salience_fraction_floored: Any = None
+        self._lcma_salience_fraction_below_floor: Any = None
         self._lcma_salience_node_count: Any = None
 
     @property
@@ -985,7 +985,7 @@ class _LithosMetrics:
     def lcma_salience_mean(self) -> Any:
         """Gauge: mean node salience, snapshotted by the daily enrich sweep.
 
-        Together with :attr:`lcma_salience_fraction_floored` this makes salience
+        Together with :attr:`lcma_salience_fraction_below_floor` this makes salience
         health observable so a re-collapse (the bug behind task e7d8ef60) can be
         alerted on rather than re-discovered by a manual audit.
         """
@@ -997,14 +997,20 @@ class _LithosMetrics:
         return self._lcma_salience_mean
 
     @property
-    def lcma_salience_fraction_floored(self) -> Any:
-        """Gauge: share of nodes with salience ≤ 0.30 (the collapse marker)."""
-        if self._lcma_salience_fraction_floored is None:
-            self._lcma_salience_fraction_floored = get_meter().create_gauge(
-                "lithos.lcma.salience.fraction_floored",
-                description="Fraction of nodes with salience <= 0.30 (daily snapshot)",
+    def lcma_salience_fraction_below_floor(self) -> Any:
+        """Gauge: share of nodes **strictly below** the configured salience floor.
+
+        This is the collapse marker: high while decay drives nodes toward zero, and it
+        clears to ~0 once the backfill lifts them to the floor — nodes resting *at* the
+        floor are healthy. (A fixed ≤ 0.30 threshold could not tell recovery from
+        collapse, since the backfill parks values at the floor.)
+        """
+        if self._lcma_salience_fraction_below_floor is None:
+            self._lcma_salience_fraction_below_floor = get_meter().create_gauge(
+                "lithos.lcma.salience.fraction_below_floor",
+                description="Fraction of nodes with salience below the configured floor",
             )
-        return self._lcma_salience_fraction_floored
+        return self._lcma_salience_fraction_below_floor
 
     @property
     def lcma_salience_node_count(self) -> Any:

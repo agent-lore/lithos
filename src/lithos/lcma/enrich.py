@@ -525,13 +525,14 @@ class EnrichWorker:
         if not _HAS_TELEMETRY or _lithos_metrics is None:
             return
         try:
-            dist = await self._stats_store.salience_distribution()
+            dist = await self._stats_store.salience_distribution(self._config.salience_floor)
+            _lithos_metrics.lcma_salience_mean.set(dist["mean"])
+            _lithos_metrics.lcma_salience_fraction_below_floor.set(dist["fraction_below_floor"])
+            _lithos_metrics.lcma_salience_node_count.set(dist["count"])
         except Exception:
+            # Telemetry is best-effort — a metrics hiccup must never abort the sweep's
+            # decay / working-memory / provenance work that runs after this.
             logger.exception("EnrichWorker: salience distribution snapshot failed")
-            return
-        _lithos_metrics.lcma_salience_mean.set(dist["mean"])
-        _lithos_metrics.lcma_salience_fraction_floored.set(dist["fraction_le_030"])
-        _lithos_metrics.lcma_salience_node_count.set(dist["count"])
 
     async def _extract_entities(self, node_id: str, doc: KnowledgeDocument | None = None) -> None:
         """Extract entities from note content and write to frontmatter.

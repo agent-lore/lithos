@@ -1234,19 +1234,47 @@ class TestSalienceDistribution:
     """Aggregate distribution stats used by the daily sweep gauge + recalibration CLI."""
 
     async def test_empty_table(self, stats_store: StatsStore) -> None:
-        dist = await stats_store.salience_distribution()
+        dist = await stats_store.salience_distribution(0.3)
         assert dist["count"] == 0.0
         assert dist["mean"] == 0.0
-        assert dist["fraction_le_030"] == 0.0
+        assert dist["fraction_below_floor"] == 0.0
 
     async def test_summarises_distribution(self, stats_store: StatsStore) -> None:
-        # Three nodes: 0.1, 0.3, 0.9  -> two of three are <= 0.30.
+        # Three nodes: 0.1, 0.3, 0.9. Strictly below floor 0.3 -> only 0.1.
         await stats_store.update_salience("a", -0.4)  # 0.1
-        await stats_store.update_salience("b", -0.2)  # 0.3
+        await stats_store.update_salience("b", -0.2)  # 0.3 (at floor, not below)
         await stats_store.update_salience("c", 0.4)  # 0.9
-        dist = await stats_store.salience_distribution()
+        dist = await stats_store.salience_distribution(0.3)
         assert dist["count"] == 3.0
         assert dist["mean"] == pytest.approx((0.1 + 0.3 + 0.9) / 3)
-        assert dist["fraction_le_030"] == pytest.approx(2 / 3)
-        assert 0.0 <= dist["p50"] <= 1.0
-        assert dist["p90"] >= dist["p50"]
+        assert dist["fraction_below_floor"] == pytest.approx(1 / 3)
+        # Nearest-rank percentiles over sorted [0.1, 0.3, 0.9].
+        assert dist["p50"] == pytest.approx(0.3)
+        assert dist["p90"] == pytest.approx(0.9)
+
+    async def test_fraction_below_floor_clears_after_backfill(
+        self, stats_store: StatsStore
+    ) -> None:
+        # The collapse marker must drop once the backfill lifts rows to the floor —
+        # a fixed <=0.30 threshold could not tell recovery from collapse.
+        for i in range(4):
+            await stats_store.update_salience(f"n{i}", -0.45)  # 0.05, collapsed
+        before = await stats_store.salience_distribution(0.3)
+        assert before["fraction_below_floor"] == pytest.approx(1.0)
+        await stats_store.recalibrate_salience_floor(0.3)
+        after = await stats_store.salience_distribution(0.3)
+        assert after["fraction_below_floor"] == pytest.approx(0.0)
+        assert after["mean"] == pytest.approx(0.3)
+
+    async def test_percentile_nearest_rank_small_table(self, stats_store: StatsStore) -> None:
+        # n=2: p50 must pick the lower value (nearest-rank), not the max.
+        await stats_store.update_salience("a", -0.3)  # 0.2
+        await stats_store.update_salience("b", 0.3)  # 0.8
+        dist = await stats_store.salience_distribution(0.3)
+        assert dist["p50"] == pytest.approx(0.2)
+        assert dist["p90"] == pytest.approx(0.8)
+
+    async def test_rejects_out_of_range_floor(self, stats_store: StatsStore) -> None:
+        for bad in (-0.1, 1.5, float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="finite value in"):
+                await stats_store.recalibrate_salience_floor(bad)

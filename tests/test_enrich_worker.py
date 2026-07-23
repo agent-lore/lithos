@@ -618,11 +618,14 @@ class TestSalienceDecay:
         monkeypatch,
     ) -> None:
         """The sweep snapshots the salience distribution into the OTEL gauges."""
+        import sys
         from unittest.mock import MagicMock
 
-        import lithos.lcma.enrich as enrich_mod
+        # Resolve the already-imported module via sys.modules to avoid a second,
+        # mixed-style import of lithos.lcma.enrich in this file.
+        enrich_mod = sys.modules[EnrichWorker.__module__]
 
-        await stats_store.update_salience("a", -0.4)  # 0.1 (floored bucket)
+        await stats_store.update_salience("a", -0.4)  # 0.1 (below the 0.3 floor)
         await stats_store.update_salience("b", 0.4)  # 0.9
 
         metrics = MagicMock()
@@ -633,10 +636,45 @@ class TestSalienceDecay:
 
         metrics.lcma_salience_node_count.set.assert_called_once_with(2.0)
         metrics.lcma_salience_mean.set.assert_called_once()
-        metrics.lcma_salience_fraction_floored.set.assert_called_once()
-        # Half the nodes are <= 0.30.
-        (floored_arg,) = metrics.lcma_salience_fraction_floored.set.call_args.args
-        assert floored_arg == pytest.approx(0.5)
+        metrics.lcma_salience_fraction_below_floor.set.assert_called_once()
+        # One of two nodes (0.1) is strictly below the 0.3 floor.
+        (below_arg,) = metrics.lcma_salience_fraction_below_floor.set.call_args.args
+        assert below_arg == pytest.approx(0.5)
+
+    async def test_decay_floor_and_rate_are_config_driven(
+        self,
+        worker: EnrichWorker,
+        stats_store: StatsStore,
+        monkeypatch,
+    ) -> None:
+        """Decay reads floor / per_day / cap from config, not hardcoded constants."""
+        import aiosqlite
+
+        # Non-default floor (0.45) and rate (0.05/day, cap 0.5): endpoints must reflect them.
+        monkeypatch.setattr(
+            worker,
+            "_config",
+            LcmaConfig(
+                salience_floor=0.45,
+                salience_decay_per_day=0.05,
+                salience_decay_daily_cap=0.5,
+            ),
+        )
+        node_id = "decay-config"
+        await stats_store.increment_node_stats(node_id=node_id)  # 0.5
+        long_ago = (datetime.now(UTC) - timedelta(days=100)).isoformat()
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "UPDATE node_stats SET last_used_at = ? WHERE node_id = ?", (long_ago, node_id)
+            )
+            await db.commit()
+
+        await worker._enrich_node(node_id, [NOTE_UPDATED])
+
+        stats_after = await stats_store.get_node_stats(node_id)
+        assert stats_after is not None
+        # 100*0.05=5 capped at 0.5, headroom 0.5-0.45=0.05 -> stops at the custom floor.
+        assert stats_after["salience"] == pytest.approx(0.45)
 
     async def test_no_decay_within_inactive_days(
         self,

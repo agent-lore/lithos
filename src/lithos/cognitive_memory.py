@@ -1146,12 +1146,12 @@ async def recalibrate_salience(
     store = StatsStore(config)
     await store.open()
     try:
-        before = await store.salience_distribution()
+        before = await store.salience_distribution(floor)
         if dry_run:
             would = await store.recalibrate_salience_floor(floor, dry_run=True)
             return before, None, would
         lifted = await store.recalibrate_salience_floor(floor)
-        after = await store.salience_distribution()
+        after = await store.salience_distribution(floor)
         return before, after, lifted
     finally:
         await store.close()

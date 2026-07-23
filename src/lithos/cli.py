@@ -249,7 +249,7 @@ def reindex(ctx: click.Context, clear: bool) -> None:
 def _echo_salience_distribution(label: str, dist: dict[str, float], floor: float) -> None:
     click.echo(
         f"{label:>6}: n={int(dist['count'])} mean={dist['mean']:.3f} "
-        f"<=0.30={dist['fraction_le_030'] * 100:.1f}% "
+        f"below_floor={dist['fraction_below_floor'] * 100:.1f}% "
         f"p50={dist['p50']:.3f} p90={dist['p90']:.3f} (floor={floor:.3f})"
     )
 
@@ -257,9 +257,9 @@ def _echo_salience_distribution(label: str, dist: dict[str, float], floor: float
 @cli.command(name="recalibrate-salience")
 @click.option(
     "--floor",
-    type=float,
+    type=click.FloatRange(0.0, 1.0),
     default=None,
-    help="Floor to lift collapsed rows to (default: config lcma.salience_floor).",
+    help="Floor to lift collapsed rows to, in [0, 1] (default: config lcma.salience_floor).",
 )
 @click.option(
     "--dry-run/--no-dry-run",

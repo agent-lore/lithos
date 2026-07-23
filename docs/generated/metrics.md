@@ -17,7 +17,7 @@ lower a budget after improving the code to lock in the gain.
 | `max_module_lines` | 2675 | 2800 | 125 |
 | `module_cycles` | 1 | 1 | 0 |
 | `modules_over_800_lines` | 11 | 11 | 0 |
-| `tests_private_imports` | 88 | 88 | 0 |
+| `tests_private_imports` | 90 | 90 | 0 |
 
 ## Import graph
 
@@ -44,16 +44,16 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Graph | 2 | 1315 | 1059 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | Intake | 1 | 630 | 533 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 2067 | 1654 | 5 | 7 | 0.58 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
-| LCMA | 10 | 4581 | 3691 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 16 |
+| LCMA | 10 | 4628 | 3730 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 16 |
 | Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 1941 | 1576 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 5 |
 | SqliteStore | 1 | 279 | 226 | 2 | 1 | 0.33 | 10 (`lithos.async_sqlite_store.AsyncSqliteStore._session`) | 0 |
-| Telemetry | 1 | 1250 | 965 | 9 | 1 | 0.10 | 19 (`lithos.telemetry.setup_telemetry`) | 1 |
+| Telemetry | 1 | 1256 | 970 | 9 | 1 | 0.10 | 19 (`lithos.telemetry.setup_telemetry`) | 1 |
 
 ## Size
 
-- Modules: **42**, lines: **24172**, SLOC: **19426**
+- Modules: **42**, lines: **24225**, SLOC: **19470**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -70,7 +70,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **736**, cyclomatic > 10: **60**
+- Functions: **737**, cyclomatic > 10: **60**
 
 Top 10 most complex functions:
 
@@ -113,7 +113,7 @@ Private-name reaches across module seams. Both counts can be pinned as
   - `lithos.tools.findings_stats -> lithos.server.LithosServer._emit`
   - `lithos.tools.notes -> lithos.knowledge._UNSET`
   - `lithos.tools.notes -> lithos.knowledge._UnsetType`
-- Tests importing src privates: **88**
+- Tests importing src privates: **90**
   - `tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x18)`
   - `tests/test_telemetry.py -> lithos.telemetry._lcma_metrics_registered (x8)`
   - `tests/test_telemetry.py -> lithos.telemetry._initialized (x7)`
@@ -124,6 +124,7 @@ Private-name reaches across module seams. Both counts can be pinned as
   - `tests/test_coordination.py -> lithos.coordination._parse_datetime (x2)`
   - `tests/test_entities.py -> lithos.lcma.entities._clean_candidate (x2)`
   - `tests/test_knowledge.py -> lithos.knowledge._UNSET (x2)`
+  - `tests/test_retrieve.py -> lithos.lcma.retrieve._rerank_fast (x2)`
   - `tests/test_telemetry.py -> lithos.telemetry._TraceContextFilter (x2)`
   - `tests/test_telemetry.py -> lithos.telemetry._inject_trace_context_into_logs (x2)`
   - `tests/test_telemetry.py -> lithos.telemetry._trace_context_filter (x2)`
@@ -143,11 +144,10 @@ Private-name reaches across module seams. Both counts can be pinned as
   - `tests/test_event_delivery.py -> lithos.server._format_resync_sse`
   - `tests/test_event_delivery.py -> lithos.server._format_sse`
   - `tests/test_knowledge.py -> lithos.knowledge._atomic_write`
-  - `tests/test_lcma_config.py -> lithos.config._DEFAULT_NOTE_TYPE_PRIORS`
   - … (list capped at 30 pairs)
 
 ## Domain, tools & tests
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.88** (45349 test lines / 24172 source lines)
+- Test-to-source line ratio: **1.88** (45579 test lines / 24225 source lines)

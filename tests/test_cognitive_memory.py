@@ -859,6 +859,21 @@ class TestReinforceCited:
         # Default salience 0.5 + 0.02
         assert stats.salience == pytest.approx(0.52)
 
+    async def test_cited_boost_is_config_driven(
+        self,
+        memory_with_knowledge: CognitiveMemory,
+        knowledge_manager: KnowledgeManager,
+    ) -> None:
+        """The citation boost reads lcma.salience_cited_boost, not a hardcoded 0.02."""
+        nid = await _create_note(knowledge_manager, "Note B2")
+        memory_with_knowledge._config.lcma.salience_cited_boost = 0.1
+
+        await memory_with_knowledge.reinforce_cited([nid])
+
+        stats = await memory_with_knowledge.node_stats(nid)
+        assert isinstance(stats, NodeStats)
+        assert stats.salience == pytest.approx(0.6)  # 0.5 + custom 0.1, not 0.02
+
     async def test_bumps_spaced_rep_strength_by_0_05(
         self,
         memory_with_knowledge: CognitiveMemory,

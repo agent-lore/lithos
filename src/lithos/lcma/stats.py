@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -799,7 +800,9 @@ class StatsStore(AsyncSqliteStore):
         Sets ``salience = floor`` for every node currently below it, **except** nodes
         carrying an explicit negative-feedback signal (``misleading_count > 0`` or the
         chronic-ignored condition) — their sub-floor salience is a deliberate penalty,
-        not decay damage, so the backfill must not erase it.
+        not decay damage, so the backfill must not erase it. Eligibility mirrors
+        :func:`lithos.lcma.salience.recalibration_eligible` (shared with the offline
+        calibration harness).
 
         Idempotent (a second run matches nothing) and conservative (rows already at or
         above the floor, and the meaningful-high tail, are untouched). Returns the count
@@ -807,7 +810,13 @@ class StatsStore(AsyncSqliteStore):
         *would* be lifted. This is a deliberate operator-run maintenance pass over the
         whole table (exposed as the ``recalibrate-salience`` CLI command), not a
         hot-path query.
+
+        Raises ``ValueError`` if *floor* is not a finite value in ``[0.0, 1.0]`` — a
+        write outside that range would break the salience invariant every other path
+        upholds.
         """
+        if not math.isfinite(floor) or not (0.0 <= floor <= 1.0):
+            raise ValueError(f"salience floor must be a finite value in [0.0, 1.0], got {floor!r}")
         async with self._session() as db:
             if dry_run:
                 row = await (
@@ -830,28 +839,34 @@ class StatsStore(AsyncSqliteStore):
             )
             return cursor.rowcount
 
-    async def salience_distribution(self) -> dict[str, float]:
+    async def salience_distribution(self, floor: float) -> dict[str, float]:
         """Return summary statistics of the salience distribution across all nodes.
 
         A single aggregate scan used by the daily sweep to emit distribution telemetry
         (so "the distribution recovered / has re-collapsed" is observable) and by the
         recalibration CLI to report before/after. Keys: ``count``, ``mean``,
-        ``fraction_le_030`` (share ≤ 0.30 — the collapse marker), ``p50``, ``p90``.
-        Returns zeros for an empty table.
+        ``fraction_below_floor`` (share **strictly** below *floor*), ``p50``, ``p90``.
+
+        ``fraction_below_floor`` is the collapse marker: it is high while decay has
+        driven nodes toward zero and **clears to ~0 after the backfill lifts them to
+        the floor** (nodes resting *at* the floor are healthy, not collapsed). Using the
+        configured floor rather than a fixed 0.30 threshold keeps the signal meaningful
+        under a custom floor. Returns zeros for an empty table.
         """
         async with self._session() as db:
             row = await (
                 await db.execute(
                     """SELECT COUNT(*) AS n,
                               COALESCE(AVG(salience), 0.0) AS mean,
-                              COALESCE(AVG(CASE WHEN salience <= 0.30 THEN 1.0 ELSE 0.0 END), 0.0)
-                                  AS frac_le_030
-                         FROM node_stats"""
+                              COALESCE(AVG(CASE WHEN salience < ? THEN 1.0 ELSE 0.0 END), 0.0)
+                                  AS frac_below
+                         FROM node_stats""",
+                    (floor,),
                 )
             ).fetchone()
             n = int(row[0]) if row else 0
             mean = float(row[1]) if row else 0.0
-            frac_le_030 = float(row[2]) if row else 0.0
+            frac_below = float(row[2]) if row else 0.0
             p50 = p90 = 0.0
             if n > 0:
                 p50 = await self._salience_percentile(db, n, 0.50)
@@ -859,15 +874,20 @@ class StatsStore(AsyncSqliteStore):
         return {
             "count": float(n),
             "mean": mean,
-            "fraction_le_030": frac_le_030,
+            "fraction_below_floor": frac_below,
             "p50": p50,
             "p90": p90,
         }
 
     @staticmethod
     async def _salience_percentile(db: aiosqlite.Connection, n: int, q: float) -> float:
-        """Return the *q* quantile of salience via an OFFSET scan (n already known)."""
-        offset = min(n - 1, max(0, int(q * n)))
+        """Return the *q* quantile of salience via an OFFSET scan (n already known).
+
+        Nearest-rank definition: the value at 1-based rank ``ceil(q*n)`` (clamped to
+        ``[1, n]``), so ``q=0.5`` on ``n=2`` picks the lower of the two and ``q=0.9`` on
+        ``n=100`` picks the 90th value, not the 91st.
+        """
+        offset = min(n, max(1, math.ceil(q * n))) - 1
         row = await (
             await db.execute(
                 "SELECT salience FROM node_stats ORDER BY salience LIMIT 1 OFFSET ?",

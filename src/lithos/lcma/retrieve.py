@@ -135,11 +135,15 @@ def _mmr_diversify(
 def _days_since(ts: object, now: datetime) -> float | None:
     """Fractional days between an ISO timestamp and *now* (tz-naive treated as UTC).
 
-    Returns ``None`` when *ts* is missing/blank so the usage recency term drops out.
+    Returns ``None`` when *ts* is missing/blank/unparseable so a single malformed
+    timestamp drops the recency term rather than failing the whole retrieval.
     """
     if not isinstance(ts, str) or not ts:
         return None
-    dt = datetime.fromisoformat(ts)
+    try:
+        dt = datetime.fromisoformat(ts)
+    except ValueError:
+        return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return max(0.0, (now - dt).total_seconds() / 86400.0)

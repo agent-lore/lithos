@@ -522,6 +522,48 @@ class TestUsageSignalAffectsRetrieval:
         assert usage1 == pytest.approx(0.0)
 
 
+class TestConfigWiring:
+    """Newly-exposed LcmaConfig fields must actually change behaviour, not be ignored."""
+
+    def test_usage_from_stats_respects_recency_halflife(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from lithos.lcma.retrieve import _usage_from_stats
+
+        now = datetime(2026, 1, 20, tzinfo=UTC)
+        stats: dict[str, object] = {
+            "retrieval_count": 10,
+            "last_used_at": (now - timedelta(days=14)).isoformat(),
+        }
+        short_hl = LcmaConfig(usage_recency_halflife_days=1.0)
+        long_hl = LcmaConfig(usage_recency_halflife_days=1000.0)
+        # A longer half-life keeps a 14-day-old use fresher -> higher usage score.
+        assert _usage_from_stats(stats, now, long_hl) > _usage_from_stats(stats, now, short_hl)
+
+    def test_rerank_usage_weight_is_wired(self) -> None:
+        from lithos.lcma.retrieve import _rerank_fast
+        from lithos.lcma.utils import Candidate
+
+        class _StubKnowledge:
+            def get_cached_meta(self, node_id: str) -> None:
+                return None
+
+        cands = [
+            Candidate(node_id="a", score=0.5, reasons=[], scouts=["scout_vector"]),
+            Candidate(node_id="b", score=0.5, reasons=[], scouts=["scout_vector"]),
+        ]
+        salience = {"a": 0.5, "b": 0.5}
+        usage = {"a": 0.0, "b": 0.9}
+        stub = _StubKnowledge()
+
+        # Usage is the only differentiator: at weight 0.1, b (high usage) wins.
+        ranked = _rerank_fast(cands, LcmaConfig(rerank_usage_weight=0.1), stub, salience, usage)  # type: ignore[arg-type]
+        assert ranked[0].node_id == "b"
+        # At weight 0.0 the usage gap no longer moves anything; the tie is stable (a first).
+        tied = _rerank_fast(cands, LcmaConfig(rerank_usage_weight=0.0), stub, salience, usage)  # type: ignore[arg-type]
+        assert tied[0].node_id == "a"
+
+
 class TestRetrieveSnippetParity:
     """lithos_retrieve must produce snippets from the same string Tantivy
     indexes so title-only matches surface the matching term.

@@ -50,6 +50,28 @@ def decay_amount(
     return min(raw, headroom)
 
 
+def recalibration_eligible(
+    salience: float,
+    floor: float,
+    *,
+    misleading_count: int,
+    ignored_count: int,
+    cited_count: int,
+) -> bool:
+    """Whether the one-time floor backfill should lift *salience* to *floor*.
+
+    True iff the node is **strictly below** the floor and carries no explicit
+    negative-feedback signal: a node penalised as misleading, or chronically ignored
+    (ignored more than five times and more than it was cited), keeps its deliberate
+    sub-floor value. This is the single source of truth for backfill eligibility —
+    mirrored by the SQL ``WHERE`` clause in
+    :meth:`lithos.lcma.stats.StatsStore.recalibrate_salience_floor` and reused by the
+    offline calibration harness so its projected distribution matches the operator run.
+    """
+    chronically_ignored = ignored_count > 5 and ignored_count > cited_count
+    return not (salience >= floor or misleading_count > 0 or chronically_ignored)
+
+
 def usage_score(
     retrieval_count: int,
     days_since_use: float | None,

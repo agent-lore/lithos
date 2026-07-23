@@ -9,7 +9,12 @@ import math
 
 import pytest
 
-from lithos.lcma.salience import DEFAULT_SALIENCE, decay_amount, usage_score
+from lithos.lcma.salience import (
+    DEFAULT_SALIENCE,
+    decay_amount,
+    recalibration_eligible,
+    usage_score,
+)
 
 # Representative decay params (mirror the LcmaConfig defaults).
 _DECAY = {"per_day": 0.005, "daily_cap": 0.1, "floor": 0.3}
@@ -84,6 +89,36 @@ class TestUsageScore:
 
     def test_zero_when_cold_and_unused(self):
         assert usage_score(0, None, **_USAGE) == 0.0
+
+
+class TestRecalibrationEligible:
+    def test_below_floor_no_feedback_is_eligible(self):
+        assert recalibration_eligible(0.05, 0.3, misleading_count=0, ignored_count=0, cited_count=0)
+
+    def test_at_or_above_floor_not_eligible(self):
+        assert not recalibration_eligible(
+            0.3, 0.3, misleading_count=0, ignored_count=0, cited_count=0
+        )
+        assert not recalibration_eligible(
+            0.9, 0.3, misleading_count=0, ignored_count=0, cited_count=0
+        )
+
+    def test_misleading_is_protected(self):
+        assert not recalibration_eligible(
+            0.05, 0.3, misleading_count=1, ignored_count=0, cited_count=0
+        )
+
+    def test_chronic_ignored_is_protected(self):
+        assert not recalibration_eligible(
+            0.05, 0.3, misleading_count=0, ignored_count=6, cited_count=0
+        )
+
+    def test_light_ignore_is_eligible(self):
+        assert recalibration_eligible(0.05, 0.3, misleading_count=0, ignored_count=2, cited_count=0)
+
+    def test_ignored_but_more_cited_is_eligible(self):
+        # ignored 6 but cited 7 -> not chronic (ignored not > cited) -> still eligible.
+        assert recalibration_eligible(0.05, 0.3, misleading_count=0, ignored_count=6, cited_count=7)
 
 
 def test_default_salience_constant():
