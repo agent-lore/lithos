@@ -16,7 +16,8 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
-| `lithos.lcma.retrieve` | M | 0 | 1 |
+| `lithos.lcma.retrieve` | L | 0 | 1 |
+| `lithos.lcma.salience` | XS | 0 | 2 |
 | `lithos.lcma.scouts` | L | 2 | 11 |
 | `lithos.lcma.stats` | L | 1 | 0 |
 | `lithos.lcma.utils` | S | 1 | 1 |
@@ -38,6 +39,10 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 
 ### `lithos.lcma.retrieve`
 - def `compute_temperature` — Return the MVP 1 retrieval temperature.
+
+### `lithos.lcma.salience`
+- def `decay_amount` — Return the salience decay to subtract for a node idle *days_inactive* days.
+- def `usage_score` — Return a bounded ``[0, 1]`` popularity signal from live usage counters.
 
 ### `lithos.lcma.scouts`
 - def `scout_vector` — ChromaDB semantic search via asyncio.to_thread.

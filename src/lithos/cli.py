@@ -246,6 +246,60 @@ def reindex(ctx: click.Context, clear: bool) -> None:
     asyncio.run(do_reindex())
 
 
+def _echo_salience_distribution(label: str, dist: dict[str, float], floor: float) -> None:
+    click.echo(
+        f"{label:>6}: n={int(dist['count'])} mean={dist['mean']:.3f} "
+        f"<=0.30={dist['fraction_le_030'] * 100:.1f}% "
+        f"p50={dist['p50']:.3f} p90={dist['p90']:.3f} (floor={floor:.3f})"
+    )
+
+
+@cli.command(name="recalibrate-salience")
+@click.option(
+    "--floor",
+    type=float,
+    default=None,
+    help="Floor to lift collapsed rows to (default: config lcma.salience_floor).",
+)
+@click.option(
+    "--dry-run/--no-dry-run",
+    default=False,
+    help="Report the distribution and how many rows would be lifted, without writing.",
+)
+@click.pass_context
+def recalibrate_salience(ctx: click.Context, floor: float | None, dry_run: bool) -> None:
+    """One-time backfill: lift decay-collapsed salience rows to the floor.
+
+    Corrects the historical salience collapse (task e7d8ef60) where a floor-less daily
+    decay drove most nodes to ~0. Run once — on staging first, then prod. Idempotent, so
+    re-running is safe. Nodes carrying explicit negative feedback (misleading /
+    chronically ignored) are deliberately left below the floor.
+    """
+    # Routed through the cognitive_memory facade so the CLI stays off the
+    # lithos.lcma import seam (ADR-0005 / test_module_boundaries).
+    from lithos.cognitive_memory import recalibrate_salience as run_recalibrate
+
+    config: LithosConfig = ctx.obj["config"]
+    resolved_floor = config.lcma.salience_floor if floor is None else floor
+
+    async def do_recalibrate() -> None:
+        before, after, count = await run_recalibrate(config, resolved_floor, dry_run=dry_run)
+        _echo_salience_distribution("Before", before, resolved_floor)
+        if dry_run:
+            click.echo(f"\n[dry-run] would lift {count} rows; no writes performed.")
+            return
+        assert after is not None
+        _echo_salience_distribution("After", after, resolved_floor)
+        click.echo(f"\nLifted {count} rows to floor {resolved_floor:.3f}.")
+        logger.info(
+            "recalibrate-salience complete: floor=%.3f lifted=%d",
+            resolved_floor,
+            count,
+        )
+
+    asyncio.run(do_recalibrate())
+
+
 @cli.command()
 @click.option(
     "--fix/--no-fix",

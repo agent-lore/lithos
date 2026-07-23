@@ -27,6 +27,8 @@ from lithos.events import (
 )
 from lithos.lcma.edge_reinforce import reinforce_related_edge
 from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION, extract_entities
+from lithos.lcma.salience import DEFAULT_SALIENCE
+from lithos.lcma.salience import decay_amount as compute_decay_amount
 
 if TYPE_CHECKING:
     from lithos.config import LcmaConfig
@@ -487,18 +489,49 @@ class EnrichWorker:
         if days_since_last_use <= self._config.decay_inactive_days:
             return False
 
-        decay_amount = min(0.1, days_since_last_use * 0.005)
-        await self._stats_store.update_salience(node_id, -decay_amount)
+        raw_salience = stats.get("salience")
+        current_salience = (
+            float(raw_salience) if isinstance(raw_salience, (int, float)) else DEFAULT_SALIENCE
+        )
+        amount = compute_decay_amount(
+            current_salience,
+            days_since_last_use,
+            per_day=self._config.salience_decay_per_day,
+            daily_cap=self._config.salience_decay_daily_cap,
+            floor=self._config.salience_floor,
+        )
+        if amount <= 0.0:
+            # Already at or below the floor (or below it via explicit feedback):
+            # time decay adds nothing. Nothing to write, nothing to converge.
+            return False
+
+        await self._stats_store.update_salience(node_id, -amount)
         await self._stats_store.update_last_decay_applied_at(node_id)
         logger.debug(
             "EnrichWorker: applied salience decay",
             extra={
                 "node_id": node_id,
                 "days_inactive": days_since_last_use,
-                "decay_amount": round(decay_amount, 3),
+                "decay_amount": round(amount, 3),
             },
         )
         return True
+
+    async def _emit_salience_distribution(self) -> None:
+        """Record the current salience distribution as gauges (no-op without telemetry).
+
+        One aggregate query on the daily sweep; cheap relative to the corpus decay pass.
+        """
+        if not _HAS_TELEMETRY or _lithos_metrics is None:
+            return
+        try:
+            dist = await self._stats_store.salience_distribution()
+        except Exception:
+            logger.exception("EnrichWorker: salience distribution snapshot failed")
+            return
+        _lithos_metrics.lcma_salience_mean.set(dist["mean"])
+        _lithos_metrics.lcma_salience_fraction_floored.set(dist["fraction_le_030"])
+        _lithos_metrics.lcma_salience_node_count.set(dist["count"])
 
     async def _extract_entities(self, node_id: str, doc: KnowledgeDocument | None = None) -> None:
         """Extract entities from note content and write to frontmatter.
@@ -594,6 +627,11 @@ class EnrichWorker:
             stats = all_stats.get(node_id)
             if stats is not None and await self._apply_decay(node_id, stats):
                 decayed += 1
+
+        # --- Snapshot the salience distribution for telemetry ---
+        # Makes "salience collapsed / recovered" (task e7d8ef60) observable so a
+        # re-collapse can be alerted on rather than re-found by a manual audit.
+        await self._emit_salience_distribution()
 
         # --- Evict stale working memory ---
         completed_tasks = await self._coordination.list_tasks(status="completed")
@@ -704,13 +742,14 @@ class EnrichWorker:
                 )
 
         # --- Salience boost for each frequent node ---
+        consolidation_boost = self._config.salience_consolidation_boost
         for entry in frequent:
             nid = str(entry["node_id"])
             if await self._stats_store.has_consolidation_salience_op(task_id, nid):
                 continue
             # Atomic: salience update + op record in one stats.db transaction
             await self._stats_store.update_salience_and_record_consolidation(
-                node_id=nid, delta=0.01, task_id=task_id
+                node_id=nid, delta=consolidation_boost, task_id=task_id
             )
 
         await self._stats_store.mark_task_consolidated(task_id)

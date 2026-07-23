@@ -57,6 +57,7 @@ __all__ = [
     "CognitiveMemory",
     "NodeStats",
     "extract_entities",
+    "recalibrate_salience",
 ]
 
 
@@ -636,14 +637,15 @@ class CognitiveMemory:
             "CognitiveMemory.reinforce_cited: reinforcing",
             extra={"node_count": len(cited_ids)},
         )
+        cited_boost = self._config.lcma.salience_cited_boost
         for node_id in cited_ids:
             await self._stats_store.increment_cited(node_id)
-            await self._stats_store.update_salience(node_id, 0.02)
+            await self._stats_store.update_salience(node_id, cited_boost)
             await self._stats_store.update_spaced_rep_strength(node_id, 0.05)
             await self._stats_store.update_last_used_at(node_id)
             logger.debug(
                 "CognitiveMemory.reinforce_cited: node reinforced",
-                extra={"node_id": node_id, "salience_delta": 0.02, "spaced_rep_delta": 0.05},
+                extra={"node_id": node_id, "salience_delta": cited_boost, "spaced_rep_delta": 0.05},
             )
 
     async def reinforce_ignored(self, ignored_ids: list[str]) -> None:
@@ -668,14 +670,15 @@ class CognitiveMemory:
                 assert isinstance(ignored, int)
                 assert isinstance(cited, int)
                 if ignored > 5 and ignored > cited:
-                    await self._stats_store.update_salience(node_id, -0.02)
+                    ignored_penalty = self._config.lcma.salience_ignored_penalty
+                    await self._stats_store.update_salience(node_id, -ignored_penalty)
                     logger.debug(
                         "CognitiveMemory.reinforce_ignored: decayed salience",
                         extra={
                             "node_id": node_id,
                             "ignored_count": ignored,
                             "cited_count": cited,
-                            "salience_delta": -0.02,
+                            "salience_delta": -ignored_penalty,
                         },
                     )
             logger.debug(
@@ -781,9 +784,10 @@ class CognitiveMemory:
             "CognitiveMemory.reinforce_misleading: applying misleading penalties",
             extra={"node_count": len(misleading_ids)},
         )
+        misleading_penalty = self._config.lcma.salience_misleading_penalty
         for node_id in misleading_ids:
             await self._stats_store.increment_misleading(node_id)
-            await self._stats_store.update_salience(node_id, -0.05)
+            await self._stats_store.update_salience(node_id, -misleading_penalty)
             stats = await self._stats_store.get_node_stats(node_id)
             if stats is not None:
                 misleading = stats["misleading_count"]
@@ -805,7 +809,7 @@ class CognitiveMemory:
                     )
             logger.debug(
                 "CognitiveMemory.reinforce_misleading: node penalized",
-                extra={"node_id": node_id, "salience_delta": -0.05},
+                extra={"node_id": node_id, "salience_delta": -misleading_penalty},
             )
 
         edge_store = self._projection.edge_store
@@ -1119,3 +1123,35 @@ class CognitiveMemory:
                 "edge_id": edge_id,
                 "conflict_state": resolution,
             }
+
+
+async def recalibrate_salience(
+    config: LithosConfig,
+    floor: float,
+    *,
+    dry_run: bool = False,
+) -> tuple[dict[str, float], dict[str, float] | None, int]:
+    """Run the one-time salience floor backfill as a standalone maintenance op.
+
+    Opens a :class:`StatsStore` for *config*, captures the before distribution, lifts
+    decay-collapsed rows to *floor* (skipping explicit-negative-feedback nodes; unless
+    *dry_run*), captures the after distribution, and closes — without starting the
+    ``EnrichWorker``. Exposed here rather than in the CLI so entrypoints need not import
+    ``lithos.lcma`` (ADR-0005 seam). Corrects the historical salience collapse
+    (task ``e7d8ef60``).
+
+    Returns ``(before, after_or_None, lifted_count)``; ``after`` is ``None`` for a dry
+    run, where ``lifted_count`` is instead how many rows *would* be lifted.
+    """
+    store = StatsStore(config)
+    await store.open()
+    try:
+        before = await store.salience_distribution()
+        if dry_run:
+            would = await store.recalibrate_salience_floor(floor, dry_run=True)
+            return before, None, would
+        lifted = await store.recalibrate_salience_floor(floor)
+        after = await store.salience_distribution()
+        return before, after, lifted
+    finally:
+        await store.close()

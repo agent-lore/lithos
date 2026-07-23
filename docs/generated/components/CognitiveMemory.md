@@ -11,13 +11,14 @@ Agent-facing facade of LCMA: retrieval, learning, and asserted state.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.cognitive_memory` | L | 2 | 0 |
+| `lithos.cognitive_memory` | L | 2 | 1 |
 
 ## Public API
 
 ### `lithos.cognitive_memory`
 - class `NodeStats` — Per-node retrieval / salience stats returned by :meth:`CognitiveMemory.node_stats`.
 - class `CognitiveMemory` — Module facade over LCMA's agent-facing surface (ADR-0005).
+- def `recalibrate_salience` — Run the one-time salience floor backfill as a standalone maintenance op.
 
 ## Dependencies
 

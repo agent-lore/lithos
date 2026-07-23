@@ -11,7 +11,7 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.cli` | L | 0 | 15 |
+| `lithos.cli` | L | 0 | 16 |
 | `lithos.cli_reconcile` | M | 0 | 1 |
 | `lithos.pipeline` | S | 1 | 1 |
 | `lithos.server` | L | 1 | 2 |
@@ -31,6 +31,7 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 - def `cli` — Lithos - Local shared knowledge base for AI agents.
 - def `serve` — Start the Lithos MCP server.
 - def `reindex` — Rebuild search indices from knowledge files.
+- def `recalibrate_salience` — One-time backfill: lift decay-collapsed salience rows to the floor.
 - def `validate` — Validate knowledge base integrity.
 - def `stats` — Show knowledge base statistics.
 - def `search` — Search the knowledge base.

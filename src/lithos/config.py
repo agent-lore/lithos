@@ -179,6 +179,36 @@ class LcmaConfig(BaseModel):
     # citation/glossary explosions (#320). 0 disables the cap.
     entity_max_per_doc: int = Field(default=50, ge=0)
 
+    # --- Salience recalibration (task e7d8ef60) -------------------------------
+    # Time-based decay erodes salience toward this non-zero floor, not to zero, so an
+    # idle-but-harmless note keeps a meaningful baseline instead of collapsing to a
+    # uniform ~0 rerank penalty. Explicit negative feedback may still push below it.
+    # The decay slope/cap and the reinforcement deltas were previously hardcoded
+    # literals in enrich.py / cognitive_memory.py; they are exposed here so the
+    # calibration harness (and WS6 metamemory) can tune them without a code change.
+    salience_floor: float = Field(default=0.3, ge=0.0, le=1.0)
+    salience_decay_per_day: float = Field(default=0.005, ge=0.0)
+    salience_decay_daily_cap: float = Field(default=0.1, ge=0.0)
+    salience_cited_boost: float = Field(default=0.02, ge=0.0)
+    salience_consolidation_boost: float = Field(default=0.01, ge=0.0)
+    salience_misleading_penalty: float = Field(default=0.05, ge=0.0)
+    salience_ignored_penalty: float = Field(default=0.02, ge=0.0)
+
+    # --- Rerank composite weights (previously hardcoded 0.1 coefficients) ------
+    # Added to the scout-weighted base score; these are outside the rerank_weights
+    # bucket (which must sum to 1.0) and need not normalise.
+    rerank_salience_weight: float = Field(default=0.1, ge=0.0)
+    rerank_note_type_weight: float = Field(default=0.1, ge=0.0)
+    rerank_usage_weight: float = Field(default=0.1, ge=0.0)
+
+    # --- Usage signal (non-decaying popularity term, retrieve.py rerank) -------
+    # log-scaled retrieval frequency + exponential recency, from live node_stats
+    # counters already fetched during rerank. See lithos.lcma.salience.usage_score.
+    usage_freq_weight: float = Field(default=0.6, ge=0.0)
+    usage_recency_weight: float = Field(default=0.4, ge=0.0)
+    usage_recency_halflife_days: float = Field(default=14.0, gt=0.0)
+    usage_freq_norm_k: float = Field(default=20.0, gt=0.0)
+
     @model_validator(mode="before")
     @classmethod
     def _fill_and_renormalize_rerank_weights(cls, data: Any) -> Any:

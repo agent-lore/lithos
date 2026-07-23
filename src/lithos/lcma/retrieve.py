@@ -23,9 +23,11 @@ import itertools
 import logging
 import re
 import time
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from lithos.errors import ScoutFailure
+from lithos.lcma.salience import DEFAULT_SALIENCE, usage_score
 from lithos.lcma.scouts import (
     ALL_SCOUT_NAMES,
     SCOUT_CONTRADICTIONS,
@@ -130,18 +132,66 @@ def _mmr_diversify(
     return selected + tail
 
 
+def _days_since(ts: object, now: datetime) -> float | None:
+    """Fractional days between an ISO timestamp and *now* (tz-naive treated as UTC).
+
+    Returns ``None`` when *ts* is missing/blank so the usage recency term drops out.
+    """
+    if not isinstance(ts, str) or not ts:
+        return None
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return max(0.0, (now - dt).total_seconds() / 86400.0)
+
+
+def _usage_from_stats(
+    stats: dict[str, object] | None,
+    now: datetime,
+    lcma_config: LcmaConfig,
+) -> float:
+    """Compute the non-decaying usage signal for a node from its stats row.
+
+    Reads ``retrieval_count`` and last-use recency (``last_used_at`` falling back to
+    ``last_retrieved_at``) — both already present in the pre-fetched row — and defers
+    to :func:`lithos.lcma.salience.usage_score`. Unseen nodes score 0.0.
+    """
+    if stats is None:
+        return 0.0
+    raw_count = stats.get("retrieval_count")
+    retrieval_count = raw_count if isinstance(raw_count, int) else 0
+    days_since_use = _days_since(stats.get("last_used_at") or stats.get("last_retrieved_at"), now)
+    return usage_score(
+        retrieval_count,
+        days_since_use,
+        freq_weight=lcma_config.usage_freq_weight,
+        recency_weight=lcma_config.usage_recency_weight,
+        recency_halflife_days=lcma_config.usage_recency_halflife_days,
+        freq_norm_k=lcma_config.usage_freq_norm_k,
+    )
+
+
 def _rerank_fast(
     candidates: list[Candidate],
     lcma_config: LcmaConfig,
     knowledge: KnowledgeManager,
     salience_map: dict[str, float] | None = None,
+    usage_map: dict[str, float] | None = None,
 ) -> list[Candidate]:
-    """Terrace 1 reranking: weighted scout scores, note_type priors, salience.
+    """Terrace 1 reranking: weighted scout scores, note_type priors, salience, usage.
 
     When *salience_map* is provided, actual salience values from StatsStore are
     used instead of the normalised scout score.  ``salience_map`` maps
-    ``node_id → salience``; nodes absent from the map fall back to 0.5
-    (the StatsStore default).
+    ``node_id → salience``; nodes absent from the map fall back to
+    ``DEFAULT_SALIENCE`` (the StatsStore default).
+
+    *usage_map* carries the non-decaying popularity signal (retrieval frequency +
+    recency) per node; nodes absent from it — or the whole map being ``None`` — score
+    0.0 (neutral). Unlike salience this cannot collapse, so it restores a real spread
+    to the composite even on a cold, unreinforced corpus (task ``e7d8ef60``).
+
+    The additive term weights (salience, note_type, usage) come from
+    :class:`LcmaConfig` rather than hardcoded coefficients.
 
     After the linear combination sort, applies a greedy MMR pass over the top
     candidates to penalise near-duplicates (see checklist MVP 1 requirement for
@@ -151,6 +201,9 @@ def _rerank_fast(
     """
     rerank_weights = lcma_config.rerank_weights
     note_type_priors = lcma_config.note_type_priors
+    w_salience = lcma_config.rerank_salience_weight
+    w_note_type = lcma_config.rerank_note_type_weight
+    w_usage = lcma_config.rerank_usage_weight
 
     debug_rows: list[dict[str, object]] = []
     scored: list[tuple[float, Candidate]] = []
@@ -174,10 +227,20 @@ def _rerank_fast(
 
         # Salience: read from StatsStore via pre-fetched map when available,
         # otherwise fall back to normalised score (pre-reinforcement path).
-        salience = salience_map.get(c.node_id, 0.5) if salience_map is not None else c.score
+        salience = (
+            salience_map.get(c.node_id, DEFAULT_SALIENCE) if salience_map is not None else c.score
+        )
+
+        # Usage: non-decaying popularity signal; neutral (0.0) when absent.
+        usage = usage_map.get(c.node_id, 0.0) if usage_map is not None else 0.0
 
         # Final composite: weighted combination
-        final = c.score * scout_weight + note_type_prior * 0.1 + salience * 0.1
+        final = (
+            c.score * scout_weight
+            + note_type_prior * w_note_type
+            + salience * w_salience
+            + usage * w_usage
+        )
         scored.append(
             (
                 final,
@@ -201,6 +264,7 @@ def _rerank_fast(
                     "note_type": resolved_note_type,
                     "note_type_prior": round(note_type_prior, 4),
                     "salience": round(salience, 4),
+                    "usage_score": round(usage, 4),
                     "final": round(final, 4),
                 }
             )
@@ -525,16 +589,24 @@ async def _run_retrieve_impl(
         candidates_considered = len(merged)
 
         # ── Terrace 1: rerank_fast ────────────────────────────────
-        # ── Pre-fetch salience map for reranking ─────��────────────
+        # ── Pre-fetch salience + usage maps for reranking ──
+        # get_node_stats_batch returns full rows (SELECT *), so the usage counters
+        # (retrieval_count, last_used_at/last_retrieved_at) ride along for free — the
+        # usage signal costs no extra query.
         all_node_ids = [c.node_id for c in merged]
         stats_batch = await stats_store.get_node_stats_batch(all_node_ids)
+        now = datetime.now(UTC)
         salience_map: dict[str, float] = {}
+        usage_map: dict[str, float] = {}
         for nid in all_node_ids:
             stats = stats_batch.get(nid)
-            raw = stats["salience"] if stats else 0.5
-            salience_map[nid] = raw if isinstance(raw, float) else 0.5
+            raw = stats["salience"] if stats else DEFAULT_SALIENCE
+            salience_map[nid] = raw if isinstance(raw, float) else DEFAULT_SALIENCE
+            usage_map[nid] = _usage_from_stats(stats, now, lcma_config)
 
-        reranked = _rerank_fast(merged, lcma_config, knowledge, salience_map=salience_map)
+        reranked = _rerank_fast(
+            merged, lcma_config, knowledge, salience_map=salience_map, usage_map=usage_map
+        )
         terrace_reached = 1
 
         logger.info(
@@ -588,7 +660,8 @@ async def _run_retrieve_impl(
                         # LCMA extras
                         "reasons": c.reasons,
                         "scouts": c.scouts,
-                        "salience": salience_map.get(c.node_id, 0.5),
+                        "salience": salience_map.get(c.node_id, DEFAULT_SALIENCE),
+                        "usage_score": usage_map.get(c.node_id, 0.0),
                     }
                 )
             except FileNotFoundError:

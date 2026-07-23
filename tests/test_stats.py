@@ -1163,3 +1163,90 @@ class TestPersistentConnectionHardening:
         row = await stats_store.get_node_stats("node-1")
         assert row is not None
         assert row["retrieval_count"] == 1
+
+
+class TestRecalibrateSalienceFloor:
+    """One-time backfill that lifts decay-collapsed rows to the floor (task e7d8ef60)."""
+
+    async def _salience(self, store: StatsStore, node_id: str) -> float:
+        row = await store.get_node_stats(node_id)
+        assert row is not None
+        val = row["salience"]
+        assert isinstance(val, float)
+        return val
+
+    async def test_lifts_rows_below_floor(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("cold", -0.45)  # 0.05
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 1
+        assert await self._salience(stats_store, "cold") == pytest.approx(0.3)
+
+    async def test_leaves_rows_at_or_above_floor(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("hot", 0.4)  # 0.9
+        await stats_store.update_salience("edge", -0.2)  # 0.3 (== floor)
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 0
+        assert await self._salience(stats_store, "hot") == pytest.approx(0.9)
+        assert await self._salience(stats_store, "edge") == pytest.approx(0.3)
+
+    async def test_skips_misleading_nodes(self, stats_store: StatsStore) -> None:
+        # A node penalised below the floor by explicit misleading feedback must stay.
+        await stats_store.update_salience("bad", -0.45)  # 0.05
+        await stats_store.increment_misleading("bad")
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 0
+        assert await self._salience(stats_store, "bad") == pytest.approx(0.05)
+
+    async def test_skips_chronically_ignored_nodes(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("ign", -0.45)  # 0.05
+        for _ in range(6):  # ignored_count 6 > 5 and > cited_count 0
+            await stats_store.increment_ignored("ign")
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 0
+        assert await self._salience(stats_store, "ign") == pytest.approx(0.05)
+
+    async def test_lifts_lightly_ignored_below_threshold(self, stats_store: StatsStore) -> None:
+        # Only chronic ignore (count > 5 and > cited) is a deliberate penalty; a couple
+        # of ignores is not, so such a node is still lifted.
+        await stats_store.update_salience("meh", -0.45)  # 0.05
+        for _ in range(2):
+            await stats_store.increment_ignored("meh")
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 1
+        assert await self._salience(stats_store, "meh") == pytest.approx(0.3)
+
+    async def test_idempotent(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("cold", -0.45)
+        first = await stats_store.recalibrate_salience_floor(0.3)
+        second = await stats_store.recalibrate_salience_floor(0.3)
+        assert first == 1
+        assert second == 0
+
+    async def test_dry_run_counts_without_writing(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("cold", -0.45)  # 0.05
+        would = await stats_store.recalibrate_salience_floor(0.3, dry_run=True)
+        assert would == 1
+        # Unchanged — dry run must not write.
+        assert await self._salience(stats_store, "cold") == pytest.approx(0.05)
+
+
+class TestSalienceDistribution:
+    """Aggregate distribution stats used by the daily sweep gauge + recalibration CLI."""
+
+    async def test_empty_table(self, stats_store: StatsStore) -> None:
+        dist = await stats_store.salience_distribution()
+        assert dist["count"] == 0.0
+        assert dist["mean"] == 0.0
+        assert dist["fraction_le_030"] == 0.0
+
+    async def test_summarises_distribution(self, stats_store: StatsStore) -> None:
+        # Three nodes: 0.1, 0.3, 0.9  -> two of three are <= 0.30.
+        await stats_store.update_salience("a", -0.4)  # 0.1
+        await stats_store.update_salience("b", -0.2)  # 0.3
+        await stats_store.update_salience("c", 0.4)  # 0.9
+        dist = await stats_store.salience_distribution()
+        assert dist["count"] == 3.0
+        assert dist["mean"] == pytest.approx((0.1 + 0.3 + 0.9) / 3)
+        assert dist["fraction_le_030"] == pytest.approx(2 / 3)
+        assert 0.0 <= dist["p50"] <= 1.0
+        assert dist["p90"] >= dist["p50"]

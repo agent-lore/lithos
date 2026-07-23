@@ -113,6 +113,27 @@ lithos reindex --clear
 
 Use this after manually editing or adding Markdown files outside of the MCP interface.
 
+### `recalibrate-salience` — One-time salience backfill
+
+```bash
+# Preview: show the distribution and how many rows would be lifted
+lithos recalibrate-salience --dry-run
+
+# Lift decay-collapsed rows up to the floor (config lcma.salience_floor)
+lithos recalibrate-salience
+
+# Override the floor explicitly
+lithos recalibrate-salience --floor 0.3
+```
+
+Corrects the historical salience collapse (task `e7d8ef60`) where a floor-less daily
+decay drove most nodes to ~0. Lifts every node below the floor up to it, **except** nodes
+carrying explicit negative feedback (misleading / chronically ignored), which stay below
+deliberately. Idempotent — safe to re-run. Run it **once on staging first, then prod**,
+with the server stopped is not required (it only touches `stats.db`), but the operator
+should confirm the reported before/after distribution. Going forward the daily enrich
+sweep holds the floor, so this should not need re-running.
+
 ### `validate` — Check knowledge base integrity
 
 ```bash

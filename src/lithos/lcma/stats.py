@@ -793,6 +793,89 @@ class StatsStore(AsyncSqliteStore):
             extra={"node_id": node_id, "delta": delta},
         )
 
+    async def recalibrate_salience_floor(self, floor: float, *, dry_run: bool = False) -> int:
+        """One-time backfill: lift decay-collapsed rows up to *floor*.
+
+        Sets ``salience = floor`` for every node currently below it, **except** nodes
+        carrying an explicit negative-feedback signal (``misleading_count > 0`` or the
+        chronic-ignored condition) — their sub-floor salience is a deliberate penalty,
+        not decay damage, so the backfill must not erase it.
+
+        Idempotent (a second run matches nothing) and conservative (rows already at or
+        above the floor, and the meaningful-high tail, are untouched). Returns the count
+        of rows lifted. With ``dry_run`` it writes nothing and returns how many rows
+        *would* be lifted. This is a deliberate operator-run maintenance pass over the
+        whole table (exposed as the ``recalibrate-salience`` CLI command), not a
+        hot-path query.
+        """
+        async with self._session() as db:
+            if dry_run:
+                row = await (
+                    await db.execute(
+                        """SELECT COUNT(*) FROM node_stats
+                            WHERE salience < ?
+                              AND misleading_count = 0
+                              AND NOT (ignored_count > 5 AND ignored_count > cited_count)""",
+                        (floor,),
+                    )
+                ).fetchone()
+                return int(row[0]) if row else 0
+            cursor = await db.execute(
+                """UPDATE node_stats
+                      SET salience = ?
+                    WHERE salience < ?
+                      AND misleading_count = 0
+                      AND NOT (ignored_count > 5 AND ignored_count > cited_count)""",
+                (floor, floor),
+            )
+            return cursor.rowcount
+
+    async def salience_distribution(self) -> dict[str, float]:
+        """Return summary statistics of the salience distribution across all nodes.
+
+        A single aggregate scan used by the daily sweep to emit distribution telemetry
+        (so "the distribution recovered / has re-collapsed" is observable) and by the
+        recalibration CLI to report before/after. Keys: ``count``, ``mean``,
+        ``fraction_le_030`` (share ≤ 0.30 — the collapse marker), ``p50``, ``p90``.
+        Returns zeros for an empty table.
+        """
+        async with self._session() as db:
+            row = await (
+                await db.execute(
+                    """SELECT COUNT(*) AS n,
+                              COALESCE(AVG(salience), 0.0) AS mean,
+                              COALESCE(AVG(CASE WHEN salience <= 0.30 THEN 1.0 ELSE 0.0 END), 0.0)
+                                  AS frac_le_030
+                         FROM node_stats"""
+                )
+            ).fetchone()
+            n = int(row[0]) if row else 0
+            mean = float(row[1]) if row else 0.0
+            frac_le_030 = float(row[2]) if row else 0.0
+            p50 = p90 = 0.0
+            if n > 0:
+                p50 = await self._salience_percentile(db, n, 0.50)
+                p90 = await self._salience_percentile(db, n, 0.90)
+        return {
+            "count": float(n),
+            "mean": mean,
+            "fraction_le_030": frac_le_030,
+            "p50": p50,
+            "p90": p90,
+        }
+
+    @staticmethod
+    async def _salience_percentile(db: aiosqlite.Connection, n: int, q: float) -> float:
+        """Return the *q* quantile of salience via an OFFSET scan (n already known)."""
+        offset = min(n - 1, max(0, int(q * n)))
+        row = await (
+            await db.execute(
+                "SELECT salience FROM node_stats ORDER BY salience LIMIT 1 OFFSET ?",
+                (offset,),
+            )
+        ).fetchone()
+        return float(row[0]) if row else 0.0
+
     async def increment_ignored(self, node_id: str) -> None:
         """Atomically increment ignored_count; creates row if absent."""
         async with self._session() as db:

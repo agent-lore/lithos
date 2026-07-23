@@ -104,6 +104,13 @@ class _NoOpHistogram:
         pass
 
 
+class _NoOpGauge:
+    """No-op synchronous gauge instrument."""
+
+    def set(self, amount: int | float, attributes: dict[str, Any] | None = None) -> None:
+        pass
+
+
 class _NoOpMeter:
     """No-op meter that returns no-op instruments."""
 
@@ -112,6 +119,9 @@ class _NoOpMeter:
 
     def create_histogram(self, name: str, **kwargs: Any) -> _NoOpHistogram:
         return _NoOpHistogram()
+
+    def create_gauge(self, name: str, **kwargs: Any) -> _NoOpGauge:
+        return _NoOpGauge()
 
     def create_up_down_counter(self, name: str, **kwargs: Any) -> _NoOpCounter:
         return _NoOpCounter()
@@ -641,6 +651,9 @@ class _LithosMetrics:
         self._lcma_scout_candidates: Any = None
         self._lcma_scout_failures: Any = None
         self._lcma_salience_updates: Any = None
+        self._lcma_salience_mean: Any = None
+        self._lcma_salience_fraction_floored: Any = None
+        self._lcma_salience_node_count: Any = None
 
     @property
     def knowledge_ops(self) -> Any:
@@ -967,6 +980,41 @@ class _LithosMetrics:
                 description="Total update_salience calls",
             )
         return self._lcma_salience_updates
+
+    @property
+    def lcma_salience_mean(self) -> Any:
+        """Gauge: mean node salience, snapshotted by the daily enrich sweep.
+
+        Together with :attr:`lcma_salience_fraction_floored` this makes salience
+        health observable so a re-collapse (the bug behind task e7d8ef60) can be
+        alerted on rather than re-discovered by a manual audit.
+        """
+        if self._lcma_salience_mean is None:
+            self._lcma_salience_mean = get_meter().create_gauge(
+                "lithos.lcma.salience.mean",
+                description="Mean node_stats salience across the corpus (daily snapshot)",
+            )
+        return self._lcma_salience_mean
+
+    @property
+    def lcma_salience_fraction_floored(self) -> Any:
+        """Gauge: share of nodes with salience ≤ 0.30 (the collapse marker)."""
+        if self._lcma_salience_fraction_floored is None:
+            self._lcma_salience_fraction_floored = get_meter().create_gauge(
+                "lithos.lcma.salience.fraction_floored",
+                description="Fraction of nodes with salience <= 0.30 (daily snapshot)",
+            )
+        return self._lcma_salience_fraction_floored
+
+    @property
+    def lcma_salience_node_count(self) -> Any:
+        """Gauge: number of nodes with a stats row (daily snapshot)."""
+        if self._lcma_salience_node_count is None:
+            self._lcma_salience_node_count = get_meter().create_gauge(
+                "lithos.lcma.salience.node_count",
+                description="Number of node_stats rows (daily snapshot)",
+            )
+        return self._lcma_salience_node_count
 
 
 def register_active_claims_observer(get_active_claim_count: Callable[[], int]) -> None:
