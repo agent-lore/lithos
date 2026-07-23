@@ -650,7 +650,8 @@ Each scout wraps existing Lithos infrastructure where possible. Implementation n
 
 def scout_vector(q: QueryContext, k: int) -> list[Candidate]:
     # Wraps existing ChromaIndex.search(query, limit=k, threshold, tags)
-    # Queries active embedding spaces (multiple ChromaDB collections during migration)
+    # Queries the current `knowledge` collection; multi-space querying is deferred
+    # with embedding-space versioning (see the revised MVP-3 section)
     ...
 
 def scout_lexical(q: QueryContext, k: int) -> list[Candidate]:
