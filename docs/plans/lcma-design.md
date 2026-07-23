@@ -1521,8 +1521,9 @@ Write-contract note for LCMA params:
 > temperature — now embedding-dispersion), §5.2 (analogy/exploration scouts — pure-random dropped)
 > and §5.8 (coactivation-seeded concepts — now semantic clusters) **wherever they conflict; those
 > sections carry inline `Superseded` markers**. Grounded in a read-only substrate
-> measurement of production (2026-07); full findings + numbers in the KB note
-> `analysis/lcma-substrate-measurement-phase-3-re-plan-2026-07.md`.
+> measurement of production (2026-07); full findings + numbers in the Lithos **knowledge-base**
+> note `analysis/lcma-substrate-measurement-phase-3-re-plan-2026-07.md` (stored under
+> `$LITHOS_DATA_DIR/knowledge/`, not a git-tracked file).
 
 MVP-3 was conceived in 2026-03, before the KB had content or interaction, and framed around
 Hofstadter's Copycat (analogy / temperature / terraces as *query-time search*). Two things
@@ -1560,7 +1561,7 @@ background worker as persistent artifacts (typed edges, concept notes, analogy f
 ### Workstreams
 
 **WS1 — LLM-synthesis worker (backbone).** `lithos-enrich` gains an **optional** LLM provider
-(`LcmaConfig.llm_provider`, local or external — local keeps privacy-first deployments whole).
+(`LithosConfig.lcma.llm_provider`, local or external — local keeps privacy-first deployments whole).
 Query-independent, background, budget-bounded; never on the retrieve hot path. Emits provenance-
 stamped, idempotent artifacts (the `enrich_queue` already sequences work). Enables WS2/WS4/WS5.
 
@@ -1587,7 +1588,8 @@ concept + specifics). Damping (needs `e7d8ef60`): salience ceiling + diversity p
 threshold. Governance: provenance-stamped, reviewable, reversible; never overwrite human notes.
 *Measured thresholds (2026-07, over the currently-embedded content — provisional until `97cd00bb`):*
 semantic separation is weak (silhouette ~0.05), so **use density clustering (HDBSCAN), not fixed-K
-KMeans**; tight params (cosine eps ≈ 0.18–0.22, min_cluster_size ≈ 4–8) yield **~15–30 concept
+KMeans** — HDBSCAN core params `min_cluster_size` ≈ 4–8 (+ small `min_samples`; optional
+`cluster_selection_epsilon`). *Measured* with DBSCAN at cosine `eps` ≈ 0.18–0.22, which yields **~15–30 concept
 candidates over ~20–30%** of docs, with noise treated as a feature (don't force a concept for
 everything); coactivation validation is load-bearing given the weak separation.
 
@@ -1607,7 +1609,7 @@ change).** `lithos_related` already merges links + provenance + typed edges + `r
 
 - **`lithos_related`:** resolve **titles** on edge entries (currently raw ids); normalise every
   neighbour to `{id, title, note_type, namespace, relation, source, direction, weight, rationale?}`
-  where `source ∈ asserted | provenance | inferred | semantic | coactivation` (mapped from
+  where `source ∈ asserted | provenance | consolidation | inferred | semantic | coactivation | other` (mapped from
   `provenance_type`); add opt-in `include` values `semantic` (ChromaDB k-NN) + `coactivation`
   (default stays the structural three — backward compatible); add `relation_types` / `sources` /
   `min_weight` / `limit` / `order` params; upgrade `related_ids` → a ranked flat `neighbours` list.
@@ -1617,8 +1619,8 @@ change).** `lithos_related` already merges links + provenance + typed edges + `r
   existing `provenance_type` column is free-form (`human`/`agent`/`rule`/`manual`/`frontmatter`/
   `reinforcement`/`consolidation`, per SPECIFICATION.md); `lithos_related` maps it to `source` at
   read time: `human`/`agent`/`rule`/`manual` → `asserted`; `reinforcement`/`consolidation` →
-  `consolidation`; `frontmatter` → `provenance`; WS2's new `inferred` → `inferred`; unknown →
-  passthrough. WS2 writes `provenance_type="inferred"` (a new free-form value), so the write path
+  `consolidation`; `frontmatter` → `provenance`; WS2's new `inferred` → `inferred`; any unknown
+  value → `other`. WS2 writes `provenance_type="inferred"` (a new free-form value), so the write path
   and schema are unchanged — the normalisation lives only in the read layer, for Lens.
 
 Freeze the neighbour shape + the `source` mapping alongside WS2 so Lens builds against it while

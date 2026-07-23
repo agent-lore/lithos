@@ -143,7 +143,9 @@ Exit criteria (all MVPs):
 ## MVP 3 — Advanced Cognition (revised 2026-07)
 
 > Revised plan grounded in the 2026-07 substrate measurement (see the MVP-3 section of
-> `lcma-design.md` and KB note `analysis/lcma-substrate-measurement-phase-3-re-plan-2026-07.md`).
+> `lcma-design.md` and the Lithos knowledge-base note
+> `analysis/lcma-substrate-measurement-phase-3-re-plan-2026-07.md`, under `$LITHOS_DATA_DIR/knowledge/`
+> — not committed to git).
 > Embedding-space versioning dropped; analogy/concepts/temperature re-grounded; Lithos Lens added
 > as a consumer.
 
@@ -155,7 +157,7 @@ Exit criteria (all MVPs):
 
 **WS1 — LLM-synthesis backbone**
 
-- [ ] Optional `LcmaConfig.llm_provider` (local or external) wired into `lithos-enrich`; background, budget-bounded, provenance-stamped, idempotent
+- [ ] Optional `LithosConfig.lcma.llm_provider` (local or external) wired into `lithos-enrich`; background, budget-bounded, provenance-stamped, idempotent
 
 **WS2 — Typed-edge inference**
 
@@ -169,7 +171,7 @@ Exit criteria (all MVPs):
 
 **WS4 — Concept nodes**
 
-- [ ] Density-cluster embeddings (HDBSCAN; tight eps ≈ 0.18–0.22 / min_size ≈ 4–8), validate by coactivation, promote stable clusters to `note_type: concept` (gateway model)
+- [ ] Density-cluster embeddings (HDBSCAN: `min_cluster_size` ≈ 4–8, small `min_samples`; measured via DBSCAN `eps` ≈ 0.18–0.22), validate by coactivation, promote stable clusters to `note_type: concept` (gateway model)
 - [ ] Damping (salience ceiling — needs `e7d8ef60` — + diversity + promotion threshold); provenance-stamped + reversible
 
 **WS5 — Analogy scout**
