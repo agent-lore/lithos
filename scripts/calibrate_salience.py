@@ -46,7 +46,7 @@ from lithos.lcma.salience import recalibration_eligible, usage_score
 # Reuse the store's own receipt parser so the harness reads `final_nodes` exactly as
 # production does (objects with an `id` field, per retrieve.py / design §4.6) and can
 # never drift from it.
-from lithos.lcma.stats import _extract_final_node_ids
+from lithos.lcma.stats import extract_final_node_ids
 
 # Candidate usage-signal parameter sets, expanded from these axes by default.
 _FREQ_RECENCY_SPLITS: tuple[tuple[float, float], ...] = (
@@ -165,7 +165,7 @@ def load_receipts(db_path: str) -> list[tuple[datetime, list[str]]]:
     """Read (ts, returned node_ids) from the receipts log of a stats.db copy.
 
     ``final_nodes`` is a JSON list of *objects* (``{"id", "reasons", "scouts"}``); the
-    node ids are pulled via the store's own :func:`_extract_final_node_ids` so a node is
+    node ids are pulled via the store's own :func:`extract_final_node_ids` so a node is
     never fragmented by its explainability payload. Ordered by ``(ts, rowid)`` for a
     deterministic split boundary when receipts share a second-resolution timestamp.
     """
@@ -180,7 +180,7 @@ def load_receipts(db_path: str) -> list[tuple[datetime, list[str]]]:
         ts = _parse_ts(ts_raw)
         if ts is None:
             continue
-        node_ids = _extract_final_node_ids(nodes_raw)
+        node_ids = extract_final_node_ids(nodes_raw)
         if node_ids:
             out.append((ts, node_ids))
     return out

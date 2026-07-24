@@ -172,6 +172,47 @@ def test_build_time_split_is_position_based() -> None:
     assert cs.build_time_split(receipts[:1], 0.5) is None
 
 
+async def test_time_split_deterministic_for_equal_timestamps(test_config: LithosConfig) -> None:
+    """Receipts sharing a second-resolution ts must split by rowid (insertion) order.
+
+    Guards the (ts, rowid) ordering contract: without the rowid tie-break the past/future
+    partition of same-timestamp receipts would be nondeterministic.
+    """
+    import aiosqlite
+
+    store = StatsStore(test_config)
+    await store.open()
+    try:
+        for rid, node in (("r_a", "a"), ("r_b", "b")):  # 'a' inserted before 'b'
+            await store.insert_receipt(
+                receipt_id=rid,
+                query="q",
+                limit=10,
+                namespace_filter=None,
+                scouts_fired=["scout_vector"],
+                candidates_considered=1,
+                final_nodes=[{"id": node, "reasons": [], "scouts": ["scout_vector"]}],
+                conflicts_surfaced=[],
+                surface_conflicts=False,
+                temperature=0.5,
+                terrace_reached=1,
+            )
+        # Force identical timestamps so only rowid order can disambiguate the split.
+        async with aiosqlite.connect(store.db_path) as db:
+            await db.execute("UPDATE receipts SET ts = ?", ("2026-01-01T00:00:00+00:00",))
+            await db.commit()
+    finally:
+        await store.close()
+
+    receipts = cs.load_receipts(str(store.db_path))
+    assert len(receipts) == 2
+    split = cs.build_time_split(receipts, 0.5)
+    assert split is not None
+    # Earlier rowid ('a') -> past; later rowid ('b') -> held-out future. Deterministic.
+    assert set(split.past_count) == {"a"}
+    assert split.future_nodes == frozenset({"b"})
+
+
 def test_future_auc_distinguishes_recency_configs() -> None:
     """The ranking metric must reward a better-tuned config, not treat all as equal.
 

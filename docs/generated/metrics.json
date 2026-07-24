@@ -413,7 +413,7 @@
         "largest_module_lines": 1130,
         "lines": 4630,
         "modules": 10,
-        "public_symbols": 25,
+        "public_symbols": 26,
         "sloc": 3730
       },
       "Logging": {
@@ -487,8 +487,8 @@
     "total_sloc": 19470
   },
   "tests": {
-    "ratio": 1.88,
+    "ratio": 1.89,
     "src_lines": 24227,
-    "test_lines": 45652
+    "test_lines": 45693
   }
 }

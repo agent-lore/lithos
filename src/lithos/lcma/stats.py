@@ -133,7 +133,7 @@ def _generate_receipt_id() -> str:
     return f"rcpt_{uuid.uuid4().hex[:12]}"
 
 
-def _extract_final_node_ids(final_nodes_json: object) -> list[str]:
+def extract_final_node_ids(final_nodes_json: object) -> list[str]:
     """Parse the ``final_nodes`` JSON column and collect ``id`` fields."""
     if not isinstance(final_nodes_json, str):
         return []
@@ -1071,7 +1071,7 @@ class StatsStore(AsyncSqliteStore):
         result = dict(row)
         if result.get("task_id") != task_id:
             return None
-        result["final_node_ids"] = _extract_final_node_ids(result.get("final_nodes", "[]"))
+        result["final_node_ids"] = extract_final_node_ids(result.get("final_nodes", "[]"))
         return result
 
     async def get_latest_receipt(self, task_id: str, agent_id: str) -> dict[str, object] | None:
@@ -1091,7 +1091,7 @@ class StatsStore(AsyncSqliteStore):
         if row is None:
             return None
         result = dict(row)
-        result["final_node_ids"] = _extract_final_node_ids(result.get("final_nodes", "[]"))
+        result["final_node_ids"] = extract_final_node_ids(result.get("final_nodes", "[]"))
         return result
 
     # ------------------------------------------------------------------

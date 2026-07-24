@@ -19,7 +19,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.retrieve` | L | 0 | 1 |
 | `lithos.lcma.salience` | S | 0 | 3 |
 | `lithos.lcma.scouts` | L | 2 | 11 |
-| `lithos.lcma.stats` | L | 1 | 0 |
+| `lithos.lcma.stats` | L | 1 | 1 |
 | `lithos.lcma.utils` | S | 1 | 1 |
 
 ## Public API
@@ -61,6 +61,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 - class `ScoutSpec` — One entry in the scout registry.
 
 ### `lithos.lcma.stats`
+- def `extract_final_node_ids` — Parse the ``final_nodes`` JSON column and collect ``id`` fields.
 - class `StatsStore` — Lazily-created SQLite store for LCMA retrieval statistics.
 
 ### `lithos.lcma.utils`
