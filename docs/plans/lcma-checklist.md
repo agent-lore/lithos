@@ -151,7 +151,8 @@ Exit criteria (all MVPs):
 
 **Gated prerequisites (separate tasks, not MVP-3 work):**
 
-- [ ] Salience recalibration — task `e7d8ef60` (HIGH; `blocks` this epic)
+- [x] Salience recalibration — task `e7d8ef60` — DONE 2026-07-24 (PR #402 + operator backfill
+      staging/prod; defaults calibration-confirmed; record: KB note `9f5e6737`)
 - [ ] Feedback capture — task `fc4b0669`
 - [ ] (operational) Semantic-index coverage reconcile — task `97cd00bb`
 
