@@ -115,7 +115,7 @@ module_cycles          = 1    # server<->tools; the knowledge<->graph<->search<-
 modules_over_800_lines = 11   # incl. tools.tasks (985) split from server in #374; knowledge.py 2444→1773 (codec out) but still over; direction: down
 max_module_lines       = 2800 # stop-loss; largest today is coordination.py at 2675
 cross_module_private_refs = 42  # measured 2026-07; server._emit/_config x12 etc. (normalize_datetime made public in task 4a3836a9); goal: 0
-tests_private_imports     = 88  # measured 2026-07; test_telemetry alone is 45; direction: down
+tests_private_imports     = 90  # measured 2026-07; test_telemetry alone is 45; direction: down. 88→90: two white-box config-wiring tests import _rerank_fast / _usage_from_stats to prove the newly-exposed LcmaConfig rerank/usage fields actually change behaviour (task e7d8ef60, review finding 5) — the private helpers are the precise units under test.
 
 # MCP tool surface: modules scanned for @…tool()-decorated handlers (counted in
 # the metrics snapshot; catalogued in docs/generated/tool_catalog.md). Omit the

@@ -1134,7 +1134,8 @@ PTS-style retrieval orchestrating seven scouts in parallel and reranking via a f
       "derived_from_ids": [],
       "reasons": ["lexical match score 0.91"],
       "scouts": ["scout_lexical"],
-      "salience": 0.42
+      "salience": 0.42,
+      "usage_score": 0.18
     }
   ],
   "temperature": 0.5,
@@ -1145,7 +1146,7 @@ PTS-style retrieval orchestrating seven scouts in parallel and reranking via a f
 }
 ```
 
-The `id`/`title`/`snippet`/`score`/`path`/`source_url`/`updated_at`/`is_stale`/`derived_from_ids` keys mirror the `lithos_search` shape so clients that read only those fields work unchanged. `reasons`/`scouts`/`salience` are LCMA-only additive fields. `degraded`/`failed_scouts` are always present: `failed_scouts` lists the canonical names of any scouts whose backend raised (so one bad backend degrades rather than kills the retrieve), and `degraded` is `true` when that list is non-empty — letting a caller distinguish partial results from a genuinely empty corpus.
+The `id`/`title`/`snippet`/`score`/`path`/`source_url`/`updated_at`/`is_stale`/`derived_from_ids` keys mirror the `lithos_search` shape so clients that read only those fields work unchanged. `reasons`/`scouts`/`salience`/`usage_score` are LCMA-only additive fields — `salience` is the stored learned utility (`stats.db`), while `usage_score` is the live, non-decaying popularity signal (retrieval frequency + recency) that feeds reranking alongside it. `degraded`/`failed_scouts` are always present: `failed_scouts` lists the canonical names of any scouts whose backend raised (so one bad backend degrades rather than kills the retrieve), and `degraded` is `true` when that list is non-empty — letting a caller distinguish partial results from a genuinely empty corpus.
 
 **Receipt audit trail:** every call writes a row to `stats.db.receipts` with columns including `id`, `ts`, `query`, `namespace_filter`, `scouts_fired` (canonical names of every scout that ran cleanly — empty results still count as fired), `candidates_considered`, `final_nodes` (JSON array of `{id, reasons, scouts}` objects), `surface_conflicts`, `temperature`, and `terrace_reached`.
 

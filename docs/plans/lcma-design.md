@@ -620,18 +620,21 @@ class ResultItem:
     is_stale: bool
     derived_from_ids: list[str]
     # LCMA-only extras (additive):
-    reasons: list[str]   # why this node was retrieved
-    scouts: list[str]    # which scouts surfaced it
-    salience: float      # from stats.db
+    reasons: list[str]    # why this node was retrieved
+    scouts: list[str]     # which scouts surfaced it
+    salience: float       # stored learned utility (stats.db)
+    usage_score: float    # live popularity: retrieval frequency + recency (e7d8ef60)
 
 class RetrievalResult:
     """Response shape is structurally compatible with lithos_search.
 
     The top-level `results` key mirrors lithos_search so clients can
     switch between tools without rewriting result-handling code.
-    LCMA-specific fields (reasons, scouts, salience, temperature,
-    terrace_reached, receipt_id) are additive — clients that only
-    read id/title/score/snippet will work unchanged.
+    LCMA-specific fields (reasons, scouts, salience, usage_score,
+    temperature, terrace_reached, receipt_id) are additive — clients
+    that only read id/title/score/snippet will work unchanged.
+    `salience` is the stored learned-quality signal; `usage_score` is a
+    non-decaying popularity signal derived live from usage counters.
     """
     results: list[ResultItem]   # compatible with lithos_search results
     temperature: float
@@ -1735,7 +1738,7 @@ LCMA is also compatible with cross-plan metadata additions: `source_url`, `deriv
 
 ### Key design decisions
 
-- **`confidence` vs `salience`**: `confidence` (frontmatter) = author's belief about accuracy. `salience` (stats.db) = retrieval utility learned from usage. Both are 0–1 floats but serve different purposes.
+- **`confidence` vs `salience` vs `usage_score`**: `confidence` (frontmatter) = author's belief about accuracy. `salience` (stats.db) = retrieval utility *learned/reinforced* from feedback, decayed toward a non-zero floor (see `lcma.salience_floor`). `usage_score` (derived live at retrieve time from `stats.db` usage counters, not stored) = raw *popularity* — retrieval frequency + recency — a non-decaying signal that complements salience in reranking so ranking stays discriminating even on a cold, unreinforced corpus (task `e7d8ef60`). All are 0–1 floats serving different purposes.
 - **NetworkX vs edges.db**: NetworkX handles structural `[[wiki-link]]` navigation and powers the `links` section of `lithos_related`. edges.db handles semantic/learned relationships with weights and types. Both are queried by the graph scout.
 - **Declared provenance vs learned edges**: `derived_from_ids` is the source of truth for declared lineage. `edges.db` can carry mirrored `derived_from` edges as an accelerator only.
 - **Frontmatter vs stats.db**: Static metadata in frontmatter (author, tags, note_type). Dynamic signals in stats.db (salience, retrieval_count, decay). This avoids constant file rewrites from learning updates.
@@ -1766,9 +1769,30 @@ class LcmaConfig(BaseModel):
     temperature_edge_threshold: int = 50            # min edges for computed temp
     wm_eviction_days: int = 7
     llm_provider: str | None = None                # MVP 3+, background LLM synthesis
+
+    # Salience recalibration (task e7d8ef60) — decay floor, formerly-hardcoded
+    # decay/reinforcement constants, composite rerank weights, and the usage signal.
+    salience_floor: float = 0.3                     # time decay stops here, not at 0
+    salience_decay_per_day: float = 0.005
+    salience_decay_daily_cap: float = 0.1
+    salience_cited_boost: float = 0.02
+    salience_consolidation_boost: float = 0.01
+    salience_misleading_penalty: float = 0.05
+    salience_ignored_penalty: float = 0.02
+    rerank_salience_weight: float = 0.1             # additive composite terms
+    rerank_note_type_weight: float = 0.1
+    rerank_usage_weight: float = 0.1
+    usage_freq_weight: float = 0.6                  # usage_score = freq + recency
+    usage_recency_weight: float = 0.4
+    usage_recency_halflife_days: float = 14.0
+    usage_freq_norm_k: float = 20.0
 ```
 
-Ship with hardcoded defaults in MVP 1. Config override via `LithosConfig.lcma` available from first release but only becomes load-bearing when `lithos-enrich` ships in MVP 2.
+This block is a **draft**; the authoritative shape is `LcmaConfig` in `src/lithos/config.py`
+(e.g. `enabled` defaults to `True`, and `rerank_weights` is scout-name-keyed and sums to 1.0).
+Ship with defaults; config override via `LithosConfig.lcma` is load-bearing now that
+`lithos-enrich` has shipped. The salience/usage constants above were previously hardcoded and
+are exposed so the calibration harness and WS6 metamemory can tune them without a code change.
 
 ### 7.x Two-Component Design Rationale
 
@@ -1777,7 +1801,7 @@ Ship with hardcoded defaults in MVP 1. Config override via `LithosConfig.lcma` a
 - Clients who only need content can use `lithos_search` and benefit from enrichment passively — concept nodes created by `lithos-enrich` are regular `.md` files indexed by the standard search pipeline.
 - Clients who need salience-weighted, graph-aware, multi-scout ranked results use `lithos_retrieve`.
 - **Background LLM synthesis belongs to `lithos-enrich`** (not the retrieval pipeline) because: (a) it is expensive, (b) it is query-independent — it synthesizes knowledge proactively, producing persistent artifacts (summaries, concept notes, edge annotations), (c) clients should not block waiting for LLM synthesis. It is deliberately **not** numbered as "Terrace 2" to avoid implying it is a step in the retrieval pipeline.
-- **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`) are additive. The envelope adds `temperature`, `terrace_reached`, and `receipt_id`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
+- **Response compatibility**: `lithos_retrieve` returns a `results` list with the same fields as `lithos_search` (`id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids`). LCMA-specific fields (`reasons`, `scouts`, `salience`, `usage_score`) are additive. The envelope adds `temperature`, `terrace_reached`, and `receipt_id`. Clients that only read `results[].id` or `results[].score` work identically with both tools.
 - **Enrichment queue pattern**: Rather than triggering `lithos-enrich` directly on each action, triggering actions emit events via the existing Lithos event bus. The in-process `lithos-enrich` worker subscribes to these events and writes to an `enrich_queue` table in `stats.db`. A periodic drain processes pending work, deduplicating multiple events for the same node. A daily full sweep catches anything missed and recomputes global signals (decay, concept clusters). This avoids redundant enrichment runs (e.g., 10 task completions → 1 enrichment run), enables incremental targeted processing, and leverages existing event infrastructure with no new event system required.
 
 ### 7.y When to Use Which Tool

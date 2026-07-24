@@ -2,10 +2,12 @@
 
 import asyncio
 
+import pytest
 from click.testing import CliRunner
 
 from lithos.cli import cli
 from lithos.knowledge import KnowledgeManager
+from lithos.lcma.stats import StatsStore
 
 
 def test_inspect_doc_shows_created_and_updated_timestamps(test_config):
@@ -164,3 +166,67 @@ class TestExtractEntitiesCommand:
         assert meta.entities == []
         assert meta.entities_extractor is None
         assert meta.version == version_before
+
+
+class TestRecalibrateSalienceCommand:
+    """`lithos recalibrate-salience` — one-time backfill of collapsed salience (e7d8ef60)."""
+
+    def _seed(self, test_config):
+        async def _s():
+            store = StatsStore(test_config)
+            await store.open()
+            try:
+                await store.update_salience("cold", -0.45)  # 0.05, below floor
+                await store.update_salience("hot", 0.4)  # 0.9, untouched
+            finally:
+                await store.close()
+
+        asyncio.run(_s())
+
+    def _salience(self, test_config, node_id):
+        async def _r():
+            store = StatsStore(test_config)
+            await store.open()
+            try:
+                row = await store.get_node_stats(node_id)
+                return row["salience"] if row else None
+            finally:
+                await store.close()
+
+        return asyncio.run(_r())
+
+    def test_dry_run_reports_without_writing(self, test_config):
+        self._seed(test_config)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--data-dir",
+                str(test_config.storage.data_dir),
+                "recalibrate-salience",
+                "--floor",
+                "0.3",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "would lift 1" in result.output
+        assert self._salience(test_config, "cold") == pytest.approx(0.05)
+
+    def test_lifts_collapsed_rows(self, test_config):
+        self._seed(test_config)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--data-dir",
+                str(test_config.storage.data_dir),
+                "recalibrate-salience",
+                "--floor",
+                "0.3",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "Lifted 1 rows" in result.output
+        assert self._salience(test_config, "cold") == pytest.approx(0.3)
+        assert self._salience(test_config, "hot") == pytest.approx(0.9)

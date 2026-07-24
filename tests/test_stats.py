@@ -1163,3 +1163,118 @@ class TestPersistentConnectionHardening:
         row = await stats_store.get_node_stats("node-1")
         assert row is not None
         assert row["retrieval_count"] == 1
+
+
+class TestRecalibrateSalienceFloor:
+    """One-time backfill that lifts decay-collapsed rows to the floor (task e7d8ef60)."""
+
+    async def _salience(self, store: StatsStore, node_id: str) -> float:
+        row = await store.get_node_stats(node_id)
+        assert row is not None
+        val = row["salience"]
+        assert isinstance(val, float)
+        return val
+
+    async def test_lifts_rows_below_floor(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("cold", -0.45)  # 0.05
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 1
+        assert await self._salience(stats_store, "cold") == pytest.approx(0.3)
+
+    async def test_leaves_rows_at_or_above_floor(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("hot", 0.4)  # 0.9
+        await stats_store.update_salience("edge", -0.2)  # 0.3 (== floor)
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 0
+        assert await self._salience(stats_store, "hot") == pytest.approx(0.9)
+        assert await self._salience(stats_store, "edge") == pytest.approx(0.3)
+
+    async def test_skips_misleading_nodes(self, stats_store: StatsStore) -> None:
+        # A node penalised below the floor by explicit misleading feedback must stay.
+        await stats_store.update_salience("bad", -0.45)  # 0.05
+        await stats_store.increment_misleading("bad")
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 0
+        assert await self._salience(stats_store, "bad") == pytest.approx(0.05)
+
+    async def test_skips_chronically_ignored_nodes(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("ign", -0.45)  # 0.05
+        for _ in range(6):  # ignored_count 6 > 5 and > cited_count 0
+            await stats_store.increment_ignored("ign")
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 0
+        assert await self._salience(stats_store, "ign") == pytest.approx(0.05)
+
+    async def test_lifts_lightly_ignored_below_threshold(self, stats_store: StatsStore) -> None:
+        # Only chronic ignore (count > 5 and > cited) is a deliberate penalty; a couple
+        # of ignores is not, so such a node is still lifted.
+        await stats_store.update_salience("meh", -0.45)  # 0.05
+        for _ in range(2):
+            await stats_store.increment_ignored("meh")
+        lifted = await stats_store.recalibrate_salience_floor(0.3)
+        assert lifted == 1
+        assert await self._salience(stats_store, "meh") == pytest.approx(0.3)
+
+    async def test_idempotent(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("cold", -0.45)
+        first = await stats_store.recalibrate_salience_floor(0.3)
+        second = await stats_store.recalibrate_salience_floor(0.3)
+        assert first == 1
+        assert second == 0
+
+    async def test_dry_run_counts_without_writing(self, stats_store: StatsStore) -> None:
+        await stats_store.update_salience("cold", -0.45)  # 0.05
+        would = await stats_store.recalibrate_salience_floor(0.3, dry_run=True)
+        assert would == 1
+        # Unchanged — dry run must not write.
+        assert await self._salience(stats_store, "cold") == pytest.approx(0.05)
+
+
+class TestSalienceDistribution:
+    """Aggregate distribution stats used by the daily sweep gauge + recalibration CLI."""
+
+    async def test_empty_table(self, stats_store: StatsStore) -> None:
+        dist = await stats_store.salience_distribution(0.3)
+        assert dist["count"] == 0.0
+        assert dist["mean"] == 0.0
+        assert dist["fraction_below_floor"] == 0.0
+
+    async def test_summarises_distribution(self, stats_store: StatsStore) -> None:
+        # Three nodes: 0.1, 0.3, 0.9. Strictly below floor 0.3 -> only 0.1.
+        await stats_store.update_salience("a", -0.4)  # 0.1
+        await stats_store.update_salience("b", -0.2)  # 0.3 (at floor, not below)
+        await stats_store.update_salience("c", 0.4)  # 0.9
+        dist = await stats_store.salience_distribution(0.3)
+        assert dist["count"] == 3.0
+        assert dist["mean"] == pytest.approx((0.1 + 0.3 + 0.9) / 3)
+        assert dist["fraction_below_floor"] == pytest.approx(1 / 3)
+        # Nearest-rank percentiles over sorted [0.1, 0.3, 0.9].
+        assert dist["p50"] == pytest.approx(0.3)
+        assert dist["p90"] == pytest.approx(0.9)
+
+    async def test_fraction_below_floor_clears_after_backfill(
+        self, stats_store: StatsStore
+    ) -> None:
+        # The collapse marker must drop once the backfill lifts rows to the floor —
+        # a fixed <=0.30 threshold could not tell recovery from collapse.
+        for i in range(4):
+            await stats_store.update_salience(f"n{i}", -0.45)  # 0.05, collapsed
+        before = await stats_store.salience_distribution(0.3)
+        assert before["fraction_below_floor"] == pytest.approx(1.0)
+        await stats_store.recalibrate_salience_floor(0.3)
+        after = await stats_store.salience_distribution(0.3)
+        assert after["fraction_below_floor"] == pytest.approx(0.0)
+        assert after["mean"] == pytest.approx(0.3)
+
+    async def test_percentile_nearest_rank_small_table(self, stats_store: StatsStore) -> None:
+        # n=2: p50 must pick the lower value (nearest-rank), not the max.
+        await stats_store.update_salience("a", -0.3)  # 0.2
+        await stats_store.update_salience("b", 0.3)  # 0.8
+        dist = await stats_store.salience_distribution(0.3)
+        assert dist["p50"] == pytest.approx(0.2)
+        assert dist["p90"] == pytest.approx(0.8)
+
+    async def test_rejects_out_of_range_floor(self, stats_store: StatsStore) -> None:
+        for bad in (-0.1, 1.5, float("nan"), float("inf")):
+            with pytest.raises(ValueError, match="finite value in"):
+                await stats_store.recalibrate_salience_floor(bad)

@@ -460,6 +460,123 @@ class TestStoredSalienceAffectsRetrieval:
         assert row["salience"] == pytest.approx(0.5, abs=1e-6)
 
 
+class TestUsageSignalAffectsRetrieval:
+    """The non-decaying usage signal (retrieval frequency/recency) feeds rerank.
+
+    Restores a spread even at equal/collapsed salience (task e7d8ef60).
+    """
+
+    @pytest.mark.asyncio
+    async def test_usage_breaks_ties_at_equal_salience(
+        self,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+        stats_store: StatsStore,
+    ) -> None:
+        """With identical salience and base scores, the node with a richer retrieval
+        history ranks higher and carries a higher emitted ``usage_score``."""
+        # Both nodes sit at the default salience 0.5; only _ID2 has usage history.
+        for _ in range(20):
+            await stats_store.increment_node_stats(node_id=_ID2)
+
+        from lithos.search import SearchResult
+
+        equal_results = [
+            SearchResult(
+                id=_ID1, score=0.5, title="Alpha Note", snippet="alpha", path="alpha-note.md"
+            ),
+            SearchResult(
+                id=_ID2, score=0.5, title="Beta Note", snippet="beta", path="beta-note.md"
+            ),
+        ]
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=equal_results),
+            patch.object(seeded_search, "full_text_search", return_value=equal_results),
+        ):
+            result = await _run_retrieve_impl(
+                query="testing",
+                search=seeded_search,
+                knowledge=seeded_km,
+                graph=seeded_graph,
+                coordination=mock_coordination,
+                edge_store=edge_store,
+                projection=projection,
+                stats_store=stats_store,
+                lcma_config=LcmaConfig(),
+                limit=10,
+            )
+
+        result_ids = [r["id"] for r in result["results"]]
+        assert _ID1 in result_ids
+        assert _ID2 in result_ids
+        # _ID2's usage history lifts it above _ID1 despite equal salience + base score.
+        assert result_ids.index(_ID2) < result_ids.index(_ID1)
+
+        usage2 = next(r for r in result["results"] if r["id"] == _ID2)["usage_score"]
+        usage1 = next(r for r in result["results"] if r["id"] == _ID1)["usage_score"]
+        assert usage2 > usage1
+        assert usage1 == pytest.approx(0.0)
+
+
+class TestConfigWiring:
+    """Newly-exposed LcmaConfig fields must actually change behaviour, not be ignored."""
+
+    def test_usage_from_stats_respects_recency_halflife(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from lithos.lcma.retrieve import _usage_from_stats
+
+        now = datetime(2026, 1, 20, tzinfo=UTC)
+        stats: dict[str, object] = {
+            "retrieval_count": 10,
+            "last_used_at": (now - timedelta(days=14)).isoformat(),
+        }
+        short_hl = LcmaConfig(usage_recency_halflife_days=1.0)
+        long_hl = LcmaConfig(usage_recency_halflife_days=1000.0)
+        # A longer half-life keeps a 14-day-old use fresher -> higher usage score.
+        assert _usage_from_stats(stats, now, long_hl) > _usage_from_stats(stats, now, short_hl)
+
+        # A 'Z'-suffixed timestamp must parse (recent -> higher usage than long-ago),
+        # not silently drop the recency term.
+        cfg = LcmaConfig()
+        recent_z: dict[str, object] = {
+            "retrieval_count": 5,
+            "last_used_at": (now - timedelta(days=1)).isoformat().replace("+00:00", "Z"),
+        }
+        old_z: dict[str, object] = {
+            "retrieval_count": 5,
+            "last_used_at": (now - timedelta(days=400)).isoformat().replace("+00:00", "Z"),
+        }
+        assert _usage_from_stats(recent_z, now, cfg) > _usage_from_stats(old_z, now, cfg)
+
+    def test_rerank_usage_weight_is_wired(self) -> None:
+        from lithos.lcma.retrieve import _rerank_fast
+        from lithos.lcma.utils import Candidate
+
+        class _StubKnowledge:
+            def get_cached_meta(self, node_id: str) -> None:
+                return None
+
+        cands = [
+            Candidate(node_id="a", score=0.5, reasons=[], scouts=["scout_vector"]),
+            Candidate(node_id="b", score=0.5, reasons=[], scouts=["scout_vector"]),
+        ]
+        salience = {"a": 0.5, "b": 0.5}
+        usage = {"a": 0.0, "b": 0.9}
+        stub = _StubKnowledge()
+
+        # Usage is the only differentiator: at weight 0.1, b (high usage) wins.
+        ranked = _rerank_fast(cands, LcmaConfig(rerank_usage_weight=0.1), stub, salience, usage)  # type: ignore[arg-type]
+        assert ranked[0].node_id == "b"
+        # At weight 0.0 the usage gap no longer moves anything; the tie is stable (a first).
+        tied = _rerank_fast(cands, LcmaConfig(rerank_usage_weight=0.0), stub, salience, usage)  # type: ignore[arg-type]
+        assert tied[0].node_id == "a"
+
+
 class TestRetrieveSnippetParity:
     """lithos_retrieve must produce snippets from the same string Tantivy
     indexes so title-only matches surface the matching term.
