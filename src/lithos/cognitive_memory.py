@@ -232,6 +232,7 @@ class CognitiveMemory:
                 knowledge=self._knowledge,
                 coordination=self._coordination,
                 intake=self._intake,
+                search=self._search,
             )
             await self._enrich_worker.start()
         self._started = True

@@ -558,7 +558,9 @@ class CorpusIntake:
                 warnings=list(result.warnings),
             )
 
-    async def assert_edge(self, agent: str, request: EdgeRequest) -> EdgeOutcome:
+    async def assert_edge(
+        self, agent: str, request: EdgeRequest, *, origin: str = ""
+    ) -> EdgeOutcome:
         """Assert an edge into the Corpus (ADR-0006 Slice 1).
 
         Four-step pipeline modelled on :meth:`delete` / :meth:`write`:
@@ -613,6 +615,7 @@ class CorpusIntake:
                     edge_type=request.edge_type,
                     namespace=request.namespace,
                     conflict_state=request.conflict_state,
+                    origin=origin,
                 )
             )
 

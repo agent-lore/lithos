@@ -158,12 +158,16 @@ Exit criteria (all MVPs):
 
 **WS1 — LLM-synthesis backbone**
 
-- [ ] Optional LLM provider (nested `LithosConfig.lcma.llm` — one OpenAI-compatible endpoint, local or external; enabled iff `base_url` set, env `LITHOS_LCMA__LLM__BASE_URL`/`__MODEL`) wired into `lithos-enrich`; background, budget-bounded, provenance-stamped, idempotent
+- [x] Optional LLM provider wired into `lithos-enrich`; background, budget-bounded,
+      provenance-stamped, idempotent — DONE (slice 1): nested `LithosConfig.lcma.llm`
+      (OpenAI-compatible endpoint, replaces the never-read `llm_provider` string),
+      `lithos/lcma/llm.py` client, `llm_budget` daily-token + per-drain-call caps,
+      `edge_inference_log` idempotency, `origin=enrich` cascade guard on `assert_edge`
 
 **WS2 — Typed-edge inference**
 
-- [ ] Infer `supports`/`contradicts`/`refines`/`is_example_of`/`depends_on`/`analogy_to` over semantic-neighbour pairs (LLM-adjudicated), written to `edges.db` with `provenance_type=inferred`
-- [ ] Governance: inferred ≠ asserted, confidence floor, `contradicts` surfaced not auto-applied
+- [x] Infer `supports`/`contradicts`/`refines`/`is_example_of`/`depends_on`/`analogy_to` over semantic-neighbour pairs (LLM-adjudicated), written to `edges.db` with `provenance_type=inferred` — DONE (slice 1, drain-triggered on note create/update via `lithos/lcma/edge_inference.py`; full-corpus sweep backfill + re-inference policy = slice 2)
+- [x] Governance: inferred ≠ asserted, confidence floor, `contradicts` surfaced not auto-applied
 
 **WS3 — Coherence / temperature / exploration**
 

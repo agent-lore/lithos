@@ -25,8 +25,10 @@ from lithos.events import (
     TASK_COMPLETED,
     LithosEvent,
 )
+from lithos.lcma.edge_inference import EdgeInferenceEngine
 from lithos.lcma.edge_reinforce import reinforce_related_edge
 from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION, extract_entities
+from lithos.lcma.llm import LlmClient
 from lithos.lcma.salience import DEFAULT_SALIENCE
 from lithos.lcma.salience import decay_amount as compute_decay_amount
 
@@ -39,6 +41,7 @@ if TYPE_CHECKING:
     from lithos.knowledge import KnowledgeManager
     from lithos.lcma.stats import StatsStore
     from lithos.provenance import ProvenanceProjection
+    from lithos.search import SearchEngine
     from lithos.telemetry import _LithosMetrics
 
 _lithos_metrics: _LithosMetrics | None = None
@@ -137,6 +140,7 @@ class EnrichWorker:
         knowledge: KnowledgeManager,
         coordination: CoordinationService,
         intake: CorpusIntake,
+        search: SearchEngine,
     ) -> None:
         self._config = config
         self._event_bus = event_bus
@@ -145,6 +149,21 @@ class EnrichWorker:
         self._knowledge = knowledge
         self._coordination = coordination
         self._intake = intake
+
+        # Typed-edge inference (WS1) — constructed only when an LLM endpoint is
+        # configured; None keeps the whole synthesis path a no-op.
+        self._edge_inference: EdgeInferenceEngine | None = None
+        if config.llm.enabled:
+            self._edge_inference = EdgeInferenceEngine(
+                config=config.llm,
+                client=LlmClient(config.llm),
+                stats_store=stats_store,
+                knowledge=knowledge,
+                search=search,
+                intake=intake,
+                edge_store=projection.edge_store,
+                agent=ENRICH_AGENT,
+            )
 
         self._queue: asyncio.Queue[LithosEvent] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
@@ -182,6 +201,10 @@ class EnrichWorker:
         self._consumer_task = None
         self._drain_task = None
         self._sweep_task = None
+
+        if self._edge_inference is not None:
+            await self._edge_inference.close()
+
         logger.info("EnrichWorker stopped")
 
     # ------------------------------------------------------------------
@@ -289,6 +312,8 @@ class EnrichWorker:
     async def drain(self) -> None:
         """Process pending nodes and tasks from enrich_queue."""
         max_attempts = self._config.max_enrich_attempts
+        if self._edge_inference is not None:
+            self._edge_inference.reset_drain_counter()
 
         # --- Node-level enrichment ---
         node_entries = await self._stats_store.drain_pending_nodes(max_attempts=max_attempts)
@@ -450,6 +475,11 @@ class EnrichWorker:
             NOTE_CREATED in trigger_types or NOTE_UPDATED in trigger_types
         ):
             await self._extract_entities(node_id)
+
+        # --- Typed-edge inference (WS1; engine gates on trigger type, op-log,
+        # call cap, and daily token budget internally and never raises) ---
+        if self._edge_inference is not None:
+            await self._edge_inference.maybe_infer(node_id, trigger_types)
 
         logger.debug(
             "EnrichWorker: node enrichment complete",

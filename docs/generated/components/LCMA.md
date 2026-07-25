@@ -12,6 +12,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos.lcma` | XS | 0 | 0 |
+| `lithos.lcma.edge_inference` | M | 3 | 4 |
 | `lithos.lcma.edge_reinforce` | XS | 0 | 1 |
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
@@ -24,6 +25,15 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.utils` | S | 1 | 1 |
 
 ## Public API
+
+### `lithos.lcma.edge_inference`
+- class `NeighbourInfo` — A semantic-search hit enriched with the metadata the pre-filter needs.
+- class `Adjudication` — One validated judgement from the LLM response.
+- def `prefilter_candidates` — Cheap, token-free candidate filter + ranking.
+- def `build_adjudication_prompt` — Build the two-message prompt: fixed system instruction + numbered candidates.
+- def `parse_adjudications` — Defensively parse the model's JSON; ``None`` means wholesale failure.
+- def `edge_endpoints` — Resolve ``(from_id, to_id)`` from the judged direction.
+- class `EdgeInferenceEngine` — Per-node orchestration: gates → neighbours → one LLM call → inferred edges.
 
 ### `lithos.lcma.edge_reinforce`
 - def `reinforce_related_edge` — Strengthen an existing ``related_to`` edge or create one.
