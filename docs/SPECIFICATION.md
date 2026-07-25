@@ -231,7 +231,8 @@ data/
   section of `lithos_related`.
 - **`stats.db`** — `CognitiveMemory` state. Tables: `node_stats`,
   `coactivation`, `enrich_queue`, `working_memory`, `receipts`, plus the MVP 2
-  consolidation-log tables. Created lazily on the first `lithos_retrieve` call
+  consolidation-log tables and the WS1 LLM-synthesis ledgers (`llm_budget`,
+  `edge_inference_log`). Created lazily on the first `lithos_retrieve` call
   (when the first receipt is written). All accumulated agent state — no drift
   condition relative to the corpus.
 

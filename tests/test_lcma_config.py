@@ -1,6 +1,7 @@
 """Tests for US-005: LcmaConfig configuration subtree."""
 
 import pytest
+from pydantic import ValidationError
 
 from lithos.config import (
     _DEFAULT_NOTE_TYPE_PRIORS,
@@ -8,6 +9,7 @@ from lithos.config import (
     _LCMA_NOTE_TYPES,
     LcmaConfig,
     LithosConfig,
+    LlmConfig,
 )
 
 
@@ -77,9 +79,42 @@ class TestLcmaConfigDefaults:
         cfg = LcmaConfig()
         assert cfg.wm_eviction_days == 7
 
-    def test_default_llm_provider(self) -> None:
+    def test_default_llm_disabled(self) -> None:
         cfg = LcmaConfig()
-        assert cfg.llm_provider is None
+        assert cfg.llm.base_url is None
+        assert not cfg.llm.enabled
+
+
+class TestLlmConfig:
+    """LcmaConfig.llm — OpenAI-compatible synthesis endpoint (WS1)."""
+
+    def test_enabled_iff_base_url_set(self) -> None:
+        assert not LlmConfig().enabled
+        assert LlmConfig(base_url="http://localhost:11434/v1", model="m").enabled
+
+    def test_model_required_when_base_url_set(self) -> None:
+        with pytest.raises(ValidationError, match="model is required"):
+            LlmConfig(base_url="http://localhost:11434/v1")
+
+    def test_similarity_band_must_be_ordered(self) -> None:
+        with pytest.raises(ValidationError, match="min_similarity"):
+            LlmConfig(min_similarity=0.9, max_similarity=0.5)
+
+    def test_api_key_is_secret(self) -> None:
+        cfg = LlmConfig(api_key="sk-test")  # type: ignore[arg-type]  # SecretStr coercion
+        assert "sk-test" not in repr(cfg)
+        assert cfg.api_key is not None
+        assert cfg.api_key.get_secret_value() == "sk-test"
+
+    def test_env_nesting_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITHOS_LCMA__LLM__BASE_URL", "http://ollama:11434/v1")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__MODEL", "qwen3")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__DAILY_TOKEN_BUDGET", "1000")
+        cfg = LithosConfig()
+        assert cfg.lcma.llm.base_url == "http://ollama:11434/v1"
+        assert cfg.lcma.llm.model == "qwen3"
+        assert cfg.lcma.llm.daily_token_budget == 1000
+        assert cfg.lcma.llm.enabled
 
 
 class TestLcmaConfigRerankWeights:

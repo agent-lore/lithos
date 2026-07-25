@@ -145,3 +145,12 @@ class RetrieveTimeout(CognitiveMemoryError):
     Defined now so #258/#259/#260 — and a future timeout slice — share one
     base hierarchy.
     """
+
+
+class LlmError(CognitiveMemoryError):
+    """Background LLM synthesis call failed (transport, HTTP, or malformed body).
+
+    Raised only inside the ``lithos-enrich`` worker; enrichment catches it and
+    completes the item without synthesis — an LLM outage must never fail or
+    requeue the surrounding enrich work.
+    """

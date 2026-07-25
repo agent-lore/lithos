@@ -15,6 +15,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.edge_reinforce` | XS | 0 | 1 |
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
+| `lithos.lcma.llm` | S | 3 | 0 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
 | `lithos.lcma.retrieve` | L | 0 | 1 |
 | `lithos.lcma.salience` | S | 0 | 3 |
@@ -32,6 +33,11 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 
 ### `lithos.lcma.entities`
 - def `extract_entities` — Extract entity names from note content.
+
+### `lithos.lcma.llm`
+- class `ChatMessage`
+- class `LlmResult` — Completion text plus the token spend that produced it.
+- class `LlmClient` — Thin async client over one OpenAI-compatible ``/chat/completions`` endpoint.
 
 ### `lithos.lcma.migrations`
 - class `MigrationRegistry` — Persistent registry tracking applied schema migrations.

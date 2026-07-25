@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -158,6 +158,48 @@ class EventsConfig(BaseModel):
     max_sse_clients: int = 50
 
 
+class LlmConfig(BaseModel):
+    """OpenAI-compatible chat-completions endpoint for background LLM synthesis (WS1).
+
+    Synthesis is enabled iff ``base_url`` is set — one knob that cannot disagree
+    with itself; unsetting it is the operational kill switch. The endpoint may be
+    local (Ollama/llama.cpp/vLLM ``/v1`` shims keep privacy-first deployments
+    whole) or a hosted API. Calls happen only inside the ``lithos-enrich``
+    background worker, never on the retrieve hot path.
+    """
+
+    base_url: str | None = None
+    model: str = ""
+    api_key: SecretStr | None = None
+    timeout_seconds: float = Field(default=120.0, gt=0.0)
+    max_output_tokens: int = Field(default=1024, gt=0)
+    # Budget bounds: a UTC-day token ceiling plus a per-drain-cycle call cap.
+    # Exhaustion skips synthesis (observable via telemetry) — never blocks
+    # the rest of enrichment.
+    daily_token_budget: int = Field(default=250_000, ge=0)
+    max_calls_per_drain: int = Field(default=10, ge=0)
+    # Typed-edge inference: adjudications below the floor are discarded.
+    confidence_floor: float = Field(default=0.6, ge=0.0, le=1.0)
+    neighbour_k: int = Field(default=5, ge=1)
+    # Candidate similarity band: near-duplicates (related_to's job) and
+    # far-off pairs both waste adjudication tokens.
+    min_similarity: float = Field(default=0.35, ge=0.0, le=1.0)
+    max_similarity: float = Field(default=0.92, ge=0.0, le=1.0)
+    snippet_chars: int = Field(default=700, gt=0)
+
+    @property
+    def enabled(self) -> bool:
+        return self.base_url is not None
+
+    @model_validator(mode="after")
+    def _validate(self) -> "LlmConfig":
+        if self.base_url is not None and not self.model:
+            raise ValueError("lcma.llm.model is required when lcma.llm.base_url is set")
+        if self.min_similarity >= self.max_similarity:
+            raise ValueError("lcma.llm.min_similarity must be < max_similarity")
+        return self
+
+
 class LcmaConfig(BaseModel):
     """LCMA (Lithos Cognitive Memory Architecture) configuration subtree."""
 
@@ -174,7 +216,7 @@ class LcmaConfig(BaseModel):
     decay_inactive_days: int = 7
     sweep_interval_hours: int = 24
     sweep_startup_delay_minutes: int = 10
-    llm_provider: str | None = None
+    llm: LlmConfig = Field(default_factory=LlmConfig)
     # Max entities the extractor keeps per document; backstop against
     # citation/glossary explosions (#320). 0 disables the cap.
     entity_max_per_doc: int = Field(default=50, ge=0)

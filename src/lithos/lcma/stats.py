@@ -119,6 +119,22 @@ CREATE TABLE IF NOT EXISTS consolidation_salience_ops (
     PRIMARY KEY (task_id, node_id)
 );
 
+CREATE TABLE IF NOT EXISTS llm_budget (
+    day TEXT PRIMARY KEY,
+    tokens_spent INTEGER NOT NULL DEFAULT 0,
+    calls_made INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS edge_inference_log (
+    node_id TEXT NOT NULL,
+    doc_version INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    edges_written INTEGER NOT NULL DEFAULT 0,
+    inferred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (node_id, doc_version)
+);
+
 CREATE INDEX IF NOT EXISTS idx_receipts_ts ON receipts(ts);
 CREATE INDEX IF NOT EXISTS idx_receipts_task_id ON receipts(task_id);
 CREATE INDEX IF NOT EXISTS idx_receipts_agent_id ON receipts(agent_id);
@@ -1023,6 +1039,53 @@ class StatsStore(AsyncSqliteStore):
             await db.execute(
                 "INSERT OR IGNORE INTO consolidation_salience_ops (task_id, node_id) VALUES (?, ?)",
                 (task_id, node_id),
+            )
+
+    # ------------------------------------------------------------------
+    # LLM synthesis budget + idempotency (WS1)
+    # ------------------------------------------------------------------
+
+    async def get_llm_spend(self, day: str) -> tuple[int, int]:
+        """Return ``(tokens_spent, calls_made)`` for the UTC day key ``YYYY-MM-DD``."""
+        async with self._session() as db:
+            cursor = await db.execute(
+                "SELECT tokens_spent, calls_made FROM llm_budget WHERE day = ?",
+                (day,),
+            )
+            row = await cursor.fetchone()
+            return (int(row[0]), int(row[1])) if row is not None else (0, 0)
+
+    async def record_llm_spend(self, day: str, tokens: int) -> None:
+        """Add one call's token spend to *day*'s ledger row (atomic upsert)."""
+        async with self._session() as db:
+            await db.execute(
+                """INSERT INTO llm_budget (day, tokens_spent, calls_made, updated_at)
+                   VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+                   ON CONFLICT(day) DO UPDATE SET
+                       tokens_spent = tokens_spent + excluded.tokens_spent,
+                       calls_made = calls_made + 1,
+                       updated_at = excluded.updated_at""",
+                (day, max(0, tokens)),
+            )
+
+    async def has_edge_inference(self, node_id: str, doc_version: int) -> bool:
+        """Return ``True`` if inference already ran for this node at this content version."""
+        async with self._session() as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM edge_inference_log WHERE node_id = ? AND doc_version = ?",
+                (node_id, doc_version),
+            )
+            return await cursor.fetchone() is not None
+
+    async def record_edge_inference(
+        self, node_id: str, doc_version: int, *, model: str, edges_written: int
+    ) -> None:
+        """Record that inference ran for ``(node_id, doc_version)`` (INSERT OR IGNORE)."""
+        async with self._session() as db:
+            await db.execute(
+                """INSERT OR IGNORE INTO edge_inference_log
+                   (node_id, doc_version, model, edges_written) VALUES (?, ?, ?, ?)""",
+                (node_id, doc_version, model, edges_written),
             )
 
     async def update_salience_and_record_consolidation(

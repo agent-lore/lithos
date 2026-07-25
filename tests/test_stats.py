@@ -51,6 +51,8 @@ class TestStatsStoreCreation:
             "task_consolidation_log",
             "consolidation_edge_ops",
             "consolidation_salience_ops",
+            "llm_budget",
+            "edge_inference_log",
         }
         assert tables == expected
 
@@ -451,6 +453,8 @@ class TestCorruptRecovery:
                 "task_consolidation_log",
                 "consolidation_edge_ops",
                 "consolidation_salience_ops",
+                "llm_budget",
+                "edge_inference_log",
             }
         finally:
             await store.close()
@@ -1278,3 +1282,46 @@ class TestSalienceDistribution:
         for bad in (-0.1, 1.5, float("nan"), float("inf")):
             with pytest.raises(ValueError, match="finite value in"):
                 await stats_store.recalibrate_salience_floor(bad)
+
+
+class TestLlmBudget:
+    """WS1: day-keyed token/call ledger for background LLM synthesis."""
+
+    async def test_unknown_day_reads_zero(self, stats_store: StatsStore) -> None:
+        assert await stats_store.get_llm_spend("2026-07-25") == (0, 0)
+
+    async def test_spend_accumulates_atomically(self, stats_store: StatsStore) -> None:
+        await stats_store.record_llm_spend("2026-07-25", 100)
+        await stats_store.record_llm_spend("2026-07-25", 250)
+        assert await stats_store.get_llm_spend("2026-07-25") == (350, 2)
+
+    async def test_days_are_isolated(self, stats_store: StatsStore) -> None:
+        await stats_store.record_llm_spend("2026-07-25", 100)
+        await stats_store.record_llm_spend("2026-07-26", 7)
+        assert await stats_store.get_llm_spend("2026-07-25") == (100, 1)
+        assert await stats_store.get_llm_spend("2026-07-26") == (7, 1)
+
+    async def test_negative_tokens_clamped(self, stats_store: StatsStore) -> None:
+        # A degenerate estimate must never decrement the ledger.
+        await stats_store.record_llm_spend("2026-07-25", -50)
+        assert await stats_store.get_llm_spend("2026-07-25") == (0, 1)
+
+
+class TestEdgeInferenceLog:
+    """WS1: (node_id, doc_version) idempotency ledger for typed-edge inference."""
+
+    async def test_absent_by_default(self, stats_store: StatsStore) -> None:
+        assert not await stats_store.has_edge_inference("n1", 1)
+
+    async def test_record_then_present(self, stats_store: StatsStore) -> None:
+        await stats_store.record_edge_inference("n1", 1, model="qwen3", edges_written=3)
+        assert await stats_store.has_edge_inference("n1", 1)
+        # A content bump (new version) is a fresh slate.
+        assert not await stats_store.has_edge_inference("n1", 2)
+        # Other nodes unaffected.
+        assert not await stats_store.has_edge_inference("n2", 1)
+
+    async def test_record_is_idempotent(self, stats_store: StatsStore) -> None:
+        await stats_store.record_edge_inference("n1", 1, model="qwen3", edges_written=0)
+        await stats_store.record_edge_inference("n1", 1, model="other", edges_written=9)
+        assert await stats_store.has_edge_inference("n1", 1)
