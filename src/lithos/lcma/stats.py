@@ -1056,7 +1056,14 @@ class StatsStore(AsyncSqliteStore):
             return (int(row[0]), int(row[1])) if row is not None else (0, 0)
 
     async def record_llm_spend(self, day: str, tokens: int) -> None:
-        """Add one call's token spend to *day*'s ledger row (atomic upsert)."""
+        """Add one call's token spend to *day*'s ledger row (atomic upsert).
+
+        The recording itself is atomic, but budget *admission* is a separate
+        read (:meth:`get_llm_spend`) before an external call — the daily budget
+        is therefore a soft ceiling with bounded overshoot (at most the final
+        call's tokens, given the single sequential in-process enrich worker),
+        not a hard reservation. See ``LlmConfig.daily_token_budget``.
+        """
         async with self._session() as db:
             await db.execute(
                 """INSERT INTO llm_budget (day, tokens_spent, calls_made, updated_at)

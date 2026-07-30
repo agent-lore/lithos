@@ -268,3 +268,44 @@ class TestLithosConfigLcmaSubtree:
         assert cfg.lcma.enabled is True
         assert len(cfg.lcma.rerank_weights) == 10
         assert len(cfg.lcma.note_type_priors) == 6
+
+
+class TestLlmConfigHardening:
+    """Round-1 review: secret redaction on failure, empty-env normalization, scheme check."""
+
+    def test_api_key_absent_from_validation_errors(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            LlmConfig(
+                api_key="sk-topsecret",  # type: ignore[arg-type]
+                min_similarity=0.9,
+                max_similarity=0.5,  # forces failure with the key present in input
+            )
+        assert "sk-topsecret" not in str(excinfo.value)
+        assert "sk-topsecret" not in repr(excinfo.value)
+
+    def test_api_key_absent_when_propagated_through_lithos_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITHOS_LCMA__LLM__API_KEY", "sk-topsecret")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__BASE_URL", "http://ollama:11434/v1")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__MODEL", "   ")  # blank -> validation failure
+        with pytest.raises(ValidationError) as excinfo:
+            LithosConfig()
+        assert "sk-topsecret" not in str(excinfo.value)
+
+    def test_empty_or_whitespace_base_url_means_disabled(self) -> None:
+        assert LlmConfig(base_url="").base_url is None
+        assert not LlmConfig(base_url="").enabled
+        assert LlmConfig(base_url="   ").base_url is None
+        # And crucially: empty base_url + model set must NOT demand a model/scheme.
+        assert not LlmConfig(base_url="", model="m").enabled
+
+    def test_whitespace_model_rejected_when_enabled(self) -> None:
+        with pytest.raises(ValidationError, match="model is required"):
+            LlmConfig(base_url="http://ollama:11434/v1", model="   ")
+
+    def test_non_http_scheme_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="http:// or https://"):
+            LlmConfig(base_url="ollama:11434/v1", model="m")
+        with pytest.raises(ValidationError, match="http:// or https://"):
+            LlmConfig(base_url="ftp://host/v1", model="m")

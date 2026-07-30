@@ -1565,7 +1565,8 @@ background worker as persistent artifacts (typed edges, concept notes, analogy f
 ### Workstreams
 
 **WS1 — LLM-synthesis worker (backbone).** `lithos-enrich` gains an **optional** LLM provider
-(`LithosConfig.lcma.llm_provider`, local or external — local keeps privacy-first deployments whole).
+(nested `LithosConfig.lcma.llm` — one OpenAI-compatible chat-completions endpoint, local or
+external; local Ollama/llama.cpp/vLLM `/v1` shims keep privacy-first deployments whole).
 Query-independent, background, budget-bounded; never on the retrieve hot path. Emits provenance-
 stamped, idempotent artifacts (the `enrich_queue` already sequences work). Enables WS2/WS4/WS5.
 
@@ -1746,7 +1747,7 @@ LCMA is also compatible with cross-plan metadata additions: `source_url`, `deriv
 
 ### LLM integration scope
 
-Background LLM synthesis (the `should_enrich_with_llm()` policy and `llm_interpretive_synthesize()` worker in §5.4/§5.12) requires an external LLM provider and is not available in MVP 1 or MVP 2. `lithos_retrieve` always terminates at Terrace 1 — no local model is bundled and no external LLM call is made. LLM synthesis ships in MVP 3 as part of `lithos-enrich`, configured via `LithosConfig.lcma.llm_provider`.
+Background LLM synthesis (the `should_enrich_with_llm()` policy and `llm_interpretive_synthesize()` worker in §5.4/§5.12) requires an LLM provider and is not available in MVP 1 or MVP 2. `lithos_retrieve` always terminates at Terrace 1 — no local model is bundled and no LLM call ever happens on the retrieve path. LLM synthesis ships in MVP 3 as part of `lithos-enrich`, configured via the nested `LithosConfig.lcma.llm` block (OpenAI-compatible endpoint; disabled unless `base_url` is set).
 
 ### 7.z `LcmaConfig` Schema (Draft)
 
@@ -1768,7 +1769,7 @@ class LcmaConfig(BaseModel):
     temperature_default: float = 0.5               # used when edges < threshold
     temperature_edge_threshold: int = 50            # min edges for computed temp
     wm_eviction_days: int = 7
-    llm_provider: str | None = None                # MVP 3+, background LLM synthesis
+    llm: LlmConfig = LlmConfig()                   # MVP 3 WS1 — nested OpenAI-compatible endpoint config
 
     # Salience recalibration (task e7d8ef60) — decay floor, formerly-hardcoded
     # decay/reinforcement constants, composite rerank weights, and the usage signal.

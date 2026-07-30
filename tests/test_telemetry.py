@@ -68,6 +68,26 @@ class TestTelemetryDisabled:
         lithos_metrics.search_duration.record(42.0)
         # should not raise
 
+    def test_noop_llm_metrics_dont_raise(self):
+        """WS1 instruments construct and record as no-ops when OTEL is off."""
+        from lithos.telemetry import _reset_for_testing, lithos_metrics
+
+        _reset_for_testing()
+        for attr in (
+            "_lcma_llm_calls",
+            "_lcma_llm_tokens",
+            "_lcma_llm_call_duration",
+            "_lcma_edge_inference_skips",
+            "_lcma_inferred_edges_written",
+        ):
+            setattr(lithos_metrics, attr, None)
+        lithos_metrics.lcma_llm_calls.add(1, {"outcome": "ok"})
+        lithos_metrics.lcma_llm_tokens.add(150, {"estimated": "false"})
+        lithos_metrics.lcma_llm_call_duration.record(1234.5, {"outcome": "ok"})
+        lithos_metrics.lcma_edge_inference_skips.add(1, {"reason": "budget"})
+        lithos_metrics.lcma_inferred_edges_written.add(1, {"relation": "supports"})
+        # should not raise
+
 
 @pytest.mark.skipif(
     not _has_otel_packages(),

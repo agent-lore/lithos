@@ -34,6 +34,14 @@ _RETRY_DELAY_SECONDS = 0.5
 _CHARS_PER_TOKEN = 4
 
 
+def _usage_int(value: object) -> int | None:
+    """Coerce a ``usage`` field to a non-negative int; ``None`` if it isn't one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    coerced = int(value)
+    return coerced if coerced >= 0 else None
+
+
 @dataclass(frozen=True)
 class ChatMessage:
     role: str
@@ -101,11 +109,16 @@ class LlmClient:
         return self._parse_response(response, request_chars=sum(len(m.content) for m in messages))
 
     async def _post_with_retry(self, body: dict[str, Any]) -> httpx.Response:
+        # Catch httpx.HTTPError — the base of every transport/protocol failure
+        # (timeouts, connect/read/write errors, RemoteProtocolError,
+        # UnsupportedProtocol, invalid URLs) — so nothing escapes the LlmError
+        # contract. All of them get the single retry: one wasted 0.5s pause on
+        # a non-transient failure is cheaper than misclassifying a transient one.
         last_error: Exception | None = None
         for attempt in (1, 2):
             try:
                 response = await self._client.post("/chat/completions", json=body)
-            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            except httpx.HTTPError as exc:
                 last_error = exc
             else:
                 if response.status_code < 500:
@@ -130,12 +143,25 @@ class LlmClient:
             raise LlmError("Malformed LLM response: message content is not a string")
 
         usage = payload.get("usage")
-        if isinstance(usage, dict) and "prompt_tokens" in usage:
-            return LlmResult(
-                text=text,
-                prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                completion_tokens=int(usage.get("completion_tokens", 0)),
-            )
+        if isinstance(usage, dict):
+            prompt_tokens = _usage_int(usage.get("prompt_tokens"))
+            completion_tokens = _usage_int(usage.get("completion_tokens"))
+            # Both fields must be valid non-negative ints; a null / non-numeric /
+            # negative usage block falls through rather than escaping as a raw
+            # TypeError or corrupting the ledger.
+            if prompt_tokens is not None and completion_tokens is not None:
+                return LlmResult(
+                    text=text,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
+            # Some providers report only an aggregate total. The total is what
+            # the budget ledger consumes, so it is authoritative (not an
+            # estimate); the prompt/completion split is simply unavailable and
+            # recorded as total/0.
+            total_tokens = _usage_int(usage.get("total_tokens"))
+            if total_tokens is not None:
+                return LlmResult(text=text, prompt_tokens=total_tokens, completion_tokens=0)
         return LlmResult(
             text=text,
             prompt_tokens=request_chars // _CHARS_PER_TOKEN,

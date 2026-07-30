@@ -1325,3 +1325,22 @@ class TestEdgeInferenceLog:
         await stats_store.record_edge_inference("n1", 1, model="qwen3", edges_written=0)
         await stats_store.record_edge_inference("n1", 1, model="other", edges_written=9)
         assert await stats_store.has_edge_inference("n1", 1)
+
+    async def test_persisted_audit_fields(self, stats_store: StatsStore) -> None:
+        """The ledger is an audit trail: model + edges_written must persist as given,
+        and the first write must win (INSERT OR IGNORE), not be silently replaced."""
+        await stats_store.record_edge_inference("n1", 1, model="qwen3", edges_written=3)
+        await stats_store.record_edge_inference("n1", 1, model="other", edges_written=9)
+        conn = sqlite3.connect(str(stats_store.db_path))
+        try:
+            row = conn.execute(
+                "SELECT model, edges_written, inferred_at FROM edge_inference_log "
+                "WHERE node_id = ? AND doc_version = ?",
+                ("n1", 1),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None
+        assert row[0] == "qwen3"  # first write wins
+        assert row[1] == 3
+        assert row[2] is not None

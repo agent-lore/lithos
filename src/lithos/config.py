@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -162,18 +162,29 @@ class LlmConfig(BaseModel):
     """OpenAI-compatible chat-completions endpoint for background LLM synthesis (WS1).
 
     Synthesis is enabled iff ``base_url`` is set — one knob that cannot disagree
-    with itself; unsetting it is the operational kill switch. The endpoint may be
-    local (Ollama/llama.cpp/vLLM ``/v1`` shims keep privacy-first deployments
-    whole) or a hosted API. Calls happen only inside the ``lithos-enrich``
-    background worker, never on the retrieve hot path.
+    with itself; unsetting it is the operational kill switch. An empty or
+    whitespace-only ``base_url`` (common when deployment tooling exports blank
+    env vars) normalises to ``None`` — i.e. disabled — rather than producing a
+    client that fails on every call. The endpoint may be local (Ollama/
+    llama.cpp/vLLM ``/v1`` shims keep privacy-first deployments whole) or a
+    hosted API. Calls happen only inside the ``lithos-enrich`` background
+    worker, never on the retrieve hot path.
     """
+
+    # Never echo raw input values in ValidationErrors: a failed validation on
+    # any sibling field would otherwise print the unwrapped api_key (SecretStr
+    # only protects successfully-constructed models).
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     base_url: str | None = None
     model: str = ""
     api_key: SecretStr | None = None
     timeout_seconds: float = Field(default=120.0, gt=0.0)
     max_output_tokens: int = Field(default=1024, gt=0)
-    # Budget bounds: a UTC-day token ceiling plus a per-drain-cycle call cap.
+    # Budget bounds: a UTC-day *soft* token ceiling plus a per-drain-cycle call
+    # cap. Admission is check-before-call with the actual spend recorded after
+    # the call, so the ledger can overshoot the ceiling by at most the final
+    # call's tokens (one in-process worker per stats.db; calls are sequential).
     # Exhaustion skips synthesis (observable via telemetry) — never blocks
     # the rest of enrichment.
     daily_token_budget: int = Field(default=250_000, ge=0)
@@ -191,10 +202,20 @@ class LlmConfig(BaseModel):
     def enabled(self) -> bool:
         return self.base_url is not None
 
+    @field_validator("base_url", mode="before")
+    @classmethod
+    def _normalize_base_url(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @model_validator(mode="after")
     def _validate(self) -> "LlmConfig":
-        if self.base_url is not None and not self.model:
-            raise ValueError("lcma.llm.model is required when lcma.llm.base_url is set")
+        if self.base_url is not None:
+            if not self.base_url.lower().startswith(("http://", "https://")):
+                raise ValueError("lcma.llm.base_url must be an http:// or https:// URL")
+            if not self.model.strip():
+                raise ValueError("lcma.llm.model is required when lcma.llm.base_url is set")
         if self.min_similarity >= self.max_similarity:
             raise ValueError("lcma.llm.min_similarity must be < max_similarity")
         return self
@@ -202,6 +223,11 @@ class LlmConfig(BaseModel):
 
 class LcmaConfig(BaseModel):
     """LCMA (Lithos Cognitive Memory Architecture) configuration subtree."""
+
+    # Secret-bearing subtree (llm.api_key): see the note on LithosConfig's
+    # model_config — every model that can be a construction entry point must
+    # hide raw input in its own ValidationErrors.
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     enabled: bool = True
     enrich_drain_interval_minutes: int = 5
@@ -316,10 +342,15 @@ class LcmaConfig(BaseModel):
 class LithosConfig(BaseSettings):
     """Main Lithos configuration."""
 
+    # hide_input_in_errors: ValidationErrors are formatted by the OUTERMOST
+    # validating model, so the root settings class must hide raw input or a
+    # failed validation anywhere in the tree echoes sibling values — including
+    # unwrapped secrets like lcma.llm.api_key — into logs/CI output.
     model_config = SettingsConfigDict(
         env_prefix="LITHOS_",
         env_nested_delimiter="__",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     server: ServerConfig = Field(default_factory=ServerConfig)

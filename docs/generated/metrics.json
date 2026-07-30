@@ -125,7 +125,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 754
+    "total_functions": 756
   },
   "domain": {
     "associations": 26,
@@ -271,7 +271,7 @@
     ],
     "cross_module_private_refs": 29,
     "tests_private_detail": [
-      "tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x18)",
+      "tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x19)",
       "tests/test_telemetry.py -> lithos.telemetry._lcma_metrics_registered (x8)",
       "tests/test_telemetry.py -> lithos.telemetry._initialized (x7)",
       "tests/test_telemetry.py -> lithos.telemetry._sse_active_clients_gauge_registered (x6)",
@@ -302,7 +302,7 @@
       "tests/test_event_delivery.py -> lithos.server._format_sse",
       "tests/test_knowledge.py -> lithos.knowledge._atomic_write"
     ],
-    "tests_private_imports": 90
+    "tests_private_imports": 91
   },
   "size": {
     "components": {
@@ -328,13 +328,13 @@
       },
       "Config": {
         "classes": 10,
-        "functions": 19,
+        "functions": 20,
         "largest_module": "lithos.config",
-        "largest_module_lines": 443,
-        "lines": 443,
+        "largest_module_lines": 474,
+        "lines": 474,
         "modules": 1,
         "public_symbols": 13,
-        "sloc": 325
+        "sloc": 340
       },
       "Coordination": {
         "classes": 8,
@@ -408,13 +408,13 @@
       },
       "LCMA": {
         "classes": 10,
-        "functions": 140,
+        "functions": 141,
         "largest_module": "lithos.lcma.stats",
-        "largest_module_lines": 1193,
-        "lines": 4837,
+        "largest_module_lines": 1200,
+        "lines": 4870,
         "modules": 11,
         "public_symbols": 29,
-        "sloc": 3896
+        "sloc": 3914
       },
       "Logging": {
         "classes": 1,
@@ -482,13 +482,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 24541,
+    "total_lines": 24605,
     "total_modules": 43,
-    "total_sloc": 19723
+    "total_sloc": 19756
   },
   "tests": {
     "ratio": 1.87,
-    "src_lines": 24541,
-    "test_lines": 45947
+    "src_lines": 24605,
+    "test_lines": 46124
   }
 }

@@ -170,3 +170,100 @@ async def test_malformed_body_raises_llm_error() -> None:
 def test_client_requires_base_url() -> None:
     with pytest.raises(ValueError, match="base_url"):
         LlmClient(LlmConfig())
+
+
+async def test_read_error_becomes_llm_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadError("connection reset mid-body")
+
+    client = _client_with(handler)
+    try:
+        with pytest.raises(LlmError, match="after retry"):
+            await client.chat(MESSAGES)
+    finally:
+        await client.close()
+
+
+async def test_remote_protocol_error_becomes_llm_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("server disconnected without response")
+
+    client = _client_with(handler)
+    try:
+        with pytest.raises(LlmError):
+            await client.chat(MESSAGES)
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": None, "completion_tokens": 5},  # null
+        {"prompt_tokens": "many", "completion_tokens": 5},  # non-numeric
+        {"prompt_tokens": -10, "completion_tokens": 5},  # negative
+        {"prompt_tokens": 100},  # completion missing
+    ],
+)
+async def test_invalid_usage_falls_back_to_estimate(usage: dict) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_ok_response(content="x" * 40, usage=usage))
+
+    client = _client_with(handler)
+    try:
+        result = await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert result.estimated
+    assert result.completion_tokens == 10  # 40 chars // 4, not the bogus usage
+
+
+async def test_json_response_false_omits_response_format() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_ok_response(content="free text"))
+
+    client = _client_with(handler)
+    try:
+        result = await client.chat(MESSAGES, json_response=False)
+    finally:
+        await client.close()
+    assert "response_format" not in seen["body"]  # type: ignore[operator]
+    assert result.text == "free text"
+
+
+async def test_total_tokens_only_usage_is_authoritative() -> None:
+    """Providers reporting only an aggregate total are measured, not estimated."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_ok_response(usage={"total_tokens": 137}))
+
+    client = _client_with(handler)
+    try:
+        result = await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert not result.estimated
+    assert result.total_tokens == 137
+
+
+async def test_partial_split_with_total_prefers_total() -> None:
+    """A broken split (null completion) with a valid total uses the total."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_ok_response(
+                usage={"prompt_tokens": 100, "completion_tokens": None, "total_tokens": 120}
+            ),
+        )
+
+    client = _client_with(handler)
+    try:
+        result = await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert not result.estimated
+    assert result.total_tokens == 120
