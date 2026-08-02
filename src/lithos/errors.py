@@ -12,6 +12,17 @@ class LithosError(Exception):
     """Base error for all Lithos operations."""
 
 
+class ConfigurationError(LithosError):
+    """Invalid configuration detected outside pydantic field validation.
+
+    Deliberately NOT a ``ValueError``: raised from inside a root-level pydantic
+    validator, a ``ValueError`` is wrapped into a ``ValidationError`` whose
+    structured forms (``.errors()`` / ``.json()``) capture the entire raw
+    config input — including secrets such as ``lcma.llm.api_key``. This class
+    propagates unwrapped, carrying only its message.
+    """
+
+
 class SearchBackendError(LithosError):
     """One or more search backends failed.
 

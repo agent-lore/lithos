@@ -32,7 +32,7 @@ Pydantic-settings configuration and resolved store paths.
 
 ## Dependencies
 
-- Depends on: —
+- Depends on: [Errors](Errors.md)
 - Used by: [CognitiveMemory](CognitiveMemory.md), [Coordination](Coordination.md), [Entrypoints](Entrypoints.md), [Events](Events.md), [Graph](Graph.md), [Knowledge](Knowledge.md), [LCMA](LCMA.md), [Provenance](Provenance.md), [Search](Search.md), [SqliteStore](SqliteStore.md), [Telemetry](Telemetry.md)
 
 [← all generated docs](../README.md)

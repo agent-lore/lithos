@@ -12,7 +12,7 @@ Standard error types and canonical MCP error envelopes.
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos.envelopes` | XS | 0 | 3 |
-| `lithos.errors` | S | 10 | 0 |
+| `lithos.errors` | S | 11 | 0 |
 
 ## Public API
 
@@ -23,6 +23,7 @@ Standard error types and canonical MCP error envelopes.
 
 ### `lithos.errors`
 - class `LithosError` — Base error for all Lithos operations.
+- class `ConfigurationError` — Invalid configuration detected outside pydantic field validation.
 - class `SearchBackendError` — One or more search backends failed.
 - class `SlugCollisionError` — Raised when a slug would collide with an existing document's slug.
 - class `IndexingError` — All search backends failed during a write operation (index or remove).
@@ -36,7 +37,7 @@ Standard error types and canonical MCP error envelopes.
 ## Dependencies
 
 - Depends on: —
-- Used by: [CognitiveMemory](CognitiveMemory.md), [Coordination](Coordination.md), [Entrypoints](Entrypoints.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [LCMA](LCMA.md), [Search](Search.md)
+- Used by: [CognitiveMemory](CognitiveMemory.md), [Config](Config.md), [Coordination](Coordination.md), [Entrypoints](Entrypoints.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [LCMA](LCMA.md), [Search](Search.md)
 
 ## ADRs
 

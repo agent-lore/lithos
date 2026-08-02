@@ -18,6 +18,7 @@ from lithos.config import (
     load_config,
     set_config,
 )
+from lithos.errors import ConfigurationError
 
 
 class TestConfigDefaults:
@@ -234,10 +235,15 @@ class TestConfigEnvironment:
         assert config.telemetry.environment is None
 
     def test_env_port_invalid_raises(self, monkeypatch):
-        """LITHOS_PORT with a non-integer value raises a clear error."""
+        """LITHOS_PORT with a non-integer value raises a clear error.
+
+        ConfigurationError, not ValidationError: a ValueError from the root
+        model validator would wrap the whole raw config tree — secrets
+        included — into the ValidationError's structured forms.
+        """
         monkeypatch.setenv("LITHOS_PORT", "abc")
 
-        with pytest.raises(ValueError, match="LITHOS_PORT must be a valid integer"):
+        with pytest.raises(ConfigurationError, match="LITHOS_PORT must be a valid integer"):
             load_config()
 
     def test_explicit_constructor_arg_not_overridden_by_env(self, monkeypatch):

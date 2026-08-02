@@ -1127,8 +1127,17 @@ class StatsStore(AsyncSqliteStore):
 
         With ``model`` set, only that model's rows are purged (e.g. after
         deciding a superseded model's adjudications should be redone); with
-        ``None``, the whole ledger is cleared. Returns rows deleted. Edges
-        already written are untouched — re-inference upserts over them.
+        ``None``, the whole ledger is cleared. Returns rows deleted.
+
+        This clears *execution markers only* — re-inference is additive.
+        Previously inferred edges are untouched: a rerun upserts over an
+        exact ``(from_id, to_id, edge_type, namespace)`` match but does not
+        remove edges the new model no longer asserts (a changed relation
+        type or direction keys a *new* edge alongside the old one).
+        Reconciliation of superseded inferred edges is deliberately out of
+        scope here and belongs to the WS2 sweep/backfill policy (slice 2),
+        which can diff ``provenance_type="inferred"`` edges against a fresh
+        adjudication before deciding what to retire.
         """
         async with self._session() as db:
             if model is None:

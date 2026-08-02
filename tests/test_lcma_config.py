@@ -11,6 +11,7 @@ from lithos.config import (
     LithosConfig,
     LlmConfig,
 )
+from lithos.errors import ConfigurationError
 
 
 class TestLcmaConfigDefaults:
@@ -313,6 +314,42 @@ class TestLlmConfigHardening:
         with pytest.raises(ValidationError) as excinfo:
             LithosConfig()
         self._assert_key_fully_absent(excinfo)
+
+    # -- Round-3 review: failures OUTSIDE LlmConfig, with a valid key present.
+    # A model validator on an enclosing model raises through a ValidationError
+    # whose structured forms carry the whole raw input — so LcmaConfig's
+    # dict-shaping validators are field-level and LITHOS_PORT parsing raises
+    # ConfigurationError (never wrapped by pydantic at all).
+
+    def test_api_key_absent_when_sibling_rerank_weights_invalid(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            LcmaConfig(
+                llm={"api_key": "sk-topsecret", "base_url": "http://ollama:11434/v1", "model": "m"},
+                rerank_weights={"bogus": 1.0},
+            )
+        self._assert_key_fully_absent(excinfo)
+
+    def test_api_key_absent_when_sibling_note_type_priors_invalid(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            LcmaConfig(
+                llm={"api_key": "sk-topsecret", "base_url": "http://ollama:11434/v1", "model": "m"},
+                note_type_priors={"bogus_type": 0.5},
+            )
+        self._assert_key_fully_absent(excinfo)
+
+    def test_api_key_absent_when_legacy_env_port_invalid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITHOS_LCMA__LLM__API_KEY", "sk-topsecret")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__BASE_URL", "http://ollama:11434/v1")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__MODEL", "m")
+        monkeypatch.setenv("LITHOS_PORT", "not-a-port")
+        with pytest.raises(ConfigurationError) as excinfo:
+            LithosConfig()
+        # Not a ValidationError: no .errors()/.json() surface exists at all.
+        assert not isinstance(excinfo.value, ValidationError)
+        for surface in (str(excinfo.value), repr(excinfo.value)):
+            assert "sk-topsecret" not in surface
 
     def test_base_url_whitespace_padding_stripped(self) -> None:
         cfg = LlmConfig(base_url="  http://ollama:11434/v1  ", model="m")

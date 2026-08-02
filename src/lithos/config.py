@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import yaml
 from pydantic import (
@@ -16,6 +16,8 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from lithos.errors import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -305,66 +307,50 @@ class LcmaConfig(BaseModel):
     usage_recency_halflife_days: float = Field(default=14.0, gt=0.0)
     usage_freq_norm_k: float = Field(default=20.0, gt=0.0)
 
-    @model_validator(mode="before")
+    # NOTE (secret redaction): these MUST stay field validators. A model
+    # validator on this class that raises ValueError produces a
+    # ValidationError whose structured forms (.errors()/.json()) carry the
+    # whole lcma input dict — including llm.api_key. A field validator's
+    # error input is scoped to that field's own value.
+    @field_validator("rerank_weights", mode="after")
     @classmethod
-    def _fill_and_renormalize_rerank_weights(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        weights = data.get("rerank_weights")
-        if weights is None:
-            return data
-        if not isinstance(weights, dict):
-            return data
+    def _fill_and_renormalize_rerank_weights(cls, value: dict[str, float]) -> dict[str, float]:
         valid_keys = set(_DEFAULT_RERANK_WEIGHTS.keys())
         # Reject unknown keys
-        unknown = set(weights.keys()) - valid_keys
+        unknown = set(value.keys()) - valid_keys
         if unknown:
             raise ValueError(
                 f"Unknown rerank_weights keys: {sorted(unknown)}. "
                 f"Allowed keys: {sorted(valid_keys)}"
             )
         # Fill missing keys with defaults and renormalize
-        missing = valid_keys - set(weights.keys())
+        missing = valid_keys - set(value.keys())
         if missing:
-            for key in missing:
-                weights[key] = _DEFAULT_RERANK_WEIGHTS[key]
-            total = sum(weights.values())
+            filled = {**value, **{key: _DEFAULT_RERANK_WEIGHTS[key] for key in missing}}
+            total = sum(filled.values())
             if total <= 0:
                 raise ValueError(
                     f"rerank_weights sum must be positive after filling missing keys, got {total:.4f}"
                 )
-            weights = {k: v / total for k, v in weights.items()}
-        else:
-            # All keys present — assert sum ≈ 1.0
-            total = sum(weights.values())
-            if abs(total - 1.0) > 0.01:
-                raise ValueError(f"rerank_weights must sum to ~1.0, got {total:.4f}")
-        data["rerank_weights"] = weights
-        return data
+            return {k: v / total for k, v in filled.items()}
+        # All keys present — assert sum ≈ 1.0
+        total = sum(value.values())
+        if abs(total - 1.0) > 0.01:
+            raise ValueError(f"rerank_weights must sum to ~1.0, got {total:.4f}")
+        return value
 
-    @model_validator(mode="before")
+    @field_validator("note_type_priors", mode="after")
     @classmethod
-    def _fill_and_validate_note_type_priors(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        priors = data.get("note_type_priors")
-        if priors is None:
-            return data
-        if not isinstance(priors, dict):
-            return data
+    def _fill_and_validate_note_type_priors(cls, value: dict[str, float]) -> dict[str, float]:
         # Reject unknown keys
-        unknown = set(priors.keys()) - _LCMA_NOTE_TYPES
+        unknown = set(value.keys()) - _LCMA_NOTE_TYPES
         if unknown:
             raise ValueError(
                 f"Unknown note_type_priors keys: {sorted(unknown)}. "
                 f"Allowed keys: {sorted(_LCMA_NOTE_TYPES)}"
             )
         # Fill missing keys with differentiated defaults
-        for nt in _LCMA_NOTE_TYPES:
-            if nt not in priors:
-                priors[nt] = _DEFAULT_NOTE_TYPE_PRIORS[nt]
-        data["note_type_priors"] = priors
-        return data
+        return {**_DEFAULT_NOTE_TYPE_PRIORS, **value}
 
 
 class LithosConfig(BaseSettings):
@@ -401,6 +387,12 @@ class LithosConfig(BaseSettings):
         explicitly set via a constructor argument.  This means
         ``LithosConfig(storage=StorageConfig(data_dir=tmp))`` is respected
         even when ``LITHOS_DATA_DIR`` is set in the environment.
+
+        Secret-redaction invariant: this validator (and any future model
+        validator on this class or LcmaConfig) must never raise ValueError —
+        the resulting ValidationError's .errors()/.json() would echo the whole
+        raw config tree, including lcma.llm.api_key. Raise
+        :class:`lithos.errors.ConfigurationError` instead.
         """
         if (data_dir := os.environ.get("LITHOS_DATA_DIR")) and (
             "data_dir" not in self.storage.model_fields_set
@@ -412,7 +404,14 @@ class LithosConfig(BaseSettings):
                 self.server.port = int(port)
                 logger.debug("Config env override: LITHOS_PORT=%s", port)
             except ValueError:
-                raise ValueError(f"LITHOS_PORT must be a valid integer, got {port!r}") from None
+                # ConfigurationError, NOT ValueError: a ValueError raised from
+                # this root model validator becomes a ValidationError whose
+                # .errors()/.json() capture the entire raw config tree —
+                # including lcma.llm.api_key. ConfigurationError propagates
+                # unwrapped, carrying only this message.
+                raise ConfigurationError(
+                    f"LITHOS_PORT must be a valid integer, got {port!r}"
+                ) from None
         if (host := os.environ.get("LITHOS_HOST")) and ("host" not in self.server.model_fields_set):
             self.server.host = host
             logger.debug("Config env override: LITHOS_HOST=%s", host)

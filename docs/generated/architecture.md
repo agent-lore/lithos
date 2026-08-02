@@ -55,6 +55,7 @@ graph TD
   CognitiveMemory --> Provenance
   CognitiveMemory --> Search
   CognitiveMemory --> Telemetry
+  Config --> Errors
   Coordination --> Config
   Coordination --> Errors
   Coordination --> Knowledge
@@ -120,32 +121,33 @@ graph TD
   linkStyle 11 stroke:#bbb
   linkStyle 12 stroke:#bbb
   linkStyle 13 stroke:#bbb
-  linkStyle 15 stroke:#bbb
-  linkStyle 18 stroke:#999,stroke-dasharray:4
-  linkStyle 20 stroke:#999,stroke-dasharray:4
+  linkStyle 14 stroke:#bbb
+  linkStyle 16 stroke:#bbb
+  linkStyle 19 stroke:#999,stroke-dasharray:4
   linkStyle 21 stroke:#999,stroke-dasharray:4
-  linkStyle 25 stroke:#999,stroke-dasharray:4
-  linkStyle 28 stroke:#999,stroke-dasharray:4
-  linkStyle 29 stroke:#bbb
+  linkStyle 22 stroke:#999,stroke-dasharray:4
+  linkStyle 26 stroke:#999,stroke-dasharray:4
+  linkStyle 29 stroke:#999,stroke-dasharray:4
   linkStyle 30 stroke:#bbb
-  linkStyle 32 stroke:#bbb
+  linkStyle 31 stroke:#bbb
   linkStyle 33 stroke:#bbb
   linkStyle 34 stroke:#bbb
-  linkStyle 37 stroke:#bbb
+  linkStyle 35 stroke:#bbb
   linkStyle 38 stroke:#bbb
-  linkStyle 42 stroke:#bbb
-  linkStyle 44 stroke:#bbb
+  linkStyle 39 stroke:#bbb
+  linkStyle 43 stroke:#bbb
   linkStyle 45 stroke:#bbb
-  linkStyle 49 stroke:#bbb
-  linkStyle 51 stroke:#bbb
-  linkStyle 53 stroke:#bbb
+  linkStyle 46 stroke:#bbb
+  linkStyle 50 stroke:#bbb
+  linkStyle 52 stroke:#bbb
   linkStyle 54 stroke:#bbb
-  linkStyle 60 stroke:#bbb
+  linkStyle 55 stroke:#bbb
   linkStyle 61 stroke:#bbb
-  linkStyle 63 stroke:#bbb
-  linkStyle 65 stroke:#bbb
+  linkStyle 62 stroke:#bbb
+  linkStyle 64 stroke:#bbb
   linkStyle 66 stroke:#bbb
-  linkStyle 68 stroke:#bbb
+  linkStyle 67 stroke:#bbb
   linkStyle 69 stroke:#bbb
   linkStyle 70 stroke:#bbb
+  linkStyle 71 stroke:#bbb
 ```

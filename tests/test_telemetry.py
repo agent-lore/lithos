@@ -1617,8 +1617,8 @@ class TestLlmInstrumentMetadata:
         from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
         import lithos.telemetry as telemetry_mod
-        from lithos.telemetry import lithos_metrics
 
+        lithos_metrics = telemetry_mod.lithos_metrics
         reader = InMemoryMetricReader()
         provider = MeterProvider(metric_readers=[reader])
         monkeypatch.setattr(
