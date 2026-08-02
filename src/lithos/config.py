@@ -6,7 +6,15 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -171,13 +179,19 @@ class LlmConfig(BaseModel):
     worker, never on the retrieve hot path.
     """
 
-    # Never echo raw input values in ValidationErrors: a failed validation on
-    # any sibling field would otherwise print the unwrapped api_key (SecretStr
-    # only protects successfully-constructed models).
+    # Defense in depth against echoing the api_key through ValidationErrors:
+    # 1. All validation below is FIELD-level, never a model validator — a model
+    #    validator's structured error (ValidationError.errors()/.json()) carries
+    #    the entire raw input dict including the unwrapped api_key, and
+    #    hide_input_in_errors only redacts the *printed* form. A field
+    #    validator's error input is limited to that field's own value.
+    # 2. hide_input_in_errors additionally redacts printed/str() forms.
     model_config = ConfigDict(hide_input_in_errors=True)
 
     base_url: str | None = None
-    model: str = ""
+    # validate_default: the "model required when enabled" check must also fire
+    # when model is simply omitted (field validators skip defaults otherwise).
+    model: str = Field(default="", validate_default=True)
     api_key: SecretStr | None = None
     timeout_seconds: float = Field(default=120.0, gt=0.0)
     max_output_tokens: int = Field(default=1024, gt=0)
@@ -205,20 +219,34 @@ class LlmConfig(BaseModel):
     @field_validator("base_url", mode="before")
     @classmethod
     def _normalize_base_url(cls, value: object) -> object:
-        if isinstance(value, str) and not value.strip():
-            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
         return value
 
-    @model_validator(mode="after")
-    def _validate(self) -> "LlmConfig":
-        if self.base_url is not None:
-            if not self.base_url.lower().startswith(("http://", "https://")):
-                raise ValueError("lcma.llm.base_url must be an http:// or https:// URL")
-            if not self.model.strip():
-                raise ValueError("lcma.llm.model is required when lcma.llm.base_url is set")
-        if self.min_similarity >= self.max_similarity:
+    @field_validator("base_url", mode="after")
+    @classmethod
+    def _check_base_url_scheme(cls, value: str | None) -> str | None:
+        if value is not None and not value.lower().startswith(("http://", "https://")):
+            raise ValueError("lcma.llm.base_url must be an http:// or https:// URL")
+        return value
+
+    @field_validator("model", mode="after")
+    @classmethod
+    def _check_model_present_when_enabled(cls, value: str, info: ValidationInfo) -> str:
+        # base_url precedes model in field order, so it is already validated
+        # and present in info.data (absent if it failed its own validation).
+        if info.data.get("base_url") is not None and not value.strip():
+            raise ValueError("lcma.llm.model is required when lcma.llm.base_url is set")
+        return value
+
+    @field_validator("max_similarity", mode="after")
+    @classmethod
+    def _check_similarity_band(cls, value: float, info: ValidationInfo) -> float:
+        min_similarity = info.data.get("min_similarity")
+        if min_similarity is not None and min_similarity >= value:
             raise ValueError("lcma.llm.min_similarity must be < max_similarity")
-        return self
+        return value
 
 
 class LcmaConfig(BaseModel):

@@ -267,3 +267,53 @@ async def test_partial_split_with_total_prefers_total() -> None:
         await client.close()
     assert not result.estimated
     assert result.total_tokens == 120
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": 1.9, "completion_tokens": 5},  # fractional
+        {"prompt_tokens": float("nan"), "completion_tokens": 5},
+        {"prompt_tokens": float("inf"), "completion_tokens": 5},
+        {"prompt_tokens": float("-inf"), "completion_tokens": 5},
+        {"total_tokens": 1.9},  # fractional aggregate
+        {"total_tokens": float("nan")},
+    ],
+)
+async def test_fractional_and_nonfinite_usage_falls_back_to_estimate(usage: dict) -> None:
+    """Round-2 review: fractional values must not truncate the ledger and
+    non-finite values must not raise past the LlmError boundary.
+
+    The body is serialized with allow_nan (emitting bare NaN/Infinity tokens,
+    which real decoders and Python's json.loads accept) because httpx's strict
+    json= kwarg refuses to encode them — the wire shape is realistic even
+    though it is not strict JSON."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.dumps(_ok_response(content="x" * 40, usage=usage))
+        return httpx.Response(200, text=body, headers={"content-type": "application/json"})
+
+    client = _client_with(handler)
+    try:
+        result = await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert result.estimated
+    assert result.completion_tokens == 10  # chars//4 estimate, not the bogus usage
+
+
+async def test_integral_float_usage_is_accepted() -> None:
+    """JSON decoders may deliver 120.0 — integral finite floats are measured."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json=_ok_response(usage={"prompt_tokens": 120.0, "completion_tokens": 30.0})
+        )
+
+    client = _client_with(handler)
+    try:
+        result = await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert not result.estimated
+    assert result.total_tokens == 150

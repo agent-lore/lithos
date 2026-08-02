@@ -273,6 +273,17 @@ class TestLithosConfigLcmaSubtree:
 class TestLlmConfigHardening:
     """Round-1 review: secret redaction on failure, empty-env normalization, scheme check."""
 
+    @staticmethod
+    def _assert_key_fully_absent(excinfo: pytest.ExceptionInfo[ValidationError]) -> None:
+        """The key must be absent from EVERY representation — printed forms AND
+        the structured errors()/json() payloads that structured logging or API
+        error serialization would emit (round-2 review: hide_input_in_errors
+        only covers the printed forms; field-level validation keeps the whole
+        input dict out of the structured error entirely)."""
+        err = excinfo.value
+        for surface in (str(err), repr(err), str(err.errors()), err.json()):
+            assert "sk-topsecret" not in surface
+
     def test_api_key_absent_from_validation_errors(self) -> None:
         with pytest.raises(ValidationError) as excinfo:
             LlmConfig(
@@ -280,8 +291,18 @@ class TestLlmConfigHardening:
                 min_similarity=0.9,
                 max_similarity=0.5,  # forces failure with the key present in input
             )
-        assert "sk-topsecret" not in str(excinfo.value)
-        assert "sk-topsecret" not in repr(excinfo.value)
+        self._assert_key_fully_absent(excinfo)
+
+    def test_api_key_absent_when_nested_in_lcma_config(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            LcmaConfig(
+                llm={
+                    "api_key": "sk-topsecret",
+                    "base_url": "http://ollama:11434/v1",
+                    "model": "   ",
+                }
+            )
+        self._assert_key_fully_absent(excinfo)
 
     def test_api_key_absent_when_propagated_through_lithos_config(
         self, monkeypatch: pytest.MonkeyPatch
@@ -291,7 +312,11 @@ class TestLlmConfigHardening:
         monkeypatch.setenv("LITHOS_LCMA__LLM__MODEL", "   ")  # blank -> validation failure
         with pytest.raises(ValidationError) as excinfo:
             LithosConfig()
-        assert "sk-topsecret" not in str(excinfo.value)
+        self._assert_key_fully_absent(excinfo)
+
+    def test_base_url_whitespace_padding_stripped(self) -> None:
+        cfg = LlmConfig(base_url="  http://ollama:11434/v1  ", model="m")
+        assert cfg.base_url == "http://ollama:11434/v1"
 
     def test_empty_or_whitespace_base_url_means_disabled(self) -> None:
         assert LlmConfig(base_url="").base_url is None

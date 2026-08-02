@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,8 +36,20 @@ _CHARS_PER_TOKEN = 4
 
 
 def _usage_int(value: object) -> int | None:
-    """Coerce a ``usage`` field to a non-negative int; ``None`` if it isn't one."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    """Coerce a ``usage`` field to a non-negative int; ``None`` if it isn't one.
+
+    Accepts ints and *integral* finite floats (JSON decoders may deliver
+    ``120.0``). Fractional, NaN, and ±infinity values return ``None`` — the
+    caller falls back to the flagged estimate — rather than silently
+    truncating the budget ledger or letting ``int()`` raise past the
+    LlmError boundary.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        if not (math.isfinite(value) and value.is_integer()):
+            return None
+    elif not isinstance(value, int):
         return None
     coerced = int(value)
     return coerced if coerced >= 0 else None

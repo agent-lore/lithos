@@ -1602,3 +1602,63 @@ class TestLcmaMetrics:
         tel_module._lcma_metrics_registered = True
         tel_module._reset_for_testing()
         assert tel_module._lcma_metrics_registered is False
+
+
+@pytest.mark.skipif(
+    not _has_otel_packages(),
+    reason="opentelemetry-sdk not installed",
+)
+class TestLlmInstrumentMetadata:
+    """Round-2 review: verify the WS1 instruments' names, kinds, units, and
+    attributes on the real SDK path, not just NoOp construction."""
+
+    def test_llm_instruments_emit_expected_metadata(self, monkeypatch) -> None:
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+        import lithos.telemetry as telemetry_mod
+        from lithos.telemetry import lithos_metrics
+
+        reader = InMemoryMetricReader()
+        provider = MeterProvider(metric_readers=[reader])
+        monkeypatch.setattr(
+            telemetry_mod, "get_meter", lambda name="lithos": provider.get_meter(name)
+        )
+        attrs = (
+            "_lcma_llm_calls",
+            "_lcma_llm_tokens",
+            "_lcma_llm_call_duration",
+            "_lcma_edge_inference_skips",
+            "_lcma_inferred_edges_written",
+        )
+        for attr in attrs:
+            monkeypatch.setattr(lithos_metrics, attr, None)
+
+        lithos_metrics.lcma_llm_calls.add(1, {"outcome": "ok"})
+        lithos_metrics.lcma_llm_tokens.add(150, {"estimated": "false"})
+        lithos_metrics.lcma_llm_call_duration.record(1234.5, {"outcome": "ok"})
+        lithos_metrics.lcma_edge_inference_skips.add(1, {"reason": "budget"})
+        lithos_metrics.lcma_inferred_edges_written.add(1, {"relation": "supports"})
+
+        data = reader.get_metrics_data()
+        metrics_by_name = {
+            m.name: m for rm in data.resource_metrics for sm in rm.scope_metrics for m in sm.metrics
+        }
+        expected_sums = {
+            "lithos.lcma.llm.calls": ({"outcome": "ok"}, 1),
+            "lithos.lcma.llm.tokens": ({"estimated": "false"}, 150),
+            "lithos.lcma.edge_inference.skips": ({"reason": "budget"}, 1),
+            "lithos.lcma.edge_inference.edges_written": ({"relation": "supports"}, 1),
+        }
+        for name, (attributes, value) in expected_sums.items():
+            metric = metrics_by_name[name]
+            point = metric.data.data_points[0]
+            assert dict(point.attributes) == attributes, name
+            assert point.value == value, name
+            assert metric.data.is_monotonic, name  # counters, not gauges
+
+        histogram = metrics_by_name["lithos.lcma.llm.call_duration_ms"]
+        assert histogram.unit == "ms"
+        hist_point = histogram.data.data_points[0]
+        assert hist_point.sum == pytest.approx(1234.5)
+        assert dict(hist_point.attributes) == {"outcome": "ok"}
