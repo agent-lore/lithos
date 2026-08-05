@@ -3,11 +3,21 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from lithos.errors import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +168,131 @@ class EventsConfig(BaseModel):
     max_sse_clients: int = 50
 
 
+class LlmConfig(BaseModel):
+    """OpenAI-compatible chat-completions endpoint for background LLM synthesis (WS1).
+
+    Synthesis is enabled iff ``base_url`` is set — one knob that cannot disagree
+    with itself; unsetting it is the operational kill switch. An empty or
+    whitespace-only ``base_url`` (common when deployment tooling exports blank
+    env vars) normalises to ``None`` — i.e. disabled — rather than producing a
+    client that fails on every call. The endpoint may be local (Ollama/
+    llama.cpp/vLLM ``/v1`` shims keep privacy-first deployments whole) or a
+    hosted API. Calls happen only inside the ``lithos-enrich`` background
+    worker, never on the retrieve hot path.
+    """
+
+    # Defense in depth against echoing the api_key through ValidationErrors:
+    # 1. All validation below is FIELD-level, never a model validator — a model
+    #    validator's structured error (ValidationError.errors()/.json()) carries
+    #    the entire raw input dict including the unwrapped api_key, and
+    #    hide_input_in_errors only redacts the *printed* form. A field
+    #    validator's error input is limited to that field's own value.
+    # 2. hide_input_in_errors additionally redacts printed/str() forms.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    base_url: str | None = None
+    # validate_default: the "model required when enabled" check must also fire
+    # when model is simply omitted (field validators skip defaults otherwise).
+    model: str = Field(default="", validate_default=True)
+    api_key: SecretStr | None = None
+    timeout_seconds: float = Field(default=120.0, gt=0.0)
+    max_output_tokens: int = Field(default=1024, gt=0)
+    # Budget bounds: a UTC-day *soft* token ceiling plus a per-drain-cycle call
+    # cap. Admission is check-before-call with the actual spend recorded after
+    # the call, so the ledger can overshoot the ceiling by at most the final
+    # call's tokens (one in-process worker per stats.db; calls are sequential).
+    # Exhaustion skips synthesis (observable via telemetry) — never blocks
+    # the rest of enrichment.
+    daily_token_budget: int = Field(default=250_000, ge=0)
+    max_calls_per_drain: int = Field(default=10, ge=0)
+    # Typed-edge inference: adjudications below the floor are discarded.
+    confidence_floor: float = Field(default=0.6, ge=0.0, le=1.0)
+    neighbour_k: int = Field(default=5, ge=1)
+    # Candidate similarity band: near-duplicates (related_to's job) and
+    # far-off pairs both waste adjudication tokens.
+    min_similarity: float = Field(default=0.35, ge=0.0, le=1.0)
+    max_similarity: float = Field(default=0.92, ge=0.0, le=1.0)
+    snippet_chars: int = Field(default=700, gt=0)
+
+    @property
+    def enabled(self) -> bool:
+        return self.base_url is not None
+
+    @field_validator("base_url", mode="before")
+    @classmethod
+    def _normalize_base_url(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+    @field_validator("base_url", mode="after")
+    @classmethod
+    def _check_base_url_scheme(cls, value: str | None) -> str | None:
+        if value is not None and not value.lower().startswith(("http://", "https://")):
+            raise ValueError("lcma.llm.base_url must be an http:// or https:// URL")
+        return value
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _check_api_key_header_safe(cls, value: object) -> object:
+        """Reject api_key values that cannot travel safely in an HTTP header.
+
+        Header-unsafe keys must never reach the client: h11 echoes the raw
+        offending header bytes (``Authorization: Bearer <key>`` included) into
+        its LocalProtocolError, and a non-ASCII key raises UnicodeEncodeError
+        whose repr carries the full value. Outer whitespace is stripped —
+        file-backed secrets commonly carry a trailing newline — and an
+        empty/whitespace-only value normalises to None (disabled), matching
+        base_url.
+
+        Every rejection raises ConfigurationError, never ValueError: a
+        ValueError here would become a ValidationError whose structured
+        .errors()/.json() echo the offending value as the field input — the
+        exact leak this validator exists to close. Messages are value-free
+        for the same reason.
+        """
+        if value is None:
+            return None
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        if not isinstance(value, str):
+            raise ConfigurationError("lcma.llm.api_key must be a string (offending value withheld)")
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if not (stripped.isascii() and stripped.isprintable() and " " not in stripped):
+            raise ConfigurationError(
+                "lcma.llm.api_key contains whitespace, control, or non-ASCII "
+                "characters (offending value withheld); only visible ASCII is supported"
+            )
+        return stripped
+
+    @field_validator("model", mode="after")
+    @classmethod
+    def _check_model_present_when_enabled(cls, value: str, info: ValidationInfo) -> str:
+        # base_url precedes model in field order, so it is already validated
+        # and present in info.data (absent if it failed its own validation).
+        if info.data.get("base_url") is not None and not value.strip():
+            raise ValueError("lcma.llm.model is required when lcma.llm.base_url is set")
+        return value
+
+    @field_validator("max_similarity", mode="after")
+    @classmethod
+    def _check_similarity_band(cls, value: float, info: ValidationInfo) -> float:
+        min_similarity = info.data.get("min_similarity")
+        if min_similarity is not None and min_similarity >= value:
+            raise ValueError("lcma.llm.min_similarity must be < max_similarity")
+        return value
+
+
 class LcmaConfig(BaseModel):
     """LCMA (Lithos Cognitive Memory Architecture) configuration subtree."""
+
+    # Secret-bearing subtree (llm.api_key): see the note on LithosConfig's
+    # model_config — every model that can be a construction entry point must
+    # hide raw input in its own ValidationErrors.
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     enabled: bool = True
     enrich_drain_interval_minutes: int = 5
@@ -174,7 +307,7 @@ class LcmaConfig(BaseModel):
     decay_inactive_days: int = 7
     sweep_interval_hours: int = 24
     sweep_startup_delay_minutes: int = 10
-    llm_provider: str | None = None
+    llm: LlmConfig = Field(default_factory=LlmConfig)
     # Max entities the extractor keeps per document; backstop against
     # citation/glossary explosions (#320). 0 disables the cap.
     entity_max_per_doc: int = Field(default=50, ge=0)
@@ -209,75 +342,64 @@ class LcmaConfig(BaseModel):
     usage_recency_halflife_days: float = Field(default=14.0, gt=0.0)
     usage_freq_norm_k: float = Field(default=20.0, gt=0.0)
 
-    @model_validator(mode="before")
+    # NOTE (secret redaction): these MUST stay field validators. A model
+    # validator on this class that raises ValueError produces a
+    # ValidationError whose structured forms (.errors()/.json()) carry the
+    # whole lcma input dict — including llm.api_key. A field validator's
+    # error input is scoped to that field's own value.
+    @field_validator("rerank_weights", mode="after")
     @classmethod
-    def _fill_and_renormalize_rerank_weights(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        weights = data.get("rerank_weights")
-        if weights is None:
-            return data
-        if not isinstance(weights, dict):
-            return data
+    def _fill_and_renormalize_rerank_weights(cls, value: dict[str, float]) -> dict[str, float]:
         valid_keys = set(_DEFAULT_RERANK_WEIGHTS.keys())
         # Reject unknown keys
-        unknown = set(weights.keys()) - valid_keys
+        unknown = set(value.keys()) - valid_keys
         if unknown:
             raise ValueError(
                 f"Unknown rerank_weights keys: {sorted(unknown)}. "
                 f"Allowed keys: {sorted(valid_keys)}"
             )
         # Fill missing keys with defaults and renormalize
-        missing = valid_keys - set(weights.keys())
+        missing = valid_keys - set(value.keys())
         if missing:
-            for key in missing:
-                weights[key] = _DEFAULT_RERANK_WEIGHTS[key]
-            total = sum(weights.values())
+            filled = {**value, **{key: _DEFAULT_RERANK_WEIGHTS[key] for key in missing}}
+            total = sum(filled.values())
             if total <= 0:
                 raise ValueError(
                     f"rerank_weights sum must be positive after filling missing keys, got {total:.4f}"
                 )
-            weights = {k: v / total for k, v in weights.items()}
-        else:
-            # All keys present — assert sum ≈ 1.0
-            total = sum(weights.values())
-            if abs(total - 1.0) > 0.01:
-                raise ValueError(f"rerank_weights must sum to ~1.0, got {total:.4f}")
-        data["rerank_weights"] = weights
-        return data
+            return {k: v / total for k, v in filled.items()}
+        # All keys present — assert sum ≈ 1.0
+        total = sum(value.values())
+        if abs(total - 1.0) > 0.01:
+            raise ValueError(f"rerank_weights must sum to ~1.0, got {total:.4f}")
+        return value
 
-    @model_validator(mode="before")
+    @field_validator("note_type_priors", mode="after")
     @classmethod
-    def _fill_and_validate_note_type_priors(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        priors = data.get("note_type_priors")
-        if priors is None:
-            return data
-        if not isinstance(priors, dict):
-            return data
+    def _fill_and_validate_note_type_priors(cls, value: dict[str, float]) -> dict[str, float]:
         # Reject unknown keys
-        unknown = set(priors.keys()) - _LCMA_NOTE_TYPES
+        unknown = set(value.keys()) - _LCMA_NOTE_TYPES
         if unknown:
             raise ValueError(
                 f"Unknown note_type_priors keys: {sorted(unknown)}. "
                 f"Allowed keys: {sorted(_LCMA_NOTE_TYPES)}"
             )
         # Fill missing keys with differentiated defaults
-        for nt in _LCMA_NOTE_TYPES:
-            if nt not in priors:
-                priors[nt] = _DEFAULT_NOTE_TYPE_PRIORS[nt]
-        data["note_type_priors"] = priors
-        return data
+        return {**_DEFAULT_NOTE_TYPE_PRIORS, **value}
 
 
 class LithosConfig(BaseSettings):
     """Main Lithos configuration."""
 
+    # hide_input_in_errors: ValidationErrors are formatted by the OUTERMOST
+    # validating model, so the root settings class must hide raw input or a
+    # failed validation anywhere in the tree echoes sibling values — including
+    # unwrapped secrets like lcma.llm.api_key — into logs/CI output.
     model_config = SettingsConfigDict(
         env_prefix="LITHOS_",
         env_nested_delimiter="__",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     server: ServerConfig = Field(default_factory=ServerConfig)
@@ -300,6 +422,12 @@ class LithosConfig(BaseSettings):
         explicitly set via a constructor argument.  This means
         ``LithosConfig(storage=StorageConfig(data_dir=tmp))`` is respected
         even when ``LITHOS_DATA_DIR`` is set in the environment.
+
+        Secret-redaction invariant: this validator (and any future model
+        validator on this class or LcmaConfig) must never raise ValueError —
+        the resulting ValidationError's .errors()/.json() would echo the whole
+        raw config tree, including lcma.llm.api_key. Raise
+        :class:`lithos.errors.ConfigurationError` instead.
         """
         if (data_dir := os.environ.get("LITHOS_DATA_DIR")) and (
             "data_dir" not in self.storage.model_fields_set
@@ -311,7 +439,14 @@ class LithosConfig(BaseSettings):
                 self.server.port = int(port)
                 logger.debug("Config env override: LITHOS_PORT=%s", port)
             except ValueError:
-                raise ValueError(f"LITHOS_PORT must be a valid integer, got {port!r}") from None
+                # ConfigurationError, NOT ValueError: a ValueError raised from
+                # this root model validator becomes a ValidationError whose
+                # .errors()/.json() capture the entire raw config tree —
+                # including lcma.llm.api_key. ConfigurationError propagates
+                # unwrapped, carrying only this message.
+                raise ConfigurationError(
+                    f"LITHOS_PORT must be a valid integer, got {port!r}"
+                ) from None
         if (host := os.environ.get("LITHOS_HOST")) and ("host" not in self.server.model_fields_set):
             self.server.host = host
             logger.debug("Config env override: LITHOS_HOST=%s", host)

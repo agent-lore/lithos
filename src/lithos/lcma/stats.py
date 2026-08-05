@@ -9,6 +9,13 @@ Tables (MVP 1):
   enrich_queue    — queue for deferred enrichment jobs
   working_memory  — per-task node activation tracking
   receipts        — audit trail for every lithos_retrieve call
+
+Tables (MVP 2 consolidation): task_consolidation_log, consolidation_edge_ops,
+consolidation_salience_ops — idempotency ledgers for task consolidation.
+
+Tables (MVP 3 WS1 LLM synthesis):
+  llm_budget          — UTC-day token/call spend ledger (soft daily ceiling)
+  edge_inference_log  — (node_id, doc_version, inference_version) idempotency
 """
 
 from __future__ import annotations
@@ -117,6 +124,23 @@ CREATE TABLE IF NOT EXISTS consolidation_salience_ops (
     node_id TEXT NOT NULL,
     applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (task_id, node_id)
+);
+
+CREATE TABLE IF NOT EXISTS llm_budget (
+    day TEXT PRIMARY KEY,
+    tokens_spent INTEGER NOT NULL DEFAULT 0,
+    calls_made INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS edge_inference_log (
+    node_id TEXT NOT NULL,
+    doc_version INTEGER NOT NULL,
+    inference_version INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    edges_written INTEGER NOT NULL DEFAULT 0,
+    inferred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (node_id, doc_version, inference_version)
 );
 
 CREATE INDEX IF NOT EXISTS idx_receipts_ts ON receipts(ts);
@@ -1024,6 +1048,105 @@ class StatsStore(AsyncSqliteStore):
                 "INSERT OR IGNORE INTO consolidation_salience_ops (task_id, node_id) VALUES (?, ?)",
                 (task_id, node_id),
             )
+
+    # ------------------------------------------------------------------
+    # LLM synthesis budget + idempotency (WS1)
+    # ------------------------------------------------------------------
+
+    async def get_llm_spend(self, day: str) -> tuple[int, int]:
+        """Return ``(tokens_spent, calls_made)`` for the UTC day key ``YYYY-MM-DD``."""
+        async with self._session() as db:
+            cursor = await db.execute(
+                "SELECT tokens_spent, calls_made FROM llm_budget WHERE day = ?",
+                (day,),
+            )
+            row = await cursor.fetchone()
+            return (int(row[0]), int(row[1])) if row is not None else (0, 0)
+
+    async def record_llm_spend(self, day: str, tokens: int) -> None:
+        """Add one call's token spend to *day*'s ledger row (atomic upsert).
+
+        The recording itself is atomic, but budget *admission* is a separate
+        read (:meth:`get_llm_spend`) before an external call — the daily budget
+        is therefore a soft ceiling with bounded overshoot (at most the final
+        call's tokens, given the single sequential in-process enrich worker),
+        not a hard reservation. See ``LlmConfig.daily_token_budget``.
+        """
+        async with self._session() as db:
+            await db.execute(
+                """INSERT INTO llm_budget (day, tokens_spent, calls_made, updated_at)
+                   VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+                   ON CONFLICT(day) DO UPDATE SET
+                       tokens_spent = tokens_spent + excluded.tokens_spent,
+                       calls_made = calls_made + 1,
+                       updated_at = excluded.updated_at""",
+                (day, max(0, tokens)),
+            )
+
+    async def has_edge_inference(
+        self, node_id: str, doc_version: int, inference_version: int
+    ) -> bool:
+        """Return ``True`` if inference already ran for this identity triple.
+
+        ``inference_version`` is the caller's code-level policy fingerprint
+        (prompt schema / relation vocab / parsing semantics — owned by the
+        inference engine). Bumping it invalidates every prior run, so a
+        prompt or policy change reprocesses unchanged notes naturally. A
+        *model/config* change deliberately does NOT invalidate (switching
+        models must not silently re-burn the whole corpus budget) — the
+        supported reset for that is :meth:`purge_edge_inference_log`.
+        """
+        async with self._session() as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM edge_inference_log "
+                "WHERE node_id = ? AND doc_version = ? AND inference_version = ?",
+                (node_id, doc_version, inference_version),
+            )
+            return await cursor.fetchone() is not None
+
+    async def record_edge_inference(
+        self,
+        node_id: str,
+        doc_version: int,
+        inference_version: int,
+        *,
+        model: str,
+        edges_written: int,
+    ) -> None:
+        """Record an inference run for the identity triple (INSERT OR IGNORE)."""
+        async with self._session() as db:
+            await db.execute(
+                """INSERT OR IGNORE INTO edge_inference_log
+                   (node_id, doc_version, inference_version, model, edges_written)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (node_id, doc_version, inference_version, model, edges_written),
+            )
+
+    async def purge_edge_inference_log(self, *, model: str | None = None) -> int:
+        """Delete inference-ledger rows; the operator reset for re-inference.
+
+        With ``model`` set, only that model's rows are purged (e.g. after
+        deciding a superseded model's adjudications should be redone); with
+        ``None``, the whole ledger is cleared. Returns rows deleted.
+
+        This clears *execution markers only* — re-inference is additive.
+        Previously inferred edges are untouched: a rerun upserts over an
+        exact ``(from_id, to_id, edge_type, namespace)`` match but does not
+        remove edges the new model no longer asserts (a changed relation
+        type or direction keys a *new* edge alongside the old one).
+        Reconciliation of superseded inferred edges is deliberately out of
+        scope here and belongs to the WS2 sweep/backfill policy (slice 2),
+        which can diff ``provenance_type="inferred"`` edges against a fresh
+        adjudication before deciding what to retire.
+        """
+        async with self._session() as db:
+            if model is None:
+                cursor = await db.execute("DELETE FROM edge_inference_log")
+            else:
+                cursor = await db.execute(
+                    "DELETE FROM edge_inference_log WHERE model = ?", (model,)
+                )
+            return cursor.rowcount
 
     async def update_salience_and_record_consolidation(
         self, *, node_id: str, delta: float, task_id: str

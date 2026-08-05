@@ -11,7 +11,7 @@ Pydantic-settings configuration and resolved store paths.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.config` | M | 9 | 3 |
+| `lithos.config` | M | 10 | 3 |
 
 ## Public API
 
@@ -23,6 +23,7 @@ Pydantic-settings configuration and resolved store paths.
 - class `TelemetryConfig` — OpenTelemetry configuration.
 - class `IndexConfig` — Index configuration.
 - class `EventsConfig` — Internal event bus configuration.
+- class `LlmConfig` — OpenAI-compatible chat-completions endpoint for background LLM synthesis (WS1).
 - class `LcmaConfig` — LCMA (Lithos Cognitive Memory Architecture) configuration subtree.
 - class `LithosConfig` — Main Lithos configuration.
 - def `load_config` — Load configuration from file and/or environment.
@@ -31,7 +32,7 @@ Pydantic-settings configuration and resolved store paths.
 
 ## Dependencies
 
-- Depends on: —
+- Depends on: [Errors](Errors.md)
 - Used by: [CognitiveMemory](CognitiveMemory.md), [Coordination](Coordination.md), [Entrypoints](Entrypoints.md), [Events](Events.md), [Graph](Graph.md), [Knowledge](Knowledge.md), [LCMA](LCMA.md), [Provenance](Provenance.md), [Search](Search.md), [SqliteStore](SqliteStore.md), [Telemetry](Telemetry.md)
 
 [← all generated docs](../README.md)

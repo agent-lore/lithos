@@ -12,6 +12,19 @@ class LithosError(Exception):
     """Base error for all Lithos operations."""
 
 
+class ConfigurationError(LithosError):
+    """Invalid configuration whose details must not pass through pydantic.
+
+    Deliberately NOT a ``ValueError``: raised from inside a pydantic
+    validator, a ``ValueError`` is wrapped into a ``ValidationError`` whose
+    structured forms (``.errors()`` / ``.json()``) capture the raw offending
+    input — the entire config tree for a model validator, the field's own
+    value for a field validator. Either way that can echo secrets such as
+    ``lcma.llm.api_key``. This class propagates unwrapped, carrying only its
+    (value-free) message.
+    """
+
+
 class SearchBackendError(LithosError):
     """One or more search backends failed.
 
@@ -144,4 +157,13 @@ class RetrieveTimeout(CognitiveMemoryError):
     Reserved for the Phase A gather timeout (when LcmaConfig grows the knob).
     Defined now so #258/#259/#260 — and a future timeout slice — share one
     base hierarchy.
+    """
+
+
+class LlmError(CognitiveMemoryError):
+    """Background LLM synthesis call failed (transport, HTTP, or malformed body).
+
+    Raised only inside the ``lithos-enrich`` worker; enrichment catches it and
+    completes the item without synthesis — an LLM outage must never fail or
+    requeue the surrounding enrich work.
     """

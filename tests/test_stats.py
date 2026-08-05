@@ -51,6 +51,8 @@ class TestStatsStoreCreation:
             "task_consolidation_log",
             "consolidation_edge_ops",
             "consolidation_salience_ops",
+            "llm_budget",
+            "edge_inference_log",
         }
         assert tables == expected
 
@@ -451,6 +453,8 @@ class TestCorruptRecovery:
                 "task_consolidation_log",
                 "consolidation_edge_ops",
                 "consolidation_salience_ops",
+                "llm_budget",
+                "edge_inference_log",
             }
         finally:
             await store.close()
@@ -1278,3 +1282,133 @@ class TestSalienceDistribution:
         for bad in (-0.1, 1.5, float("nan"), float("inf")):
             with pytest.raises(ValueError, match="finite value in"):
                 await stats_store.recalibrate_salience_floor(bad)
+
+
+class TestLlmBudget:
+    """WS1: day-keyed token/call ledger for background LLM synthesis."""
+
+    async def test_unknown_day_reads_zero(self, stats_store: StatsStore) -> None:
+        assert await stats_store.get_llm_spend("2026-07-25") == (0, 0)
+
+    async def test_spend_accumulates_atomically(self, stats_store: StatsStore) -> None:
+        await stats_store.record_llm_spend("2026-07-25", 100)
+        await stats_store.record_llm_spend("2026-07-25", 250)
+        assert await stats_store.get_llm_spend("2026-07-25") == (350, 2)
+
+    async def test_days_are_isolated(self, stats_store: StatsStore) -> None:
+        await stats_store.record_llm_spend("2026-07-25", 100)
+        await stats_store.record_llm_spend("2026-07-26", 7)
+        assert await stats_store.get_llm_spend("2026-07-25") == (100, 1)
+        assert await stats_store.get_llm_spend("2026-07-26") == (7, 1)
+
+    async def test_negative_tokens_clamped(self, stats_store: StatsStore) -> None:
+        # A degenerate estimate must never decrement the ledger.
+        await stats_store.record_llm_spend("2026-07-25", -50)
+        assert await stats_store.get_llm_spend("2026-07-25") == (0, 1)
+
+
+class TestEdgeInferenceLog:
+    """WS1: (node_id, doc_version, inference_version) idempotency ledger."""
+
+    async def test_absent_by_default(self, stats_store: StatsStore) -> None:
+        assert not await stats_store.has_edge_inference("n1", 1, 1)
+
+    async def test_record_then_present(self, stats_store: StatsStore) -> None:
+        await stats_store.record_edge_inference("n1", 1, 1, model="qwen3", edges_written=3)
+        assert await stats_store.has_edge_inference("n1", 1, 1)
+        # A content bump (new doc version) is a fresh slate.
+        assert not await stats_store.has_edge_inference("n1", 2, 1)
+        # A policy bump (new inference version) is a fresh slate too — this is
+        # the invalidation lever for prompt/vocab/parse changes.
+        assert not await stats_store.has_edge_inference("n1", 1, 2)
+        # Other nodes unaffected.
+        assert not await stats_store.has_edge_inference("n2", 1, 1)
+
+    async def test_record_is_idempotent(self, stats_store: StatsStore) -> None:
+        await stats_store.record_edge_inference("n1", 1, 1, model="qwen3", edges_written=0)
+        await stats_store.record_edge_inference("n1", 1, 1, model="other", edges_written=9)
+        assert await stats_store.has_edge_inference("n1", 1, 1)
+
+    async def test_persisted_audit_fields(self, stats_store: StatsStore) -> None:
+        """The ledger is an audit trail: model + edges_written must persist as given,
+        and the first write must win (INSERT OR IGNORE), not be silently replaced."""
+        await stats_store.record_edge_inference("n1", 1, 1, model="qwen3", edges_written=3)
+        await stats_store.record_edge_inference("n1", 1, 1, model="other", edges_written=9)
+        conn = sqlite3.connect(str(stats_store.db_path))
+        try:
+            row = conn.execute(
+                "SELECT model, edges_written, inferred_at FROM edge_inference_log "
+                "WHERE node_id = ? AND doc_version = ? AND inference_version = ?",
+                ("n1", 1, 1),
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row is not None
+        assert row[0] == "qwen3"  # first write wins
+        assert row[1] == 3
+        assert row[2] is not None
+
+    async def test_purge_all_and_by_model(self, stats_store: StatsStore) -> None:
+        """purge_edge_inference_log is the supported operator reset for
+        model-independent first-write-forever semantics."""
+        await stats_store.record_edge_inference("n1", 1, 1, model="old", edges_written=1)
+        await stats_store.record_edge_inference("n2", 1, 1, model="new", edges_written=1)
+        assert await stats_store.purge_edge_inference_log(model="old") == 1
+        assert not await stats_store.has_edge_inference("n1", 1, 1)
+        assert await stats_store.has_edge_inference("n2", 1, 1)
+        assert await stats_store.purge_edge_inference_log() == 1
+        assert not await stats_store.has_edge_inference("n2", 1, 1)
+
+
+class TestLlmBudgetConcurrency:
+    """Round-2 review: the race-free claim needs concurrent writers, not one store."""
+
+    async def test_concurrent_stores_accumulate_exactly(self, test_config: LithosConfig) -> None:
+        """Two store instances (separate connections) upserting the same day row
+        concurrently must lose no spend — the single-statement ON CONFLICT
+        upsert is the atomicity boundary, not the per-store lock."""
+        a, b = StatsStore(test_config), StatsStore(test_config)
+        await a.open()
+        await b.open()
+        try:
+            await asyncio.gather(
+                *(store.record_llm_spend("2026-08-02", 10) for store in (a, b) for _ in range(25))
+            )
+            assert await a.get_llm_spend("2026-08-02") == (500, 50)
+            assert await b.get_llm_spend("2026-08-02") == (500, 50)
+        finally:
+            await a.close()
+            await b.close()
+
+
+class TestAdditiveTablesOnExistingDb:
+    """Round-2 review: a populated pre-WS1 stats.db gains the new tables on open
+    without losing rows (CREATE TABLE IF NOT EXISTS re-applied per open)."""
+
+    async def test_pre_ws1_db_gains_ledgers_and_keeps_rows(self, test_config: LithosConfig) -> None:
+        store = StatsStore(test_config)
+        await store.open()
+        await store.increment_node_stats(node_id="survivor")
+        await store.close()
+
+        # Simulate a pre-WS1 database: drop the two new tables.
+        conn = sqlite3.connect(str(store.db_path))
+        try:
+            conn.execute("DROP TABLE llm_budget")
+            conn.execute("DROP TABLE edge_inference_log")
+            conn.commit()
+        finally:
+            conn.close()
+
+        reopened = StatsStore(test_config)
+        await reopened.open()
+        try:
+            # New tables exist and work...
+            await reopened.record_llm_spend("2026-08-02", 5)
+            assert await reopened.get_llm_spend("2026-08-02") == (5, 1)
+            assert not await reopened.has_edge_inference("survivor", 1, 1)
+            # ...and pre-existing data survived.
+            row = await reopened.get_node_stats("survivor")
+            assert row is not None and row["retrieval_count"] == 1
+        finally:
+            await reopened.close()

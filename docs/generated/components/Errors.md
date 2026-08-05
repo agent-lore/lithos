@@ -12,7 +12,7 @@ Standard error types and canonical MCP error envelopes.
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos.envelopes` | XS | 0 | 3 |
-| `lithos.errors` | S | 9 | 0 |
+| `lithos.errors` | S | 11 | 0 |
 
 ## Public API
 
@@ -23,6 +23,7 @@ Standard error types and canonical MCP error envelopes.
 
 ### `lithos.errors`
 - class `LithosError` — Base error for all Lithos operations.
+- class `ConfigurationError` — Invalid configuration whose details must not pass through pydantic.
 - class `SearchBackendError` — One or more search backends failed.
 - class `SlugCollisionError` — Raised when a slug would collide with an existing document's slug.
 - class `IndexingError` — All search backends failed during a write operation (index or remove).
@@ -31,11 +32,12 @@ Standard error types and canonical MCP error envelopes.
 - class `CognitiveMemoryError` — Base error for any failure originating inside CognitiveMemory.
 - class `ScoutFailure` — A single retrieval scout's backend raised.
 - class `RetrieveTimeout` — Retrieve exceeded its configured wall-clock budget.
+- class `LlmError` — Background LLM synthesis call failed (transport, HTTP, or malformed body).
 
 ## Dependencies
 
 - Depends on: —
-- Used by: [CognitiveMemory](CognitiveMemory.md), [Coordination](Coordination.md), [Entrypoints](Entrypoints.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [LCMA](LCMA.md), [Search](Search.md)
+- Used by: [CognitiveMemory](CognitiveMemory.md), [Config](Config.md), [Coordination](Coordination.md), [Entrypoints](Entrypoints.md), [Intake](Intake.md), [Knowledge](Knowledge.md), [LCMA](LCMA.md), [Search](Search.md)
 
 ## ADRs
 

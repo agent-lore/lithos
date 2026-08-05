@@ -53,7 +53,7 @@ Exit criteria (all MVPs):
 - [ ] Create `data/.lithos/edges.db` with `edges` table and indexes
 - [ ] Create `data/.lithos/stats.db` with `node_stats`, `coactivation`, `enrich_queue`, and `working_memory` tables (`enrich_queue`: `id`, `trigger_type`, `node_id`, `task_id`, `triggered_at`, `processed_at`; index on `processed_at`; `working_memory`: `task_id`, `node_id`, `activation_count`, `first_seen_at`, `last_seen_at`, `last_receipt_id`; PK `(task_id, node_id)`; index on `task_id`)
 - [ ] Add `receipts` table to `stats.db` (schema: `id` TEXT PK, `ts`, `query`, `namespace_filter`, `agent_id`, `task_id`, `temperature`, `scouts_fired`, `candidates_considered`, `terrace_reached`, `final_nodes`, `conflicts_surfaced`; indexes on `ts`, `task_id`, `agent_id`)
-- [ ] Add `LithosConfig.lcma` configuration subtree (`LcmaConfig` schema in design doc §7.z): `enabled`, `enrich_drain_interval_minutes`, `rerank_weights`, `note_type_priors`, `temperature_default`, `temperature_edge_threshold`, `wm_eviction_days`, `llm_provider`
+- [ ] Add `LithosConfig.lcma` configuration subtree (`LcmaConfig` schema in design doc §7.z): `enabled`, `enrich_drain_interval_minutes`, `rerank_weights`, `note_type_priors`, `temperature_default`, `temperature_edge_threshold`, `wm_eviction_days`, `llm` (nested `LlmConfig`, WS1)
 
 ### Retrieval
 - [ ] Add `lithos_retrieve` tool orchestrating scouts internally
@@ -158,7 +158,7 @@ Exit criteria (all MVPs):
 
 **WS1 — LLM-synthesis backbone**
 
-- [ ] Optional `LithosConfig.lcma.llm_provider` (local or external) wired into `lithos-enrich`; background, budget-bounded, provenance-stamped, idempotent
+- [ ] Optional LLM provider (nested `LithosConfig.lcma.llm` — one OpenAI-compatible endpoint, local or external; enabled iff `base_url` set, env `LITHOS_LCMA__LLM__BASE_URL`/`__MODEL`) wired into `lithos-enrich`; background, budget-bounded, provenance-stamped, idempotent
 
 **WS2 — Typed-edge inference**
 

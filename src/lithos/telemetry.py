@@ -654,6 +654,11 @@ class _LithosMetrics:
         self._lcma_salience_mean: Any = None
         self._lcma_salience_fraction_below_floor: Any = None
         self._lcma_salience_node_count: Any = None
+        self._lcma_llm_calls: Any = None
+        self._lcma_llm_tokens: Any = None
+        self._lcma_llm_call_duration: Any = None
+        self._lcma_edge_inference_skips: Any = None
+        self._lcma_inferred_edges_written: Any = None
 
     @property
     def knowledge_ops(self) -> Any:
@@ -1021,6 +1026,57 @@ class _LithosMetrics:
                 description="Number of node_stats rows (daily snapshot)",
             )
         return self._lcma_salience_node_count
+
+    @property
+    def lcma_llm_calls(self) -> Any:
+        """Counter: background LLM synthesis calls, attr outcome=ok|error|parse_error."""
+        if self._lcma_llm_calls is None:
+            self._lcma_llm_calls = get_meter().create_counter(
+                "lithos.lcma.llm.calls",
+                description="Background LLM synthesis calls by outcome",
+            )
+        return self._lcma_llm_calls
+
+    @property
+    def lcma_llm_tokens(self) -> Any:
+        """Counter: tokens spent on LLM synthesis, attr estimated=true|false."""
+        if self._lcma_llm_tokens is None:
+            self._lcma_llm_tokens = get_meter().create_counter(
+                "lithos.lcma.llm.tokens",
+                description="Prompt+completion tokens spent on LLM synthesis",
+            )
+        return self._lcma_llm_tokens
+
+    @property
+    def lcma_llm_call_duration(self) -> Any:
+        """Histogram: LLM synthesis call wall-clock duration in ms."""
+        if self._lcma_llm_call_duration is None:
+            self._lcma_llm_call_duration = get_meter().create_histogram(
+                "lithos.lcma.llm.call_duration_ms",
+                unit="ms",
+                description="LLM synthesis call duration",
+            )
+        return self._lcma_llm_call_duration
+
+    @property
+    def lcma_edge_inference_skips(self) -> Any:
+        """Counter: inference skipped, attr reason=budget|call_cap|op_log|no_candidates."""
+        if self._lcma_edge_inference_skips is None:
+            self._lcma_edge_inference_skips = get_meter().create_counter(
+                "lithos.lcma.edge_inference.skips",
+                description="Typed-edge inference skips by reason",
+            )
+        return self._lcma_edge_inference_skips
+
+    @property
+    def lcma_inferred_edges_written(self) -> Any:
+        """Counter: inferred edges written to edges.db, attr relation=<type>."""
+        if self._lcma_inferred_edges_written is None:
+            self._lcma_inferred_edges_written = get_meter().create_counter(
+                "lithos.lcma.edge_inference.edges_written",
+                description="LLM-inferred typed edges written, by relation type",
+            )
+        return self._lcma_inferred_edges_written
 
 
 def register_active_claims_observer(get_active_claim_count: Callable[[], int]) -> None:

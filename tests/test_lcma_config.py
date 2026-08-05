@@ -1,6 +1,7 @@
 """Tests for US-005: LcmaConfig configuration subtree."""
 
 import pytest
+from pydantic import SecretStr, ValidationError
 
 from lithos.config import (
     _DEFAULT_NOTE_TYPE_PRIORS,
@@ -8,7 +9,9 @@ from lithos.config import (
     _LCMA_NOTE_TYPES,
     LcmaConfig,
     LithosConfig,
+    LlmConfig,
 )
+from lithos.errors import ConfigurationError
 
 
 class TestLcmaConfigDefaults:
@@ -77,9 +80,42 @@ class TestLcmaConfigDefaults:
         cfg = LcmaConfig()
         assert cfg.wm_eviction_days == 7
 
-    def test_default_llm_provider(self) -> None:
+    def test_default_llm_disabled(self) -> None:
         cfg = LcmaConfig()
-        assert cfg.llm_provider is None
+        assert cfg.llm.base_url is None
+        assert not cfg.llm.enabled
+
+
+class TestLlmConfig:
+    """LcmaConfig.llm — OpenAI-compatible synthesis endpoint (WS1)."""
+
+    def test_enabled_iff_base_url_set(self) -> None:
+        assert not LlmConfig().enabled
+        assert LlmConfig(base_url="http://localhost:11434/v1", model="m").enabled
+
+    def test_model_required_when_base_url_set(self) -> None:
+        with pytest.raises(ValidationError, match="model is required"):
+            LlmConfig(base_url="http://localhost:11434/v1")
+
+    def test_similarity_band_must_be_ordered(self) -> None:
+        with pytest.raises(ValidationError, match="min_similarity"):
+            LlmConfig(min_similarity=0.9, max_similarity=0.5)
+
+    def test_api_key_is_secret(self) -> None:
+        cfg = LlmConfig(api_key="sk-test")  # type: ignore[arg-type]  # SecretStr coercion
+        assert "sk-test" not in repr(cfg)
+        assert cfg.api_key is not None
+        assert cfg.api_key.get_secret_value() == "sk-test"
+
+    def test_env_nesting_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITHOS_LCMA__LLM__BASE_URL", "http://ollama:11434/v1")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__MODEL", "qwen3")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__DAILY_TOKEN_BUDGET", "1000")
+        cfg = LithosConfig()
+        assert cfg.lcma.llm.base_url == "http://ollama:11434/v1"
+        assert cfg.lcma.llm.model == "qwen3"
+        assert cfg.lcma.llm.daily_token_budget == 1000
+        assert cfg.lcma.llm.enabled
 
 
 class TestLcmaConfigRerankWeights:
@@ -233,3 +269,156 @@ class TestLithosConfigLcmaSubtree:
         assert cfg.lcma.enabled is True
         assert len(cfg.lcma.rerank_weights) == 10
         assert len(cfg.lcma.note_type_priors) == 6
+
+
+class TestLlmConfigHardening:
+    """Round-1 review: secret redaction on failure, empty-env normalization, scheme check."""
+
+    @staticmethod
+    def _assert_key_fully_absent(excinfo: pytest.ExceptionInfo[ValidationError]) -> None:
+        """The key must be absent from EVERY representation — printed forms AND
+        the structured errors()/json() payloads that structured logging or API
+        error serialization would emit (round-2 review: hide_input_in_errors
+        only covers the printed forms; field-level validation keeps the whole
+        input dict out of the structured error entirely)."""
+        err = excinfo.value
+        for surface in (str(err), repr(err), str(err.errors()), err.json()):
+            assert "sk-topsecret" not in surface
+
+    def test_api_key_absent_from_validation_errors(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            LlmConfig(
+                api_key="sk-topsecret",  # type: ignore[arg-type]
+                min_similarity=0.9,
+                max_similarity=0.5,  # forces failure with the key present in input
+            )
+        self._assert_key_fully_absent(excinfo)
+
+    def test_api_key_absent_when_nested_in_lcma_config(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            LcmaConfig(
+                llm={
+                    "api_key": "sk-topsecret",
+                    "base_url": "http://ollama:11434/v1",
+                    "model": "   ",
+                }
+            )
+        self._assert_key_fully_absent(excinfo)
+
+    def test_api_key_absent_when_propagated_through_lithos_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITHOS_LCMA__LLM__API_KEY", "sk-topsecret")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__BASE_URL", "http://ollama:11434/v1")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__MODEL", "   ")  # blank -> validation failure
+        with pytest.raises(ValidationError) as excinfo:
+            LithosConfig()
+        self._assert_key_fully_absent(excinfo)
+
+    # -- Round-3 review: failures OUTSIDE LlmConfig, with a valid key present.
+    # A model validator on an enclosing model raises through a ValidationError
+    # whose structured forms carry the whole raw input — so LcmaConfig's
+    # dict-shaping validators are field-level and LITHOS_PORT parsing raises
+    # ConfigurationError (never wrapped by pydantic at all).
+
+    def test_api_key_absent_when_sibling_rerank_weights_invalid(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            LcmaConfig(
+                llm={"api_key": "sk-topsecret", "base_url": "http://ollama:11434/v1", "model": "m"},
+                rerank_weights={"bogus": 1.0},
+            )
+        self._assert_key_fully_absent(excinfo)
+
+    def test_api_key_absent_when_sibling_note_type_priors_invalid(self) -> None:
+        with pytest.raises(ValidationError) as excinfo:
+            LcmaConfig(
+                llm={"api_key": "sk-topsecret", "base_url": "http://ollama:11434/v1", "model": "m"},
+                note_type_priors={"bogus_type": 0.5},
+            )
+        self._assert_key_fully_absent(excinfo)
+
+    def test_api_key_absent_when_legacy_env_port_invalid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITHOS_LCMA__LLM__API_KEY", "sk-topsecret")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__BASE_URL", "http://ollama:11434/v1")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__MODEL", "m")
+        monkeypatch.setenv("LITHOS_PORT", "not-a-port")
+        with pytest.raises(ConfigurationError) as excinfo:
+            LithosConfig()
+        # Not a ValidationError: no .errors()/.json() surface exists at all.
+        assert not isinstance(excinfo.value, ValidationError)
+        for surface in (str(excinfo.value), repr(excinfo.value)):
+            assert "sk-topsecret" not in surface
+
+    # -- Round-4 review: the api_key VALUE itself can be the invalid input.
+    # A field-validator ValueError would echo it as the error's `input` in
+    # .errors()/.json(), and a header-unsafe key that reached httpx would be
+    # echoed back by h11's LocalProtocolError. So api_key validation raises
+    # value-free ConfigurationError (never pydantic-wrapped), and outer
+    # whitespace — the realistic file-backed-secret case — is normalized away.
+
+    def test_api_key_outer_whitespace_normalized(self) -> None:
+        cfg = LlmConfig(api_key="sk-topsecret\n")  # type: ignore[arg-type]
+        assert cfg.api_key is not None
+        assert cfg.api_key.get_secret_value() == "sk-topsecret"
+        wrapped = LlmConfig(api_key=SecretStr("  sk-topsecret  "))
+        assert wrapped.api_key is not None
+        assert wrapped.api_key.get_secret_value() == "sk-topsecret"
+
+    def test_empty_or_whitespace_api_key_means_no_key(self) -> None:
+        assert LlmConfig(api_key="").api_key is None  # type: ignore[arg-type]
+        assert LlmConfig(api_key="   \n").api_key is None  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "sk-top\nsecret",  # embedded LF (header injection / h11 echo)
+            "sk-top\rsecret",  # embedded CR
+            "sk-top\x00secret",  # control character
+            "sk-töpsecret",  # non-ASCII (UnicodeEncodeError in httpx)
+            "sk top secret",  # interior space
+        ],
+    )
+    def test_header_unsafe_api_key_rejected_value_free(self, bad: str) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            LlmConfig(api_key=bad)  # type: ignore[arg-type]
+        assert not isinstance(excinfo.value, ValidationError)  # no errors()/json() surface
+        for surface in (str(excinfo.value), repr(excinfo.value)):
+            assert "sk-t" not in surface
+            assert "secret" not in surface
+
+    def test_non_string_api_key_rejected_without_structured_leak(self) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            LlmConfig(api_key=["sk-topsecret"])  # type: ignore[arg-type]
+        assert not isinstance(excinfo.value, ValidationError)
+        for surface in (str(excinfo.value), repr(excinfo.value)):
+            assert "sk-topsecret" not in surface
+
+    def test_non_string_api_key_nested_in_lcma_config(self) -> None:
+        # The YAML-indentation-mistake shape: a list where a scalar belongs.
+        with pytest.raises(ConfigurationError) as excinfo:
+            LcmaConfig(llm={"api_key": ["sk-topsecret"]})
+        for surface in (str(excinfo.value), repr(excinfo.value)):
+            assert "sk-topsecret" not in surface
+
+    def test_base_url_whitespace_padding_stripped(self) -> None:
+        cfg = LlmConfig(base_url="  http://ollama:11434/v1  ", model="m")
+        assert cfg.base_url == "http://ollama:11434/v1"
+
+    def test_empty_or_whitespace_base_url_means_disabled(self) -> None:
+        assert LlmConfig(base_url="").base_url is None
+        assert not LlmConfig(base_url="").enabled
+        assert LlmConfig(base_url="   ").base_url is None
+        # And crucially: empty base_url + model set must NOT demand a model/scheme.
+        assert not LlmConfig(base_url="", model="m").enabled
+
+    def test_whitespace_model_rejected_when_enabled(self) -> None:
+        with pytest.raises(ValidationError, match="model is required"):
+            LlmConfig(base_url="http://ollama:11434/v1", model="   ")
+
+    def test_non_http_scheme_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="http:// or https://"):
+            LlmConfig(base_url="ollama:11434/v1", model="m")
+        with pytest.raises(ValidationError, match="http:// or https://"):
+            LlmConfig(base_url="ftp://host/v1", model="m")

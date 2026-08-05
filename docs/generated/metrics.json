@@ -125,7 +125,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 737
+    "total_functions": 762
   },
   "domain": {
     "associations": 26,
@@ -147,8 +147,8 @@
       },
       "Config": {
         "fan_in": 11,
-        "fan_out": 0,
-        "instability": 0.0
+        "fan_out": 1,
+        "instability": 0.08
       },
       "Coordination": {
         "fan_in": 4,
@@ -161,7 +161,7 @@
         "instability": 1.0
       },
       "Errors": {
-        "fan_in": 7,
+        "fan_in": 8,
         "fan_out": 0,
         "instability": 0.0
       },
@@ -216,9 +216,9 @@
         "instability": 0.1
       }
     },
-    "cross_component_edges": 71,
-    "cross_component_module_edges": 152,
-    "longest_component_chain": 9,
+    "cross_component_edges": 72,
+    "cross_component_module_edges": 155,
+    "longest_component_chain": 10,
     "module_cycle_count": 1,
     "module_cycles": [
       [
@@ -271,7 +271,7 @@
     ],
     "cross_module_private_refs": 29,
     "tests_private_detail": [
-      "tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x18)",
+      "tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x19)",
       "tests/test_telemetry.py -> lithos.telemetry._lcma_metrics_registered (x8)",
       "tests/test_telemetry.py -> lithos.telemetry._initialized (x7)",
       "tests/test_telemetry.py -> lithos.telemetry._sse_active_clients_gauge_registered (x6)",
@@ -302,7 +302,7 @@
       "tests/test_event_delivery.py -> lithos.server._format_sse",
       "tests/test_knowledge.py -> lithos.knowledge._atomic_write"
     ],
-    "tests_private_imports": 90
+    "tests_private_imports": 91
   },
   "size": {
     "components": {
@@ -327,14 +327,14 @@
         "sloc": 952
       },
       "Config": {
-        "classes": 9,
-        "functions": 17,
+        "classes": 10,
+        "functions": 23,
         "largest_module": "lithos.config",
-        "largest_module_lines": 401,
-        "lines": 401,
+        "largest_module_lines": 536,
+        "lines": 536,
         "modules": 1,
-        "public_symbols": 12,
-        "sloc": 295
+        "public_symbols": 13,
+        "sloc": 377
       },
       "Coordination": {
         "classes": 8,
@@ -357,14 +357,14 @@
         "sloc": 4737
       },
       "Errors": {
-        "classes": 9,
+        "classes": 11,
         "functions": 11,
         "largest_module": "lithos.errors",
-        "largest_module_lines": 147,
-        "lines": 211,
+        "largest_module_lines": 169,
+        "lines": 233,
         "modules": 2,
-        "public_symbols": 12,
-        "sloc": 152
+        "public_symbols": 14,
+        "sloc": 168
       },
       "Events": {
         "classes": 4,
@@ -407,14 +407,14 @@
         "sloc": 1654
       },
       "LCMA": {
-        "classes": 7,
-        "functions": 130,
+        "classes": 10,
+        "functions": 144,
         "largest_module": "lithos.lcma.stats",
-        "largest_module_lines": 1130,
-        "lines": 4630,
-        "modules": 10,
-        "public_symbols": 26,
-        "sloc": 3730
+        "largest_module_lines": 1253,
+        "lines": 4965,
+        "modules": 11,
+        "public_symbols": 29,
+        "sloc": 3992
       },
       "Logging": {
         "classes": 1,
@@ -458,13 +458,13 @@
       },
       "Telemetry": {
         "classes": 9,
-        "functions": 74,
+        "functions": 79,
         "largest_module": "lithos.telemetry",
-        "largest_module_lines": 1256,
-        "lines": 1256,
+        "largest_module_lines": 1312,
+        "lines": 1312,
         "modules": 1,
         "public_symbols": 13,
-        "sloc": 970
+        "sloc": 1021
       }
     },
     "max_module": "lithos.coordination",
@@ -482,13 +482,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 24227,
-    "total_modules": 42,
-    "total_sloc": 19470
+    "total_lines": 24775,
+    "total_modules": 43,
+    "total_sloc": 19881
   },
   "tests": {
-    "ratio": 1.89,
-    "src_lines": 24227,
-    "test_lines": 45693
+    "ratio": 1.88,
+    "src_lines": 24775,
+    "test_lines": 46491
   }
 }
