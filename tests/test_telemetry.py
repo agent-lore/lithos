@@ -1616,13 +1616,12 @@ class TestLlmInstrumentMetadata:
         from opentelemetry.sdk.metrics import MeterProvider
         from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
-        import lithos.telemetry as telemetry_mod
+        from lithos.telemetry import lithos_metrics
 
-        lithos_metrics = telemetry_mod.lithos_metrics
         reader = InMemoryMetricReader()
         provider = MeterProvider(metric_readers=[reader])
         monkeypatch.setattr(
-            telemetry_mod, "get_meter", lambda name="lithos": provider.get_meter(name)
+            "lithos.telemetry.get_meter", lambda name="lithos": provider.get_meter(name)
         )
         attrs = (
             "_lcma_llm_calls",
