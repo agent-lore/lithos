@@ -9,6 +9,7 @@ immediate LlmError on 4xx, LlmError after exhausted retry).
 from __future__ import annotations
 
 import json
+import traceback
 from typing import Any
 
 import httpx
@@ -323,8 +324,9 @@ async def test_local_protocol_error_never_echoes_header_bytes(
     finally:
         await client.close()
     assert "LocalProtocolError" in str(excinfo.value)
-    assert "sk-secret" not in str(excinfo.value)
     assert excinfo.value.__cause__ is None  # no chained cause for a traceback to print
+    rendered = "".join(traceback.format_exception(excinfo.value))
+    assert "sk-secret" not in rendered
     assert all("sk-secret" not in record.getMessage() for record in caplog.records)
 
 
@@ -346,9 +348,29 @@ async def test_transport_error_message_redacts_api_key(
             await client.chat(MESSAGES)
     finally:
         await client.close()
-    assert "sk-secret" not in str(excinfo.value)
     assert "[redacted]" in str(excinfo.value)
+    assert excinfo.value.__cause__ is None  # raw ConnectError must not ride the cause chain
+    rendered = "".join(traceback.format_exception(excinfo.value))
+    assert "sk-secret" not in rendered
     assert all("sk-secret" not in record.getMessage() for record in caplog.records)
+
+
+async def test_4xx_body_echoing_api_key_is_redacted() -> None:
+    """A 4xx body that echoes the credential (proxy auth chatter) is redacted
+    before its first 200 chars are embedded in the LlmError message."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="rejected credential 'Bearer sk-secret' for upstream")
+
+    client = _client_with(handler, api_key="sk-secret")
+    try:
+        with pytest.raises(LlmError, match="401") as excinfo:
+            await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert "[redacted]" in str(excinfo.value)
+    rendered = "".join(traceback.format_exception(excinfo.value))
+    assert "sk-secret" not in rendered
 
 
 async def test_integral_float_usage_is_accepted() -> None:

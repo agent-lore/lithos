@@ -125,7 +125,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 761
+    "total_functions": 762
   },
   "domain": {
     "associations": 26,
@@ -408,13 +408,13 @@
       },
       "LCMA": {
         "classes": 10,
-        "functions": 143,
+        "functions": 144,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1253,
-        "lines": 4961,
+        "lines": 4965,
         "modules": 11,
         "public_symbols": 29,
-        "sloc": 3994
+        "sloc": 3992
       },
       "Logging": {
         "classes": 1,
@@ -482,13 +482,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 24771,
+    "total_lines": 24775,
     "total_modules": 43,
-    "total_sloc": 19883
+    "total_sloc": 19881
   },
   "tests": {
     "ratio": 1.88,
-    "src_lines": 24771,
-    "test_lines": 46469
+    "src_lines": 24775,
+    "test_lines": 46491
   }
 }

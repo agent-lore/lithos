@@ -122,6 +122,12 @@ class LlmClient:
         response = await self._post_with_retry(body)
         return self._parse_response(response, request_chars=sum(len(m.content) for m in messages))
 
+    def _redact(self, text: str) -> str:
+        """Strip the api_key value out of any text bound for logs or LlmError."""
+        if self._api_key is not None:
+            text = text.replace(self._api_key, "[redacted]")
+        return text
+
     def _sanitize_error(self, error: Exception) -> str:
         """Render a transport failure for logs/LlmError without credential bleed.
 
@@ -133,10 +139,7 @@ class LlmClient:
         """
         if isinstance(error, httpx.LocalProtocolError):
             return type(error).__name__
-        text = f"{type(error).__name__}: {error}"
-        if self._api_key is not None:
-            text = text.replace(self._api_key, "[redacted]")
-        return text
+        return self._redact(f"{type(error).__name__}: {error}")
 
     async def _post_with_retry(self, body: dict[str, Any]) -> httpx.Response:
         # Catch httpx.HTTPError — the base of every transport/protocol failure
@@ -153,9 +156,10 @@ class LlmClient:
             else:
                 if response.status_code < 500:
                     if response.status_code >= 400:
-                        raise LlmError(
-                            f"LLM endpoint returned {response.status_code}: {response.text[:200]}"
-                        )
+                        # Redact BEFORE truncating: cutting first could leave a
+                        # partial key that .replace() no longer matches.
+                        detail = self._redact(response.text)[:200]
+                        raise LlmError(f"LLM endpoint returned {response.status_code}: {detail}")
                     return response
                 last_error = LlmError(f"LLM endpoint returned {response.status_code}")
             if attempt == 1:
@@ -164,12 +168,12 @@ class LlmClient:
                 )
                 await asyncio.sleep(_RETRY_DELAY_SECONDS)
         assert last_error is not None  # both loop arms set it or exit the method
-        # No exception chaining for LocalProtocolError: its args carry the raw
-        # header bytes, and a traceback formatter would print the cause.
-        cause = None if isinstance(last_error, httpx.LocalProtocolError) else last_error
-        raise LlmError(
-            f"LLM call failed after retry: {self._sanitize_error(last_error)}"
-        ) from cause
+        # NEVER chain the transport exception as __cause__: str(LlmError) is
+        # sanitized, but traceback.format_exception() renders the cause's raw
+        # args — h11's header bytes for LocalProtocolError, proxy chatter that
+        # may echo the credential for anything else. The sanitized message
+        # already carries the original type name and redacted detail.
+        raise LlmError(f"LLM call failed after retry: {self._sanitize_error(last_error)}") from None
 
     def _parse_response(self, response: httpx.Response, *, request_chars: int) -> LlmResult:
         try:
