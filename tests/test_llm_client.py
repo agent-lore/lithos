@@ -302,6 +302,55 @@ async def test_fractional_and_nonfinite_usage_falls_back_to_estimate(usage: dict
     assert result.completion_tokens == 10  # chars//4 estimate, not the bogus usage
 
 
+async def test_local_protocol_error_never_echoes_header_bytes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Round-4 review: h11 embeds the raw offending header bytes (Authorization
+    included) in LocalProtocolError. Neither the retry warning nor the LlmError
+    message/cause chain may carry them — the error is reduced to its type name.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.LocalProtocolError("Illegal header value b'Bearer sk-secret'")
+
+    client = _client_with(handler, api_key="sk-secret")
+    try:
+        with (
+            caplog.at_level("WARNING", logger="lithos.lcma.llm"),
+            pytest.raises(LlmError) as excinfo,
+        ):
+            await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert "LocalProtocolError" in str(excinfo.value)
+    assert "sk-secret" not in str(excinfo.value)
+    assert excinfo.value.__cause__ is None  # no chained cause for a traceback to print
+    assert all("sk-secret" not in record.getMessage() for record in caplog.records)
+
+
+async def test_transport_error_message_redacts_api_key(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Any transport error whose message happens to echo the key (proxy chatter,
+    request dumps) is redacted before logging or raising."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("proxy rejected credential 'Bearer sk-secret'")
+
+    client = _client_with(handler, api_key="sk-secret")
+    try:
+        with (
+            caplog.at_level("WARNING", logger="lithos.lcma.llm"),
+            pytest.raises(LlmError) as excinfo,
+        ):
+            await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert "sk-secret" not in str(excinfo.value)
+    assert "[redacted]" in str(excinfo.value)
+    assert all("sk-secret" not in record.getMessage() for record in caplog.records)
+
+
 async def test_integral_float_usage_is_accepted() -> None:
     """JSON decoders may deliver 120.0 — integral finite floats are measured."""
 

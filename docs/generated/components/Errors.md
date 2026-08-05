@@ -23,7 +23,7 @@ Standard error types and canonical MCP error envelopes.
 
 ### `lithos.errors`
 - class `LithosError` — Base error for all Lithos operations.
-- class `ConfigurationError` — Invalid configuration detected outside pydantic field validation.
+- class `ConfigurationError` — Invalid configuration whose details must not pass through pydantic.
 - class `SearchBackendError` — One or more search backends failed.
 - class `SlugCollisionError` — Raised when a slug would collide with an existing document's slug.
 - class `IndexingError` — All search backends failed during a write operation (index or remove).

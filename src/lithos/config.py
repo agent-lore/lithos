@@ -233,6 +233,41 @@ class LlmConfig(BaseModel):
             raise ValueError("lcma.llm.base_url must be an http:// or https:// URL")
         return value
 
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _check_api_key_header_safe(cls, value: object) -> object:
+        """Reject api_key values that cannot travel safely in an HTTP header.
+
+        Header-unsafe keys must never reach the client: h11 echoes the raw
+        offending header bytes (``Authorization: Bearer <key>`` included) into
+        its LocalProtocolError, and a non-ASCII key raises UnicodeEncodeError
+        whose repr carries the full value. Outer whitespace is stripped —
+        file-backed secrets commonly carry a trailing newline — and an
+        empty/whitespace-only value normalises to None (disabled), matching
+        base_url.
+
+        Every rejection raises ConfigurationError, never ValueError: a
+        ValueError here would become a ValidationError whose structured
+        .errors()/.json() echo the offending value as the field input — the
+        exact leak this validator exists to close. Messages are value-free
+        for the same reason.
+        """
+        if value is None:
+            return None
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        if not isinstance(value, str):
+            raise ConfigurationError("lcma.llm.api_key must be a string (offending value withheld)")
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if not (stripped.isascii() and stripped.isprintable() and " " not in stripped):
+            raise ConfigurationError(
+                "lcma.llm.api_key contains whitespace, control, or non-ASCII "
+                "characters (offending value withheld); only visible ASCII is supported"
+            )
+        return stripped
+
     @field_validator("model", mode="after")
     @classmethod
     def _check_model_present_when_enabled(cls, value: str, info: ValidationInfo) -> str:

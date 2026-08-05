@@ -88,9 +88,10 @@ class LlmClient:
         if config.base_url is None:
             raise ValueError("LlmClient requires lcma.llm.base_url to be set")
         self._config = config
+        self._api_key = config.api_key.get_secret_value() if config.api_key else None
         headers = {}
-        if config.api_key is not None:
-            headers["Authorization"] = f"Bearer {config.api_key.get_secret_value()}"
+        if self._api_key is not None:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         self._client = httpx.AsyncClient(
             base_url=config.base_url.rstrip("/"),
             headers=headers,
@@ -121,6 +122,22 @@ class LlmClient:
         response = await self._post_with_retry(body)
         return self._parse_response(response, request_chars=sum(len(m.content) for m in messages))
 
+    def _sanitize_error(self, error: Exception) -> str:
+        """Render a transport failure for logs/LlmError without credential bleed.
+
+        ``httpx.LocalProtocolError`` (h11) embeds the raw offending header
+        bytes — Authorization included — so it is reduced to its type name.
+        Every other message additionally has the api_key value redacted in
+        case a proxy or transport echoes request data. Config validation
+        already rejects header-unsafe keys, so this is defense in depth.
+        """
+        if isinstance(error, httpx.LocalProtocolError):
+            return type(error).__name__
+        text = f"{type(error).__name__}: {error}"
+        if self._api_key is not None:
+            text = text.replace(self._api_key, "[redacted]")
+        return text
+
     async def _post_with_retry(self, body: dict[str, Any]) -> httpx.Response:
         # Catch httpx.HTTPError — the base of every transport/protocol failure
         # (timeouts, connect/read/write errors, RemoteProtocolError,
@@ -142,9 +159,17 @@ class LlmClient:
                     return response
                 last_error = LlmError(f"LLM endpoint returned {response.status_code}")
             if attempt == 1:
-                logger.warning("LLM call failed (%s); retrying once", last_error)
+                logger.warning(
+                    "LLM call failed (%s); retrying once", self._sanitize_error(last_error)
+                )
                 await asyncio.sleep(_RETRY_DELAY_SECONDS)
-        raise LlmError(f"LLM call failed after retry: {last_error}") from last_error
+        assert last_error is not None  # both loop arms set it or exit the method
+        # No exception chaining for LocalProtocolError: its args carry the raw
+        # header bytes, and a traceback formatter would print the cause.
+        cause = None if isinstance(last_error, httpx.LocalProtocolError) else last_error
+        raise LlmError(
+            f"LLM call failed after retry: {self._sanitize_error(last_error)}"
+        ) from cause
 
     def _parse_response(self, response: httpx.Response, *, request_chars: int) -> LlmResult:
         try:

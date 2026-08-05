@@ -1,7 +1,7 @@
 """Tests for US-005: LcmaConfig configuration subtree."""
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from lithos.config import (
     _DEFAULT_NOTE_TYPE_PRIORS,
@@ -348,6 +348,57 @@ class TestLlmConfigHardening:
             LithosConfig()
         # Not a ValidationError: no .errors()/.json() surface exists at all.
         assert not isinstance(excinfo.value, ValidationError)
+        for surface in (str(excinfo.value), repr(excinfo.value)):
+            assert "sk-topsecret" not in surface
+
+    # -- Round-4 review: the api_key VALUE itself can be the invalid input.
+    # A field-validator ValueError would echo it as the error's `input` in
+    # .errors()/.json(), and a header-unsafe key that reached httpx would be
+    # echoed back by h11's LocalProtocolError. So api_key validation raises
+    # value-free ConfigurationError (never pydantic-wrapped), and outer
+    # whitespace — the realistic file-backed-secret case — is normalized away.
+
+    def test_api_key_outer_whitespace_normalized(self) -> None:
+        cfg = LlmConfig(api_key="sk-topsecret\n")  # type: ignore[arg-type]
+        assert cfg.api_key is not None
+        assert cfg.api_key.get_secret_value() == "sk-topsecret"
+        wrapped = LlmConfig(api_key=SecretStr("  sk-topsecret  "))
+        assert wrapped.api_key is not None
+        assert wrapped.api_key.get_secret_value() == "sk-topsecret"
+
+    def test_empty_or_whitespace_api_key_means_no_key(self) -> None:
+        assert LlmConfig(api_key="").api_key is None  # type: ignore[arg-type]
+        assert LlmConfig(api_key="   \n").api_key is None  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "sk-top\nsecret",  # embedded LF (header injection / h11 echo)
+            "sk-top\rsecret",  # embedded CR
+            "sk-top\x00secret",  # control character
+            "sk-töpsecret",  # non-ASCII (UnicodeEncodeError in httpx)
+            "sk top secret",  # interior space
+        ],
+    )
+    def test_header_unsafe_api_key_rejected_value_free(self, bad: str) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            LlmConfig(api_key=bad)  # type: ignore[arg-type]
+        assert not isinstance(excinfo.value, ValidationError)  # no errors()/json() surface
+        for surface in (str(excinfo.value), repr(excinfo.value)):
+            assert "sk-t" not in surface
+            assert "secret" not in surface
+
+    def test_non_string_api_key_rejected_without_structured_leak(self) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            LlmConfig(api_key=["sk-topsecret"])  # type: ignore[arg-type]
+        assert not isinstance(excinfo.value, ValidationError)
+        for surface in (str(excinfo.value), repr(excinfo.value)):
+            assert "sk-topsecret" not in surface
+
+    def test_non_string_api_key_nested_in_lcma_config(self) -> None:
+        # The YAML-indentation-mistake shape: a list where a scalar belongs.
+        with pytest.raises(ConfigurationError) as excinfo:
+            LcmaConfig(llm={"api_key": ["sk-topsecret"]})
         for surface in (str(excinfo.value), repr(excinfo.value)):
             assert "sk-topsecret" not in surface
 

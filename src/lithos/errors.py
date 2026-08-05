@@ -13,13 +13,15 @@ class LithosError(Exception):
 
 
 class ConfigurationError(LithosError):
-    """Invalid configuration detected outside pydantic field validation.
+    """Invalid configuration whose details must not pass through pydantic.
 
-    Deliberately NOT a ``ValueError``: raised from inside a root-level pydantic
+    Deliberately NOT a ``ValueError``: raised from inside a pydantic
     validator, a ``ValueError`` is wrapped into a ``ValidationError`` whose
-    structured forms (``.errors()`` / ``.json()``) capture the entire raw
-    config input — including secrets such as ``lcma.llm.api_key``. This class
-    propagates unwrapped, carrying only its message.
+    structured forms (``.errors()`` / ``.json()``) capture the raw offending
+    input — the entire config tree for a model validator, the field's own
+    value for a field validator. Either way that can echo secrets such as
+    ``lcma.llm.api_key``. This class propagates unwrapped, carrying only its
+    (value-free) message.
     """
 
 
