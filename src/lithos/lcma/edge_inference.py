@@ -18,10 +18,22 @@ Safety properties (see the WS1 plan):
 - **Budget-bounded** — a UTC-day token ceiling (``llm_budget`` ledger in stats.db)
   plus a per-drain-cycle call cap; exhaustion skips inference observably, never
   blocks the rest of enrichment.
-- **Idempotent** — ``edge_inference_log`` keyed on ``(node_id, doc_version,
-  inference_version)``; edges are written before the log row (edge upserts are
-  idempotent by natural key, so at-least-once is safe). See
-  :data:`INFERENCE_VERSION` for the invalidation policy.
+- **Idempotent & re-inferable** — ``edge_inference_log`` keyed on ``(node_id,
+  doc_version, inference_version)``; edges are written before the log row
+  (inferred upserts are idempotent by natural key, so at-least-once is safe).
+  A document update, an :data:`INFERENCE_VERSION` bump, or an operator ledger
+  purge each genuinely re-adjudicates: candidate pairs already carrying an
+  inferred edge are NOT excluded — re-adjudication refreshes their weight,
+  rationale, and model attribution in place.
+- **Non-destructive** — inferred writes go through
+  ``CorpusIntake.assert_inferred_edge`` → ``EdgeStore.upsert_inferred``, which
+  atomically refuses to displace any row that is not itself an unconflicted
+  inferred edge. Asserted edges, legacy rows, and manually resolved conflicts
+  always win; a blocked write is counted, not silently absorbed.
+- **Stale-proof** — after the LLM call returns, the focus document's version is
+  re-read; if the note changed mid-flight, neither edges nor the op-log row are
+  written (spend is still recorded), so the queued newer version re-runs
+  against fresh content.
 - **Cascade-proof** — edge writes go through ``CorpusIntake.assert_edge`` with
   ``origin=EVENT_ORIGIN_ENRICH`` so the worker drops its own ``edge.upserted``
   events; inference additionally only ever fires on note create/update triggers,
@@ -48,7 +60,6 @@ from lithos.lcma.llm import ChatMessage, LlmClient
 
 if TYPE_CHECKING:
     from lithos.config import LlmConfig
-    from lithos.edge_store import EdgeStore
     from lithos.frontmatter_codec import KnowledgeDocument
     from lithos.intake import CorpusIntake
     from lithos.knowledge import KnowledgeManager
@@ -124,8 +135,6 @@ class NeighbourInfo:
     namespace: str
     entities: frozenset[str]
     tags: frozenset[str]
-    #: True when an inferred edge already exists between focus and this node.
-    already_inferred: bool
 
 
 @dataclass(frozen=True)
@@ -152,16 +161,19 @@ def prefilter_candidates(
 ) -> list[NeighbourInfo]:
     """Cheap, token-free candidate filter + ranking.
 
-    Drops self, cross-namespace hits, pairs outside the similarity band
+    Drops self, cross-namespace hits, and pairs outside the similarity band
     (too-similar ≈ near-duplicate — ``related_to``'s job; too-distant wastes
-    adjudication tokens) and pairs already adjudicated (inferred edge exists).
-    Existing ``related_to`` edges do NOT exclude a pair — typed relations are
-    additive semantics. Survivors are ranked by similarity plus a small
-    entity/tag-overlap boost; the top *k* go to the LLM.
+    adjudication tokens). Pairs that already carry edges — ``related_to`` or
+    previously inferred — are deliberately NOT excluded: typed relations are
+    additive semantics, and re-adjudication is the mechanism by which a
+    document/policy-version change refreshes existing inferred edges (the
+    protected inferred-only upsert makes rewrites safe). Survivors are ranked
+    by similarity plus a small entity/tag-overlap boost; the top *k* go to
+    the LLM.
     """
     scored: list[tuple[float, NeighbourInfo]] = []
     for n in neighbours:
-        if n.node_id == focus_id or n.already_inferred:
+        if n.node_id == focus_id:
             continue
         if n.namespace != focus_namespace:
             continue
@@ -201,13 +213,24 @@ def build_adjudication_prompt(
     ]
 
 
-def parse_adjudications(text: str, n_candidates: int) -> list[Adjudication] | None:
+def parse_adjudications(text: str, n_candidates: int) -> tuple[list[Adjudication], int] | None:
     """Defensively parse the model's JSON; ``None`` means wholesale failure.
 
-    Individually invalid entries (unknown relation — including the deliberate
-    ``none`` —, out-of-range candidate index, bad confidence) are dropped;
-    only an unparseable body returns ``None`` so the caller can distinguish
-    "model answered, nothing qualified" from "model cannot follow the schema".
+    Returns ``(adjudications, problems)``. *problems* counts response-contract
+    violations that still allowed partial use: invalid entries, duplicate
+    candidate indexes (first judgement wins), and candidates the response
+    never covered — the prompt demands every candidate exactly once, and a
+    ``none`` answer covers its candidate without producing an edge. The caller
+    reports ``problems > 0`` observably (a "partial" outcome) instead of
+    silently treating malformed output as success.
+
+    Strictness rules (review round 1):
+
+    - candidate indexes must be genuine non-boolean integers — ``1.9`` is a
+      contract violation, never candidate 1;
+    - direction is never invented: a directional relation missing a valid
+      direction is dropped (an inverted edge is worse than no edge);
+      symmetric relations ignore direction entirely.
     """
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -224,25 +247,49 @@ def parse_adjudications(text: str, n_candidates: int) -> list[Adjudication] | No
         return None
 
     out: list[Adjudication] = []
+    problems = 0
+    covered: set[int] = set()
     for entry in entries:
         if not isinstance(entry, dict):
+            problems += 1
+            continue
+        index = entry.get("candidate")
+        if (
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or not (1 <= index <= n_candidates)
+        ):
+            problems += 1
+            continue
+        if index in covered:
+            problems += 1  # duplicate judgement for one candidate
             continue
         relation = entry.get("relation")
+        if relation == "none":
+            covered.add(index)  # a valid answer, just not an edge
+            continue
         if relation not in RELATION_VOCAB:
-            continue  # includes the deliberate "none"
+            problems += 1
+            continue
         try:
-            index = int(entry.get("candidate", 0))
             confidence = float(entry.get("confidence", 0.0))
         except (TypeError, ValueError):
+            problems += 1
             continue
-        if not (1 <= index <= n_candidates) or not (0.0 <= confidence <= 1.0):
+        if not (0.0 <= confidence <= 1.0):
+            problems += 1
             continue
         direction = entry.get("direction")
-        if direction not in _DIRECTIONS:
-            direction = "focus_to_candidate"
+        if relation in SYMMETRIC_RELATIONS:
+            direction = "focus_to_candidate"  # placeholder; endpoints canonicalize
+        elif direction not in _DIRECTIONS:
+            problems += 1
+            continue
+        covered.add(index)
         rationale = str(entry.get("rationale", ""))[:300]
         out.append(Adjudication(index, str(relation), str(direction), confidence, rationale))
-    return out
+    problems += n_candidates - len(covered)
+    return out, problems
 
 
 def edge_endpoints(focus_id: str, candidate_id: str, adjudication: Adjudication) -> tuple[str, str]:
@@ -275,7 +322,6 @@ class EdgeInferenceEngine:
         knowledge: KnowledgeManager,
         search: SearchEngine,
         intake: CorpusIntake,
-        edge_store: EdgeStore,
         agent: str,
     ) -> None:
         self._config = config
@@ -284,7 +330,6 @@ class EdgeInferenceEngine:
         self._knowledge = knowledge
         self._search = search
         self._intake = intake
-        self._edge_store = edge_store
         self._agent = agent
         self._calls_this_drain = 0
 
@@ -359,8 +404,8 @@ class EdgeInferenceEngine:
                 result.total_tokens, {"estimated": str(result.estimated).lower()}
             )
 
-        adjudications = parse_adjudications(result.text, len(candidates))
-        if adjudications is None:
+        parsed = parse_adjudications(result.text, len(candidates))
+        if parsed is None:
             # Tokens were genuinely spent — record the op-log row so a
             # schema-incapable model can't re-burn the budget every drain.
             logger.warning(
@@ -371,15 +416,34 @@ class EdgeInferenceEngine:
             )
             self._count_call("parse_error", started)
             return
+        adjudications, problems = parsed
+        if problems:
+            logger.warning(
+                "LLM adjudication for %s violated the response contract "
+                "(%d bad/duplicate/missing entries; using %d valid judgements)",
+                node_id,
+                problems,
+                len(adjudications),
+            )
+
+        # Staleness guard: the note may have changed during the (long) LLM
+        # call. Spend is already recorded — the tokens are burned either way —
+        # but stale judgements must not become edges, and no op-log row is
+        # written so the queued newer version re-runs against fresh content.
+        if await self._current_version(node_id) != version:
+            self._skip("stale_version")
+            self._count_call("stale", started)
+            return
 
         namespace = self._namespace_of(node_id)
         written = 0
+        blocked = 0
         for adjudication in adjudications:
             if adjudication.confidence < self._config.confidence_floor:
                 continue
             candidate = candidates[adjudication.candidate_index - 1]
             from_id, to_id = edge_endpoints(node_id, candidate.node_id, adjudication)
-            await self._intake.assert_edge(
+            outcome = await self._intake.assert_inferred_edge(
                 self._agent,
                 EdgeRequest(
                     from_id=from_id,
@@ -399,6 +463,12 @@ class EdgeInferenceEngine:
                 ),
                 origin=EVENT_ORIGIN_ENRICH,
             )
+            if outcome is None:
+                # An asserted / resolved / legacy row holds this key — the
+                # judgement is discarded, observably. Inferred never wins.
+                blocked += 1
+                self._skip("asserted_exists")
+                continue
             written += 1
             if _HAS_TELEMETRY and _lithos_metrics is not None:
                 _lithos_metrics.lcma_inferred_edges_written.add(
@@ -408,17 +478,23 @@ class EdgeInferenceEngine:
         await self._stats_store.record_edge_inference(
             node_id, version, INFERENCE_VERSION, model=self._config.model, edges_written=written
         )
-        self._count_call("ok", started)
+        self._count_call("partial" if problems else "ok", started)
         logger.info(
-            "Edge inference for %s: %d/%d judgements written (version=%d)",
+            "Edge inference for %s: %d/%d judgements written, %d blocked (version=%d)",
             node_id,
             written,
             len(adjudications),
+            blocked,
             version,
         )
 
     async def _gather_candidates(self, node_id: str, doc: KnowledgeDocument) -> list[NeighbourInfo]:
-        """Semantic k-NN → NeighbourInfo (cached meta + inferred-edge lookups) → pre-filter."""
+        """Semantic k-NN → NeighbourInfo (cached meta) → pre-filter.
+
+        ``threshold`` is passed explicitly so the LCMA similarity band is
+        self-contained: without it, the global ``SearchConfig.semantic_threshold``
+        would silently pre-narrow the configured ``min_similarity`` floor.
+        """
         focus_meta = self._knowledge.get_cached_meta(node_id)
         if focus_meta is None:
             return []
@@ -427,6 +503,7 @@ class EdgeInferenceEngine:
             self._search.semantic_search,
             query=f"{doc.title}\n{doc.content[:1000]}",
             limit=self._config.neighbour_k * 3,
+            threshold=self._config.min_similarity,
         )
 
         neighbours: list[NeighbourInfo] = []
@@ -443,7 +520,6 @@ class EdgeInferenceEngine:
                     namespace=meta.namespace,
                     entities=frozenset(meta.entities),
                     tags=frozenset(meta.tags),
-                    already_inferred=await self._has_inferred_edge(node_id, r.id),
                 )
             )
 
@@ -458,13 +534,13 @@ class EdgeInferenceEngine:
             k=self._config.neighbour_k,
         )
 
-    async def _has_inferred_edge(self, a: str, b: str) -> bool:
-        """True when an inferred-provenance edge already links *a* and *b* (either way)."""
-        for from_id, to_id in ((a, b), (b, a)):
-            for edge in await self._edge_store.list_edges(from_id=from_id, to_id=to_id):
-                if edge.get("provenance_type") == "inferred":
-                    return True
-        return False
+    async def _current_version(self, node_id: str) -> int | None:
+        """Fresh read of the focus document's version; ``None`` if it vanished."""
+        try:
+            doc, _ = await self._knowledge.read(id=node_id)
+        except FileNotFoundError:
+            return None
+        return doc.metadata.version
 
     def _namespace_of(self, node_id: str) -> str:
         meta = self._knowledge.get_cached_meta(node_id)

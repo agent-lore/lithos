@@ -5,6 +5,9 @@ The EdgeInferenceEngine is tested over a real StatsStore/EdgeStore/CorpusIntake 
 temp dirs with an LlmClient backed by httpx.MockTransport — no network, no model.
 The cascade-regression tests prove the origin-stamp guard: an inferred-edge write
 must never re-enqueue its endpoints through the enrich worker's event handler.
+The authority-boundary tests prove inferred writes can never displace asserted
+rows or manually resolved conflicts, and that document/policy/purge resets
+genuinely re-adjudicate.
 """
 
 from __future__ import annotations
@@ -51,7 +54,6 @@ def _neighbour(node_id: str = "n1", **overrides: Any) -> NeighbourInfo:
         "namespace": "default",
         "entities": frozenset(),
         "tags": frozenset(),
-        "already_inferred": False,
     }
     defaults.update(overrides)
     return NeighbourInfo(**defaults)
@@ -72,12 +74,11 @@ def _prefilter(neighbours: list[NeighbourInfo], **overrides: Any) -> list[Neighb
 
 
 class TestPrefilterCandidates:
-    def test_drops_self_cross_namespace_and_already_inferred(self) -> None:
+    def test_drops_self_and_cross_namespace(self) -> None:
         kept = _prefilter(
             [
                 _neighbour("focus"),  # self
                 _neighbour("other-ns", namespace="projects"),
-                _neighbour("done", already_inferred=True),
                 _neighbour("ok"),
             ]
         )
@@ -146,31 +147,106 @@ class TestParseAdjudications:
                 ]
             }
         )
-        parsed = parse_adjudications(text, 2)
-        assert parsed == [Adjudication(1, "supports", "candidate_to_focus", 0.8, "because")]
+        parsed = parse_adjudications(text, 1)
+        assert parsed == ([Adjudication(1, "supports", "candidate_to_focus", 0.8, "because")], 0)
 
     def test_fenced_and_bare_list_accepted(self) -> None:
-        entry = {"candidate": 1, "relation": "refines", "confidence": 0.7}
+        entry = {
+            "candidate": 1,
+            "relation": "refines",
+            "direction": "focus_to_candidate",
+            "confidence": 0.7,
+        }
         fenced = f"```json\n{json.dumps({'judgements': [entry]})}\n```"
         assert parse_adjudications(fenced, 1) is not None
         bare = json.dumps([entry])
         parsed = parse_adjudications(bare, 1)
-        assert parsed is not None and parsed[0].relation == "refines"
-        # Missing/invalid direction defaults to focus_to_candidate.
-        assert parsed[0].direction == "focus_to_candidate"
+        assert parsed is not None
+        adjudications, problems = parsed
+        assert adjudications[0].relation == "refines"
+        assert problems == 0
+
+    def test_directional_relation_without_direction_is_dropped(self) -> None:
+        """Round-1 review: direction is never invented — an inverted supports/
+        depends_on edge is worse than no edge."""
+        entries = [
+            {"candidate": 1, "relation": "refines", "confidence": 0.7},  # no direction
+            {"candidate": 2, "relation": "supports", "direction": "sideways", "confidence": 0.8},
+        ]
+        parsed = parse_adjudications(json.dumps({"judgements": entries}), 2)
+        assert parsed == ([], 4)  # 2 dropped entries + 2 uncovered candidates
+
+    def test_symmetric_relation_ignores_direction(self) -> None:
+        entries = [{"candidate": 1, "relation": "contradicts", "confidence": 0.9}]
+        parsed = parse_adjudications(json.dumps({"judgements": entries}), 1)
+        assert parsed is not None
+        adjudications, problems = parsed
+        assert adjudications[0].relation == "contradicts"
+        assert problems == 0
+
+    def test_fractional_and_boolean_indexes_rejected(self) -> None:
+        """1.9 must not silently become candidate 1; True must not become 1."""
+        entries = [
+            {
+                "candidate": 1.9,
+                "relation": "supports",
+                "direction": "focus_to_candidate",
+                "confidence": 0.8,
+            },
+            {
+                "candidate": True,
+                "relation": "supports",
+                "direction": "focus_to_candidate",
+                "confidence": 0.8,
+            },
+        ]
+        parsed = parse_adjudications(json.dumps({"judgements": entries}), 2)
+        assert parsed == ([], 4)  # 2 bad indexes + 2 uncovered candidates
+
+    def test_duplicate_candidate_keeps_first_and_counts_problem(self) -> None:
+        entries = [
+            {
+                "candidate": 1,
+                "relation": "supports",
+                "direction": "focus_to_candidate",
+                "confidence": 0.8,
+            },
+            {"candidate": 1, "relation": "contradicts", "confidence": 0.9},  # duplicate
+        ]
+        parsed = parse_adjudications(json.dumps({"judgements": entries}), 1)
+        assert parsed is not None
+        adjudications, problems = parsed
+        assert len(adjudications) == 1 and adjudications[0].relation == "supports"
+        assert problems == 1
+
+    def test_missing_coverage_counts_problems(self) -> None:
+        """The prompt demands every candidate exactly once; silence is a
+        contract violation, while an explicit "none" covers its candidate."""
+        entries = [
+            {"candidate": 1, "relation": "none", "confidence": 0.9},
+        ]
+        parsed = parse_adjudications(json.dumps({"judgements": entries}), 3)
+        assert parsed == ([], 2)  # candidates 2 and 3 never covered
 
     def test_invalid_entries_dropped_individually(self) -> None:
         entries = [
-            {"candidate": 1, "relation": "none", "confidence": 0.9},  # deliberate none
-            {"candidate": 1, "relation": "made_up", "confidence": 0.9},  # unknown vocab
+            {"candidate": 1, "relation": "none", "confidence": 0.9},  # deliberate none: covers 1
+            {"candidate": 2, "relation": "made_up", "confidence": 0.9},  # unknown vocab
             {"candidate": 99, "relation": "supports", "confidence": 0.9},  # bad index
-            {"candidate": 1, "relation": "supports", "confidence": 1.7},  # bad confidence
-            {"candidate": 1, "relation": "supports", "confidence": "high"},  # non-numeric
-            {"candidate": 2, "relation": "depends_on", "confidence": 0.75},  # valid
+            {"candidate": 2, "relation": "supports", "confidence": 1.7},  # bad confidence
+            {
+                "candidate": 3,
+                "relation": "depends_on",
+                "direction": "focus_to_candidate",
+                "confidence": 0.75,
+            },  # valid
         ]
-        parsed = parse_adjudications(json.dumps({"judgements": entries}), 2)
-        assert parsed is not None and len(parsed) == 1
-        assert parsed[0].relation == "depends_on"
+        parsed = parse_adjudications(json.dumps({"judgements": entries}), 3)
+        assert parsed is not None
+        adjudications, problems = parsed
+        assert len(adjudications) == 1
+        assert adjudications[0].relation == "depends_on"
+        assert problems == 4  # made_up + bad index + bad confidence + candidate 2 uncovered
 
     def test_garbage_returns_none(self) -> None:
         assert parse_adjudications("I think these notes are related!", 2) is None
@@ -306,7 +382,6 @@ class _EngineHarness:
                 search_results if search_results is not None else [_semantic_hit("cand")]
             ),
             intake=self.intake,
-            edge_store=edge_store,
             agent="lithos-enrich",
         )
 
@@ -508,6 +583,267 @@ class TestEdgeInferenceEngine:
             await harness.close()
         assert await edge_store.list_edges(from_id="focus") == []
         assert await stats_store.has_edge_inference("focus", 1, 1)
+
+
+class TestAuthorityBoundary:
+    """Round-1 review finding 1: inferred writes must never displace asserted
+    rows or manually resolved conflicts — provenance is a one-way boundary."""
+
+    async def test_asserted_edge_survives_inference(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        from lithos.intake import EdgeRequest
+
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=_adjudication_body([_GOOD_JUDGEMENT])),
+        )
+        await harness.intake.assert_edge(
+            "human-reviewer",
+            EdgeRequest(
+                from_id="focus",
+                to_id="cand",
+                edge_type="supports",
+                weight=1.0,
+                namespace="default",
+                provenance_actor="human-reviewer",
+                provenance_type="asserted",
+                evidence="manual",
+            ),
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+
+        edges = await edge_store.list_edges(from_id="focus", to_id="cand")
+        assert len(edges) == 1
+        edge = edges[0]
+        # Every authoritative column untouched by the blocked inferred write.
+        assert edge["provenance_type"] == "asserted"
+        assert edge["provenance_actor"] == "human-reviewer"
+        assert edge["evidence"] == "manual"
+        assert edge["weight"] == pytest.approx(1.0)
+        # The run itself completed: op-log recorded with nothing written.
+        assert await stats_store.has_edge_inference("focus", 1, 1)
+
+    async def test_resolved_conflict_survives_reinference(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """A manually resolved inferred contradiction keeps its resolution."""
+        contradiction = {
+            "candidate": 1,
+            "relation": "contradicts",
+            "confidence": 0.95,
+            "rationale": "still contradicts",
+        }
+        # Canonical symmetric endpoints for (focus, cand): "cand" <= "focus".
+        await edge_store.upsert(
+            from_id="cand",
+            to_id="focus",
+            edge_type="contradicts",
+            weight=0.9,
+            namespace="default",
+            provenance_actor="human-reviewer",
+            provenance_type="inferred",
+            evidence="original rationale",
+            conflict_state="resolved",
+        )
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=_adjudication_body([contradiction])),
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+
+        edges = await edge_store.list_edges(from_id="cand", to_id="focus")
+        assert len(edges) == 1
+        edge = edges[0]
+        assert edge["conflict_state"] == "resolved"
+        assert edge["provenance_actor"] == "human-reviewer"
+        assert edge["evidence"] == "original rationale"
+        assert edge["weight"] == pytest.approx(0.9)
+
+
+class TestReinference:
+    """Round-1 review finding 2: document/policy/purge resets must genuinely
+    re-adjudicate — existing inferred pairs are refreshed, not excluded."""
+
+    @staticmethod
+    def _mutable_handler(judgement: dict[str, Any]):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=_adjudication_body([dict(judgement)]))
+
+        return handler
+
+    async def test_document_version_bump_readjudicates_and_refreshes(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        judgement = dict(_GOOD_JUDGEMENT)
+        harness = _EngineHarness(
+            test_config, stats_store, edge_store, handler=self._mutable_handler(judgement)
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+            assert harness.calls["n"] == 1
+
+            # The note changes: version 2, and the model now judges differently.
+            harness.knowledge.read = AsyncMock(return_value=(_doc("focus", version=2), False))
+            judgement["confidence"] = 0.9
+            judgement["rationale"] = "updated evidence"
+            await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
+            assert harness.calls["n"] == 2  # genuinely re-adjudicated
+        finally:
+            await harness.close()
+
+        edges = await edge_store.list_edges(from_id="focus", to_id="cand")
+        assert len(edges) == 1  # refreshed in place, not duplicated
+        assert edges[0]["weight"] == pytest.approx(0.9)
+        assert json.loads(str(edges[0]["evidence"]))["rationale"] == "updated evidence"
+        assert await stats_store.has_edge_inference("focus", 1, 1)
+        assert await stats_store.has_edge_inference("focus", 2, 1)
+
+    async def test_ledger_purge_enables_actual_readjudication(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=_adjudication_body([_GOOD_JUDGEMENT])),
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+            assert harness.calls["n"] == 1
+            purged = await stats_store.purge_edge_inference_log()
+            assert purged == 1
+            await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
+            assert harness.calls["n"] == 2  # operator reset re-adjudicates
+        finally:
+            await harness.close()
+        edges = await edge_store.list_edges(from_id="focus", to_id="cand")
+        assert len(edges) == 1  # same pair refreshed via the inferred upsert
+
+    async def test_inference_version_bump_readjudicates(
+        self,
+        test_config: LithosConfig,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=_adjudication_body([_GOOD_JUDGEMENT])),
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+            assert harness.calls["n"] == 1
+            monkeypatch.setattr("lithos.lcma.edge_inference.INFERENCE_VERSION", 2)
+            await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
+            assert harness.calls["n"] == 2  # policy bump re-adjudicates
+        finally:
+            await harness.close()
+        assert await stats_store.has_edge_inference("focus", 1, 1)
+        assert await stats_store.has_edge_inference("focus", 1, 2)
+
+    async def test_changed_relation_accumulates_new_edge(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """A re-adjudication that changes relation type keys a NEW edge; the
+        old one remains (additive semantics — reconciliation of superseded
+        inferred edges is slice-2 sweep scope, per the PR1 review record)."""
+        judgement = dict(_GOOD_JUDGEMENT)
+        harness = _EngineHarness(
+            test_config, stats_store, edge_store, handler=self._mutable_handler(judgement)
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+            harness.knowledge.read = AsyncMock(return_value=(_doc("focus", version=2), False))
+            judgement["relation"] = "refines"
+            await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
+        finally:
+            await harness.close()
+        edges = await edge_store.list_edges(from_id="focus", to_id="cand")
+        assert {e["type"] for e in edges} == {"supports", "refines"}
+
+    async def test_stale_version_discards_results(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """Round-1 review finding 4: a note updated mid-LLM-call must not get
+        stale edges or a stale completion marker; spend is still recorded."""
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=_adjudication_body([_GOOD_JUDGEMENT])),
+        )
+        # First read (prompt build) sees v1; the post-call staleness re-read
+        # sees v2 — the note changed while the LLM call was in flight.
+        harness.knowledge.read = AsyncMock(
+            side_effect=[(_doc("focus", version=1), False), (_doc("focus", version=2), False)]
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+
+        assert harness.calls["n"] == 1  # tokens were spent...
+        day = datetime.now(UTC).strftime("%Y-%m-%d")
+        assert (await stats_store.get_llm_spend(day))[0] == 250  # ...and recorded
+        assert await edge_store.list_edges(from_id="focus") == []  # no stale edges
+        # No completion marker for either version: the queued v2 drain re-runs.
+        assert not await stats_store.has_edge_inference("focus", 1, 1)
+        assert not await stats_store.has_edge_inference("focus", 2, 1)
+
+
+class TestWorkerLifecycle:
+    """Production construction: engine exists iff llm enabled; stop() closes it."""
+
+    async def test_enabled_worker_builds_engine_and_stop_closes_it(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        from lithos.lcma.enrich import EnrichWorker
+
+        test_config.lcma.llm = LlmConfig(base_url="http://ollama:11434/v1", model="m")
+        worker = EnrichWorker(
+            config=test_config.lcma,
+            event_bus=EventBus(test_config.events),
+            stats_store=stats_store,
+            projection=MagicMock(edge_store=edge_store),
+            knowledge=MagicMock(),
+            coordination=AsyncMock(),
+            intake=MagicMock(),
+            search=MagicMock(),
+        )
+        assert worker._edge_inference is not None
+        await worker.stop()  # must close the engine's httpx client without error
+
+    async def test_disabled_worker_has_no_engine(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        from lithos.lcma.enrich import EnrichWorker
+
+        test_config.lcma.llm = LlmConfig()
+        worker = EnrichWorker(
+            config=test_config.lcma,
+            event_bus=EventBus(test_config.events),
+            stats_store=stats_store,
+            projection=MagicMock(edge_store=edge_store),
+            knowledge=MagicMock(),
+            coordination=AsyncMock(),
+            intake=MagicMock(),
+            search=MagicMock(),
+        )
+        assert worker._edge_inference is None
+        await worker.stop()
 
 
 class TestCascadeGuard:

@@ -161,7 +161,6 @@ class EnrichWorker:
                 knowledge=knowledge,
                 search=search,
                 intake=intake,
-                edge_store=projection.edge_store,
                 agent=ENRICH_AGENT,
             )
 

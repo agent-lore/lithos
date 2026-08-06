@@ -178,6 +178,75 @@ CREATE INDEX IF NOT EXISTS idx_edges_namespace ON edges(namespace);
                 )
         return edge_id
 
+    async def upsert_inferred(
+        self,
+        *,
+        from_id: str,
+        to_id: str,
+        edge_type: str,
+        weight: float,
+        namespace: str,
+        provenance_actor: str,
+        evidence: str | None = None,
+    ) -> str | None:
+        """Upsert an LLM-inferred edge without ever displacing authoritative rows.
+
+        The write proceeds only when no row exists for the natural key, or the
+        existing row is itself ``provenance_type='inferred'`` with no
+        ``conflict_state`` — asserted rows, legacy NULL-provenance rows,
+        projection-owned rows, and manually resolved conflicts are all left
+        untouched (inferred ≠ asserted is a one-way boundary). Returns the
+        ``edge_id`` when written, ``None`` when the existing row wins. The
+        SELECT-then-act pair is atomic inside the transactional
+        :meth:`_session` (same serialisation contract as :meth:`upsert`).
+        """
+        now = datetime.now(UTC).isoformat()
+        async with self._session(transactional=True) as db:
+            cursor = await db.execute(
+                "SELECT edge_id, provenance_type, conflict_state FROM edges "
+                "WHERE from_id = ? AND to_id = ? AND type = ? AND namespace = ?",
+                (from_id, to_id, edge_type, namespace),
+            )
+            row = await cursor.fetchone()
+            if row is not None:
+                edge_id: str = row[0]
+                if row[1] != "inferred" or row[2] is not None:
+                    logger.debug(
+                        "inferred upsert blocked by existing row: edge_id=%s "
+                        "provenance_type=%s conflict_state=%s",
+                        edge_id,
+                        row[1],
+                        row[2],
+                    )
+                    return None
+                await db.execute(
+                    "UPDATE edges SET weight = ?, updated_at = ?, "
+                    "provenance_actor = ?, evidence = ? WHERE edge_id = ?",
+                    (weight, now, provenance_actor, evidence, edge_id),
+                )
+                return edge_id
+            edge_id = _generate_edge_id()
+            await db.execute(
+                "INSERT INTO edges "
+                "(edge_id, from_id, to_id, type, weight, namespace, "
+                "created_at, updated_at, provenance_actor, provenance_type, "
+                "evidence, conflict_state) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'inferred', ?, NULL)",
+                (
+                    edge_id,
+                    from_id,
+                    to_id,
+                    edge_type,
+                    weight,
+                    namespace,
+                    now,
+                    now,
+                    provenance_actor,
+                    evidence,
+                ),
+            )
+            return edge_id
+
     async def get_edge(self, edge_id: str) -> dict[str, object] | None:
         """Return a single edge by its ID, or ``None`` if not found."""
         async with self._session() as db:
