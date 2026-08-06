@@ -1565,10 +1565,17 @@ background worker as persistent artifacts (typed edges, concept notes, analogy f
 ### Workstreams
 
 **WS1 — LLM-synthesis worker (backbone).** `lithos-enrich` gains an **optional** LLM provider
-(nested `LithosConfig.lcma.llm` — one OpenAI-compatible chat-completions endpoint, local or
-external; local Ollama/llama.cpp/vLLM `/v1` shims keep privacy-first deployments whole).
-Query-independent, background, budget-bounded; never on the retrieve hot path. Emits provenance-
-stamped, idempotent artifacts (the `enrich_queue` already sequences work). Enables WS2/WS4/WS5.
+(`LithosConfig.lcma.llm`, a nested config for one OpenAI-compatible chat-completions endpoint —
+local Ollama/llama.cpp/vLLM `/v1` shims keep privacy-first deployments whole; hosted APIs work
+identically). Query-independent, background, budget-bounded (daily token ceiling + per-drain
+call cap in stats.db `llm_budget`); never on the retrieve hot path. Emits provenance-stamped,
+idempotent artifacts (`edge_inference_log` keyed on the identity triple `(node_id, doc_version,
+inference_version)` — a doc update or an `INFERENCE_VERSION` bump in `edge_inference.py`
+re-adjudicates; a model switch deliberately does not, with `purge_edge_inference_log` as the
+operator reset. Inferred-edge writes flow through `intake.assert_inferred_edge` with
+`origin=enrich` — the worker drops its own events, and the underlying `upsert_inferred`
+atomically refuses to displace asserted, legacy, or manually-resolved rows). Enables
+WS2/WS4/WS5. *Shipped 2026-07 as slice 1 together with the thin WS2 consumer below.*
 
 **WS2 — Typed-edge inference (top lever + Lens enabler).** For each node, take its top semantic
 neighbours as candidate pairs, cheap-pre-filter (similarity + entity/tag overlap), then have WS1
@@ -1578,7 +1585,9 @@ columns** (no migration): `provenance_type="inferred"`, `provenance_actor="litho
 `weight=confidence`, `evidence={rationale, model, confidence}`. Lifts coverage from 17% with *real*
 semantic types and — because `lithos_related` already surfaces `edges.db` — feeds Lens for free.
 Governance: inferred ≠ asserted (marked + filterable); confidence floor; `contradicts` is surfaced,
-never auto-mutating.
+never auto-mutating. *Slice 1 shipped 2026-07: drain-triggered inference on note create/update
+(`lithos/lcma/edge_inference.py` — one LLM call per node over top-K pre-filtered semantic
+neighbours). Slice 2 remains: full-corpus sweep backfill + neighbourhood-drift re-inference.*
 
 **WS3 — Embedding-based coherence + temperature + exploration.** Edge-based coherence is dead (17%
 coverage); redefine **coherence = 1 − normalised semantic dispersion** of the top candidates
@@ -1747,7 +1756,7 @@ LCMA is also compatible with cross-plan metadata additions: `source_url`, `deriv
 
 ### LLM integration scope
 
-Background LLM synthesis (the `should_enrich_with_llm()` policy and `llm_interpretive_synthesize()` worker in §5.4/§5.12) requires an LLM provider and is not available in MVP 1 or MVP 2. `lithos_retrieve` always terminates at Terrace 1 — no local model is bundled and no LLM call ever happens on the retrieve path. LLM synthesis ships in MVP 3 as part of `lithos-enrich`, configured via the nested `LithosConfig.lcma.llm` block (OpenAI-compatible endpoint; disabled unless `base_url` is set).
+Background LLM synthesis (the `should_enrich_with_llm()` policy and `llm_interpretive_synthesize()` worker in §5.4/§5.12) requires an LLM provider and is not available in MVP 1 or MVP 2. `lithos_retrieve` always terminates at Terrace 1 — no local model is bundled and no LLM call ever happens on the retrieve path. LLM synthesis shipped with MVP 3 WS1 as part of `lithos-enrich`, configured via the nested `LithosConfig.lcma.llm` block (OpenAI-compatible endpoint; disabled unless `base_url` is set). The §5.4 temperature-based `should_enrich_with_llm()` gate is superseded in slice 1 by a deterministic trigger-type + budget + op-log gate (temperature is inert until WS3).
 
 ### 7.z `LcmaConfig` Schema (Draft)
 

@@ -128,6 +128,7 @@ async def worker(
         knowledge=mock_knowledge,
         coordination=mock_coordination,
         intake=_make_intake(mock_knowledge, event_bus, edge_store, mock_coordination),
+        search=MagicMock(),
     )
 
 
@@ -833,6 +834,7 @@ class TestEnrichNodeProvenanceHandoff:
             knowledge=km,
             coordination=coord,
             intake=_make_intake(km, event_bus, edge_store, coord),
+            search=MagicMock(),
         )
         return worker, km
 
@@ -1294,6 +1296,7 @@ class TestSelfOriginatedEventFilter:
             knowledge=km,
             coordination=mock_coordination,
             intake=intake,
+            search=MagicMock(),
         )
 
         await worker._extract_entities(doc_id)
@@ -1350,6 +1353,7 @@ class TestExtractEntities:
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
+            search=MagicMock(),
         )
 
         await worker._extract_entities(doc_id)
@@ -1403,6 +1407,7 @@ class TestExtractEntities:
             knowledge=km,
             coordination=mock_coordination,
             intake=intake,
+            search=MagicMock(),
         )
 
         await worker._extract_entities(doc_id)
@@ -1433,6 +1438,7 @@ class TestExtractEntities:
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
+            search=MagicMock(),
         )
 
     async def test_stale_marker_entities_reextracted(
@@ -1579,6 +1585,7 @@ class TestExtractEntities:
             knowledge=km,
             coordination=coord,
             intake=_make_intake(km, event_bus, edge_store, coord),
+            search=MagicMock(),
         )
         await worker.full_sweep()
 
@@ -1621,6 +1628,7 @@ class TestExtractEntities:
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
+            search=MagicMock(),
         )
 
         await worker._extract_entities(doc_id)
@@ -1658,6 +1666,7 @@ class TestExtractEntities:
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
+            search=MagicMock(),
         )
 
         # Call with edge.upserted trigger — should NOT extract entities
@@ -1708,6 +1717,7 @@ class TestExtractEntities:
             knowledge=km,
             coordination=mock_coordination,
             intake=_make_intake(km, event_bus, edge_store, mock_coordination),
+            search=MagicMock(),
         )
 
         await worker._extract_entities(doc_id)
@@ -1750,6 +1760,7 @@ class TestFullSweep:
             knowledge=km,
             coordination=coord,
             intake=_make_intake(km, event_bus, edge_store, coord),
+            search=MagicMock(),
         )
 
         # Create node_stats with last_used_at 14 days ago (will decay)
@@ -1812,6 +1823,7 @@ class TestFullSweep:
             knowledge=km,
             coordination=coord,
             intake=_make_intake(km, event_bus, edge_store, coord),
+            search=MagicMock(),
         )
 
         # Create two notes: source-note and derived-note
@@ -1895,6 +1907,7 @@ class TestFullSweep:
             knowledge=km,
             coordination=coord,
             intake=_make_intake(km, event_bus, edge_store, coord),
+            search=MagicMock(),
         )
 
         source = await km.create(title="Source", content="src", agent="test-agent")

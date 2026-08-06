@@ -558,7 +558,9 @@ class CorpusIntake:
                 warnings=list(result.warnings),
             )
 
-    async def assert_edge(self, agent: str, request: EdgeRequest) -> EdgeOutcome:
+    async def assert_edge(
+        self, agent: str, request: EdgeRequest, *, origin: str = ""
+    ) -> EdgeOutcome:
         """Assert an edge into the Corpus (ADR-0006 Slice 1).
 
         Four-step pipeline modelled on :meth:`delete` / :meth:`write`:
@@ -613,6 +615,60 @@ class CorpusIntake:
                     edge_type=request.edge_type,
                     namespace=request.namespace,
                     conflict_state=request.conflict_state,
+                    origin=origin,
+                )
+            )
+
+            return EdgeOutcome(edge_id=edge_id, status="ok")
+
+    async def assert_inferred_edge(
+        self, agent: str, request: EdgeRequest, *, origin: str = ""
+    ) -> EdgeOutcome | None:
+        """:meth:`assert_edge` variant for LLM-inferred edges (WS1/WS2).
+
+        Same four-step pipeline, but the store write is
+        :meth:`EdgeStore.upsert_inferred`: it atomically refuses to displace
+        any row that is not itself an unconflicted inferred edge (asserted,
+        legacy NULL-provenance, projection-owned, or manually resolved rows
+        all win). When the write is blocked, returns ``None`` and emits no
+        event — the graph did not change.
+        """
+        tracer = get_tracer()
+        with tracer.start_as_current_span("lithos.intake.assert_inferred_edge") as span:
+            span.set_attribute("lithos.intake.op", "assert_inferred_edge")
+            span.set_attribute("lithos.agent", agent)
+            span.set_attribute("lithos.edge.from_id", request.from_id)
+            span.set_attribute("lithos.edge.to_id", request.to_id)
+            span.set_attribute("lithos.edge.type", request.edge_type)
+            span.set_attribute("lithos.edge.namespace", request.namespace)
+
+            await self._coordination.ensure_agent_known(agent)
+
+            edge_id = await self._edge_store.upsert_inferred(
+                from_id=request.from_id,
+                to_id=request.to_id,
+                edge_type=request.edge_type,
+                weight=request.weight,
+                namespace=request.namespace,
+                provenance_actor=request.provenance_actor or agent,
+                evidence=request.evidence,
+            )
+            if edge_id is None:
+                span.set_attribute("lithos.edge.blocked", True)
+                return None
+
+            span.set_attribute("lithos.edge.edge_id", edge_id)
+
+            await self._emit(
+                make_edge_upserted_event(
+                    agent=agent,
+                    edge_id=edge_id,
+                    from_id=request.from_id,
+                    to_id=request.to_id,
+                    edge_type=request.edge_type,
+                    namespace=request.namespace,
+                    conflict_state=None,
+                    origin=origin,
                 )
             )
 

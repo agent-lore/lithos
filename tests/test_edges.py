@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sqlite3
+from typing import ClassVar
 
 import pytest
 import pytest_asyncio
@@ -268,6 +269,74 @@ class TestUpsertAndList:
         assert await edge_store.count() == 1
         assert await edge_store.count(namespace="ns") == 1
         assert await edge_store.count(namespace="other") == 0
+
+
+class TestUpsertInferred:
+    """upsert_inferred (WS1 PR2): the one-way authority boundary at the store."""
+
+    _KEY: ClassVar[dict[str, str]] = {
+        "from_id": "a",
+        "to_id": "b",
+        "edge_type": "supports",
+        "namespace": "default",
+    }
+
+    async def _seed(self, edge_store, *, provenance_type, conflict_state=None):
+        return await edge_store.upsert(
+            **self._KEY,
+            weight=1.0,
+            provenance_actor="human",
+            provenance_type=provenance_type,
+            evidence="manual",
+            conflict_state=conflict_state,
+        )
+
+    async def _inferred(self, edge_store):
+        return await edge_store.upsert_inferred(
+            **self._KEY, weight=0.7, provenance_actor="lithos-enrich", evidence="llm"
+        )
+
+    async def test_inserts_fresh_row_as_inferred(self, edge_store) -> None:
+        edge_id = await self._inferred(edge_store)
+        assert edge_id is not None
+        edge = await edge_store.get_edge(edge_id)
+        assert edge is not None
+        assert edge["provenance_type"] == "inferred"
+        assert edge["conflict_state"] is None
+
+    async def test_refreshes_existing_inferred_row(self, edge_store) -> None:
+        first = await self._inferred(edge_store)
+        second = await edge_store.upsert_inferred(
+            **self._KEY, weight=0.9, provenance_actor="lithos-enrich", evidence="llm-v2"
+        )
+        assert second == first  # same row updated, not duplicated
+        edge = await edge_store.get_edge(str(first))
+        assert edge is not None
+        assert edge["weight"] == pytest.approx(0.9)
+        assert edge["evidence"] == "llm-v2"
+
+    @pytest.mark.parametrize("provenance_type", ["asserted", "projection", None])
+    async def test_blocked_by_non_inferred_rows(self, edge_store, provenance_type) -> None:
+        """Asserted, projection-owned, and legacy NULL-provenance rows all win."""
+        edge_id = await self._seed(edge_store, provenance_type=provenance_type)
+        assert await self._inferred(edge_store) is None
+        edge = await edge_store.get_edge(edge_id)
+        assert edge is not None
+        assert edge["provenance_type"] == provenance_type
+        assert edge["provenance_actor"] == "human"
+        assert edge["evidence"] == "manual"
+        assert edge["weight"] == pytest.approx(1.0)
+
+    async def test_blocked_by_resolved_inferred_row(self, edge_store) -> None:
+        """A manually resolved conflict on an inferred edge is authoritative."""
+        edge_id = await self._seed(
+            edge_store, provenance_type="inferred", conflict_state="resolved"
+        )
+        assert await self._inferred(edge_store) is None
+        edge = await edge_store.get_edge(edge_id)
+        assert edge is not None
+        assert edge["conflict_state"] == "resolved"
+        assert edge["evidence"] == "manual"
 
 
 class TestUpdateConflictResolution:
