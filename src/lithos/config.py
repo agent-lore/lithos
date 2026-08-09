@@ -196,7 +196,13 @@ class LlmConfig(BaseModel):
     model: str = Field(default="", validate_default=True)
     api_key: SecretStr | None = None
     timeout_seconds: float = Field(default=120.0, gt=0.0)
-    max_output_tokens: int = Field(default=1024, gt=0)
+    # Cap on completion tokens per call. Reasoning models (gpt-5 family etc.)
+    # spend completion budget on hidden reasoning BEFORE emitting text — a tight
+    # cap truncates them into null/cut-off content (observed on gpt-5-mini at
+    # 1024 with production prompts: 979/1024 spent). The cap is protective, not
+    # a spend target, so a generous default costs nothing on non-reasoning
+    # models.
+    max_output_tokens: int = Field(default=4096, gt=0)
     # Budget bounds: a UTC-day *soft* token ceiling plus a per-drain-cycle call
     # cap. Admission is check-before-call with the actual spend recorded after
     # the call, so the ledger can overshoot the ceiling by at most the final
@@ -395,11 +401,15 @@ class LithosConfig(BaseSettings):
     # validating model, so the root settings class must hide raw input or a
     # failed validation anywhere in the tree echoes sibling values — including
     # unwrapped secrets like lcma.llm.api_key — into logs/CI output.
+    # env_ignore_empty: deployment tooling (docker compose pass-through with
+    # empty defaults) exports blank env vars for unset settings; treat them as
+    # unset instead of failing int/float parsing on "".
     model_config = SettingsConfigDict(
         env_prefix="LITHOS_",
         env_nested_delimiter="__",
         extra="ignore",
         hide_input_in_errors=True,
+        env_ignore_empty=True,
     )
 
     server: ServerConfig = Field(default_factory=ServerConfig)

@@ -402,6 +402,19 @@ class TestLlmConfigHardening:
         for surface in (str(excinfo.value), repr(excinfo.value)):
             assert "sk-topsecret" not in surface
 
+    def test_empty_env_vars_treated_as_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Compose pass-through exports blank env vars for unset settings;
+        env_ignore_empty must keep them from failing int/float parsing."""
+        monkeypatch.setenv("LITHOS_LCMA__LLM__BASE_URL", "")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__MODEL", "")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__API_KEY", "")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__MAX_OUTPUT_TOKENS", "")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__CONFIDENCE_FLOOR", "")
+        cfg = LithosConfig()
+        assert not cfg.lcma.llm.enabled
+        assert cfg.lcma.llm.max_output_tokens == 4096  # default, not ValidationError
+        assert cfg.lcma.llm.confidence_floor == 0.6
+
     def test_base_url_whitespace_padding_stripped(self) -> None:
         cfg = LlmConfig(base_url="  http://ollama:11434/v1  ", model="m")
         assert cfg.base_url == "http://ollama:11434/v1"

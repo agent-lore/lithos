@@ -20,11 +20,21 @@ services:
       - LITHOS_OTEL_ENABLED=${LITHOS_OTEL_ENABLED:-true}
       - LITHOS_ENVIRONMENT=${LITHOS_ENVIRONMENT:-dev}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
-      # WS1 LLM synthesis (optional): empty values normalise to disabled, so
-      # environments that omit these in .env.<env> keep synthesis off.
+      # WS1 LLM synthesis (optional): empty values are treated as unset
+      # (env_ignore_empty) so environments that omit these in .env.<env>
+      # keep synthesis off / config defaults.
       - LITHOS_LCMA__LLM__BASE_URL=${LITHOS_LCMA__LLM__BASE_URL:-}
       - LITHOS_LCMA__LLM__MODEL=${LITHOS_LCMA__LLM__MODEL:-}
       - LITHOS_LCMA__LLM__API_KEY=${LITHOS_LCMA__LLM__API_KEY:-}
+      - LITHOS_LCMA__LLM__MAX_OUTPUT_TOKENS=${LITHOS_LCMA__LLM__MAX_OUTPUT_TOKENS:-}
+      - LITHOS_LCMA__LLM__TIMEOUT_SECONDS=${LITHOS_LCMA__LLM__TIMEOUT_SECONDS:-}
+      - LITHOS_LCMA__LLM__DAILY_TOKEN_BUDGET=${LITHOS_LCMA__LLM__DAILY_TOKEN_BUDGET:-}
+      - LITHOS_LCMA__LLM__MAX_CALLS_PER_DRAIN=${LITHOS_LCMA__LLM__MAX_CALLS_PER_DRAIN:-}
+      - LITHOS_LCMA__LLM__CONFIDENCE_FLOOR=${LITHOS_LCMA__LLM__CONFIDENCE_FLOOR:-}
+      - LITHOS_LCMA__LLM__NEIGHBOUR_K=${LITHOS_LCMA__LLM__NEIGHBOUR_K:-}
+      - LITHOS_LCMA__LLM__MIN_SIMILARITY=${LITHOS_LCMA__LLM__MIN_SIMILARITY:-}
+      - LITHOS_LCMA__LLM__MAX_SIMILARITY=${LITHOS_LCMA__LLM__MAX_SIMILARITY:-}
+      - LITHOS_LCMA__LLM__SNIPPET_CHARS=${LITHOS_LCMA__LLM__SNIPPET_CHARS:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
       interval: 10s
