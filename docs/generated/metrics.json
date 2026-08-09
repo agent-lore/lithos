@@ -331,11 +331,11 @@
         "classes": 10,
         "functions": 23,
         "largest_module": "lithos.config",
-        "largest_module_lines": 536,
-        "lines": 536,
+        "largest_module_lines": 546,
+        "lines": 546,
         "modules": 1,
         "public_symbols": 13,
-        "sloc": 377
+        "sloc": 378
       },
       "Coordination": {
         "classes": 8,
@@ -483,13 +483,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 25489,
+    "total_lines": 25499,
     "total_modules": 44,
-    "total_sloc": 20485
+    "total_sloc": 20486
   },
   "tests": {
     "ratio": 1.86,
-    "src_lines": 25489,
-    "test_lines": 47534
+    "src_lines": 25499,
+    "test_lines": 47547
   }
 }
