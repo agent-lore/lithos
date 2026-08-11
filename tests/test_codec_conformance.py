@@ -275,3 +275,67 @@ class TestPurity:
         # Already-set fields are untouched.
         assert meta.access_scope == "shared"
         assert meta.note_type == "observation"
+
+
+# ---------------------------------------------------------------------------
+# 8. Bare-date normalisation (#407)
+# ---------------------------------------------------------------------------
+
+
+class TestBareDateNormalisation:
+    """YAML-native dates behave exactly like their quoted forms (#407).
+
+    PyYAML resolves a bare ``2026-07-30`` to ``datetime.date`` (and a bare
+    timestamp to ``datetime.datetime``), which the JSON bucket keys, Tantivy
+    field joins, and MCP response serialisation cannot carry. The codec
+    stringifies them at ingestion so a note with a bare date can never again
+    be silently dropped from the index.
+    """
+
+    def test_bare_date_in_unknown_key_decodes_to_string(self):
+        text = "---\nid: n1\ntitle: T\ncreated: 2026-07-30\n---\nBody."
+        doc = decode(text, Path("notes/n1.md"))
+        assert doc.metadata.extra["created"] == "2026-07-30"
+
+    def test_bare_datetime_in_unknown_key_decodes_to_string(self):
+        text = "---\nid: n1\ntitle: T\npublished: 2026-07-30 10:15:00\n---\nBody."
+        doc = decode(text, Path("notes/n1.md"))
+        assert doc.metadata.extra["published"] == "2026-07-30T10:15:00"
+
+    def test_nested_dates_normalised_recursively(self):
+        text = (
+            "---\nid: n1\ntitle: T\n"
+            "dates:\n  - 2026-01-01\n  - 2026-01-02\n"
+            "nested:\n  inner: 2026-02-02\n"
+            "---\nBody."
+        )
+        doc = decode(text, Path("notes/n1.md"))
+        assert doc.metadata.extra["dates"] == ["2026-01-01", "2026-01-02"]
+        assert doc.metadata.extra["nested"] == {"inner": "2026-02-02"}
+
+    def test_bare_date_in_tags_decodes_to_string(self):
+        """Tags reach ``" ".join`` in the Tantivy backend — must be strings."""
+        text = "---\nid: n1\ntitle: T\ntags:\n  - 2026-07-30\n  - real-tag\n---\nBody."
+        doc = decode(text, Path("notes/n1.md"))
+        assert doc.metadata.tags == ["2026-07-30", "real-tag"]
+
+    def test_bare_and_quoted_dates_decode_identically(self):
+        bare = decode("---\nid: n1\ntitle: T\ncreated: 2026-07-30\n---\nB", Path("n.md"))
+        quoted = decode("---\nid: n1\ntitle: T\ncreated: '2026-07-30'\n---\nB", Path("n.md"))
+        assert bare.metadata.extra == quoted.metadata.extra
+
+    def test_bare_date_round_trip_is_stable(self):
+        """First encode quotes the date; from then on the note is a fixed point."""
+        text = "---\nid: n1\ntitle: T\ncreated: 2026-07-30\n---\nBody."
+        once = encode(decode(text, Path("n.md")))
+        twice = encode(decode(once, Path("n.md")))
+        assert once == twice
+        assert decode(once, Path("n.md")).metadata.extra["created"] == "2026-07-30"
+
+    def test_canonical_metadata_value_is_total(self):
+        """An unserialisable value yields a lossy key, never an exception —
+        this function runs during the startup scan, where raising would stop
+        the server from booting."""
+        from lithos.frontmatter_codec import canonical_metadata_value
+
+        assert isinstance(canonical_metadata_value(b"\x00bytes"), str)

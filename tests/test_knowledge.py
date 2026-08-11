@@ -4607,3 +4607,53 @@ class TestScanCorpus:
 
         with pytest.raises(CorpusScanError):
             await knowledge_manager.plan_reconcile(engine)
+
+
+class TestBareDateFrontmatter:
+    """Regression for #407: a bare (unquoted) YAML date must never break the scan.
+
+    On v0.4.0 the note was silently skipped ("Object of type date is not JSON
+    serializable"); after the CorpusIndex extraction the same value crashed
+    manager construction outright. Either way ~25% of a real vault vanished
+    from search. The note must scan, index, and match its quoted-string form.
+    """
+
+    DOC_ID = "33333333-3333-3333-3333-333333333333"
+
+    def _write_note(self, test_config) -> None:
+        note = test_config.storage.knowledge_path / "dated.md"
+        note.write_text(
+            "---\n"
+            f"id: {self.DOC_ID}\n"
+            "title: Dated Note\n"
+            "created: 2026-07-30\n"
+            "tags:\n"
+            "  - 2026-07-30\n"
+            "---\n"
+            "Searchable body.\n"
+        )
+
+    def test_scan_survives_bare_date_and_indexes_the_note(self, test_config):
+        self._write_note(test_config)
+
+        mgr = KnowledgeManager(test_config)
+
+        assert mgr._index.has_document(self.DOC_ID)
+        cached = mgr._index.get_cached_meta(self.DOC_ID)
+        assert cached is not None
+        assert cached.extra["created"] == "2026-07-30"
+        assert mgr._index.metadata_candidate_ids({"created": "2026-07-30"}) == {self.DOC_ID}
+
+    @pytest.mark.asyncio
+    async def test_bare_date_note_is_indexable(self, test_config):
+        """The full search-feed path: tags stay strings all the way to the
+        Tantivy field join."""
+        self._write_note(test_config)
+        mgr = KnowledgeManager(test_config)
+
+        docs = await mgr.scan_corpus()
+        doc = next(d for d in docs if d.id == self.DOC_ID)
+        indexable = mgr.to_indexable(doc)
+
+        assert indexable.tags == ("2026-07-30",)
+        assert " ".join(indexable.tags) == "2026-07-30"

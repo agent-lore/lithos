@@ -34,7 +34,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Codec | 1 | 777 | 583 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
+| Codec | 1 | 799 | 600 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
 | CognitiveMemory | 1 | 1158 | 953 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 546 | 378 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 1 | 2675 | 2256 | 4 | 4 | 0.50 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
@@ -43,7 +43,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Events | 1 | 350 | 281 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1384 | 1126 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
-| Knowledge | 3 | 2067 | 1654 | 5 | 7 | 0.58 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
+| Knowledge | 3 | 2073 | 1659 | 5 | 7 | 0.58 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
 | LCMA | 12 | 5553 | 4479 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 18 |
 | Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
@@ -53,7 +53,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **44**, lines: **25499**, SLOC: **20486**
+- Modules: **44**, lines: **25527**, SLOC: **20508**
 - Largest module: `lithos.coordination` (2675 lines)
 - Modules over 800 lines: **11**
   - `lithos.cli`
@@ -70,7 +70,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **778**, cyclomatic > 10: **62**
+- Functions: **780**, cyclomatic > 10: **62**
 
 Top 10 most complex functions:
 
@@ -151,4 +151,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.86** (47547 test lines / 25499 source lines)
+- Test-to-source line ratio: **1.87** (47713 test lines / 25527 source lines)
