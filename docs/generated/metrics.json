@@ -311,11 +311,11 @@
         "classes": 3,
         "functions": 27,
         "largest_module": "lithos.frontmatter_codec",
-        "largest_module_lines": 799,
-        "lines": 799,
+        "largest_module_lines": 808,
+        "lines": 808,
         "modules": 1,
         "public_symbols": 21,
-        "sloc": 600
+        "sloc": 609
       },
       "CognitiveMemory": {
         "classes": 2,
@@ -474,6 +474,7 @@
       "lithos.cli",
       "lithos.cognitive_memory",
       "lithos.coordination",
+      "lithos.frontmatter_codec",
       "lithos.graph",
       "lithos.knowledge",
       "lithos.lcma.scouts",
@@ -483,13 +484,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 25527,
+    "total_lines": 25536,
     "total_modules": 44,
-    "total_sloc": 20508
+    "total_sloc": 20517
   },
   "tests": {
     "ratio": 1.87,
-    "src_lines": 25527,
-    "test_lines": 47713
+    "src_lines": 25536,
+    "test_lines": 47804
   }
 }

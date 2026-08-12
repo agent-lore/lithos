@@ -4657,3 +4657,34 @@ class TestBareDateFrontmatter:
 
         assert indexable.tags == ("2026-07-30",)
         assert " ".join(indexable.tags) == "2026-07-30"
+
+    def test_scan_survives_date_mapping_keys_and_mixed_key_types(self, test_config):
+        """#407 review: bare dates as nested mapping keys, and mixed str/int
+        keys, each crashed manager construction after the scalar fix."""
+        (test_config.storage.knowledge_path / "keyed.md").write_text(
+            "---\n"
+            "id: 44444444-4444-4444-4444-444444444444\n"
+            "title: Keyed Note\n"
+            "custom:\n"
+            "  2026-07-30: value\n"
+            "---\n"
+            "Body.\n"
+        )
+        (test_config.storage.knowledge_path / "mixed.md").write_text(
+            "---\n"
+            "id: 55555555-5555-5555-5555-555555555555\n"
+            "title: Mixed Keys Note\n"
+            "custom:\n"
+            "  alpha: one\n"
+            "  7: seven\n"
+            "---\n"
+            "Body.\n"
+        )
+
+        mgr = KnowledgeManager(test_config)
+
+        assert mgr._index.has_document("44444444-4444-4444-4444-444444444444")
+        assert mgr._index.has_document("55555555-5555-5555-5555-555555555555")
+        cached = mgr._index.get_cached_meta("44444444-4444-4444-4444-444444444444")
+        assert cached is not None
+        assert cached.extra["custom"] == {"2026-07-30": "value"}

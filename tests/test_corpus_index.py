@@ -348,3 +348,31 @@ def test_rebuild_survives_bare_date_frontmatter():
     )
     assert idx.has_document("D")
     assert idx.metadata_candidate_ids({"created": "2026-07-30"}) == {"D"}
+
+
+def test_rebuild_survives_date_mapping_keys_and_mixed_key_types():
+    """#407 review: nested date keys and mixed-type keys crashed the startup
+    rebuild even after scalar dates were normalised."""
+    from datetime import date
+
+    idx = CorpusIndex()
+    idx.rebuild(
+        [
+            ScannedNote(
+                doc_id="K",
+                title="Keyed",
+                frontmatter={"custom": {date(2026, 7, 30): "value"}},
+                rel_path=Path("k.md"),
+            ),
+            ScannedNote(
+                doc_id="M",
+                title="Mixed",
+                frontmatter={"custom": {"alpha": "one", 7: "seven"}},
+                rel_path=Path("m.md"),
+            ),
+        ]
+    )
+    assert idx.has_document("K")
+    assert idx.has_document("M")
+    cached = idx.get_cached_meta("K")
+    assert cached is not None and cached.extra["custom"] == {"2026-07-30": "value"}

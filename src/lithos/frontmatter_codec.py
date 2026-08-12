@@ -319,18 +319,19 @@ def extract_extra(frontmatter_meta: dict) -> dict:
 def normalize_yaml_dates(frontmatter_meta: dict) -> dict:
     """Copy of *frontmatter_meta* with YAML-native dates as ISO strings (#407).
 
-    PyYAML resolves a bare ``2026-07-30`` to ``datetime.date``, which the JSON
-    bucket keys, Tantivy field joins, and MCP serialisation cannot carry, so
-    both YAML ingestion points (``KnowledgeMetadata.from_dict``,
-    ``CachedMeta.from_frontmatter``) call this first — a bare date then behaves
-    exactly like its quoted form. Never mutates the input.
+    PyYAML resolves a bare ``2026-07-30`` to ``datetime.date`` — in values and
+    in nested mapping *keys* — which the JSON bucket keys, Tantivy joins, and
+    MCP serialisation cannot carry, so both YAML ingestion points
+    (``KnowledgeMetadata.from_dict``, ``CachedMeta.from_frontmatter``) call
+    this first. A date key colliding with its quoted twin resolves last-wins
+    in file order. Never mutates the input.
     """
 
     def _norm(value: object) -> object:
         if isinstance(value, date):  # datetime is a date subclass — covers both
             return value.isoformat()
         if isinstance(value, dict):
-            return {k: _norm(v) for k, v in value.items()}
+            return {_norm(k): _norm(v) for k, v in value.items()}
         return [_norm(v) for v in value] if isinstance(value, list) else value
 
     return {k: _norm(v) for k, v in frontmatter_meta.items()}
@@ -340,10 +341,18 @@ def canonical_metadata_value(value: object) -> str:
     """Canonical, hashable bucket key for a metadata value (#306).
 
     JSON-equal values map to the same string, so equality matching is correct
-    across types and dict key orderings. ``default=str`` keeps it total — it
-    runs in the startup rebuild, where raising would stop the server (#407).
+    across types and dict key orderings. Total by construction — it runs in the
+    startup rebuild, where raising would stop the server (#407): ``default=str``
+    covers unserialisable values, and structures JSON cannot encode or sort at
+    all (date or mixed-type mapping keys) fall back to ``repr``, which is
+    deterministic for a parsed document. Dict-shaped values are unreachable by
+    ``metadata_match`` (scalar-only queries), so the fallback never changes
+    matching semantics — it only has to be stable.
     """
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    except TypeError:
+        return repr(value)
 
 
 # ---------------------------------------------------------------------------

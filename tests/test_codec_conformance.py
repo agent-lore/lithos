@@ -339,3 +339,35 @@ class TestBareDateNormalisation:
         from lithos.frontmatter_codec import canonical_metadata_value
 
         assert isinstance(canonical_metadata_value(b"\x00bytes"), str)
+
+    def test_bare_date_mapping_key_decodes_to_string(self):
+        """PyYAML also resolves bare dates used as nested mapping *keys* —
+        json can neither encode nor ``default=``-coerce those, so a single
+        note used to crash the startup rebuild."""
+        text = "---\nid: n1\ntitle: T\ncustom:\n  2026-07-30: value\n---\nBody."
+        doc = decode(text, Path("notes/n1.md"))
+        assert doc.metadata.extra["custom"] == {"2026-07-30": "value"}
+
+    def test_date_key_collision_with_quoted_twin_is_last_wins(self):
+        text = (
+            "---\nid: n1\ntitle: T\ncustom:\n  2026-07-30: bare\n  '2026-07-30': quoted\n---\nBody."
+        )
+        doc = decode(text, Path("notes/n1.md"))
+        assert doc.metadata.extra["custom"] == {"2026-07-30": "quoted"}
+
+    def test_canonical_metadata_value_total_for_mixed_key_types(self):
+        """``sort_keys`` cannot order ``7`` against ``"alpha"`` — the repr
+        fallback must keep canonicalisation total and deterministic."""
+        from lithos.frontmatter_codec import canonical_metadata_value
+
+        value = {"alpha": "one", 7: "seven"}
+        first = canonical_metadata_value(value)
+        assert isinstance(first, str)
+        assert canonical_metadata_value(value) == first
+
+    def test_canonical_metadata_value_total_for_date_keys(self):
+        from datetime import date
+
+        from lithos.frontmatter_codec import canonical_metadata_value
+
+        assert isinstance(canonical_metadata_value({date(2026, 7, 30): "v"}), str)

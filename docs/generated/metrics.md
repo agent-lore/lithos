@@ -16,7 +16,7 @@ lower a budget after improving the code to lock in the gain.
 | `cross_module_private_refs` | 30 | 42 | 12 |
 | `max_module_lines` | 2675 | 2800 | 125 |
 | `module_cycles` | 1 | 1 | 0 |
-| `modules_over_800_lines` | 11 | 11 | 0 |
+| `modules_over_800_lines` | 12 | 12 | 0 |
 | `tests_private_imports` | 91 | 91 | 0 |
 
 ## Import graph
@@ -34,7 +34,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Codec | 1 | 799 | 600 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
+| Codec | 1 | 808 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
 | CognitiveMemory | 1 | 1158 | 953 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 546 | 378 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 1 | 2675 | 2256 | 4 | 4 | 0.50 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
@@ -53,12 +53,13 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **44**, lines: **25527**, SLOC: **20508**
+- Modules: **44**, lines: **25536**, SLOC: **20517**
 - Largest module: `lithos.coordination` (2675 lines)
-- Modules over 800 lines: **11**
+- Modules over 800 lines: **12**
   - `lithos.cli`
   - `lithos.cognitive_memory`
   - `lithos.coordination`
+  - `lithos.frontmatter_codec`
   - `lithos.graph`
   - `lithos.knowledge`
   - `lithos.lcma.scouts`
@@ -151,4 +152,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.87** (47713 test lines / 25527 source lines)
+- Test-to-source line ratio: **1.87** (47804 test lines / 25536 source lines)
