@@ -4607,3 +4607,84 @@ class TestScanCorpus:
 
         with pytest.raises(CorpusScanError):
             await knowledge_manager.plan_reconcile(engine)
+
+
+class TestBareDateFrontmatter:
+    """Regression for #407: a bare (unquoted) YAML date must never break the scan.
+
+    On v0.4.0 the note was silently skipped ("Object of type date is not JSON
+    serializable"); after the CorpusIndex extraction the same value crashed
+    manager construction outright. Either way ~25% of a real vault vanished
+    from search. The note must scan, index, and match its quoted-string form.
+    """
+
+    DOC_ID = "33333333-3333-3333-3333-333333333333"
+
+    def _write_note(self, test_config) -> None:
+        note = test_config.storage.knowledge_path / "dated.md"
+        note.write_text(
+            "---\n"
+            f"id: {self.DOC_ID}\n"
+            "title: Dated Note\n"
+            "created: 2026-07-30\n"
+            "tags:\n"
+            "  - 2026-07-30\n"
+            "---\n"
+            "Searchable body.\n"
+        )
+
+    def test_scan_survives_bare_date_and_indexes_the_note(self, test_config):
+        self._write_note(test_config)
+
+        mgr = KnowledgeManager(test_config)
+
+        assert mgr._index.has_document(self.DOC_ID)
+        cached = mgr._index.get_cached_meta(self.DOC_ID)
+        assert cached is not None
+        assert cached.extra["created"] == "2026-07-30"
+        assert mgr._index.metadata_candidate_ids({"created": "2026-07-30"}) == {self.DOC_ID}
+
+    @pytest.mark.asyncio
+    async def test_bare_date_note_is_indexable(self, test_config):
+        """The full search-feed path: tags stay strings all the way to the
+        Tantivy field join."""
+        self._write_note(test_config)
+        mgr = KnowledgeManager(test_config)
+
+        docs = await mgr.scan_corpus()
+        doc = next(d for d in docs if d.id == self.DOC_ID)
+        indexable = mgr.to_indexable(doc)
+
+        assert indexable.tags == ("2026-07-30",)
+        assert " ".join(indexable.tags) == "2026-07-30"
+
+    def test_scan_survives_date_mapping_keys_and_mixed_key_types(self, test_config):
+        """#407 review: bare dates as nested mapping keys, and mixed str/int
+        keys, each crashed manager construction after the scalar fix."""
+        (test_config.storage.knowledge_path / "keyed.md").write_text(
+            "---\n"
+            "id: 44444444-4444-4444-4444-444444444444\n"
+            "title: Keyed Note\n"
+            "custom:\n"
+            "  2026-07-30: value\n"
+            "---\n"
+            "Body.\n"
+        )
+        (test_config.storage.knowledge_path / "mixed.md").write_text(
+            "---\n"
+            "id: 55555555-5555-5555-5555-555555555555\n"
+            "title: Mixed Keys Note\n"
+            "custom:\n"
+            "  alpha: one\n"
+            "  7: seven\n"
+            "---\n"
+            "Body.\n"
+        )
+
+        mgr = KnowledgeManager(test_config)
+
+        assert mgr._index.has_document("44444444-4444-4444-4444-444444444444")
+        assert mgr._index.has_document("55555555-5555-5555-5555-555555555555")
+        cached = mgr._index.get_cached_meta("44444444-4444-4444-4444-444444444444")
+        assert cached is not None
+        assert cached.extra["custom"] == {"2026-07-30": "value"}

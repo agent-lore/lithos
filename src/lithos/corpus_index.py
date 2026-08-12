@@ -40,6 +40,7 @@ from lithos.frontmatter_codec import (
     normalize_datetime,
     normalize_derived_from_ids_lenient,
     normalize_url,
+    normalize_yaml_dates,
     slugify,
 )
 
@@ -111,7 +112,12 @@ class CachedMeta:
         Defensive by construction: frontmatter is hand-editable, so every field
         is type-guarded and falls back to a safe default rather than trusting
         the on-disk value. This is the cheap path — no full document decode.
+
+        YAML-native ``date``/``datetime`` values are normalised to ISO-8601
+        strings first (#407), mirroring ``KnowledgeMetadata.from_dict`` — a
+        bare date in any key must never poison the inverted indexes.
         """
+        meta = normalize_yaml_dates(meta)
         raw_updated = meta.get("updated_at")
         if isinstance(raw_updated, str):
             updated_at = datetime.fromisoformat(raw_updated)

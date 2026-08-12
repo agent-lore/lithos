@@ -125,7 +125,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 778
+    "total_functions": 780
   },
   "domain": {
     "associations": 26,
@@ -309,13 +309,13 @@
     "components": {
       "Codec": {
         "classes": 3,
-        "functions": 25,
+        "functions": 27,
         "largest_module": "lithos.frontmatter_codec",
-        "largest_module_lines": 777,
-        "lines": 777,
+        "largest_module_lines": 808,
+        "lines": 808,
         "modules": 1,
-        "public_symbols": 20,
-        "sloc": 583
+        "public_symbols": 21,
+        "sloc": 609
       },
       "CognitiveMemory": {
         "classes": 2,
@@ -402,10 +402,10 @@
         "functions": 87,
         "largest_module": "lithos.knowledge",
         "largest_module_lines": 1273,
-        "lines": 2067,
+        "lines": 2073,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1654
+        "sloc": 1659
       },
       "LCMA": {
         "classes": 13,
@@ -474,6 +474,7 @@
       "lithos.cli",
       "lithos.cognitive_memory",
       "lithos.coordination",
+      "lithos.frontmatter_codec",
       "lithos.graph",
       "lithos.knowledge",
       "lithos.lcma.scouts",
@@ -483,13 +484,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 25499,
+    "total_lines": 25536,
     "total_modules": 44,
-    "total_sloc": 20486
+    "total_sloc": 20517
   },
   "tests": {
-    "ratio": 1.86,
-    "src_lines": 25499,
-    "test_lines": 47547
+    "ratio": 1.87,
+    "src_lines": 25536,
+    "test_lines": 47804
   }
 }

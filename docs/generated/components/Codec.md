@@ -11,7 +11,7 @@ The corpus file format: Markdown + YAML frontmatter <-> KnowledgeDocument, with 
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.frontmatter_codec` | L | 3 | 17 |
+| `lithos.frontmatter_codec` | L | 3 | 18 |
 
 ## Public API
 
@@ -23,6 +23,7 @@ The corpus file format: Markdown + YAML frontmatter <-> KnowledgeDocument, with 
 - def `validate_derived_from_ids` — Validate and normalize a list of derived-from document IDs.
 - def `validate_metadata_match` — Validate a ``metadata_match`` filter (#306).
 - def `extract_extra` — Return the free-form metadata: keys not recognised as known fields.
+- def `normalize_yaml_dates` — Copy of *frontmatter_meta* with YAML-native dates as ISO strings (#407).
 - def `canonical_metadata_value` — Canonical, hashable bucket key for a metadata value (#306).
 - def `normalize_url` — Canonicalize a URL for dedup comparison.
 - class `WikiLink` — Represents a wiki-link in document content.

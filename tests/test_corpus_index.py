@@ -296,3 +296,83 @@ def test_rebuild_counts_source_url_collisions_first_writer_wins():
     from lithos.frontmatter_codec import normalize_url
 
     assert idx.source_url_owner(normalize_url(url)) == "first"
+
+
+# ---------------------------------------------------------------------------
+# Bare-date frontmatter (#407) — the scan path must never see raw date objects
+# ---------------------------------------------------------------------------
+
+
+def test_from_frontmatter_stringifies_bare_dates():
+    from datetime import date, datetime
+
+    cached = CachedMeta.from_frontmatter(
+        {
+            "created": date(2026, 7, 30),
+            "published": datetime(2026, 7, 30, 10, 15),
+            "tags": [date(2026, 7, 30), "real-tag"],
+        },
+        Path("n.md"),
+        seq=1,
+    )
+    assert cached.extra["created"] == "2026-07-30"
+    assert cached.extra["published"] == "2026-07-30T10:15:00"
+    assert cached.tags == ["2026-07-30", "real-tag"]
+
+
+def test_bare_date_metadata_indexes_and_matches_string_query():
+    """The v0.4.0 regression (#407): a ``datetime.date`` in extra crashed
+    ``index_doc`` (JSON bucket key) and with it the whole startup rebuild.
+    After normalisation it indexes and matches the quoted string form."""
+    from datetime import date
+
+    idx = CorpusIndex()
+    _add(idx, "D", title="Dated", created=date(2026, 7, 30))
+
+    assert idx.metadata_candidate_ids({"created": "2026-07-30"}) == {"D"}
+
+
+def test_rebuild_survives_bare_date_frontmatter():
+    from datetime import date
+
+    idx = CorpusIndex()
+    idx.rebuild(
+        [
+            ScannedNote(
+                doc_id="D",
+                title="Dated",
+                frontmatter={"id": "D", "title": "Dated", "created": date(2026, 7, 30)},
+                rel_path=Path("d.md"),
+            )
+        ]
+    )
+    assert idx.has_document("D")
+    assert idx.metadata_candidate_ids({"created": "2026-07-30"}) == {"D"}
+
+
+def test_rebuild_survives_date_mapping_keys_and_mixed_key_types():
+    """#407 review: nested date keys and mixed-type keys crashed the startup
+    rebuild even after scalar dates were normalised."""
+    from datetime import date
+
+    idx = CorpusIndex()
+    idx.rebuild(
+        [
+            ScannedNote(
+                doc_id="K",
+                title="Keyed",
+                frontmatter={"custom": {date(2026, 7, 30): "value"}},
+                rel_path=Path("k.md"),
+            ),
+            ScannedNote(
+                doc_id="M",
+                title="Mixed",
+                frontmatter={"custom": {"alpha": "one", 7: "seven"}},
+                rel_path=Path("m.md"),
+            ),
+        ]
+    )
+    assert idx.has_document("K")
+    assert idx.has_document("M")
+    cached = idx.get_cached_meta("K")
+    assert cached is not None and cached.extra["custom"] == {"2026-07-30": "value"}
