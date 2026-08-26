@@ -733,7 +733,12 @@ async def test_lithos_delete_handler_routes_through_intake(
     queue = server.event_bus.subscribe(event_types=[NOTE_DELETED])
     try:
         delete_result = await delete_tool.fn(id=doc_id, agent="agent-1")
-        assert delete_result == {"success": True}
+        assert delete_result == {
+            "success": True,
+            "id": doc_id,
+            "title": "To delete",
+            "path": create_result["path"],
+        }
 
         event = queue.get_nowait()
         assert event.type == NOTE_DELETED

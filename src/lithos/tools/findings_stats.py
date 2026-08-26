@@ -27,24 +27,27 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(map_coordination_error=True)
     async def lithos_finding_post(
         task_id: str,
         agent: str,
         summary: str,
         knowledge_id: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, str | None]:
         """Post a finding to a task.
 
         Args:
-            task_id: Task ID
+            task_id: Task ID (full id or unambiguous >= 6-char prefix)
             agent: Agent posting the finding
             summary: Finding summary
             knowledge_id: Optional linked knowledge document ID
 
         Returns:
-            Dict with finding_id
+            Dict with finding_id and the resolved task_id + title (title is
+            null when the task id is unknown — findings may be posted ahead
+            of their task)
         """
+        task_id, task_title = await server.coordination.resolve_task_id(task_id)
         logger.info("lithos_finding_post task=%s agent=%s", task_id, agent)
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
@@ -73,11 +76,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             )
         )
 
-        return {"finding_id": finding_id}
+        return {"finding_id": finding_id, "task_id": task_id, "title": task_title}
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(map_coordination_error=True)
     async def lithos_finding_list(
         task_id: str,
         since: str | None = None,
@@ -85,7 +88,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         """List findings for a task.
 
         Args:
-            task_id: Task ID
+            task_id: Task ID (full id or unambiguous >= 6-char prefix)
             since: Filter by created since (ISO datetime)
 
         Returns:
@@ -102,6 +105,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             except ValueError:
                 return invalid_input_envelope(f"Invalid since datetime: {since}")
 
+        task_id, _ = await server.coordination.resolve_task_id(task_id)
         findings = await server.coordination.list_findings(
             task_id=task_id,
             since=since_dt,

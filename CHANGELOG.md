@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Short id prefixes accepted everywhere; mutating responses echo the resolved id + title (task 83257ced)
+
+Every tool parameter that takes a task or note id now also accepts an
+**unambiguous short prefix** (min 6 chars, git-style) — the task lifecycle set,
+task edges, `depends_on`/`parent_task_id`/`source_task_id` on create/spawn,
+findings, and the note side (read/write/note_update/delete/related/node_stats).
+Task prefixes resolve against tasks only, note prefixes against notes only.
+An ambiguous prefix fails loudly with `ambiguous_id_prefix` carrying up to 5
+`{id, title}` candidates — never a silent pick. Resolution is index-driven on
+both sides (PK range scan / sorted in-memory mirror; SPECIFICATION §10.3).
+
+Mutating responses now echo the resolved full id and title
+(`task_id`/`title` on task mutations, endpoint ids+titles on edge upsert,
+`title` on write/note_update, `id`/`title`/`path` on delete) so callers can
+verify what they touched and transcripts retain full ids. Additive keys only.
+
+Behaviour changes (full-length ids are always passed through unchanged):
+
+- An id shorter than 6 chars matching nothing exactly is now `invalid_input`
+  (was `task_not_found`/`doc_not_found`/`claim_failed`/silent-empty).
+- A 6–35-char task id matching nothing is now `task_not_found` on every task
+  tool — including claim/renew/release (were `claim_failed`/`claim_not_found`)
+  and status/edge_list/children/finding_list (were silently empty).
+- `lithos_write` with an unknown `id` now returns a `note_not_found` envelope
+  (was an uncaught `FileNotFoundError` → protocol-level ToolError).
+
 ## [0.4.0] — 2026-07-06
 
 ### BREAKING — MCP error envelopes normalized (0.4.0)

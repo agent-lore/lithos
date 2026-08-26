@@ -12,7 +12,7 @@ Standard error types and canonical MCP error envelopes.
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos.envelopes` | XS | 0 | 3 |
-| `lithos.errors` | S | 11 | 0 |
+| `lithos.errors` | S | 12 | 0 |
 
 ## Public API
 
@@ -29,6 +29,7 @@ Standard error types and canonical MCP error envelopes.
 - class `IndexingError` — All search backends failed during a write operation (index or remove).
 - class `CorpusScanError` — An authoritative corpus scan could not read every known document.
 - class `CoordinationError` — A coordination operation failed validation.
+- class `AmbiguousIdPrefixError` — A short id prefix matched more than one task or note (task 83257ced).
 - class `CognitiveMemoryError` — Base error for any failure originating inside CognitiveMemory.
 - class `ScoutFailure` — A single retrieval scout's backend raised.
 - class `RetrieveTimeout` — Retrieve exceeded its configured wall-clock budget.

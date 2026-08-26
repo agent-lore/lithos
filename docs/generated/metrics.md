@@ -12,16 +12,16 @@ lower a budget after improving the code to lock in the gain.
 | Metric | Actual | Budget | Headroom |
 |---|---:|---:|---:|
 | `component_cycles` | 0 | 0 | 0 |
-| `cross_component_edges` | 72 | 72 | 0 |
+| `cross_component_edges` | 74 | 74 | 0 |
 | `cross_module_private_refs` | 30 | 42 | 12 |
-| `max_module_lines` | 2675 | 2800 | 125 |
+| `max_module_lines` | 2728 | 2800 | 72 |
 | `module_cycles` | 1 | 1 | 0 |
 | `modules_over_800_lines` | 12 | 12 | 0 |
 | `tests_private_imports` | 91 | 91 | 0 |
 
 ## Import graph
 
-- Cross-component edges: **72** (164 module-level)
+- Cross-component edges: **74** (167 module-level)
 - Component cycles: none
 - Module cycles: lithos.server ↔ lithos.tools ↔ lithos.tools.agents ↔ lithos.tools.findings_stats ↔ lithos.tools.memory_edges ↔ lithos.tools.notes ↔ lithos.tools.read_search ↔ lithos.tools.tasks
 - Tier-skipping edges (Entrypoints → Foundation): 5 (Entrypoints -> Config, Entrypoints -> Errors, Entrypoints -> Events, Entrypoints -> Logging, Entrypoints -> Telemetry)
@@ -37,13 +37,14 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Codec | 1 | 808 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
 | CognitiveMemory | 1 | 1158 | 953 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 546 | 378 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
-| Coordination | 1 | 2675 | 2256 | 4 | 4 | 0.50 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
-| Entrypoints | 13 | 5905 | 4737 | 0 | 13 | 1.00 | 65 (`lithos.tools.notes.register.lithos_write`) | 15 |
-| Errors | 2 | 233 | 168 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
+| Coordination | 1 | 2728 | 2298 | 4 | 5 | 0.56 | 20 (`lithos.coordination.CoordinationService.create_task`) | 5 |
+| Entrypoints | 13 | 6039 | 4858 | 0 | 13 | 1.00 | 67 (`lithos.tools.notes.register.lithos_write`) | 15 |
+| Errors | 2 | 270 | 200 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 350 | 281 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1384 | 1126 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
+| IdResolution | 1 | 82 | 64 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
 | Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
-| Knowledge | 3 | 2073 | 1659 | 5 | 7 | 0.58 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
+| Knowledge | 3 | 2116 | 1697 | 5 | 8 | 0.62 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
 | LCMA | 12 | 5553 | 4479 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 18 |
 | Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
@@ -53,8 +54,8 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **44**, lines: **25536**, SLOC: **20517**
-- Largest module: `lithos.coordination` (2675 lines)
+- Modules: **45**, lines: **25885**, SLOC: **20814**
+- Largest module: `lithos.coordination` (2728 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
   - `lithos.cognitive_memory`
@@ -71,21 +72,21 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **780**, cyclomatic > 10: **62**
+- Functions: **793**, cyclomatic > 10: **62**
 
 Top 10 most complex functions:
 
 | Complexity | Function |
 |---:|---|
-| 65 | `lithos.tools.notes.register.lithos_write` |
+| 67 | `lithos.tools.notes.register.lithos_write` |
 | 62 | `lithos.knowledge.KnowledgeManager.update` |
 | 41 | `lithos.lcma.retrieve._run_retrieve_impl` |
 | 33 | `lithos.search.SearchEngine.graph_search` |
 | 30 | `lithos.tools.read_search.register.lithos_list` |
 | 26 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
 | 26 | `lithos.knowledge.KnowledgeManager.create` |
+| 26 | `lithos.tools.notes.register.lithos_note_update` |
 | 25 | `lithos.cognitive_memory.CognitiveMemory.cache_lookup` |
-| 25 | `lithos.tools.notes.register.lithos_note_update` |
 | 23 | `lithos.search.TantivyIndex.search` |
 
 ## Seams
@@ -152,4 +153,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.87** (47804 test lines / 25536 source lines)
+- Test-to-source line ratio: **1.87** (48311 test lines / 25885 source lines)

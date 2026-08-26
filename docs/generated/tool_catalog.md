@@ -57,9 +57,9 @@ lithos_edge_upsert(from_id: str, to_id: str, type: str, weight: float, namespace
 
 | Tool | Summary | Touches |
 |---|---|---|
-| `lithos_delete` | Delete a knowledge file. | Intake |
-| `lithos_note_update` | Patch a note's frontmatter (tags/metadata/title/status) without resending its body. | Intake |
-| `lithos_write` | Create or update a knowledge file. | Intake |
+| `lithos_delete` | Delete a knowledge file. | Intake, Knowledge |
+| `lithos_note_update` | Patch a note's frontmatter (tags/metadata/title/status) without resending its body. | Intake, Knowledge |
+| `lithos_write` | Create or update a knowledge file. | Intake, Knowledge |
 
 ```text
 lithos_delete(id: str, agent: str)
@@ -73,7 +73,7 @@ lithos_write(title: str, content: str, agent: str, tags: list[str] | None = None
 | Tool | Summary | Touches |
 |---|---|---|
 | `lithos_list` | List knowledge documents with filters. | Knowledge, Search |
-| `lithos_node_stats` | View a note's salience score, retrieval stats, and penalty counts. | CognitiveMemory |
+| `lithos_node_stats` | View a note's salience score, retrieval stats, and penalty counts. | CognitiveMemory, Knowledge |
 | `lithos_read` | Read a knowledge file by ID or path. | Coordination, Knowledge |
 | `lithos_related` | Composite "what is this document related to?" view. | Graph, Knowledge, Provenance |
 | `lithos_retrieve` | LCMA cognitive retrieval — runs seven scouts with reranking. | CognitiveMemory |

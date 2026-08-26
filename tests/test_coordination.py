@@ -2068,3 +2068,86 @@ class TestParseDatetimeWarnsOnFailure:
 
         assert result is None
         assert not any("Failed to parse datetime" in r.getMessage() for r in caplog.records)
+
+
+class TestResolveTaskId:
+    """Short-prefix resolution at the coordination boundary (task 83257ced)."""
+
+    async def test_full_length_hit_returns_id_and_title(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(title="Resolve Me", agent="a")
+        assert await coordination_service.resolve_task_id(task_id) == (task_id, "Resolve Me")
+
+    async def test_full_length_miss_passes_through(self, coordination_service: CoordinationService):
+        """Unknown full ids keep today's downstream behaviour (claim_failed etc.)."""
+        ghost = "00000000-0000-0000-0000-000000000000"
+        assert await coordination_service.resolve_task_id(ghost) == (ghost, None)
+
+    async def test_unique_six_char_prefix_resolves(self, coordination_service: CoordinationService):
+        task_id = await coordination_service.create_task(title="Prefixed", agent="a")
+        resolved, title = await coordination_service.resolve_task_id(task_id[:6])
+        assert (resolved, title) == (task_id, "Prefixed")
+
+    async def test_prefix_containing_dash_resolves(self, coordination_service: CoordinationService):
+        """A 9-char prefix ends on the first dash — the range bound must span it."""
+        task_id = await coordination_service.create_task(title="Dashed", agent="a")
+        resolved, _ = await coordination_service.resolve_task_id(task_id[:9])
+        assert resolved == task_id
+
+    async def test_too_short_prefix_is_invalid_input(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(title="Short", agent="a")
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.resolve_task_id(task_id[:5])
+        assert exc_info.value.code == "invalid_input"
+
+    async def test_no_match_prefix_is_task_not_found_naming_field(
+        self, coordination_service: CoordinationService
+    ):
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.resolve_task_id("ffffff", field="from_task_id")
+        assert exc_info.value.code == "task_not_found"
+        assert "from_task_id" in exc_info.value.message
+
+    async def test_ambiguous_prefix_raises_with_capped_candidates(
+        self, coordination_service: CoordinationService
+    ):
+        from lithos.errors import AmbiguousIdPrefixError
+
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(coordination_service.db_path) as db:
+            for i in range(7):
+                await db.execute(
+                    "INSERT INTO tasks (id, title, description, status, created_by, created_at)"
+                    " VALUES (?, ?, '', 'open', 'a', ?)",
+                    (f"aaaaaaaa-0000-4000-8000-{i:012d}", f"Twin {i}", now),
+                )
+            await db.commit()
+
+        with pytest.raises(AmbiguousIdPrefixError) as exc_info:
+            await coordination_service.resolve_task_id("aaaaaa")
+        err = exc_info.value
+        assert err.kind == "task"
+        assert len(err.candidates) == 5  # capped
+        assert err.candidates[0] == {
+            "id": "aaaaaaaa-0000-4000-8000-000000000000",
+            "title": "Twin 0",
+        }
+
+    async def test_prefix_query_plan_is_an_index_search(
+        self, coordination_service: CoordinationService
+    ):
+        """The sub-linear rule: the range query must SEARCH the PK index,
+        never SCAN the table (LIKE would scan under BINARY collation)."""
+        from lithos.coordination import TASK_ID_PREFIX_SQL
+
+        async with aiosqlite.connect(coordination_service.db_path) as db:
+            cursor = await db.execute(
+                f"EXPLAIN QUERY PLAN {TASK_ID_PREFIX_SQL}", ("3223127", "3223128", 6)
+            )
+            plan = [row[3] for row in await cursor.fetchall()]
+        assert plan, "EXPLAIN QUERY PLAN returned no rows"
+        assert all("SCAN" not in detail for detail in plan), plan
+        assert any("SEARCH" in detail and "USING" in detail for detail in plan), plan

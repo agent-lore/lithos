@@ -19,7 +19,8 @@ from lithos.config import LithosConfig, get_config
 # exists because this module raises it. That incidentally keeps
 # ``from lithos.coordination import CoordinationError`` working — that path is
 # not a maintained contract; import from ``lithos.errors``.
-from lithos.errors import CoordinationError
+from lithos.errors import AmbiguousIdPrefixError, CoordinationError
+from lithos.id_resolution import AMBIGUITY_CANDIDATE_CAP, MIN_PREFIX_LEN, prefix_upper_bound
 from lithos.telemetry import lithos_metrics, traced
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,18 @@ ACCEPTED_TASK_TYPES: frozenset[str] = frozenset({"task", "epic", "gate"})
 
 # Valid ``gate_type`` values for a ``task_type='gate'`` task.
 GATE_TYPES: frozenset[str] = frozenset({"human", "timer", "ci", "pr", "external_task"})
+
+# Short-prefix resolution query (task 83257ced). Half-open range instead of
+# LIKE: under the id column's BINARY collation LIKE full-scans (the LIKE
+# optimisation needs a NOCASE index or case_sensitive_like), while the range
+# is a SEARCH on sqlite_autoindex_tasks_1 — pinned by an EXPLAIN QUERY PLAN
+# test. Public so that test needn't import a private name.
+TASK_ID_PREFIX_SQL = "SELECT id, title FROM tasks WHERE id >= ? AND id < ? ORDER BY id LIMIT ?"
+_TASK_ID_PREFIX_OPEN_SQL = "SELECT id, title FROM tasks WHERE id >= ? ORDER BY id LIMIT ?"
+
+# Generated task ids are always ``str(uuid.uuid4())`` — input at this length
+# is a full id, never a prefix.
+_FULL_TASK_ID_LEN = 36
 
 # Task types that are never directly workable units and so are excluded from the
 # ready frontier. ``epic`` is a roll-up container (you execute its children, not
@@ -1010,6 +1023,46 @@ class CoordinationService:
             parent,
         )
         return task_id
+
+    @traced("lithos.coordination.resolve_task_id")
+    async def resolve_task_id(self, raw: str, *, field: str = "task_id") -> tuple[str, str | None]:
+        """Resolve a task id or short prefix to ``(full_id, title)`` (task 83257ced).
+
+        Full-length input (36 chars) passes through untouched on a miss —
+        ``(raw, None)`` — preserving every downstream not-found behaviour.
+        Shorter input resolves loudly: below ``MIN_PREFIX_LEN`` raises
+        ``invalid_input``; otherwise one indexed range scan yields exactly one
+        match, ``task_not_found``, or :class:`AmbiguousIdPrefixError` carrying
+        candidates — never a silent pick. ``field`` names the parameter in
+        error messages (e.g. ``from_task_id``).
+        """
+        if len(raw) >= _FULL_TASK_ID_LEN:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute("SELECT title FROM tasks WHERE id = ?", (raw,))
+                row = await cursor.fetchone()
+            return (raw, row[0]) if row else (raw, None)
+        if len(raw) < MIN_PREFIX_LEN:
+            raise CoordinationError(
+                "invalid_input",
+                f"{field} '{raw}' is too short: pass the full task id or a prefix of "
+                f"at least {MIN_PREFIX_LEN} characters.",
+            )
+        upper = prefix_upper_bound(raw)
+        limit = AMBIGUITY_CANDIDATE_CAP + 1
+        async with aiosqlite.connect(self.db_path) as db:
+            if upper is None:
+                cursor = await db.execute(_TASK_ID_PREFIX_OPEN_SQL, (raw, limit))
+            else:
+                cursor = await db.execute(TASK_ID_PREFIX_SQL, (raw, upper, limit))
+            rows = list(await cursor.fetchall())
+        if not rows:
+            raise CoordinationError(
+                "task_not_found", f"No task matches id prefix '{raw}' ({field})."
+            )
+        if len(rows) > 1:
+            candidates = [{"id": row[0], "title": row[1]} for row in rows[:AMBIGUITY_CANDIDATE_CAP]]
+            raise AmbiguousIdPrefixError("task", raw, candidates, field=field)
+        return rows[0][0], rows[0][1]
 
     @traced("lithos.coordination.get_task")
     async def get_task(self, task_id: str) -> Task | None:

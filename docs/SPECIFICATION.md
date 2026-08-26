@@ -466,9 +466,9 @@ Parameters are flat at the MCP boundary but grouped below by role to aid discove
 
 The error code is the canonical top-level `status` value (e.g. `status="slug_collision"`); there is no separate `code` discriminator field on `lithos_write` envelopes. `status="error"` is retained as a generic fallback for unforeseen failures.
 
-`{ status: "created", id: string, path: string, version: int, warnings: string[] }`
+`{ status: "created", id: string, title: string, path: string, version: int, warnings: string[] }`
 
-`{ status: "updated", id: string, path: string, version: int, warnings: string[] }`
+`{ status: "updated", id: string, title: string, path: string, version: int, warnings: string[] }`
 
 `{ status: "duplicate", duplicate_of: { id, title, source_url }, message: string, warnings: string[] }`  *(source-URL dedup only — never used for filesystem-path conflicts; see `path_collision` below)*
 
@@ -507,7 +507,7 @@ At least one mutable field (`title`, `tags`, `status`, or a non-empty `metadata`
 
 **Returns (status envelope):**
 
-`{ status: "updated", id: string, path: string, version: int, warnings: string[] }`
+`{ status: "updated", id: string, title: string, path: string, version: int, warnings: string[] }`
 
 `{ status: "invalid_input", message: string, warnings: string[] }`
 
@@ -547,7 +547,7 @@ Delete a knowledge file.
 | `id` | string | Yes | UUID of knowledge item to delete |
 | `agent` | string | Yes | Agent performing deletion (required for audit trail and auto-registration) |
 
-**Returns:** `{ success: true }` on success, or `{ status: "error", code: "doc_not_found", message: string }` if the document does not exist.
+**Returns:** `{ success: true, id: string, title: string, path: string }` on success (the resolved full id and the deleted file's relative path), or `{ status: "error", code: "doc_not_found", message: string }` if the document does not exist.
 
 #### `lithos_search`
 Unified search across the knowledge base.
@@ -787,7 +787,7 @@ Create a coordination task.
 | `depends_on` | string[] | No | Predecessor task IDs. Each creates a `blocks` edge `predecessor -> this task`, so this task is not ready until every predecessor is `completed`. Predecessors must already exist (else `task_not_found`). A brand-new task has no outgoing edges, so `depends_on` can never form a cycle. |
 | `parent_task_id` | string | No | Optional parent. Creates a `parent_child` edge `parent -> this task` (purely structural; never blocks the child). The parent must exist (else `task_not_found`) and may be any task type. |
 
-**Returns:** `{ task_id: string }` on success, or `{ status: "error", code, message }` on validation failure (codes: `invalid_metadata_key`, `invalid_task_type`, `task_not_found`).
+**Returns:** `{ task_id: string, title: string }` on success — plus the resolved `depends_on` / `parent_task_id` when supplied — or `{ status: "error", code, message }` on validation failure (codes: `invalid_metadata_key`, `invalid_task_type`, `task_not_found`).
 
 #### `lithos_task_update`
 Update mutable task fields.
@@ -802,7 +802,7 @@ Update mutable task fields.
 | `tags` | string[] | No | Replacement tags |
 | `metadata` | object | No | Additive per-key merge patch into the existing task metadata dict. See **Behavior** for merge semantics. Must **not** contain `depends_on`/`blocked_on` (rejected with `invalid_metadata_key`); dependencies are task edges. |
 
-**Returns:** `{ success: true, message }` on success, or `{ status: "error", code, message }` on failure (codes: `invalid_input`, `invalid_metadata_key`, `task_not_found`).
+**Returns:** `{ success: true, message, task_id: string, title: string }` on success (the resolved full id; `title` reflects a title change in the same call), or `{ status: "error", code, message }` on failure (codes: `invalid_input`, `invalid_metadata_key`, `task_not_found`).
 
 **Behavior:**
 - At least one of `title`, `description`, `tags`, or `metadata` must be provided.
@@ -821,7 +821,7 @@ Claim an aspect of a task.
 | `agent` | string | Yes | Your agent identifier |
 | `ttl_minutes` | int | No | Claim duration (default: 60, max: 480) |
 
-**Returns:** `{ success: true, expires_at: string }` on success, or `{ status: "error", code: "claim_failed", message }` on failure.
+**Returns:** `{ success: true, expires_at: string, task_id: string, title: string }` on success, or `{ status: "error", code: "claim_failed", message }` on failure. A short-prefix miss reports `task_not_found` instead — the task genuinely does not exist (see §10.3).
 
 #### `lithos_task_renew`
 Extend an existing task claim.
@@ -834,7 +834,7 @@ Extend an existing task claim.
 | `agent` | string | Yes | Your agent identifier |
 | `ttl_minutes` | int | No | New duration from now (default: 60, max: 480) |
 
-**Returns:** `{ success: true, new_expires_at: string }` on success, or `{ status: "error", code: "claim_not_found", message }` on failure.
+**Returns:** `{ success: true, new_expires_at: string, task_id: string, title: string }` on success, or `{ status: "error", code: "claim_not_found", message }` on failure (a short-prefix miss reports `task_not_found`; see §10.3).
 
 **Note:** Only the agent holding the claim can renew it.
 
@@ -848,7 +848,7 @@ Release a task claim.
 | `aspect` | string | Yes | The aspect claim to release |
 | `agent` | string | Yes | Your agent identifier |
 
-**Returns:** `{ success: true }` on success, or `{ status: "error", code: "claim_not_found", message }` if no matching claim exists.
+**Returns:** `{ success: true, task_id: string, title: string }` on success, or `{ status: "error", code: "claim_not_found", message }` if no matching claim exists (a short-prefix miss reports `task_not_found`; see §10.3).
 
 #### `lithos_task_complete`
 Mark a task as completed.
@@ -863,7 +863,7 @@ Mark a task as completed.
 | `misleading_nodes` | string[] | No | Optional node IDs the caller found misleading; used for LCMA reinforcement feedback |
 | `receipt_id` | string | No | Optional specific LCMA receipt to bind the feedback to; otherwise the latest receipt for the same `(task_id, agent)` is used |
 
-**Returns:** `{ success: true, unblocked: string[] }` on success, `{ status: "error", code: "task_not_found", message }` if the task does not exist or is not open, or `{ status: "error", code: "receipt_not_found", message }` if feedback references a missing or unrelated receipt. `unblocked` lists task IDs that this completion just made ready (a `blocks` dependent whose last unsatisfied predecessor was this task), so an orchestrator can pick them up without re-polling `lithos_task_ready`.
+**Returns:** `{ success: true, unblocked: string[], task_id: string, title: string }` on success, `{ status: "error", code: "task_not_found", message }` if the task does not exist or is not open, or `{ status: "error", code: "receipt_not_found", message }` if feedback references a missing or unrelated receipt. `unblocked` lists task IDs that this completion just made ready (a `blocks` dependent whose last unsatisfied predecessor was this task), so an orchestrator can pick them up without re-polling `lithos_task_ready`.
 
 **Behavior:** Sets task status to `completed`, persists `resolved_at = now`, stores `outcome`, and releases all active claims on the task. When `cited_nodes` / `misleading_nodes` are supplied, Lithos validates them against the bound LCMA receipt before completion, then applies reinforcement side effects after the task closes. If no receipt can be found and no explicit `receipt_id` was supplied, the feedback is silently dropped and the task still completes.
 
@@ -877,7 +877,7 @@ Cancel a task and release all claims.
 | `agent` | string | Yes | Agent cancelling the task |
 | `reason` | string | No | Optional cancellation reason |
 
-**Returns:** `{ success: true }` on success, or `{ status: "error", code: "task_not_found", message }` on failure.
+**Returns:** `{ success: true, task_id: string, title: string }` on success, or `{ status: "error", code: "task_not_found", message }` on failure.
 
 **Behavior:** Marks an open task as `cancelled`, persists `resolved_at = now` (dual-write with `lithos_task_complete` so both terminal transitions populate the same timestamp), and deletes all claims on that task. The optional `reason` is accepted by the MCP surface but is not persisted in SQLite.
 
@@ -890,7 +890,7 @@ Move a terminal (`completed`/`cancelled`) task back to `open` — the inverse of
 | `task_id` | string | Yes | Task ID to reopen |
 | `agent` | string | Yes | Agent performing the reopen |
 
-**Returns:** `{ success: true, reblocked: string[] }` on success, or `{ status: "error", code, message }` on failure (codes: `task_not_found`, `task_not_resolved` — the task is already `open`).
+**Returns:** `{ success: true, reblocked: string[], task_id: string, title: string }` on success, or `{ status: "error", code, message }` on failure (codes: `task_not_found`, `task_not_resolved` — the task is already `open`).
 
 **Behavior:** Sets `status` back to `open`, clears `resolved_at` and `outcome`, posts a durable `[Reopened]` finding recording the prior terminal status, and emits a `task.reopened` event. Claims were already released on complete/cancel, so none are restored. `reblocked` lists the open dependents this reopen put back under the task's block (via `blocks`/`waits_on_gate` edges) — non-empty only when reopening a **completed** blocker/gate (a dependent that was ready is blocked again); reopening a **cancelled** blocker/gate instead *un-strands* its dependents (`blocker_unsatisfiable` → waiting) and re-blocks no one, so `reblocked` is `[]`. This is the remediation for dependents stranded by a cancelled blocker/gate (see Gates / readiness).
 
@@ -953,7 +953,7 @@ Create or update a typed relation between two tasks.
 | `agent` | string | Yes | Agent creating the edge |
 | `metadata` | object | No | Optional edge metadata (replaced on conflict) |
 
-**Returns:** `{ success: true }`, or `{ status: "error", code, message }` (codes: `invalid_edge_type`, `self_edge`, `task_not_found`, `cycle`, `not_a_gate`). Cycles in blocking edges are rejected on write via a bounded traversal over the `task_edges` indexes (never a full-table walk). A `waits_on_gate` edge requires its `from_task` to be a `gate` task (else `not_a_gate`).
+**Returns:** `{ success: true, from_task_id, from_title, to_task_id, to_title }` (both endpoints resolved to full ids), or `{ status: "error", code, message }` (codes: `invalid_edge_type`, `self_edge`, `task_not_found`, `cycle`, `not_a_gate`). Cycles in blocking edges are rejected on write via a bounded traversal over the `task_edges` indexes (never a full-table walk). A `waits_on_gate` edge requires its `from_task` to be a `gate` task (else `not_a_gate`).
 
 #### `lithos_task_edge_list`
 List edges touching a task.
@@ -1020,7 +1020,7 @@ Create a follow-on task linked to an existing source task.
 | `inherit_context` | boolean | No | Copy scheduling-convention metadata (`priority`, `parallelizable`, `phase`) from the source (default `true`). Forbidden keys are never inherited. |
 | `metadata` | object | No | Extra metadata; overrides inherited keys. Must not contain `depends_on`/`blocked_on`. |
 
-**Returns:** `{ task_id: string }`, or `{ status: "error", code, message }` (codes: `invalid_relation_type`, `task_not_found`, `invalid_metadata_key`). The spawned task is always `task_type='task'`.
+**Returns:** `{ task_id: string, title: string, source_task_id: string }` (the resolved source id), or `{ status: "error", code, message }` (codes: `invalid_relation_type`, `task_not_found`, `invalid_metadata_key`). The spawned task is always `task_type='task'`.
 
 #### Gates (Phase 3)
 
@@ -1055,7 +1055,7 @@ Post a finding to a task.
 | `summary` | string | Yes | Brief summary of finding |
 | `knowledge_id` | string | No | Link to knowledge item if created |
 
-**Returns:** `{ finding_id: string }`
+**Returns:** `{ finding_id: string, task_id: string, title: string | null }` — `title` is `null` when the (full-length) task id is unknown; findings may be posted ahead of their task.
 
 #### `lithos_finding_list`
 List findings for a task.
@@ -1682,8 +1682,37 @@ Tools indicate routine domain failures through return values, and unexpected bac
 | Invalid arguments | FastMCP validation rejects the call |
 | Ambiguous wiki-link | Link treated as unresolved (no error raised) |
 | Write content exceeds configured limit | `lithos_write` returns `{ status: "error", code: "content_too_large" }` |
+| Ambiguous short id prefix | Any id-taking tool returns `{ status: "error", code: "ambiguous_id_prefix", candidates: [{ id, title }] }` — never silently picked (see §10.3) |
+| Id shorter than 6 chars matching nothing exactly | `{ status: "error", code: "invalid_input" }` |
+| Unknown 6–35-char task id prefix | `{ status: "error", code: "task_not_found" }` — including on tools whose full-length miss reports `claim_failed` / `claim_not_found` / an empty list |
+| `lithos_write` with unknown `id` | `{ status: "error", code: "note_not_found" }` (was an uncaught protocol-level error before short-id resolution landed) |
 | Slug collision on create/update | `lithos_write` returns `{ status: "error", code: "slug_collision" }` |
 | Optimistic lock mismatch | `lithos_write` returns `{ status: "error", code: "version_conflict", current_version }` |
+
+### 10.3 Short ID Prefixes
+
+Every tool parameter that takes a task or note id also accepts an **unambiguous
+short prefix** (minimum 6 characters — the git idiom), including `depends_on`,
+`parent_task_id`, and `source_task_id` on create/spawn. Resolution rules:
+
+- **Per-domain namespaces.** A task prefix resolves against tasks only; a note
+  prefix against notes only. There is no unified id namespace.
+- **Exact match always wins** on the note side, at any length — hand-authored
+  notes may carry arbitrary string ids, even shorter than 6 characters.
+- **Full-length (36-char) task ids pass through untouched**, preserving the
+  historical behaviour of every tool for unknown full ids (`claim_failed`,
+  empty lists, orphan findings).
+- **Ambiguity fails loudly**: `{ code: "ambiguous_id_prefix" }` carrying up to
+  5 `{ id, title }` candidates. A prefix is never resolved silently.
+- A prefix shorter than 6 characters (with no exact match) is `invalid_input`;
+  an unknown prefix is the domain not-found code.
+- **Mutating responses echo the resolved full id and title** so callers can
+  verify they hit the right record and transcripts retain full ids. Short ids
+  in prose are display-only — pass them as prefixes; never reconstruct a full
+  UUID from context.
+
+Resolution is sub-linear on both sides: an index range scan on the tasks
+primary key, and a sorted in-memory id mirror on the corpus index.
 
 ---
 

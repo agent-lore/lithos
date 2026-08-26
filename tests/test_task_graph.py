@@ -1069,7 +1069,12 @@ class TestServerTaskGraphTools:
         assert got["task"]["status"] == "open" and got["task"]["resolved_at"] is None
 
     async def test_reopen_tool_error_envelopes(self, server: LithosServer):
-        missing = await _call(server, "lithos_task_reopen", task_id="ghost", agent="a")
+        missing = await _call(
+            server,
+            "lithos_task_reopen",
+            task_id="eeeeeeee-0000-4000-8000-000000000000",
+            agent="a",
+        )
         assert missing["code"] == "task_not_found"
         open_task = await server.coordination.create_task(title="Open", agent="a")
         already = await _call(server, "lithos_task_reopen", task_id=open_task, agent="a")

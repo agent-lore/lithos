@@ -8,7 +8,7 @@ import frontmatter as fm
 import pytest
 
 from lithos.config import LithosConfig
-from lithos.errors import CorpusScanError
+from lithos.errors import AmbiguousIdPrefixError, CorpusScanError
 from lithos.frontmatter_codec import (
     KnowledgeMetadata,
     encode,
@@ -4688,3 +4688,61 @@ class TestBareDateFrontmatter:
         cached = mgr._index.get_cached_meta("44444444-4444-4444-4444-444444444444")
         assert cached is not None
         assert cached.extra["custom"] == {"2026-07-30": "value"}
+
+
+class TestResolveId:
+    """Short-prefix resolution on the note side (task 83257ced)."""
+
+    DOC_ID = "aaaabbbb-1111-2222-3333-444455556666"
+
+    def _write_note(self, test_config, doc_id: str, name: str, title: str) -> None:
+        note = test_config.storage.knowledge_path / name
+        note.write_text(f"---\nid: {doc_id}\ntitle: {title}\n---\nBody.\n")
+
+    def test_exact_match_wins_at_any_length(self, test_config):
+        """A hand-authored id shorter than MIN_PREFIX_LEN must resolve exactly,
+        never hit the too-short check."""
+        self._write_note(test_config, "abc", "short-id.md", "Tiny Id")
+        mgr = KnowledgeManager(test_config)
+
+        assert mgr.resolve_id("abc") == ("abc", "Tiny Id")
+
+    def test_unique_prefix_resolves_to_id_and_title(self, test_config):
+        self._write_note(test_config, self.DOC_ID, "n1.md", "Prefixed Note")
+        mgr = KnowledgeManager(test_config)
+
+        assert mgr.resolve_id("aaaabb") == (self.DOC_ID, "Prefixed Note")
+
+    def test_unknown_prefix_raises_file_not_found(self, test_config):
+        mgr = KnowledgeManager(test_config)
+
+        with pytest.raises(FileNotFoundError, match="Document not found"):
+            mgr.resolve_id("ffffff")
+
+    def test_unknown_full_uuid_raises_file_not_found(self, test_config):
+        """Same code path an unknown full id produced before prefixes existed."""
+        mgr = KnowledgeManager(test_config)
+
+        with pytest.raises(FileNotFoundError, match="Document not found"):
+            mgr.resolve_id("00000000-0000-0000-0000-000000000000")
+
+    def test_too_short_non_matching_raises_value_error(self, test_config):
+        mgr = KnowledgeManager(test_config)
+
+        with pytest.raises(ValueError, match="too short"):
+            mgr.resolve_id("abcde")
+
+    def test_ambiguous_prefix_raises_with_candidates(self, test_config):
+        self._write_note(test_config, "aaaabbbb-0000-4000-8000-000000000001", "t1.md", "Twin One")
+        self._write_note(test_config, "aaaabbbb-0000-4000-8000-000000000002", "t2.md", "Twin Two")
+        mgr = KnowledgeManager(test_config)
+
+        with pytest.raises(AmbiguousIdPrefixError) as exc_info:
+            mgr.resolve_id("aaaabbbb-0000")
+        err = exc_info.value
+        assert err.kind == "note"
+        assert [c["id"] for c in err.candidates] == [
+            "aaaabbbb-0000-4000-8000-000000000001",
+            "aaaabbbb-0000-4000-8000-000000000002",
+        ]
+        assert err.candidates[0]["title"] == "Twin One"

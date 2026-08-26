@@ -19,7 +19,7 @@ from lithos.frontmatter_codec import (
 from lithos.intake import DeleteRequest, NoteUpdateRequest, WriteRequest
 from lithos.knowledge import _UNSET, _UnsetType
 from lithos.telemetry import get_current_span, tool_metrics
-from lithos.tools._seam import tool_span
+from lithos.tools._seam import resolve_note_id, tool_span
 
 if TYPE_CHECKING:
     from lithos.server import LithosServer
@@ -68,7 +68,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             agent: Your agent identifier.
 
             --- Identity & metadata ---
-            id: UUID to update existing; omit to create new.
+            id: UUID (or unambiguous >= 6-char prefix) to update existing;
+                omit to create new.
             tags: List of tags. On update: null/omit preserves existing; [] clears
                 all tags; non-empty list replaces.
             metadata: Free-form key/value dict persisted into the document's
@@ -125,8 +126,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             summaries: Optional dict with short/long summary strings.
 
         Returns:
-            On success: {"status": "created"|"updated", "id", "path", "version",
-            "warnings"}. Actionable outcomes keep their own top-level status:
+            On success: {"status": "created"|"updated", "id", "title", "path",
+            "version", "warnings"}. Actionable outcomes keep their own top-level status:
             duplicate / slug_collision / path_collision / version_conflict
             (version_conflict carries "current_version"). All other failures
             use the standard error envelope {"status": "error", "code",
@@ -238,6 +239,16 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                         expires_at_dt = expires_at_dt.astimezone(UTC)
                 except ValueError:
                     return invalid_input_envelope(f"Invalid expires_at datetime: {expires_at}")
+
+        # Resolve id (full or unambiguous prefix) after boundary validation,
+        # before the request is built (task 83257ced). Also turns the unknown-id
+        # update into a clean note_not_found envelope instead of an uncaught
+        # FileNotFoundError from KnowledgeManager.update.
+        if id is not None:
+            resolved = resolve_note_id(server.knowledge, id, not_found_code="note_not_found")
+            if isinstance(resolved, dict):
+                return resolved
+            id, _ = resolved
 
         # Translate MCP wire shape into intake field semantics:
         #   None  (omitted) → _UNSET (preserve)
@@ -369,6 +380,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         return {
             "status": outcome.status,
             "id": doc.id,
+            "title": doc.title,
             "path": str(doc.path),
             "version": doc.metadata.version,
             "warnings": list(outcome.warnings),
@@ -399,7 +411,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         be provided.
 
         Args:
-            id: UUID of the note to patch.
+            id: UUID (or unambiguous >= 6-char prefix) of the note to patch.
             agent: Your agent identifier.
             title: New title. null/omit preserves existing. Renaming may
                 change the note's slug; a collision with another note's
@@ -456,6 +468,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 validate_extra_metadata(metadata)
             except ValueError as e:
                 return invalid_input_envelope(str(e))
+
+        resolved = resolve_note_id(server.knowledge, id, not_found_code="note_not_found")
+        if isinstance(resolved, dict):
+            return resolved
+        id, _ = resolved
 
         # Translate the MCP wire shape into KnowledgeManager semantics:
         #   None (omitted) → _UNSET (preserve)
@@ -528,6 +545,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         return {
             "status": outcome.status,
             "id": doc.id,
+            "title": doc.title,
             "path": str(doc.path),
             "version": doc.metadata.version,
             "warnings": list(outcome.warnings),
@@ -543,12 +561,20 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         """Delete a knowledge file.
 
         Args:
-            id: UUID of knowledge item to delete
+            id: UUID (or unambiguous >= 6-char prefix) of knowledge item to delete
             agent: Agent performing deletion (required for audit trail)
 
         Returns:
-            Dict with success boolean, or error envelope if document not found
+            Dict with success and the resolved id, title, and path; or error
+            envelope if document not found
         """
+        resolved = resolve_note_id(server.knowledge, id)
+        if isinstance(resolved, dict):
+            return resolved
+        id, title = resolved
+        cached = server.knowledge.get_cached_meta(id)
+        path = str(cached.path) if cached is not None else None
+
         logger.info("lithos_delete id=%s agent=%s", id, agent)
         span = get_current_span()
         span.set_attribute("lithos.id", id)
@@ -557,4 +583,4 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         outcome = await server.intake.delete(agent, DeleteRequest(id=id))
         if outcome.status == "not_found":
             return error_envelope("doc_not_found", f"Document not found: {id}")
-        return {"success": True}
+        return {"success": True, "id": id, "title": title, "path": path}
