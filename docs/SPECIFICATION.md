@@ -1706,6 +1706,20 @@ short prefix** (minimum 6 characters — the git idiom), including `depends_on`,
   5 `{ id, title }` candidates. A prefix is never resolved silently.
 - A prefix shorter than 6 characters (with no exact match) is `invalid_input`;
   an unknown prefix is the domain not-found code.
+- **Reference fields resolve leniently.** Id-bearing fields whose contract
+  allows values that are not (yet) documents — `derived_from_ids` forward
+  references, finding `knowledge_id` links, asserted-edge endpoints and
+  filters (`lithos_edge_upsert`/`lithos_edge_list`/`conflict_resolve.winner_id`) —
+  resolve an exact or unique-prefix hit to the full note id, error on
+  ambiguity, and otherwise pass the value through unchanged for the field's
+  existing semantics. A display prefix can never be persisted alongside its
+  own note; free-form node ids and forward references keep working.
+- **Task context ids resolve leniently too**: `lithos_retrieve.task_id` and
+  `lithos_write.source_task` double as free-form correlation keys, so a
+  unique prefix of an existing task resolves to its full id (access-scope
+  filtering, findings, working memory, and persisted `source_task`
+  frontmatter compare exact ids), ambiguity errors, and any other value is
+  used as given.
 - **Mutating responses echo the resolved full id and title** so callers can
   verify they hit the right record and transcripts retain full ids. Short ids
   in prose are display-only — pass them as prefixes; never reconstruct a full

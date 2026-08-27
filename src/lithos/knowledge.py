@@ -1267,6 +1267,31 @@ class KnowledgeManager:
             raise AmbiguousIdPrefixError("note", raw, candidates)
         return matches[0], self._index.title_by_id(matches[0])
 
+    def resolve_id_lenient(self, raw: str) -> str:
+        """Resolve a note *reference* — prefix-aware, but never rejecting.
+
+        For id-bearing fields whose contract allows values that are not (yet)
+        documents: ``derived_from_ids`` forward references, finding
+        ``knowledge_id`` links, asserted-edge endpoints (task 83257ced /
+        PR #412 review). Exact match wins; a unique >= 6-char prefix of an
+        existing document resolves to its full id so a display prefix can
+        never persist alongside its own note; an ambiguous prefix still
+        raises :class:`AmbiguousIdPrefixError`. Anything else passes through
+        unchanged for the caller's existing validation/semantics.
+        """
+        if self._index.has_document(raw):
+            return raw
+        if len(raw) < MIN_PREFIX_LEN:
+            return raw
+        matches = self._index.match_id_prefix(raw, AMBIGUITY_CANDIDATE_CAP + 1)
+        if len(matches) > 1:
+            candidates = [
+                {"id": doc_id, "title": self._index.title_by_id(doc_id)}
+                for doc_id in matches[:AMBIGUITY_CANDIDATE_CAP]
+            ]
+            raise AmbiguousIdPrefixError("note", raw, candidates)
+        return matches[0] if matches else raw
+
     def iter_doc_ids(self) -> Iterable[str]:
         """Snapshot every known document ID (for prefix/UUID resolution)."""
         return self._index.iter_doc_ids()

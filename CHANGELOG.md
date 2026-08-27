@@ -28,6 +28,14 @@ Behaviour changes (full-length ids are always passed through unchanged):
 - `lithos_write` with an unknown `id` now returns a `note_not_found` envelope
   (was an uncaught `FileNotFoundError` → protocol-level ToolError).
 
+Review round (PR #412): id-bearing fields that *persist or filter* also
+resolve, so a display prefix can never become silent wrong state. All are
+lenient — an exact or unique-prefix hit resolves to the full id, ambiguity
+errors, and anything else (forward references, free-form node ids and
+correlation keys) passes through unchanged: `lithos_retrieve.task_id`,
+`lithos_write.source_task`, `derived_from_ids`, finding `knowledge_id`, and
+asserted-edge endpoints/filters/`winner_id`.
+
 ## [0.4.0] — 2026-07-06
 
 ### BREAKING — MCP error envelopes normalized (0.4.0)

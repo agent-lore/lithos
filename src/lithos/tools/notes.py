@@ -98,9 +98,13 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             source_url: URL provenance for this knowledge. On update: null/omit
                 preserves existing; "" clears; string sets new value.
             derived_from_ids: List of source document UUIDs this note was derived
-                from. On update: null/omit preserves existing; [] clears;
-                non-empty list replaces.
-            source_task: Task ID this knowledge came from.
+                from (each accepts an unambiguous >= 6-char prefix of an
+                existing note; forward references stay full UUIDs). On update:
+                null/omit preserves existing; [] clears; non-empty list
+                replaces.
+            source_task: Task ID this knowledge came from (an unambiguous
+                >= 6-char prefix of an existing task resolves to its full id
+                before persisting; other values are stored as given).
 
             --- Freshness ---
             ttl_hours: Time-to-live in hours from now. Computes expires_at.
@@ -240,7 +244,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 except ValueError:
                     return invalid_input_envelope(f"Invalid expires_at datetime: {expires_at}")
 
-        # Resolve id (full or unambiguous prefix) after boundary validation,
+        # Resolve ids (full or unambiguous prefix) after boundary validation,
         # before the request is built (task 83257ced). Also turns the unknown-id
         # update into a clean note_not_found envelope instead of an uncaught
         # FileNotFoundError from KnowledgeManager.update.
@@ -249,6 +253,20 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             if isinstance(resolved, dict):
                 return resolved
             id, _ = resolved
+        # source_task is persisted into frontmatter and later compared against
+        # exact task ids — a display prefix must never be stored literally.
+        # Lenient: free-form correlation keys and cross-environment ids pass
+        # through unchanged.
+        if source_task:
+            source_task = await server.coordination.resolve_task_id_lenient(source_task)
+        # derived_from_ids entries are *references* (forward references to
+        # not-yet-written sources are allowed), so resolution is lenient:
+        # exact/unique-prefix hits resolve, ambiguity errors, everything else
+        # passes through to the existing UUID validation.
+        if derived_from_ids:
+            derived_from_ids = [
+                server.knowledge.resolve_id_lenient(src) for src in derived_from_ids
+            ]
 
         # Translate MCP wire shape into intake field semantics:
         #   None  (omitted) → _UNSET (preserve)

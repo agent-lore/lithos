@@ -301,7 +301,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             namespace_filter: Restrict to these namespaces
             agent_id: Caller identity for access-scope gating and audit
             task_id: Task context — activates task_context scout and
-                working-memory tracking
+                working-memory tracking. An unambiguous >= 6-char prefix of
+                an existing task resolves to its full id before retrieval
+                (access-scope filtering, findings, and working memory compare
+                exact ids); other values are used as given
             surface_conflicts: Reserved for MVP 2 contradiction surfacing
             max_context_nodes: Provenance seed count (defaults to limit)
             tags: Filter by tags (AND semantics)
@@ -335,6 +338,9 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         if not server._config.lcma.enabled:
             logger.warning("lithos_retrieve: LCMA is disabled")
             return error_envelope("lcma_disabled", "LCMA is disabled via configuration")
+
+        if task_id is not None:
+            task_id = await server.coordination.resolve_task_id_lenient(task_id)
 
         result = await server.memory.retrieve(
             query=query,

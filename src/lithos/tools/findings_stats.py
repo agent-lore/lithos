@@ -40,7 +40,9 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             task_id: Task ID (full id or unambiguous >= 6-char prefix)
             agent: Agent posting the finding
             summary: Finding summary
-            knowledge_id: Optional linked knowledge document ID
+            knowledge_id: Optional linked knowledge document ID (an
+                unambiguous >= 6-char prefix of an existing note resolves to
+                its full id; other values are stored as given)
 
         Returns:
             Dict with finding_id and the resolved task_id + title (title is
@@ -48,6 +50,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             of their task)
         """
         task_id, task_title = await server.coordination.resolve_task_id(task_id)
+        if knowledge_id is not None:
+            # Lenient reference resolution: the stored link must be usable by
+            # the task-context scout, which compares exact note ids.
+            knowledge_id = server.knowledge.resolve_id_lenient(knowledge_id)
         logger.info("lithos_finding_post task=%s agent=%s", task_id, agent)
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)

@@ -41,8 +41,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Upsert key is (from_id, to_id, type, namespace).
 
         Args:
-            from_id: Source node ID
-            to_id: Target node ID
+            from_id: Source node ID (an unambiguous >= 6-char prefix of an
+                existing note resolves to its full id; other values are
+                stored as given — node ids are free-form)
+            to_id: Target node ID (same resolution as from_id)
             type: Edge type (e.g. 'derived_from', 'related_to')
             weight: Edge weight (float)
             namespace: Namespace for the edge (required)
@@ -54,6 +56,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Status envelope with edge_id.
         """
+        # Lenient reference resolution (task 83257ced): node ids are
+        # free-form, but a display prefix of an existing note must never be
+        # persisted as a phantom endpoint.
+        from_id = server.knowledge.resolve_id_lenient(from_id)
+        to_id = server.knowledge.resolve_id_lenient(to_id)
         logger.info("lithos_edge_upsert from=%s to=%s type=%s", from_id, to_id, type)
 
         if not namespace:
@@ -103,14 +110,19 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         """Query edges from edges.db by optional filters.
 
         Args:
-            from_id: Filter by source node ID
-            to_id: Filter by target node ID
+            from_id: Filter by source node ID (an unambiguous >= 6-char note
+                prefix resolves to its full id; other values filter literally)
+            to_id: Filter by target node ID (same resolution as from_id)
             type: Filter by edge type
             namespace: Filter by namespace
 
         Returns:
             Dict with results list of edge dicts.
         """
+        if from_id is not None:
+            from_id = server.knowledge.resolve_id_lenient(from_id)
+        if to_id is not None:
+            to_id = server.knowledge.resolve_id_lenient(to_id)
         logger.info("lithos_edge_list from=%s to=%s type=%s ns=%s", from_id, to_id, type, namespace)
         span = get_current_span()
 
@@ -143,8 +155,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             resolution: One of: accepted_dual, superseded, refuted, merged
             resolver: Agent or user identifier performing the resolution
             winner_id: Required when resolution is 'superseded'; must be
-                either from_id or to_id of the edge
+                either from_id or to_id of the edge (an unambiguous
+                >= 6-char note prefix resolves to its full id)
         """
+        if winner_id is not None:
+            winner_id = server.knowledge.resolve_id_lenient(winner_id)
         return await server.memory.conflict_resolve(
             edge_id=edge_id,
             resolution=resolution,

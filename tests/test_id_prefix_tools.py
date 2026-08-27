@@ -172,3 +172,167 @@ class TestNotePrefixAcceptance:
         assert related["id"] == created["id"]
         stats = await call_tool(server, "lithos_node_stats", {"node_id": created["id"][:8]})
         assert "status" not in stats or stats.get("status") != "error"
+
+
+class TestReferenceFieldResolution:
+    """PR #412 review round: id-bearing fields that persist or filter must
+    resolve too — a display prefix must never become silent wrong state."""
+
+    async def test_write_source_task_persists_full_id(self, server: LithosServer):
+        task_id = await _create_task(server, "Provenance Task")
+        created = await call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Sourced Note",
+                "content": "body",
+                "agent": "a",
+                "source_task": task_id[:8],
+            },
+        )
+        assert created["status"] == "created"
+        read = await call_tool(server, "lithos_read", {"id": created["id"]})
+        # source_task persists as the frontmatter field `source`
+        assert read["metadata"]["source"] == task_id
+
+    async def test_write_free_form_source_task_passes_through(self, server: LithosServer):
+        """source_task is a lenient reference: correlation keys and
+        cross-environment ids that match no task are stored as given."""
+        result = await call_tool(
+            server,
+            "lithos_write",
+            {"title": "Keyed Note", "content": "c", "agent": "a", "source_task": "task-wm-style"},
+        )
+        assert result["status"] == "created"
+        read = await call_tool(server, "lithos_read", {"id": result["id"]})
+        assert read["metadata"]["source"] == "task-wm-style"
+
+    async def test_derived_from_ids_prefix_resolves_forward_ref_passes(self, server: LithosServer):
+        source = await call_tool(
+            server, "lithos_write", {"title": "Source Note", "content": "s", "agent": "a"}
+        )
+        ghost = "00000000-0000-4000-8000-00000000dead"
+        derived = await call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Derived Note",
+                "content": "d",
+                "agent": "a",
+                "derived_from_ids": [source["id"][:8], ghost],
+            },
+        )
+        assert derived["status"] == "created"
+        read = await call_tool(server, "lithos_read", {"id": derived["id"]})
+        # codec normalization does not preserve list order
+        assert set(read["metadata"]["derived_from_ids"]) == {source["id"], ghost}
+
+    async def test_finding_knowledge_id_prefix_resolves(self, server: LithosServer):
+        task_id = await _create_task(server, "Linked Findings")
+        note = await call_tool(
+            server, "lithos_write", {"title": "Evidence Note", "content": "e", "agent": "a"}
+        )
+        await call_tool(
+            server,
+            "lithos_finding_post",
+            {
+                "task_id": task_id,
+                "agent": "a",
+                "summary": "linked",
+                "knowledge_id": note["id"][:8],
+            },
+        )
+        findings = await call_tool(server, "lithos_finding_list", {"task_id": task_id})
+        assert findings["findings"][0]["knowledge_id"] == note["id"]
+
+    async def test_finding_unknown_full_knowledge_id_stored_verbatim(self, server: LithosServer):
+        task_id = await _create_task(server, "Orphan Link")
+        ghost = "00000000-0000-4000-8000-00000000beef"
+        await call_tool(
+            server,
+            "lithos_finding_post",
+            {"task_id": task_id, "agent": "a", "summary": "orphan", "knowledge_id": ghost},
+        )
+        findings = await call_tool(server, "lithos_finding_list", {"task_id": task_id})
+        assert findings["findings"][0]["knowledge_id"] == ghost
+
+    async def test_edge_upsert_prefix_endpoints_resolve_and_filter(self, server: LithosServer):
+        a = await call_tool(
+            server, "lithos_write", {"title": "Edge Src", "content": "x", "agent": "a"}
+        )
+        b = await call_tool(
+            server, "lithos_write", {"title": "Edge Dst", "content": "y", "agent": "a"}
+        )
+        upsert = await call_tool(
+            server,
+            "lithos_edge_upsert",
+            {
+                "from_id": a["id"][:8],
+                "to_id": b["id"][:8],
+                "type": "related_to",
+                "weight": 0.5,
+                "namespace": "test",
+            },
+        )
+        assert upsert["status"] == "ok"
+        by_full = await call_tool(server, "lithos_edge_list", {"from_id": a["id"]})
+        assert [e for e in by_full["results"] if e["to_id"] == b["id"]]
+        by_prefix = await call_tool(server, "lithos_edge_list", {"from_id": a["id"][:8]})
+        assert [e for e in by_prefix["results"] if e["to_id"] == b["id"]]
+
+    async def test_edge_upsert_free_form_node_ids_still_work(self, server: LithosServer):
+        upsert = await call_tool(
+            server,
+            "lithos_edge_upsert",
+            {
+                "from_id": "concept:alpha",
+                "to_id": "concept:beta",
+                "type": "related_to",
+                "weight": 0.1,
+                "namespace": "test",
+            },
+        )
+        assert upsert["status"] == "ok"
+        listed = await call_tool(server, "lithos_edge_list", {"from_id": "concept:alpha"})
+        assert [e for e in listed["results"] if e["to_id"] == "concept:beta"]
+
+    async def test_retrieve_free_form_task_id_passes_through(self, server: LithosServer):
+        """retrieve.task_id doubles as a correlation key — a value matching
+        no task must keep working, not error."""
+        result = await call_tool(
+            server, "lithos_retrieve", {"query": "anything", "task_id": "task-wm-style"}
+        )
+        assert "results" in result
+
+    async def test_retrieve_task_prefix_matches_full_id_scoping(self, server: LithosServer):
+        """The reviewer's probe: a task-scoped note visible with the full task
+        id must be equally visible when retrieval uses its prefix."""
+        task_id = await _create_task(server, "Scoped Retrieval")
+        note = await call_tool(
+            server,
+            "lithos_write",
+            {
+                "title": "Zanzibar Deployment Runbook",
+                "content": "The zanzibar cutover requires the amber checklist.",
+                "agent": "scoped-agent",
+                "access_scope": "task",
+                "source_task": task_id,
+            },
+        )
+        assert note["status"] == "created"
+
+        async def _ids(tid: str) -> set[str]:
+            result = await call_tool(
+                server,
+                "lithos_retrieve",
+                {
+                    "query": "zanzibar cutover amber checklist",
+                    "agent_id": "scoped-agent",
+                    "task_id": tid,
+                },
+            )
+            assert "results" in result, result
+            return {r["id"] for r in result["results"]}
+
+        assert note["id"] in await _ids(task_id)
+        assert note["id"] in await _ids(task_id[:8])

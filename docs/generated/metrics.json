@@ -23,7 +23,7 @@
       },
       "Entrypoints": {
         "functions_over_10": 15,
-        "max_complexity": 67,
+        "max_complexity": 70,
         "max_function": "lithos.tools.notes.register.lithos_write"
       },
       "Errors": {
@@ -90,7 +90,7 @@
     "functions_over_10": 62,
     "top_functions": [
       {
-        "complexity": 67,
+        "complexity": 70,
         "qualname": "lithos.tools.notes.register.lithos_write"
       },
       {
@@ -130,7 +130,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 793
+    "total_functions": 795
   },
   "domain": {
     "associations": 26,
@@ -349,23 +349,23 @@
       },
       "Coordination": {
         "classes": 8,
-        "functions": 62,
+        "functions": 63,
         "largest_module": "lithos.coordination",
-        "largest_module_lines": 2728,
-        "lines": 2728,
+        "largest_module_lines": 2755,
+        "lines": 2755,
         "modules": 1,
         "public_symbols": 8,
-        "sloc": 2298
+        "sloc": 2323
       },
       "Entrypoints": {
         "classes": 5,
         "functions": 141,
         "largest_module": "lithos.tools.tasks",
         "largest_module_lines": 1049,
-        "lines": 6039,
+        "lines": 6084,
         "modules": 13,
         "public_symbols": 32,
-        "sloc": 4858
+        "sloc": 4889
       },
       "Errors": {
         "classes": 12,
@@ -419,13 +419,13 @@
       },
       "Knowledge": {
         "classes": 9,
-        "functions": 89,
+        "functions": 90,
         "largest_module": "lithos.knowledge",
-        "largest_module_lines": 1304,
-        "lines": 2116,
+        "largest_module_lines": 1329,
+        "lines": 2141,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1697
+        "sloc": 1720
       },
       "LCMA": {
         "classes": 13,
@@ -489,7 +489,7 @@
       }
     },
     "max_module": "lithos.coordination",
-    "max_module_lines": 2728,
+    "max_module_lines": 2755,
     "modules_over_800": [
       "lithos.cli",
       "lithos.cognitive_memory",
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 25885,
+    "total_lines": 25982,
     "total_modules": 45,
-    "total_sloc": 20814
+    "total_sloc": 20893
   },
   "tests": {
     "ratio": 1.87,
-    "src_lines": 25885,
-    "test_lines": 48333
+    "src_lines": 25982,
+    "test_lines": 48536
   }
 }

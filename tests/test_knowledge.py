@@ -4746,3 +4746,42 @@ class TestResolveId:
             "aaaabbbb-0000-4000-8000-000000000002",
         ]
         assert err.candidates[0]["title"] == "Twin One"
+
+
+class TestResolveIdLenient:
+    """Lenient reference resolution for id-bearing fields whose contract
+    allows non-document values (task 83257ced, PR #412 review)."""
+
+    DOC_ID = "ccccdddd-1111-2222-3333-444455556666"
+
+    def _mgr(self, test_config) -> KnowledgeManager:
+        note = test_config.storage.knowledge_path / "ref-target.md"
+        note.write_text(f"---\nid: {self.DOC_ID}\ntitle: Ref Target\n---\nBody.\n")
+        return KnowledgeManager(test_config)
+
+    def test_exact_match_passes_through(self, test_config):
+        mgr = self._mgr(test_config)
+        assert mgr.resolve_id_lenient(self.DOC_ID) == self.DOC_ID
+
+    def test_unique_prefix_resolves(self, test_config):
+        mgr = self._mgr(test_config)
+        assert mgr.resolve_id_lenient("ccccdd") == self.DOC_ID
+
+    def test_unknown_value_passes_through(self, test_config):
+        """Forward references and free-form node ids keep working."""
+        mgr = self._mgr(test_config)
+        ghost = "00000000-0000-4000-8000-000000000000"
+        assert mgr.resolve_id_lenient(ghost) == ghost
+        assert mgr.resolve_id_lenient("concept:foo") == "concept:foo"
+
+    def test_short_unknown_value_passes_through(self, test_config):
+        mgr = self._mgr(test_config)
+        assert mgr.resolve_id_lenient("abc") == "abc"
+
+    def test_ambiguous_prefix_still_raises(self, test_config):
+        mgr = self._mgr(test_config)
+        twin = test_config.storage.knowledge_path / "ref-twin.md"
+        twin.write_text("---\nid: ccccdddd-9999-4000-8000-000000000000\ntitle: Twin\n---\nB.\n")
+        mgr = KnowledgeManager(test_config)
+        with pytest.raises(AmbiguousIdPrefixError):
+            mgr.resolve_id_lenient("ccccdddd")

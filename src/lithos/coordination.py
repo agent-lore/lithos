@@ -1064,6 +1064,33 @@ class CoordinationService:
             raise AmbiguousIdPrefixError("task", raw, candidates, field=field)
         return rows[0][0], rows[0][1]
 
+    @traced("lithos.coordination.resolve_task_id_lenient")
+    async def resolve_task_id_lenient(self, raw: str) -> str:
+        """Resolve a task *reference* — prefix-aware, but never rejecting.
+
+        For context fields whose contract allows free-form values
+        (``lithos_write.source_task``, ``lithos_retrieve.task_id`` used as a
+        correlation key): a unique prefix of an existing task resolves to its
+        full id so a display prefix is never persisted or compared literally,
+        an ambiguous prefix still raises :class:`AmbiguousIdPrefixError`, and
+        anything else — full-length ids, free-form keys — passes through
+        unchanged (task 83257ced, PR #412 review).
+        """
+        if not (MIN_PREFIX_LEN <= len(raw) < _FULL_TASK_ID_LEN):
+            return raw
+        upper = prefix_upper_bound(raw)
+        limit = AMBIGUITY_CANDIDATE_CAP + 1
+        async with aiosqlite.connect(self.db_path) as db:
+            if upper is None:
+                cursor = await db.execute(_TASK_ID_PREFIX_OPEN_SQL, (raw, limit))
+            else:
+                cursor = await db.execute(TASK_ID_PREFIX_SQL, (raw, upper, limit))
+            rows = list(await cursor.fetchall())
+        if len(rows) > 1:
+            candidates = [{"id": row[0], "title": row[1]} for row in rows[:AMBIGUITY_CANDIDATE_CAP]]
+            raise AmbiguousIdPrefixError("task", raw, candidates)
+        return rows[0][0] if rows else raw
+
     @traced("lithos.coordination.get_task")
     async def get_task(self, task_id: str) -> Task | None:
         """Get task by ID."""
