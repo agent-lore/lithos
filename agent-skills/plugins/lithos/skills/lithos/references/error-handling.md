@@ -22,6 +22,7 @@ always in the same shape; task-graph tools also emit `invalid_edge_type`,
 | Code | Meaning | Action |
 |------|---------|--------|
 | `invalid_input` | Field validation failed | Check error message for specifics |
+| `ambiguous_id_prefix` | A short id prefix matched more than one task/note; response carries `candidates: [{id, title}]` | Retry with a longer prefix or a full id from the candidates — never guess |
 | `invalid_metadata_key` | Task metadata contains `depends_on`/`blocked_on`, or note metadata collides with a reserved key | Use the `depends_on` param or task edges; rename the note key |
 | `content_too_large` | Content exceeds the size limit | Trim or split the document |
 | `doc_not_found` | ID doesn't exist | Verify the UUID |
