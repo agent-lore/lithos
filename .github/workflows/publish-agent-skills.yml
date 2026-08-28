@@ -6,7 +6,7 @@ on:
     paths:
       - 'agent-skills/**'
       - '.github/workflows/publish-agent-skills.yml'
-  workflow_dispatch:  # allow manual trigger from the GitHub UI
+  workflow_dispatch:  # manual trigger from the GitHub UI publishes ALL plugins
 
 permissions:
   id-token: write   # Required for OIDC repo linking
@@ -16,14 +16,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # the changed-plugin diff needs the pushed range
       - uses: tesslio/setup-tessl@v2
         with:
           token: ${{ secrets.TESSL_TOKEN }}
       # Publishes the version committed in each plugin manifest verbatim.
       # Changing a plugin means bumping its manifest version in the same PR;
       # an already-published version fails loudly here as the reminder.
-      - name: Publish plugins
+      # Only plugins touched by the push are published, so an unchanged
+      # sibling plugin can never turn the run red. A workflow-file-only push
+      # publishes nothing. Manual workflow_dispatch publishes every plugin —
+      # the recovery path — and fails loudly on versions the registry
+      # already has.
+      - name: Determine changed plugins
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            plugins=$(ls -d agent-skills/plugins/*/ | xargs -n1 basename | sort | xargs)
+          else
+            base="${{ github.event.before }}"
+            # Guard the zero-sha of a first push and force-pushed-away bases.
+            if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+              base=$(git rev-parse "${{ github.sha }}^")
+            fi
+            plugins=$(git diff --name-only "$base" "${{ github.sha }}" -- 'agent-skills/plugins/' \
+              | cut -d/ -f3 | sort -u | xargs)
+          fi
+          echo "Changed plugins: ${plugins:-none}"
+          echo "plugins=$plugins" >> "$GITHUB_OUTPUT"
+      - name: Publish changed plugins
+        if: steps.changed.outputs.plugins != ''
         working-directory: agent-skills
         run: |
-          tessl plugin publish ./plugins/lithos
-          tessl plugin publish ./plugins/influx-inbox
+          for plugin in ${{ steps.changed.outputs.plugins }}; do
+            tessl plugin publish "./plugins/$plugin"
+          done
