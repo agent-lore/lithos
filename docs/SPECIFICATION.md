@@ -260,7 +260,7 @@ confidence: <float 0-1>           # Optional: Confidence score (default: 1.0).
                                   # finite numbers clamp to [0.0, 1.0].
 aliases:                          # Optional: Alternative names (Obsidian compatible)
   - <alias1>
-source: <string>                  # Optional: Task ID or provenance note
+source: <string>                  # Optional: Task ID (note provenance lives in derived_from_ids)
 source_url: <string>              # Optional: Canonical URL provenance (normalized on write)
 derived_from_ids:                 # Optional: Declared lineage (list of UUIDs)
   - <uuid-1>
@@ -436,7 +436,7 @@ Parameters are flat at the MCP boundary but grouped below by role to aid discove
 |------|------|----------|-------------|
 | `source_url` | string | No | Canonical URL provenance (http/https), dedup key after normalization. Pass `""` to clear on update. |
 | `derived_from_ids` | string[] | No | Canonical declared lineage (UUIDs). On create: `null`/omit stores `[]`. On update: `null`/omit preserves existing, `[]` clears, non-empty replaces. Self-references rejected. |
-| `source_task` | string | No | Task ID or provenance note (stored as `source` in frontmatter) |
+| `source_task` | string | No | Task ID, stored as `source` in frontmatter. An unambiguous >= 6-char prefix of an existing task resolves to its full id; other values are stored as given. Not a note reference — note provenance uses `derived_from_ids`. |
 
 *Freshness:*
 
