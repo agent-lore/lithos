@@ -98,6 +98,12 @@ Always set **both** `tags=["project:<slug>"]` and `metadata={"project": "<slug>"
 
 Use `lithos_retrieve` (not `lithos_search`) when quality matters — it runs multi-scout retrieval with reranking. Use `lithos_search` for quick exploration.
 
+## Short ID Prefixes
+
+Every task/note id parameter accepts an **unambiguous short prefix** (>= 6 chars, git-style): `lithos_task_get(task_id="83257ced")` just works. Task prefixes resolve against tasks, note prefixes against notes. An ambiguous prefix fails loudly with `ambiguous_id_prefix` listing candidate `{id, title}` pairs — retry with a longer prefix from the list. Mutating responses echo the resolved full id + title; check the echo to confirm you touched the right record.
+
+**Backstop: never reconstruct a full UUID from surrounding context.** Short ids in prose are prefixes — pass them as-is. A guessed UUID that happens to exist writes to the *wrong* record and reports success; the prefix path can only resolve correctly or fail loudly.
+
 ## Writing Knowledge: Key Decisions
 
 **What deserves a write:**
@@ -150,6 +156,7 @@ Run both task queries and union results — no single query covers all agents' c
 
 ## Pitfalls
 
+- **Don't reconstruct full UUIDs from context** — pass the short id as a prefix instead (see Short ID Prefixes). A fabricated UUID that happens to exist silently writes to the wrong record
 - **Don't skip the search step** — the most common mistake. Always `lithos_cache_lookup` or `lithos_search` before writing new knowledge
 - **Don't use `lithos_search` when quality matters** — it doesn't enforce access scopes or track salience. Use `lithos_retrieve` for actual work
 - **Don't set only tags OR only metadata on tasks** — set both. Loom queries by `metadata.project`; Agent Zero queries by tag
