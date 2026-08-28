@@ -2050,7 +2050,12 @@ class TestErrorEnvelopes:
         ).document
         assert doc is not None
         result = await self._call(server, "lithos_delete", id=doc.id, agent="agent")
-        assert result == {"success": True}
+        assert result == {
+            "success": True,
+            "id": doc.id,
+            "title": "Delete Me",
+            "path": str(doc.path),
+        }
 
     # --- lithos_task_claim ---
 
@@ -2177,7 +2182,12 @@ class TestDeleteAgentRequired:
         assert doc is not None
 
         result = await self._call_delete(server, id=doc.id, agent="deleter-agent")
-        assert result == {"success": True}
+        assert result == {
+            "success": True,
+            "id": doc.id,
+            "title": "Audit Delete Doc",
+            "path": str(doc.path),
+        }
 
         # Agent should now be registered in the coordination service
         agent_info = await server.coordination.get_agent("deleter-agent")

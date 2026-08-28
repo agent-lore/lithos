@@ -469,5 +469,5 @@ class TestLithosWritePreExistingCompatibility:
         )
         assert result["status"] == "created"
         # Envelope must only have these keys
-        expected_keys = {"status", "id", "path", "version", "warnings"}
+        expected_keys = {"status", "id", "title", "path", "version", "warnings"}
         assert set(result.keys()) == expected_keys

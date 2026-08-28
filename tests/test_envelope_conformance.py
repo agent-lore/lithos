@@ -127,6 +127,12 @@ VALIDATION_CASES: list[tuple[str, dict[str, Any], str]] = [
         "doc_not_found",
     ),
     ("lithos_task_get", {"task_id": "no-such-task"}, "task_not_found"),
+    # short-id-prefix resolution (task 83257ced)
+    ("lithos_task_get", {"task_id": "abc"}, "invalid_input"),  # under MIN_PREFIX_LEN
+    ("lithos_read", {"id": "abc"}, "invalid_input"),
+    # a prefix miss is task_not_found even on tools whose full-id miss says
+    # claim_failed — the task genuinely does not exist
+    ("lithos_task_claim", {"task_id": "abcdef0", "aspect": "x", "agent": "a"}, "task_not_found"),
     # edge tools (already canonical before normalization)
     (
         "lithos_edge_upsert",
@@ -161,6 +167,31 @@ class TestCanonicalErrorEnvelopes:
             {"from_task_id": task_id, "to_task_id": task_id, "type": "blocks", "agent": "a"},
         )
         assert_error_envelope(result, code="self_edge")
+
+    async def test_ambiguous_id_prefix_carries_candidates(self, server: LithosServer):
+        """A prefix matching several tasks fails loudly, naming the matches —
+        never a silent pick (task 83257ced)."""
+        from datetime import UTC, datetime
+
+        import aiosqlite
+
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(server.coordination.db_path) as db:
+            for i in (1, 2):
+                await db.execute(
+                    "INSERT INTO tasks (id, title, description, status, created_by, created_at)"
+                    " VALUES (?, ?, '', 'open', 'a', ?)",
+                    (f"abababab-0000-4000-8000-00000000000{i}", f"Twin {i}", now),
+                )
+            await db.commit()
+
+        result = await call_tool(server, "lithos_task_get", {"task_id": "ababab"})
+        assert_error_envelope(result, code="ambiguous_id_prefix")
+        assert [c["id"] for c in result["candidates"]] == [
+            "abababab-0000-4000-8000-000000000001",
+            "abababab-0000-4000-8000-000000000002",
+        ]
+        assert [c["title"] for c in result["candidates"]] == ["Twin 1", "Twin 2"]
 
     async def test_note_update_unknown_id_is_note_not_found(self, server: LithosServer):
         result = await call_tool(
@@ -231,9 +262,12 @@ class TestGoldenInvalidInputEnvelope:
         assert list(result) == ["status", "code", "message"]
 
     async def test_task_get_not_found_exact(self, server: LithosServer):
-        result = await call_tool(server, "lithos_task_get", {"task_id": "ghost"})
+        # Full-length id: passes through prefix resolution untouched, so this
+        # remains the historical envelope verbatim.
+        ghost = "eeeeeeee-0000-4000-8000-000000000000"
+        result = await call_tool(server, "lithos_task_get", {"task_id": ghost})
         assert result == {
             "status": "error",
             "code": "task_not_found",
-            "message": "Task 'ghost' not found.",
+            "message": f"Task '{ghost}' not found.",
         }

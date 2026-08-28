@@ -27,7 +27,7 @@ SQLite-backed task claiming, findings, and the agent registry for multi-agent wo
 
 ## Dependencies
 
-- Depends on: [Config](Config.md), [Errors](Errors.md), [Knowledge](Knowledge.md), [Telemetry](Telemetry.md)
+- Depends on: [Config](Config.md), [Errors](Errors.md), [IdResolution](IdResolution.md), [Knowledge](Knowledge.md), [Telemetry](Telemetry.md)
 - Used by: [CognitiveMemory](CognitiveMemory.md), [Entrypoints](Entrypoints.md), [Intake](Intake.md), [LCMA](LCMA.md)
 
 ## Data stores

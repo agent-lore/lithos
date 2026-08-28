@@ -27,7 +27,7 @@ import frontmatter
 from lithos._merge import merge_metadata
 from lithos.config import LithosConfig
 from lithos.corpus_index import CachedMeta, CorpusIndex, ScannedNote
-from lithos.errors import CorpusScanError, SlugCollisionError
+from lithos.errors import AmbiguousIdPrefixError, CorpusScanError, SlugCollisionError
 from lithos.frontmatter_codec import (
     KnowledgeDocument,
     KnowledgeMetadata,
@@ -43,6 +43,7 @@ from lithos.frontmatter_codec import (
     validate_derived_from_ids,
     validate_extra_metadata,
 )
+from lithos.id_resolution import AMBIGUITY_CANDIDATE_CAP, MIN_PREFIX_LEN
 from lithos.telemetry import lithos_metrics, timed_write, traced
 
 if TYPE_CHECKING:
@@ -1235,6 +1236,61 @@ class KnowledgeManager:
     def has_document(self, doc_id: str) -> bool:
         """Check whether a document ID exists."""
         return self._index.has_document(doc_id)
+
+    def resolve_id(self, raw: str) -> tuple[str, str]:
+        """Resolve a document id or short prefix to ``(full_id, title)`` (task 83257ced).
+
+        Exact match wins at any length — hand-authored notes can carry
+        arbitrary string ids, even shorter than ``MIN_PREFIX_LEN``. Otherwise
+        a too-short prefix raises ``ValueError`` (handlers map it to
+        ``invalid_input``), a miss raises ``FileNotFoundError`` (message
+        parity with :meth:`read`, so per-tool not-found codes are unchanged),
+        and multiple matches raise :class:`AmbiguousIdPrefixError` — never a
+        silent pick. Resolution is tool-boundary only: internal callers hold
+        full ids and keep exact-match semantics.
+        """
+        if self._index.has_document(raw):
+            return raw, self._index.title_by_id(raw)
+        if len(raw) < MIN_PREFIX_LEN:
+            raise ValueError(
+                f"id '{raw}' is too short: pass the full document id or a prefix of "
+                f"at least {MIN_PREFIX_LEN} characters."
+            )
+        matches = self._index.match_id_prefix(raw, AMBIGUITY_CANDIDATE_CAP + 1)
+        if not matches:
+            raise FileNotFoundError(f"Document not found: {raw}")
+        if len(matches) > 1:
+            candidates = [
+                {"id": doc_id, "title": self._index.title_by_id(doc_id)}
+                for doc_id in matches[:AMBIGUITY_CANDIDATE_CAP]
+            ]
+            raise AmbiguousIdPrefixError("note", raw, candidates)
+        return matches[0], self._index.title_by_id(matches[0])
+
+    def resolve_id_lenient(self, raw: str) -> str:
+        """Resolve a note *reference* — prefix-aware, but never rejecting.
+
+        For id-bearing fields whose contract allows values that are not (yet)
+        documents: ``derived_from_ids`` forward references, finding
+        ``knowledge_id`` links, asserted-edge endpoints (task 83257ced /
+        PR #412 review). Exact match wins; a unique >= 6-char prefix of an
+        existing document resolves to its full id so a display prefix can
+        never persist alongside its own note; an ambiguous prefix still
+        raises :class:`AmbiguousIdPrefixError`. Anything else passes through
+        unchanged for the caller's existing validation/semantics.
+        """
+        if self._index.has_document(raw):
+            return raw
+        if len(raw) < MIN_PREFIX_LEN:
+            return raw
+        matches = self._index.match_id_prefix(raw, AMBIGUITY_CANDIDATE_CAP + 1)
+        if len(matches) > 1:
+            candidates = [
+                {"id": doc_id, "title": self._index.title_by_id(doc_id)}
+                for doc_id in matches[:AMBIGUITY_CANDIDATE_CAP]
+            ]
+            raise AmbiguousIdPrefixError("note", raw, candidates)
+        return matches[0] if matches else raw
 
     def iter_doc_ids(self) -> Iterable[str]:
         """Snapshot every known document ID (for prefix/UUID resolution)."""

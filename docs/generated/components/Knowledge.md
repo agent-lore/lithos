@@ -34,7 +34,7 @@ The corpus owner: Markdown note CRUD with frontmatter, plus reconcile of derived
 
 ## Dependencies
 
-- Depends on: [Codec](Codec.md), [Config](Config.md), [Errors](Errors.md), [Graph](Graph.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
+- Depends on: [Codec](Codec.md), [Config](Config.md), [Errors](Errors.md), [Graph](Graph.md), [IdResolution](IdResolution.md), [Provenance](Provenance.md), [Search](Search.md), [Telemetry](Telemetry.md)
 - Used by: [CognitiveMemory](CognitiveMemory.md), [Coordination](Coordination.md), [Entrypoints](Entrypoints.md), [Intake](Intake.md), [LCMA](LCMA.md)
 
 ## Data stores

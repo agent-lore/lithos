@@ -130,6 +130,7 @@ source_modules = [
     "lithos._merge",
     "lithos.edge_store",
     "lithos.frontmatter_codec",
+    "lithos.id_resolution",
     "lithos.logging_config",
     "lithos.async_sqlite_store",
 ]
@@ -165,6 +166,7 @@ source_modules = [
     "lithos.errors",
     "lithos.envelopes",
     "lithos.events",
+    "lithos.id_resolution",
     "lithos.logging_config",
     "lithos.async_sqlite_store",
 ]

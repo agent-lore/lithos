@@ -4,9 +4,9 @@ import inspect
 
 import pytest
 
-from lithos.errors import CoordinationError
+from lithos.errors import AmbiguousIdPrefixError, CoordinationError
 from lithos.telemetry import tool_metrics
-from lithos.tools._seam import tool_span
+from lithos.tools._seam import resolve_note_id, tool_span
 
 
 class TestToolSpan:
@@ -39,6 +39,23 @@ class TestToolSpan:
         with pytest.raises(CoordinationError):
             await lithos_demo()
 
+    @pytest.mark.parametrize("map_flag", [True, False])
+    async def test_ambiguous_id_prefix_maps_under_both_flag_values(self, map_flag: bool):
+        """AmbiguousIdPrefixError maps unconditionally — note tools use the
+        bare seam, task tools the mapping one, and both must envelope it."""
+        candidates = [{"id": "aaaa-1", "title": "one"}, {"id": "aaaa-2", "title": "two"}]
+
+        @tool_span(map_coordination_error=map_flag)
+        async def lithos_demo() -> dict:
+            """Demo."""
+            raise AmbiguousIdPrefixError("task", "aaaa", candidates, field="task_id")
+
+        result = await lithos_demo()
+        assert result["status"] == "error"
+        assert result["code"] == "ambiguous_id_prefix"
+        assert result["candidates"] == candidates
+        assert "task_id" in result["message"]
+
     async def test_other_exceptions_propagate_even_with_mapping(self):
         @tool_span(map_coordination_error=True)
         async def lithos_demo() -> dict:
@@ -61,6 +78,22 @@ class TestToolSpan:
         assert stacked.__name__ == "lithos_demo"
         assert stacked.__doc__ == "Docstring is the MCP tool description."
         assert list(inspect.signature(stacked).parameters) == ["title", "content", "agent"]
+
+    async def test_resolve_note_id_maps_failures_and_returns_pair(self):
+        class _FakeKnowledge:
+            def resolve_id(self, raw: str) -> tuple[str, str]:
+                if raw == "toosh":
+                    raise ValueError("id 'toosh' is too short")
+                if raw == "missing-prefix":
+                    raise FileNotFoundError("Document not found: missing-prefix")
+                return "resolved-full-id", "A Title"
+
+        knowledge = _FakeKnowledge()
+        assert resolve_note_id(knowledge, "found-") == ("resolved-full-id", "A Title")
+        too_short = resolve_note_id(knowledge, "toosh")
+        assert isinstance(too_short, dict) and too_short["code"] == "invalid_input"
+        missing = resolve_note_id(knowledge, "missing-prefix", not_found_code="note_not_found")
+        assert isinstance(missing, dict) and missing["code"] == "note_not_found"
 
     async def test_mapped_coordination_error_not_counted_as_tool_error(self, monkeypatch):
         """The stack order contract: tool_span sits below tool_metrics, so a

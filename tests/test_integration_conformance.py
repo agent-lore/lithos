@@ -110,7 +110,12 @@ class TestMCPToolContracts:
         delete_payload = await call_tool(
             server, "lithos_delete", {"id": doc_id, "agent": "test-agent"}
         )
-        assert delete_payload == {"success": True}
+        assert delete_payload == {
+            "success": True,
+            "id": doc_id,
+            "title": "Conformance Doc",
+            "path": write_payload["path"],
+        }
 
     @pytest.mark.asyncio
     async def test_write_path_collision_envelope_contract(self, server: LithosServer):

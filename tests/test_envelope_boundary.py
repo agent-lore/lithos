@@ -16,12 +16,14 @@ pytestmark = pytest.mark.integration
 
 class TestCanonicalEnvelopeAtBoundary:
     async def test_task_get_not_found_exact_payload_and_key_order(self, server: LithosServer):
-        result = await call_tool(server, "lithos_task_get", {"task_id": "ghost"})
+        # Full-length id: passes through prefix resolution untouched (83257ced).
+        ghost = "eeeeeeee-0000-4000-8000-000000000000"
+        result = await call_tool(server, "lithos_task_get", {"task_id": ghost})
 
         assert result == {
             "status": "error",
             "code": "task_not_found",
-            "message": "Task 'ghost' not found.",
+            "message": f"Task '{ghost}' not found.",
         }
         assert list(result) == ["status", "code", "message"]
 

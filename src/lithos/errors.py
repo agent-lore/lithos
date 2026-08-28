@@ -123,6 +123,43 @@ class CoordinationError(LithosError):
         super().__init__(message)
 
 
+class AmbiguousIdPrefixError(LithosError):
+    """A short id prefix matched more than one task or note (task 83257ced).
+
+    Deliberately NOT a ``CoordinationError`` subclass: it is raised from both
+    the coordination and knowledge resolvers, and the tool seam maps it
+    unconditionally — subclassing would make the mapping depend on
+    ``except``-clause ordering. Never resolved silently; the caller must
+    retry with a longer prefix or a full id from ``candidates``.
+
+    Attributes:
+        kind: ``"task"`` or ``"note"`` — the namespace searched.
+        prefix: The ambiguous prefix as supplied.
+        candidates: Capped list of ``{"id": ..., "title": ...}`` matches.
+        field: Parameter name the prefix arrived in (e.g. ``from_task_id``).
+    """
+
+    def __init__(
+        self,
+        kind: str,
+        prefix: str,
+        candidates: list[dict[str, str]],
+        *,
+        field: str | None = None,
+    ) -> None:
+        self.kind = kind
+        self.prefix = prefix
+        self.candidates = candidates
+        self.field = field
+        where = f" ({field})" if field else ""
+        self.message = (
+            f"{kind.capitalize()} id prefix '{prefix}'{where} is ambiguous: "
+            f"{len(candidates)} or more matches. Retry with a longer prefix or a "
+            f"full id from candidates."
+        )
+        super().__init__(self.message)
+
+
 class CognitiveMemoryError(LithosError):
     """Base error for any failure originating inside CognitiveMemory.
 

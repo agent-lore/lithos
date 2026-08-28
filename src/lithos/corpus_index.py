@@ -43,6 +43,7 @@ from lithos.frontmatter_codec import (
     normalize_yaml_dates,
     slugify,
 )
+from lithos.id_resolution import PrefixIndex
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,8 @@ class CorpusIndex:
 
     def __init__(self) -> None:
         self._id_to_path: dict[str, Path] = {}
+        # Sorted mirror of _id_to_path's keys for short-prefix lookup (83257ced).
+        self._id_prefixes = PrefixIndex()
         self._path_to_id: dict[Path, str] = {}
         self._slug_to_id: dict[str, str] = {}
         self._source_url_to_id: dict[str, str] = {}
@@ -431,6 +434,7 @@ class CorpusIndex:
         referenced ``doc_id`` before it existed.
         """
         self._id_to_path[doc_id] = cached.path
+        self._id_prefixes.add(doc_id)
         self._path_to_id[cached.path] = doc_id
         self._slug_to_id[slugify(title)] = doc_id
         if norm_url is not None:
@@ -459,6 +463,7 @@ class CorpusIndex:
     def remove_document(self, doc_id: str) -> None:
         """Remove a document from every index (id/path/slug/title/provenance/cache)."""
         old_path = self._id_to_path.pop(doc_id, None)
+        self._id_prefixes.discard(doc_id)
         if old_path is not None:
             self._path_to_id.pop(old_path, None)
         self._slug_to_id = {k: v for k, v in self._slug_to_id.items() if v != doc_id}
@@ -490,6 +495,7 @@ class CorpusIndex:
         if old_path is not None:
             self._path_to_id.pop(old_path, None)
         self._id_to_path[doc_id] = rel_path
+        self._id_prefixes.add(doc_id)  # idempotent; watcher-discovered ids arrive here
         self._path_to_id[rel_path] = doc_id
 
     def reroute_slug_for(self, doc_id: str, new_slug: str) -> None:
@@ -597,6 +603,8 @@ class CorpusIndex:
                 (doc_id, derived_from if isinstance(derived_from, list) else [])
             )
 
+        self._id_prefixes.rebuild(self._id_to_path)
+
         # Pass 2: normalize and classify provenance now that all ids are known.
         for doc_id, source_ids in deferred_provenance:
             normalized_ids = normalize_derived_from_ids_lenient(source_ids, self_id=doc_id)
@@ -675,6 +683,10 @@ class CorpusIndex:
     def iter_doc_ids(self) -> Iterable[str]:
         """Snapshot every known document id."""
         return list(self._id_to_path)
+
+    def match_id_prefix(self, prefix: str, limit: int) -> list[str]:
+        """Up to ``limit`` doc ids starting with ``prefix`` (sorted, sub-linear)."""
+        return self._id_prefixes.match(prefix, limit=limit)
 
     def id_by_source_url(self, norm_url: str) -> str | None:
         """Get document id owning a normalized source URL."""

@@ -376,3 +376,50 @@ def test_rebuild_survives_date_mapping_keys_and_mixed_key_types():
     assert idx.has_document("M")
     cached = idx.get_cached_meta("K")
     assert cached is not None and cached.extra["custom"] == {"2026-07-30": "value"}
+
+
+# ---------------------------------------------------------------------------
+# match_id_prefix — the sorted id mirror behind note prefix resolution (83257ced)
+# ---------------------------------------------------------------------------
+
+
+def test_match_id_prefix_after_add_and_remove():
+    idx = CorpusIndex()
+    _add(idx, "aaaa-1", title="One")
+    _add(idx, "aaaa-2", title="Two")
+    _add(idx, "bbbb-1", title="Three")
+
+    assert idx.match_id_prefix("aaaa", 5) == ["aaaa-1", "aaaa-2"]
+    assert idx.match_id_prefix("aaaa", 1) == ["aaaa-1"]
+
+    idx.remove_document("aaaa-1")
+    assert idx.match_id_prefix("aaaa", 5) == ["aaaa-2"]
+
+
+def test_match_id_prefix_covers_watcher_set_path_ids():
+    """A hand-authored file's new id arrives via set_path, not add_document —
+    the prefix mirror must still pick it up (and stay idempotent on renames)."""
+    idx = CorpusIndex()
+    idx.set_path("cccc-9", Path("hand-authored.md"))
+    idx.set_path("cccc-9", Path("renamed.md"))
+
+    assert idx.match_id_prefix("cccc", 5) == ["cccc-9"]
+
+
+def test_match_id_prefix_after_rebuild_reflects_only_the_scan():
+    idx = CorpusIndex()
+    _add(idx, "dddd-1", title="Stale")
+
+    idx.rebuild(
+        [
+            ScannedNote(
+                doc_id="eeee-1",
+                title="Fresh",
+                frontmatter={"title": "Fresh"},
+                rel_path=Path("fresh.md"),
+            )
+        ]
+    )
+
+    assert idx.match_id_prefix("dddd", 5) == []
+    assert idx.match_id_prefix("eeee", 5) == ["eeee-1"]

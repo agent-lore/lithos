@@ -15,7 +15,7 @@ from lithos.envelopes import error_envelope, invalid_input_envelope
 from lithos.errors import SearchBackendError
 from lithos.frontmatter_codec import normalize_datetime, validate_metadata_match
 from lithos.telemetry import get_current_span, tool_metrics
-from lithos.tools._seam import tool_span
+from lithos.tools._seam import resolve_note_id, tool_span
 
 if TYPE_CHECKING:
     from lithos.server import LithosServer
@@ -46,7 +46,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         """Read a knowledge file by ID or path.
 
         Args:
-            id: UUID of knowledge item
+            id: UUID of knowledge item (or unambiguous >= 6-char prefix)
             path: File path relative to knowledge/
             max_length: Truncate content to N characters
             agent_id: Caller identity for audit logging (optional)
@@ -55,6 +55,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             Dict with id, title, content, metadata, links, truncated,
             retrieval_count
         """
+        if id is not None:
+            resolved = resolve_note_id(server.knowledge, id)
+            if isinstance(resolved, dict):
+                return resolved
+            id, _ = resolved
         logger.info("lithos_read id=%s path=%s", id, path)
         span = get_current_span()
         if id:
@@ -296,7 +301,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             namespace_filter: Restrict to these namespaces
             agent_id: Caller identity for access-scope gating and audit
             task_id: Task context — activates task_context scout and
-                working-memory tracking
+                working-memory tracking. An unambiguous >= 6-char prefix of
+                an existing task resolves to its full id before retrieval
+                (access-scope filtering, findings, and working memory compare
+                exact ids); other values are used as given
             surface_conflicts: Reserved for MVP 2 contradiction surfacing
             max_context_nodes: Provenance seed count (defaults to limit)
             tags: Filter by tags (AND semantics)
@@ -330,6 +338,9 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         if not server._config.lcma.enabled:
             logger.warning("lithos_retrieve: LCMA is disabled")
             return error_envelope("lcma_disabled", "LCMA is disabled via configuration")
+
+        if task_id is not None:
+            task_id = await server.coordination.resolve_task_id_lenient(task_id)
 
         result = await server.memory.retrieve(
             query=query,
@@ -583,7 +594,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         express filters like ``type`` alone or ``to_id`` alone.
 
         Args:
-            id: Document UUID.
+            id: Document UUID (or unambiguous >= 6-char prefix).
             include: Subset of ``["links", "provenance", "edges"]`` to
                 populate. Defaults to all three. Unknown values are
                 silently ignored so forward-compatible callers don't
@@ -613,15 +624,16 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             deduped union of every id referenced across the included
             sections — sorted for determinism.
         """
+        resolved = resolve_note_id(server.knowledge, id)
+        if isinstance(resolved, dict):
+            return resolved
+        id, _ = resolved
         logger.info(
             "lithos_related: called",
             extra={"id": id, "include": include, "depth": depth, "namespace": namespace},
         )
         span = get_current_span()
         span.set_attribute("lithos.id", id)
-
-        if not server.knowledge.has_document(id):
-            return error_envelope("doc_not_found", f"Document not found: {id}")
 
         requested = include if include is not None else list(_RELATED_INCLUDES)
         selected = [k for k in _RELATED_INCLUDES if k in requested]
@@ -719,13 +731,18 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         """View a note's salience score, retrieval stats, and penalty counts.
 
         Args:
-            node_id: The document ID to look up stats for
+            node_id: The document ID to look up stats for (full id or
+                unambiguous >= 6-char prefix)
 
         Returns:
             Dict with salience, retrieval_count, cited_count, ignored_count,
             misleading_count, and other stats fields.
             Returns error envelope if node_id does not match any known document.
         """
+        resolved = resolve_note_id(server.knowledge, node_id)
+        if isinstance(resolved, dict):
+            return resolved
+        node_id, _ = resolved
         logger.info("lithos_node_stats node_id=%s", node_id)
         span = get_current_span()
         span.set_attribute("lithos.node_id", node_id)

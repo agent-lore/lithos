@@ -23,6 +23,7 @@ graph TD
     Config
     Errors
     Events
+    IdResolution
     Logging
     SqliteStore
     Telemetry
@@ -35,6 +36,7 @@ graph TD
   click Errors "components/Errors.md"
   click Events "components/Events.md"
   click Graph "components/Graph.md"
+  click IdResolution "components/IdResolution.md"
   click Intake "components/Intake.md"
   click Knowledge "components/Knowledge.md"
   click LCMA "components/LCMA.md"
@@ -58,6 +60,7 @@ graph TD
   Config --> Errors
   Coordination --> Config
   Coordination --> Errors
+  Coordination --> IdResolution
   Coordination --> Knowledge
   Coordination --> Telemetry
   Entrypoints --> Codec
@@ -91,6 +94,7 @@ graph TD
   Knowledge --> Config
   Knowledge --> Errors
   Knowledge --> Graph
+  Knowledge --> IdResolution
   Knowledge --> Provenance
   Knowledge --> Search
   Knowledge --> Telemetry
@@ -122,32 +126,34 @@ graph TD
   linkStyle 12 stroke:#bbb
   linkStyle 13 stroke:#bbb
   linkStyle 14 stroke:#bbb
-  linkStyle 16 stroke:#bbb
-  linkStyle 19 stroke:#999,stroke-dasharray:4
-  linkStyle 21 stroke:#999,stroke-dasharray:4
+  linkStyle 15 stroke:#bbb
+  linkStyle 17 stroke:#bbb
+  linkStyle 20 stroke:#999,stroke-dasharray:4
   linkStyle 22 stroke:#999,stroke-dasharray:4
-  linkStyle 26 stroke:#999,stroke-dasharray:4
-  linkStyle 29 stroke:#999,stroke-dasharray:4
-  linkStyle 30 stroke:#bbb
+  linkStyle 23 stroke:#999,stroke-dasharray:4
+  linkStyle 27 stroke:#999,stroke-dasharray:4
+  linkStyle 30 stroke:#999,stroke-dasharray:4
   linkStyle 31 stroke:#bbb
-  linkStyle 33 stroke:#bbb
+  linkStyle 32 stroke:#bbb
   linkStyle 34 stroke:#bbb
   linkStyle 35 stroke:#bbb
-  linkStyle 38 stroke:#bbb
+  linkStyle 36 stroke:#bbb
   linkStyle 39 stroke:#bbb
-  linkStyle 43 stroke:#bbb
-  linkStyle 45 stroke:#bbb
+  linkStyle 40 stroke:#bbb
+  linkStyle 44 stroke:#bbb
   linkStyle 46 stroke:#bbb
-  linkStyle 50 stroke:#bbb
+  linkStyle 47 stroke:#bbb
+  linkStyle 49 stroke:#bbb
   linkStyle 52 stroke:#bbb
   linkStyle 54 stroke:#bbb
-  linkStyle 55 stroke:#bbb
-  linkStyle 61 stroke:#bbb
-  linkStyle 62 stroke:#bbb
+  linkStyle 56 stroke:#bbb
+  linkStyle 57 stroke:#bbb
+  linkStyle 63 stroke:#bbb
   linkStyle 64 stroke:#bbb
   linkStyle 66 stroke:#bbb
-  linkStyle 67 stroke:#bbb
+  linkStyle 68 stroke:#bbb
   linkStyle 69 stroke:#bbb
-  linkStyle 70 stroke:#bbb
   linkStyle 71 stroke:#bbb
+  linkStyle 72 stroke:#bbb
+  linkStyle 73 stroke:#bbb
 ```
