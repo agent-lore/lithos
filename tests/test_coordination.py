@@ -1177,6 +1177,18 @@ class TestListTasks:
         assert "resolved_at" in by_id[done_id]
         assert by_id[done_id]["resolved_at"] is not None
 
+    @pytest.mark.asyncio
+    async def test_list_tasks_returns_updated_at_key(
+        self, coordination_service: CoordinationService
+    ):
+        """list_tasks payload exposes updated_at (#415), as the raw stored string."""
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Stamped", agent="agent", now=t0)
+
+        tasks = await coordination_service.list_tasks()
+        by_id = {t["id"]: t for t in tasks}
+        assert by_id[task_id]["updated_at"] == t0.isoformat()
+
 
 class TestCoordinationStats:
     """Tests for coordination statistics."""
@@ -1589,6 +1601,208 @@ class TestTaskOutcomeMigration:
             row = await cursor.fetchone()
         assert row is not None
         assert row[0] == 7
+
+    @pytest.mark.asyncio
+    async def test_migration_adds_and_backfills_updated_at(self, tmp_path):
+        """A pre-#415 DB gains updated_at, backfilled per row and idempotently.
+
+        Open rows backfill to created_at; terminal rows to resolved_at — the
+        last write the store can still attest to. A second initialize() must
+        not re-backfill (the backfill is tied to the column-add branch).
+        """
+        db_path = tmp_path / "coordination.db"
+
+        created = "2025-04-01T08:00:00+00:00"
+        resolved = "2025-04-02T09:00:00+00:00"
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSON,
+                    outcome TEXT,
+                    resolved_at TIMESTAMP,
+                    metadata JSON
+                )
+                """
+            )
+            await db.execute(
+                "INSERT INTO tasks (id, title, status, created_by, created_at) "
+                "VALUES (?, ?, 'open', ?, ?)",
+                ("open-task", "Open", "old-agent", created),
+            )
+            await db.execute(
+                "INSERT INTO tasks (id, title, status, created_by, created_at, resolved_at) "
+                "VALUES (?, ?, 'completed', ?, ?, ?)",
+                ("done-task", "Done", "old-agent", created, resolved),
+            )
+            await db.commit()
+
+        config = LithosConfig(storage=StorageConfig(data_dir=tmp_path))
+        service = CoordinationService(config=config)
+        service._db_path = db_path
+        await service.initialize()
+
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("PRAGMA table_info(tasks)")
+            columns = {row[1] for row in await cursor.fetchall()}
+        assert "updated_at" in columns
+
+        open_task = await service.get_task("open-task")
+        assert open_task is not None
+        assert open_task.updated_at == open_task.created_at
+
+        done_task = await service.get_task("done-task")
+        assert done_task is not None
+        assert done_task.updated_at == done_task.resolved_at
+
+        # Idempotency: a fresh initialize() must not touch the stamps again.
+        service2 = CoordinationService(config=config)
+        service2._db_path = db_path
+        await service2.initialize()
+        open_task = await service.get_task("open-task")
+        assert open_task is not None
+        assert open_task.updated_at == open_task.created_at
+
+
+class TestUpdatedAtStamp:
+    """updated_at bumps on every task-row write and nothing else (#415)."""
+
+    @pytest.mark.asyncio
+    async def test_create_sets_updated_at_equal_to_created_at(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(title="Fresh", agent="agent")
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at is not None
+        assert task.updated_at == task.created_at
+
+    @pytest.mark.asyncio
+    async def test_now_parameter_is_persisted_verbatim(
+        self, coordination_service: CoordinationService
+    ):
+        """The caller-supplied write timestamp round-trips exactly.
+
+        This is the property the tool layer's response echo relies on: the
+        echoed stamp must be byte-identical to what a subsequent read returns.
+        """
+        t0 = datetime(2025, 5, 1, 10, 0, 0, 123456, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Pinned", agent="agent", now=t0)
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t0
+        assert task.updated_at.isoformat() == t0.isoformat()
+
+    @pytest.mark.asyncio
+    async def test_update_title_bumps_updated_at(self, coordination_service: CoordinationService):
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Before", agent="agent", now=t0)
+        assert await coordination_service.update_task(task_id, "agent", title="After", now=t1)
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t1
+
+    @pytest.mark.asyncio
+    async def test_metadata_only_merge_bumps_updated_at(
+        self, coordination_service: CoordinationService
+    ):
+        """The #415 core case: a metadata-only edit is visible in the stamp."""
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Meta", agent="agent", now=t0)
+        assert await coordination_service.update_task(
+            task_id, "agent", metadata={"develop_image": "img:1"}, now=t1
+        )
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t1
+
+    @pytest.mark.asyncio
+    async def test_empty_metadata_merge_bumps_updated_at(
+        self, coordination_service: CoordinationService
+    ):
+        """metadata={} changes no keys but still writes the row, so it bumps."""
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Empty", agent="agent", now=t0)
+        assert await coordination_service.update_task(task_id, "agent", metadata={}, now=t1)
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t1
+
+    @pytest.mark.asyncio
+    async def test_noop_update_does_not_bump(self, coordination_service: CoordinationService):
+        """An all-None update writes nothing and leaves the stamp untouched."""
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Noop", agent="agent", now=t0)
+        assert await coordination_service.update_task(task_id, "agent", now=t1)
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t0
+
+    @pytest.mark.asyncio
+    async def test_complete_sets_updated_at_equal_to_resolved_at(
+        self, coordination_service: CoordinationService
+    ):
+        t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Done", agent="agent")
+        assert await coordination_service.complete_task(task_id, "agent", now=t1)
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t1
+        assert task.updated_at == task.resolved_at
+
+    @pytest.mark.asyncio
+    async def test_cancel_sets_updated_at_equal_to_resolved_at(
+        self, coordination_service: CoordinationService
+    ):
+        t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Gone", agent="agent")
+        assert await coordination_service.cancel_task(task_id, "agent", now=t1)
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t1
+        assert task.updated_at == task.resolved_at
+
+    @pytest.mark.asyncio
+    async def test_reopen_bumps_updated_at(self, coordination_service: CoordinationService):
+        t2 = datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Back", agent="agent")
+        await coordination_service.complete_task(task_id, "agent")
+        await coordination_service.reopen_task(task_id, "agent", now=t2)
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t2
+        assert task.resolved_at is None
+
+    @pytest.mark.asyncio
+    async def test_claim_renew_release_do_not_bump(self, coordination_service: CoordinationService):
+        """Lease operations touch only the claims table — never the stamp.
+
+        Renew heartbeats especially must not churn updated_at, or an
+        edited-since-failure guard would see phantom edits.
+        """
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Leased", agent="agent", now=t0)
+
+        success, _ = await coordination_service.claim_task(
+            task_id=task_id, aspect="work", agent="worker"
+        )
+        assert success
+        await coordination_service.renew_claim(task_id=task_id, aspect="work", agent="worker")
+        await coordination_service.release_claim(task_id=task_id, aspect="work", agent="worker")
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t0
 
 
 class TestTaskMetadata:

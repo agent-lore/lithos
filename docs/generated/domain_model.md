@@ -111,6 +111,7 @@ classDiagram
     +tags list[str]
     +outcome str | None
     +resolved_at datetime | None
+    +updated_at datetime | None
     +metadata dict[str, Any]
   }
   class TaskEdge {
@@ -133,6 +134,7 @@ classDiagram
     +tags list[str]
     +outcome str | None
     +resolved_at datetime | None
+    +updated_at datetime | None
   }
   TaskStatus "1" --> "0..*" Claim : claims
 ```

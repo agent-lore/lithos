@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import FastMCP
@@ -51,6 +52,7 @@ def _serialize_task_record(task: Task | TaskStatus) -> dict[str, Any]:
         "created_by": task.created_by,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "resolved_at": task.resolved_at.isoformat() if task.resolved_at else None,
+        "updated_at": task.updated_at.isoformat() if task.updated_at else None,
         "tags": task.tags,
         "metadata": task.metadata,
         "outcome": task.outcome,
@@ -100,7 +102,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 ``epic`` or a plain ``task``).
 
         Returns:
-            Dict with task_id, title, and the resolved depends_on /
+            Dict with task_id, title, updated_at, and the resolved depends_on /
             parent_task_id when supplied; or an error envelope on validation
             failure.
         """
@@ -116,6 +118,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 (await server.coordination.resolve_task_id(dep, field="depends_on"))[0]
                 for dep in depends_on
             ]
+        now = datetime.now(UTC)
+        updated_at = now.isoformat()
         task_id = await server.coordination.create_task(
             title=title,
             agent=agent,
@@ -125,6 +129,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             task_type=task_type,
             depends_on=depends_on,
             parent_task_id=parent_task_id,
+            now=now,
         )
         span.set_attribute("lithos.task_id", task_id)
 
@@ -132,11 +137,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             LithosEvent(
                 type=TASK_CREATED,
                 agent=agent,
-                payload={"task_id": task_id, "title": title},
+                payload={"task_id": task_id, "title": title, "updated_at": updated_at},
             )
         )
 
-        response: dict[str, Any] = {"task_id": task_id, "title": title}
+        response: dict[str, Any] = {"task_id": task_id, "title": title, "updated_at": updated_at}
         if depends_on is not None:
             response["depends_on"] = depends_on
         if parent_task_id is not None:
@@ -166,8 +171,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         values overwrite the existing value, keys whose value is ``None`` are
         deleted from the existing metadata, and keys not mentioned are preserved.
         To clear a specific key, pass ``{"key": None}``. There is no
-        wholesale-clear affordance — ``metadata={}`` is a no-op that preserves
-        all existing keys.
+        wholesale-clear affordance — ``metadata={}`` preserves all existing keys
+        (though it still writes the row and bumps ``updated_at``).
+
+        Every successful update bumps the task's ``updated_at`` stamp, echoed
+        in the response.
 
         Args:
             task_id: Task ID to update (full id or unambiguous >= 6-char prefix)
@@ -179,7 +187,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 (optional). See merge contract above.
 
         Returns:
-            Dict with success, message, and the resolved task_id + title
+            Dict with success, message, updated_at, and the resolved
+            task_id + title
         """
         if title is None and description is None and tags is None and metadata is None:
             return error_envelope(
@@ -192,6 +201,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.task_id", task_id)
+        now = datetime.now(UTC)
+        updated_at = now.isoformat()
         updated = await server.coordination.update_task(
             task_id=task_id,
             agent=agent,
@@ -199,6 +210,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             description=description,
             tags=tags,
             metadata=metadata,
+            now=now,
         )
         span.set_attribute("lithos.success", updated)
 
@@ -207,7 +219,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 LithosEvent(
                     type=TASK_UPDATED,
                     agent=agent,
-                    payload={"task_id": task_id},
+                    payload={"task_id": task_id, "updated_at": updated_at},
                 )
             )
             return {
@@ -215,6 +227,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 "message": f"Task {task_id} updated",
                 "task_id": task_id,
                 "title": title if title is not None else task_title,
+                "updated_at": updated_at,
             }
         return error_envelope("task_not_found", f"Task {task_id} not found")
 
@@ -395,8 +408,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             receipt_id: Specific receipt to bind feedback to (optional)
 
         Returns:
-            Dict with success, unblocked, and the resolved task_id + title; or
-            error envelope if task not found or not open
+            Dict with success, unblocked, updated_at, and the resolved
+            task_id + title; or error envelope if task not found or not open
         """
         task_id, task_title = await server.coordination.resolve_task_id(task_id)
         outcome_len = len(outcome) if outcome else 0
@@ -431,10 +444,13 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             if error is not None:
                 return error
 
+        now = datetime.now(UTC)
+        updated_at = now.isoformat()
         success = await server.coordination.complete_task(
             task_id=task_id,
             agent=agent,
             outcome=outcome,
+            now=now,
         )
         span.set_attribute("lithos.success", success)
 
@@ -468,6 +484,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                     "cited_nodes": json.dumps(cited_nodes),
                     "misleading_nodes": json.dumps(misleading_nodes),
                     "receipt_id": json.dumps(receipt_id),
+                    "updated_at": updated_at,
                 },
             )
         )
@@ -477,7 +494,13 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         # pick them up without re-polling lithos_task_ready.
         unblocked = await server.coordination.newly_unblocked_by(task_id)
         span.set_attribute("lithos.unblocked_count", len(unblocked))
-        return {"success": True, "unblocked": unblocked, "task_id": task_id, "title": task_title}
+        return {
+            "success": True,
+            "unblocked": unblocked,
+            "task_id": task_id,
+            "title": task_title,
+            "updated_at": updated_at,
+        }
 
     @mcp.tool()
     @tool_metrics()
@@ -495,17 +518,20 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             reason: Optional reason for cancellation
 
         Returns:
-            Dict with success and the resolved task_id + title
+            Dict with success, updated_at, and the resolved task_id + title
         """
         task_id, task_title = await server.coordination.resolve_task_id(task_id)
         logger.info("lithos_task_cancel task=%s agent=%s reason=%s", task_id, agent, reason)
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.task_id", task_id)
+        now = datetime.now(UTC)
+        updated_at = now.isoformat()
         success = await server.coordination.cancel_task(
             task_id=task_id,
             agent=agent,
             reason=reason,
+            now=now,
         )
         span.set_attribute("lithos.success", success)
 
@@ -514,10 +540,20 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 LithosEvent(
                     type=TASK_CANCELLED,
                     agent=agent,
-                    payload={"task_id": task_id, "agent": agent, "reason": reason},
+                    payload={
+                        "task_id": task_id,
+                        "agent": agent,
+                        "reason": reason,
+                        "updated_at": updated_at,
+                    },
                 )
             )
-            return {"success": True, "task_id": task_id, "title": task_title}
+            return {
+                "success": True,
+                "task_id": task_id,
+                "title": task_title,
+                "updated_at": updated_at,
+            }
 
         return error_envelope("task_not_found", f"Task {task_id} not found or already closed")
 
@@ -543,7 +579,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
         Returns:
             ``{"success": true, "reblocked": [...]}`` (plus the resolved
-            task_id + title) — ``reblocked`` lists open
+            task_id + title and the new updated_at) — ``reblocked`` lists open
             dependents this reopen put back under the task's block (non-empty
             only when reopening a *completed* blocker/gate; a cancelled-task
             reopen un-strands dependents and re-blocks no one). On failure,
@@ -555,8 +591,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.task_id", task_id)
+        now = datetime.now(UTC)
+        updated_at = now.isoformat()
         prior_status, prior_outcome = await server.coordination.reopen_task(
-            task_id=task_id, agent=agent
+            task_id=task_id, agent=agent, now=now
         )
         # Durable audit: a queryable finding recording the prior terminal state.
         summary = f"[Reopened] task reopened (was {prior_status})"
@@ -573,12 +611,19 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                     "agent": agent,
                     "prior_status": prior_status,
                     "prior_outcome": prior_outcome,
+                    "updated_at": updated_at,
                 },
             )
         )
         reblocked = await server.coordination.newly_reblocked_by(task_id, prior_status)
         span.set_attribute("lithos.reblocked_count", len(reblocked))
-        return {"success": True, "reblocked": reblocked, "task_id": task_id, "title": task_title}
+        return {
+            "success": True,
+            "reblocked": reblocked,
+            "task_id": task_id,
+            "title": task_title,
+            "updated_at": updated_at,
+        }
 
     @mcp.tool()
     @tool_metrics()
@@ -619,8 +664,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
         Returns:
             Dict with tasks list containing id, title, description, status,
-            created_by, created_at, resolved_at, tags, metadata, outcome,
-            and (when with_claims) claims.
+            created_by, created_at, resolved_at, updated_at, tags, metadata,
+            outcome, and (when with_claims) claims.
         """
         logger.info(
             "lithos_task_list agent=%s status=%s tags=%s since=%s resolved_since=%s with_claims=%s",
@@ -934,9 +979,9 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 contain ``depends_on``/``blocked_on``.
 
         Returns:
-            Dict with task_id, title, and the resolved source_task_id; or an
-            error envelope (unknown source, invalid relation_type, or
-            forbidden metadata key).
+            Dict with task_id, title, updated_at, and the resolved
+            source_task_id; or an error envelope (unknown source, invalid
+            relation_type, or forbidden metadata key).
         """
         source_task_id, _ = await server.coordination.resolve_task_id(
             source_task_id, field="source_task_id"
@@ -950,6 +995,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.relation_type", relation_type)
+        now = datetime.now(UTC)
+        updated_at = now.isoformat()
         task_id = await server.coordination.spawn_task(
             source_task_id=source_task_id,
             title=title,
@@ -960,16 +1007,22 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             inherit_tags=inherit_tags,
             inherit_context=inherit_context,
             metadata=metadata,
+            now=now,
         )
         span.set_attribute("lithos.task_id", task_id)
         await server._emit(
             LithosEvent(
                 type=TASK_CREATED,
                 agent=agent,
-                payload={"task_id": task_id, "title": title},
+                payload={"task_id": task_id, "title": title, "updated_at": updated_at},
             )
         )
-        return {"task_id": task_id, "title": title, "source_task_id": source_task_id}
+        return {
+            "task_id": task_id,
+            "title": title,
+            "source_task_id": source_task_id,
+            "updated_at": updated_at,
+        }
 
     @mcp.tool()
     @tool_metrics()
@@ -985,9 +1038,9 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
         Returns:
             Dict with tasks list containing id, title, description, status,
-            created_by, created_at, resolved_at, tags, metadata, outcome,
-            and claims. Returns an empty tasks list if the task does not
-            exist (mirrors the historical behaviour).
+            created_by, created_at, resolved_at, updated_at, tags, metadata,
+            outcome, and claims. Returns an empty tasks list if the task does
+            not exist (mirrors the historical behaviour).
         """
         task_id, _ = await server.coordination.resolve_task_id(task_id)
         logger.info("lithos_task_status task_id=%s", task_id)
@@ -1032,7 +1085,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
         Returns:
             Dict with task fields (id, title, description, status,
-            created_by, created_at, resolved_at, tags, metadata, outcome).
+            created_by, created_at, resolved_at, updated_at, tags, metadata,
+            outcome).
             Returns the standard error envelope
             ``{status: "error", code: "task_not_found", message: ...}``
             when no task matches.

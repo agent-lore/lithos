@@ -787,7 +787,7 @@ Create a coordination task.
 | `depends_on` | string[] | No | Predecessor task IDs. Each creates a `blocks` edge `predecessor -> this task`, so this task is not ready until every predecessor is `completed`. Predecessors must already exist (else `task_not_found`). A brand-new task has no outgoing edges, so `depends_on` can never form a cycle. |
 | `parent_task_id` | string | No | Optional parent. Creates a `parent_child` edge `parent -> this task` (purely structural; never blocks the child). The parent must exist (else `task_not_found`) and may be any task type. |
 
-**Returns:** `{ task_id: string, title: string }` on success — plus the resolved `depends_on` / `parent_task_id` when supplied — or `{ status: "error", code, message }` on validation failure (codes: `invalid_metadata_key`, `invalid_task_type`, `task_not_found`).
+**Returns:** `{ task_id: string, title: string, updated_at: string }` on success — plus the resolved `depends_on` / `parent_task_id` when supplied — or `{ status: "error", code, message }` on validation failure (codes: `invalid_metadata_key`, `invalid_task_type`, `task_not_found`).
 
 #### `lithos_task_update`
 Update mutable task fields.
@@ -802,13 +802,13 @@ Update mutable task fields.
 | `tags` | string[] | No | Replacement tags |
 | `metadata` | object | No | Additive per-key merge patch into the existing task metadata dict. See **Behavior** for merge semantics. Must **not** contain `depends_on`/`blocked_on` (rejected with `invalid_metadata_key`); dependencies are task edges. |
 
-**Returns:** `{ success: true, message, task_id: string, title: string }` on success (the resolved full id; `title` reflects a title change in the same call), or `{ status: "error", code, message }` on failure (codes: `invalid_input`, `invalid_metadata_key`, `task_not_found`).
+**Returns:** `{ success: true, message, task_id: string, title: string, updated_at: string }` on success (the resolved full id; `title` reflects a title change in the same call; `updated_at` is the stamp this update wrote), or `{ status: "error", code, message }` on failure (codes: `invalid_input`, `invalid_metadata_key`, `task_not_found`).
 
 **Behavior:**
 - At least one of `title`, `description`, `tags`, or `metadata` must be provided.
 - A `metadata` patch containing `depends_on`/`blocked_on` (any value, including a `null` delete) is rejected — those keys are no longer read, and closing the write path prevents stale scheduler-invisible dependency state being recreated.
 - **Terminal tasks are updatable (#303).** `task_update` works on `completed`/`cancelled` tasks too — useful for annotating an archived task (e.g. a `metadata` snapshot) without reviving it. `task_not_found` now means the task genuinely does not exist. To bring a task back to active work, use `lithos_task_reopen`.
-- `metadata` is applied as an **additive per-key merge**: keys with non-null values overwrite the existing value, keys whose value is `null` are deleted from the existing metadata, and keys not mentioned are preserved. `metadata={}` is a no-op (preserves all existing keys); there is no wholesale-clear affordance. To clear a specific key, pass `{"key": null}`. The merge is performed atomically (single `BEGIN IMMEDIATE` transaction) so concurrent writers updating different keys never clobber each other.
+- `metadata` is applied as an **additive per-key merge**: keys with non-null values overwrite the existing value, keys whose value is `null` are deleted from the existing metadata, and keys not mentioned are preserved. `metadata={}` preserves all existing keys (though it still writes the row and bumps `updated_at`); there is no wholesale-clear affordance. To clear a specific key, pass `{"key": null}`. The merge is performed atomically (single `BEGIN IMMEDIATE` transaction) so concurrent writers updating different keys never clobber each other.
 
 #### `lithos_task_claim`
 Claim an aspect of a task.
@@ -863,9 +863,9 @@ Mark a task as completed.
 | `misleading_nodes` | string[] | No | Optional node IDs the caller found misleading; used for LCMA reinforcement feedback |
 | `receipt_id` | string | No | Optional specific LCMA receipt to bind the feedback to; otherwise the latest receipt for the same `(task_id, agent)` is used |
 
-**Returns:** `{ success: true, unblocked: string[], task_id: string, title: string }` on success, `{ status: "error", code: "task_not_found", message }` if the task does not exist or is not open, or `{ status: "error", code: "receipt_not_found", message }` if feedback references a missing or unrelated receipt. `unblocked` lists task IDs that this completion just made ready (a `blocks` dependent whose last unsatisfied predecessor was this task), so an orchestrator can pick them up without re-polling `lithos_task_ready`.
+**Returns:** `{ success: true, unblocked: string[], task_id: string, title: string, updated_at: string }` on success, `{ status: "error", code: "task_not_found", message }` if the task does not exist or is not open, or `{ status: "error", code: "receipt_not_found", message }` if feedback references a missing or unrelated receipt. `unblocked` lists task IDs that this completion just made ready (a `blocks` dependent whose last unsatisfied predecessor was this task), so an orchestrator can pick them up without re-polling `lithos_task_ready`.
 
-**Behavior:** Sets task status to `completed`, persists `resolved_at = now`, stores `outcome`, and releases all active claims on the task. When `cited_nodes` / `misleading_nodes` are supplied, Lithos validates them against the bound LCMA receipt before completion, then applies reinforcement side effects after the task closes. If no receipt can be found and no explicit `receipt_id` was supplied, the feedback is silently dropped and the task still completes.
+**Behavior:** Sets task status to `completed`, persists `resolved_at = now` (and `updated_at` to the same stamp), stores `outcome`, and releases all active claims on the task. When `cited_nodes` / `misleading_nodes` are supplied, Lithos validates them against the bound LCMA receipt before completion, then applies reinforcement side effects after the task closes. If no receipt can be found and no explicit `receipt_id` was supplied, the feedback is silently dropped and the task still completes.
 
 #### `lithos_task_cancel`
 Cancel a task and release all claims.
@@ -877,9 +877,9 @@ Cancel a task and release all claims.
 | `agent` | string | Yes | Agent cancelling the task |
 | `reason` | string | No | Optional cancellation reason |
 
-**Returns:** `{ success: true, task_id: string, title: string }` on success, or `{ status: "error", code: "task_not_found", message }` on failure.
+**Returns:** `{ success: true, task_id: string, title: string, updated_at: string }` on success, or `{ status: "error", code: "task_not_found", message }` on failure.
 
-**Behavior:** Marks an open task as `cancelled`, persists `resolved_at = now` (dual-write with `lithos_task_complete` so both terminal transitions populate the same timestamp), and deletes all claims on that task. The optional `reason` is accepted by the MCP surface but is not persisted in SQLite.
+**Behavior:** Marks an open task as `cancelled`, persists `resolved_at = now` (dual-write with `lithos_task_complete` so both terminal transitions populate the same timestamp; `updated_at` gets the same stamp), and deletes all claims on that task. The optional `reason` is accepted by the MCP surface but is not persisted in SQLite.
 
 #### `lithos_task_reopen`
 Move a terminal (`completed`/`cancelled`) task back to `open` — the inverse of complete/cancel.
@@ -890,9 +890,9 @@ Move a terminal (`completed`/`cancelled`) task back to `open` — the inverse of
 | `task_id` | string | Yes | Task ID to reopen |
 | `agent` | string | Yes | Agent performing the reopen |
 
-**Returns:** `{ success: true, reblocked: string[], task_id: string, title: string }` on success, or `{ status: "error", code, message }` on failure (codes: `task_not_found`, `task_not_resolved` — the task is already `open`).
+**Returns:** `{ success: true, reblocked: string[], task_id: string, title: string, updated_at: string }` on success, or `{ status: "error", code, message }` on failure (codes: `task_not_found`, `task_not_resolved` — the task is already `open`).
 
-**Behavior:** Sets `status` back to `open`, clears `resolved_at` and `outcome`, posts a durable `[Reopened]` finding recording the prior terminal status, and emits a `task.reopened` event. Claims were already released on complete/cancel, so none are restored. `reblocked` lists the open dependents this reopen put back under the task's block (via `blocks`/`waits_on_gate` edges) — non-empty only when reopening a **completed** blocker/gate (a dependent that was ready is blocked again); reopening a **cancelled** blocker/gate instead *un-strands* its dependents (`blocker_unsatisfiable` → waiting) and re-blocks no one, so `reblocked` is `[]`. This is the remediation for dependents stranded by a cancelled blocker/gate (see Gates / readiness).
+**Behavior:** Sets `status` back to `open`, clears `resolved_at` and `outcome`, bumps `updated_at`, posts a durable `[Reopened]` finding recording the prior terminal status, and emits a `task.reopened` event. Claims were already released on complete/cancel, so none are restored. `reblocked` lists the open dependents this reopen put back under the task's block (via `blocks`/`waits_on_gate` edges) — non-empty only when reopening a **completed** blocker/gate (a dependent that was ready is blocked again); reopening a **cancelled** blocker/gate instead *un-strands* its dependents (`blocker_unsatisfiable` → waiting) and re-blocks no one, so `reblocked` is `[]`. This is the remediation for dependents stranded by a cancelled blocker/gate (see Gates / readiness).
 
 #### `lithos_task_list`
 List tasks with optional filters.
@@ -909,7 +909,7 @@ List tasks with optional filters.
 | `with_claims` | boolean | No | When `true`, each task in the response includes its active (non-expired) claims inline as a `claims` array (same shape as `lithos_task_status`). Defaults to `false`. Use to avoid an N+1 of `lithos_task_status` calls when rendering a list view. |
 | `metadata_match` | object | No | Filter by task metadata. Same semantics as `lithos_list.metadata_match` (AND across keys; stored value equals the query or is a list containing it; scalar query values; type-sensitive). Pushed into SQLite via `json_extract`/`json_each`, so it is engine-evaluated rather than a Python post-scan. Invalid query values return `{ status: "invalid_input", message, warnings: [] }`. |
 
-**Returns:** `{ tasks: [{ id, title, description, status, task_type, created_by, created_at, resolved_at, tags, metadata, outcome }] }`. `resolved_at` is `null` for open tasks (and for historical cancellations from before the dual-write was added). `outcome` is `null` until the task is completed with an outcome. When `with_claims=true`, each task also carries `claims: [{ agent, aspect, expires_at }]`.
+**Returns:** `{ tasks: [{ id, title, description, status, task_type, created_by, created_at, resolved_at, updated_at, tags, metadata, outcome }] }`. `resolved_at` is `null` for open tasks (and for historical cancellations from before the dual-write was added). `outcome` is `null` until the task is completed with an outcome. When `with_claims=true`, each task also carries `claims: [{ agent, aspect, expires_at }]`.
 
 #### `lithos_task_status`
 Get the full record of a task along with its active claims.
@@ -919,7 +919,7 @@ Get the full record of a task along with its active claims.
 |------|------|----------|-------------|
 | `task_id` | string | Yes | Specific task ID |
 
-**Returns:** `{ tasks: [{ id, title, description, status, task_type, created_by, created_at, resolved_at, tags, metadata, outcome, claims: [{ agent, aspect, expires_at }] }] }`. Returns `{ tasks: [] }` when the task does not exist (mirrors historical behaviour — does not return the error envelope). Use `lithos_task_get` when you want a single-task fetch with an explicit not-found envelope and don't need claims.
+**Returns:** `{ tasks: [{ id, title, description, status, task_type, created_by, created_at, resolved_at, updated_at, tags, metadata, outcome, claims: [{ agent, aspect, expires_at }] }] }`. Returns `{ tasks: [] }` when the task does not exist (mirrors historical behaviour — does not return the error envelope). Use `lithos_task_get` when you want a single-task fetch with an explicit not-found envelope and don't need claims.
 
 **Claim expiry handling:** Expired claims (where `expires_at < now()`) are automatically excluded from results. Cleanup is lazy—expired claims are filtered at query time rather than eagerly deleted.
 
@@ -931,7 +931,7 @@ Fetch a single task by ID. Returns the full task record without claims; use `lit
 |------|------|----------|-------------|
 | `task_id` | string | Yes | Task ID |
 
-**Returns (success):** `{ task: { id, title, description, status, task_type, created_by, created_at, resolved_at, tags, metadata, outcome } }`
+**Returns (success):** `{ task: { id, title, description, status, task_type, created_by, created_at, resolved_at, updated_at, tags, metadata, outcome } }`
 
 **Returns (unknown task):** `{ status: "error", code: "task_not_found", message: string }`
 
@@ -1020,7 +1020,7 @@ Create a follow-on task linked to an existing source task.
 | `inherit_context` | boolean | No | Copy scheduling-convention metadata (`priority`, `parallelizable`, `phase`) from the source (default `true`). Forbidden keys are never inherited. |
 | `metadata` | object | No | Extra metadata; overrides inherited keys. Must not contain `depends_on`/`blocked_on`. |
 
-**Returns:** `{ task_id: string, title: string, source_task_id: string }` (the resolved source id), or `{ status: "error", code, message }` (codes: `invalid_relation_type`, `task_not_found`, `invalid_metadata_key`). The spawned task is always `task_type='task'`.
+**Returns:** `{ task_id: string, title: string, source_task_id: string, updated_at: string }` (the resolved source id), or `{ status: "error", code, message }` (codes: `invalid_relation_type`, `task_not_found`, `invalid_metadata_key`). The spawned task is always `task_type='task'`.
 
 #### Gates (Phase 3)
 
@@ -1390,6 +1390,7 @@ CREATE TABLE tasks (
   tags JSON,
   outcome TEXT,                -- free-text summary set by lithos_task_complete
   resolved_at TIMESTAMP,       -- dual-written on both terminal transitions (complete and cancel); NULL while open
+  updated_at TIMESTAMP,        -- last-modified stamp: bumped by every task-row write (#415); never by claims
   metadata JSON
 );
 
@@ -1436,6 +1437,8 @@ CREATE TABLE findings (
 
 **Migration & backfill.** Schema changes are applied as idempotent, column-presence-guarded `ALTER`s at `initialize()` time (no separate migration tool). When `tasks.task_type` is first added to an existing database, a **one-time backfill** runs in the same migration transaction: open tasks' legacy `metadata.depends_on` / `metadata.blocked_on` values become canonical `blocks` edges (marked `{"migrated_from": ...}` in edge metadata), references to nonexistent task IDs are logged and skipped, and any edges that form a cycle are retained (cycle members are excluded from `ready` and surfaced as `cycle` blockers). After the backfill, `task_edges` is the **only** thing the scheduler reads; `metadata.depends_on`/`blocked_on` are no longer read, and writing them via `lithos_task_create`/`lithos_task_update` is rejected so stale scheduler-invisible state cannot be recreated. The backfill is tied to the column-addition branch, so it runs exactly once and is a no-op on fresh databases (which have no legacy dependency metadata).
 
+**`updated_at` (last-modified stamp, #415).** Every write to a task row sets `updated_at`: create (`updated_at = created_at`), any `lithos_task_update` (including a metadata-only merge — even `metadata={}`, which changes no keys but still writes the row), complete/cancel (`updated_at = resolved_at`), and reopen. Claim operations (`claim`/`renew`/`release`) touch only the `claims` table and **never** bump the stamp — a lease heartbeat is not an edit. Consumers detecting "edited since X" should compare stamps for **equality** (record the stamp, later decline iff unchanged), not ordering. Mutating tool responses echo the stamp they wrote, so a writer can record its own post-write stamp without a racy re-read. When the column is first added to an existing database, a one-time backfill (tied to the column-addition branch) sets `updated_at = COALESCE(resolved_at, created_at)` — the last write the store can still attest to.
+
 ---
 
 ## 8. Event System
@@ -1462,13 +1465,13 @@ Lithos includes an in-memory event bus that emits `LithosEvent` on all write, de
 | `note.deleted` | `lithos_delete`, file watcher (delete) | `id`, `path` (tool); `path` (watcher) |
 | `note.renamed` | `WatchIntake.rename_on_disk` (in-corpus rename detected by the watcher) | `id`, `src_path`, `dest_path` |
 | `edge.upserted` | `lithos_edge_upsert` via `CorpusIntake.assert_edge`; also `lithos_conflict_resolve` when it updates a `contradicts` edge | `edge_id`, `from_id`, `to_id`, `type`, `namespace` (assert_edge); `edge_id`, `from_id`, `to_id`, `type`, `conflict_state` (conflict_resolve) |
-| `task.created` | `lithos_task_create` | `task_id`, `title` |
-| `task.updated` | `lithos_task_update` | `task_id` |
+| `task.created` | `lithos_task_create`, `lithos_task_spawn` | `task_id`, `title`, `updated_at` |
+| `task.updated` | `lithos_task_update` | `task_id`, `updated_at` |
 | `task.claimed` | `lithos_task_claim` | `task_id`, `agent`, `aspect` |
 | `task.released` | `lithos_task_release` | `task_id`, `agent`, `aspect` |
-| `task.completed` | `lithos_task_complete` | `task_id`, `agent`, `outcome`, `cited_nodes`, `misleading_nodes`, `receipt_id` |
-| `task.cancelled` | `lithos_task_cancel` | `task_id`, `agent`, `reason` |
-| `task.reopened` | `lithos_task_reopen` | `task_id`, `agent`, `prior_status`, `prior_outcome` |
+| `task.completed` | `lithos_task_complete` | `task_id`, `agent`, `outcome`, `cited_nodes`, `misleading_nodes`, `receipt_id`, `updated_at` |
+| `task.cancelled` | `lithos_task_cancel` | `task_id`, `agent`, `reason`, `updated_at` |
+| `task.reopened` | `lithos_task_reopen` | `task_id`, `agent`, `prior_status`, `prior_outcome`, `updated_at` |
 | `finding.posted` | `lithos_finding_post` | `finding_id`, `task_id`, `agent` |
 | `agent.registered` | `lithos_agent_register` | `agent_id`, `name` |
 
