@@ -8,6 +8,7 @@ from lithos.events import (
     NOTE_CREATED,
     NOTE_DELETED,
     NOTE_UPDATED,
+    TASK_CANCELLED,
     TASK_CLAIMED,
     TASK_COMPLETED,
     TASK_CREATED,
@@ -332,6 +333,61 @@ class TestTaskEventEmission:
         assert result["status"] == "error"
         assert result["code"] == "invalid_input"
         assert queue.empty()
+        server.event_bus.unsubscribe(queue)
+
+    @pytest.mark.asyncio
+    async def test_row_mutating_events_carry_updated_at(self, server: LithosServer) -> None:
+        """#415: created/updated/completed/cancelled/reopened payloads carry the
+        stamp, and event payload == response echo == what task_get then returns."""
+        queue = server.event_bus.subscribe(
+            event_types=[TASK_CREATED, TASK_UPDATED, TASK_COMPLETED, TASK_REOPENED, TASK_CANCELLED]
+        )
+
+        create = await call_tool(server, "lithos_task_create", {"title": "S", "agent": "a"})
+        task_id = create["task_id"]
+        assert queue.get_nowait().payload["updated_at"] == create["updated_at"]
+
+        update = await call_tool(
+            server, "lithos_task_update", {"task_id": task_id, "agent": "a", "metadata": {"k": 1}}
+        )
+        assert queue.get_nowait().payload["updated_at"] == update["updated_at"]
+        got = await call_tool(server, "lithos_task_get", {"task_id": task_id})
+        assert got["task"]["updated_at"] == update["updated_at"]
+
+        complete = await call_tool(
+            server, "lithos_task_complete", {"task_id": task_id, "agent": "a"}
+        )
+        assert queue.get_nowait().payload["updated_at"] == complete["updated_at"]
+        got = await call_tool(server, "lithos_task_get", {"task_id": task_id})
+        assert got["task"]["updated_at"] == complete["updated_at"]
+        assert got["task"]["resolved_at"] == complete["updated_at"]
+
+        reopen = await call_tool(server, "lithos_task_reopen", {"task_id": task_id, "agent": "a"})
+        assert queue.get_nowait().payload["updated_at"] == reopen["updated_at"]
+
+        cancel = await call_tool(server, "lithos_task_cancel", {"task_id": task_id, "agent": "a"})
+        assert queue.get_nowait().payload["updated_at"] == cancel["updated_at"]
+        server.event_bus.unsubscribe(queue)
+
+    @pytest.mark.asyncio
+    async def test_claim_and_release_events_have_no_updated_at(self, server: LithosServer) -> None:
+        """#415: lease operations don't write the task row, so their events carry
+        no stamp — and the task's updated_at is unchanged by claim/release."""
+        create = await call_tool(server, "lithos_task_create", {"title": "L", "agent": "a"})
+        task_id = create["task_id"]
+
+        queue = server.event_bus.subscribe(event_types=[TASK_CLAIMED, TASK_RELEASED])
+        await call_tool(
+            server, "lithos_task_claim", {"task_id": task_id, "aspect": "w", "agent": "a"}
+        )
+        await call_tool(
+            server, "lithos_task_release", {"task_id": task_id, "aspect": "w", "agent": "a"}
+        )
+        assert "updated_at" not in queue.get_nowait().payload
+        assert "updated_at" not in queue.get_nowait().payload
+
+        got = await call_tool(server, "lithos_task_get", {"task_id": task_id})
+        assert got["task"]["updated_at"] == create["updated_at"]
         server.event_bus.unsubscribe(queue)
 
 

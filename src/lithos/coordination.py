@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     tags JSON,
     outcome TEXT,
     resolved_at TIMESTAMP,
+    updated_at TIMESTAMP,
     metadata JSON
 );
 
@@ -251,6 +252,7 @@ class Task:
     tags: list[str] = field(default_factory=list)
     outcome: str | None = None
     resolved_at: datetime | None = None
+    updated_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -318,6 +320,7 @@ class TaskStatus:
     tags: list[str] = field(default_factory=list)
     outcome: str | None = None
     resolved_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass
@@ -454,6 +457,7 @@ def _task_row_to_dict(row: Any) -> dict[str, Any]:
         "created_by": row["created_by"],
         "created_at": row["created_at"],
         "resolved_at": row["resolved_at"] if "resolved_at" in row_keys else None,
+        "updated_at": row["updated_at"] if "updated_at" in row_keys else None,
         "tags": tags,
         "metadata": metadata,
         "outcome": row["outcome"] if "outcome" in row_keys else None,
@@ -533,6 +537,7 @@ class CoordinationService:
             await self._migrate_tasks_ensure_resolved_at(db)
             await self._migrate_tasks_add_metadata(db)
             await self._migrate_tasks_add_task_type(db)
+            await self._migrate_tasks_add_updated_at(db)
             await db.commit()
         logger.info("coordination service initialized: db_path=%s", self.db_path)
 
@@ -670,6 +675,24 @@ class CoordinationService:
             "%d blocks edge(s) from task metadata",
             backfilled,
         )
+
+    @staticmethod
+    async def _migrate_tasks_add_updated_at(db: aiosqlite.Connection) -> None:
+        """Add tasks.updated_at and backfill it for existing rows (#415).
+
+        Backfill is tied to the column-addition branch so it runs exactly once:
+        legacy rows get ``COALESCE(resolved_at, created_at)`` — the last write
+        the store can still attest to. Must run after
+        ``_migrate_tasks_ensure_resolved_at`` so the COALESCE sees the renamed
+        column.
+        """
+        cursor = await db.execute("PRAGMA table_info(tasks)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "updated_at" in columns:
+            return
+        await db.execute("ALTER TABLE tasks ADD COLUMN updated_at TIMESTAMP")
+        await db.execute("UPDATE tasks SET updated_at = COALESCE(resolved_at, created_at)")
+        logger.info("coordination.db migration applied: added and backfilled tasks.updated_at")
 
     @staticmethod
     async def _backfill_task_edges_from_metadata(db: aiosqlite.Connection) -> int:
@@ -911,6 +934,8 @@ class CoordinationService:
         task_type: str = "task",
         depends_on: list[str] | None = None,
         parent_task_id: str | None = None,
+        *,
+        now: datetime | None = None,
     ) -> str:
         """Create a new task.
 
@@ -930,6 +955,8 @@ class CoordinationService:
             parent_task_id: Optional parent. Creates a ``parent_child`` edge
                 ``parent -> this task``. The parent must already exist; it may be
                 any task type (it need not be an ``epic``).
+            now: Write timestamp (defaults to the current time). Callers that
+                echo the stamp pass it in so response == stored value.
 
         Returns:
             Task ID
@@ -957,7 +984,7 @@ class CoordinationService:
         task_id = str(uuid.uuid4())
         tags_json = json.dumps(tags) if tags else None
         metadata_json = json.dumps(metadata) if metadata is not None else None
-        now = _format_datetime(datetime.now(UTC))
+        stamp = _format_datetime(now or datetime.now(UTC))
         # Dedupe and drop a self-reference; a brand-new task has no outgoing
         # edges, so depends_on/parent_task_id can never form a cycle (nothing
         # depends on or descends from it yet).
@@ -989,10 +1016,20 @@ class CoordinationService:
                 """
                 INSERT INTO tasks
                     (id, title, description, status, task_type, created_by, tags,
-                     created_at, metadata)
-                VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?)
+                     created_at, updated_at, metadata)
+                VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)
                 """,
-                (task_id, title, description, task_type, agent, tags_json, now, metadata_json),
+                (
+                    task_id,
+                    title,
+                    description,
+                    task_type,
+                    agent,
+                    tags_json,
+                    stamp,
+                    stamp,
+                    metadata_json,
+                ),
             )
             for pred in predecessors:
                 await db.execute(
@@ -1001,7 +1038,7 @@ class CoordinationService:
                         (from_task_id, to_task_id, type, created_by, created_at)
                     VALUES (?, ?, 'blocks', ?, ?)
                     """,
-                    (pred, task_id, agent, now),
+                    (pred, task_id, agent, stamp),
                 )
             if parent:
                 await db.execute(
@@ -1010,7 +1047,7 @@ class CoordinationService:
                         (from_task_id, to_task_id, type, created_by, created_at)
                     VALUES (?, ?, 'parent_child', ?, ?)
                     """,
-                    (parent, task_id, agent, now),
+                    (parent, task_id, agent, stamp),
                 )
             await db.commit()
 
@@ -1133,6 +1170,7 @@ class CoordinationService:
                 tags=tags,
                 outcome=outcome,
                 resolved_at=_parse_datetime(resolved_at_raw),
+                updated_at=_parse_datetime(row["updated_at"] if "updated_at" in row_keys else None),
                 metadata=task_metadata,
             )
 
@@ -1145,6 +1183,8 @@ class CoordinationService:
         description: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        *,
+        now: datetime | None = None,
     ) -> bool:
         """Update mutable task metadata.
 
@@ -1155,8 +1195,12 @@ class CoordinationService:
 
         ``metadata`` is applied as an additive per-key merge: keys with
         non-null values overwrite, keys whose value is ``None`` are deleted,
-        keys not in the patch are preserved. ``metadata={}`` is a no-op.
-        There is no wholesale-clear affordance (#290).
+        keys not in the patch are preserved. ``metadata={}`` changes no keys
+        but still writes the row (and bumps ``updated_at``). There is no
+        wholesale-clear affordance (#290).
+
+        Every row write also bumps ``updated_at`` (#415); a call where all
+        field arguments are ``None`` writes nothing and bumps nothing.
 
         Returns:
             True if task was found and updated; False if no such task exists
@@ -1184,12 +1228,13 @@ class CoordinationService:
             non_metadata_sets.append("tags = ?")
             non_metadata_params.append(json.dumps(tags))
 
+        stamp = _format_datetime(now or datetime.now(UTC))
         if metadata is None:
             return await self._update_task_fast(
-                task_id, agent, non_metadata_sets, non_metadata_params
+                task_id, agent, non_metadata_sets, non_metadata_params, stamp
             )
         return await self._update_task_with_merge(
-            task_id, agent, non_metadata_sets, non_metadata_params, metadata
+            task_id, agent, non_metadata_sets, non_metadata_params, metadata, stamp
         )
 
     async def _update_task_fast(
@@ -1198,6 +1243,7 @@ class CoordinationService:
         agent: str,
         sets: list[str],
         params: list[Any],
+        stamp: str,
     ) -> bool:
         """Update title/description/tags without touching metadata.
 
@@ -1211,16 +1257,17 @@ class CoordinationService:
                 cursor = await db.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
                 return await cursor.fetchone() is not None
 
-        params_with_id = [*params, task_id]
+        # Log fields from the caller's sets, before the updated_at bump joins.
+        updated_fields = [clause.split(" = ")[0] for clause in sets]
+        params_with_id = [*params, stamp, task_id]
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
+                f"UPDATE tasks SET {', '.join([*sets, 'updated_at = ?'])} WHERE id = ?",
                 params_with_id,
             )
             await db.commit()
             updated = cursor.rowcount > 0
             if updated:
-                updated_fields = [clause.split(" = ")[0] for clause in sets]
                 logger.info(
                     "Task updated: task_id=%s agent=%s fields=%s",
                     task_id,
@@ -1237,6 +1284,7 @@ class CoordinationService:
         non_metadata_sets: list[str],
         non_metadata_params: list[Any],
         metadata_patch: dict[str, Any],
+        stamp: str,
     ) -> bool:
         """Read-merge-write the metadata column inside BEGIN IMMEDIATE.
 
@@ -1269,8 +1317,8 @@ class CoordinationService:
                     merged = _validate_gate_metadata(merged)
                 merged_json = json.dumps(merged)
 
-                sets = [*non_metadata_sets, "metadata = ?"]
-                params = [*non_metadata_params, merged_json, task_id]
+                sets = [*non_metadata_sets, "metadata = ?", "updated_at = ?"]
+                params = [*non_metadata_params, merged_json, stamp, task_id]
                 await db.execute(
                     f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
                     params,
@@ -1298,6 +1346,8 @@ class CoordinationService:
         task_id: str,
         agent: str,
         outcome: str | None = None,
+        *,
+        now: datetime | None = None,
     ) -> bool:
         """Mark task as completed and release all claims.
 
@@ -1307,6 +1357,8 @@ class CoordinationService:
             outcome: Optional free-text completion summary persisted alongside
                 the task. Downstream consolidation (LCMA enrich) can use this
                 as the ``outcome`` slot of the frame extracted from the task.
+            now: Write timestamp (defaults to the current time); becomes both
+                ``resolved_at`` and ``updated_at``.
 
         Returns:
             True if task was completed
@@ -1314,19 +1366,20 @@ class CoordinationService:
         lithos_metrics.coordination_ops.add(1, {"op": "complete"})
         await self.ensure_agent_known(agent)
 
-        now = _format_datetime(datetime.now(UTC))
+        stamp = _format_datetime(now or datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
-            # Update task status, outcome, and resolved_at in a single statement
+            # Update task status, outcome, resolved_at and updated_at in one statement
             cursor = await db.execute(
                 """
                 UPDATE tasks
                    SET status = 'completed',
                        outcome = ?,
-                       resolved_at = ?
+                       resolved_at = ?,
+                       updated_at = ?
                  WHERE id = ? AND status = 'open'
                 """,
-                (outcome, now, task_id),
+                (outcome, stamp, stamp, task_id),
             )
             if cursor.rowcount == 0:
                 return False
@@ -1353,7 +1406,14 @@ class CoordinationService:
             return True
 
     @traced("lithos.coordination.cancel_task")
-    async def cancel_task(self, task_id: str, agent: str, reason: str | None = None) -> bool:
+    async def cancel_task(
+        self,
+        task_id: str,
+        agent: str,
+        reason: str | None = None,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
         """Mark task as cancelled and release all claims.
 
         Returns:
@@ -1362,17 +1422,18 @@ class CoordinationService:
         lithos_metrics.coordination_ops.add(1, {"op": "cancel"})
         await self.ensure_agent_known(agent)
 
-        now = _format_datetime(datetime.now(UTC))
+        stamp = _format_datetime(now or datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
                 UPDATE tasks
                    SET status = 'cancelled',
-                       resolved_at = ?
+                       resolved_at = ?,
+                       updated_at = ?
                  WHERE id = ? AND status = 'open'
                 """,
-                (now, task_id),
+                (stamp, stamp, task_id),
             )
             if cursor.rowcount == 0:
                 return False
@@ -1393,7 +1454,9 @@ class CoordinationService:
             return True
 
     @traced("lithos.coordination.reopen_task")
-    async def reopen_task(self, task_id: str, agent: str) -> tuple[str, str | None]:
+    async def reopen_task(
+        self, task_id: str, agent: str, *, now: datetime | None = None
+    ) -> tuple[str, str | None]:
         """Move a terminal task back to ``open`` (the inverse of complete/cancel).
 
         Clears ``resolved_at`` and ``outcome`` — a reopened task is no longer
@@ -1422,8 +1485,9 @@ class CoordinationService:
                     "task_not_resolved", f"Task '{task_id}' is already open; nothing to reopen."
                 )
             await db.execute(
-                "UPDATE tasks SET status = 'open', resolved_at = NULL, outcome = NULL WHERE id = ?",
-                (task_id,),
+                "UPDATE tasks SET status = 'open', resolved_at = NULL, outcome = NULL, "
+                "updated_at = ? WHERE id = ?",
+                (_format_datetime(now or datetime.now(UTC)), task_id),
             )
             await db.commit()
 
@@ -1670,6 +1734,7 @@ class CoordinationService:
 
                 outcome = task["outcome"] if "outcome" in task_row_keys else None
                 resolved_at_raw = task["resolved_at"] if "resolved_at" in task_row_keys else None
+                updated_at_raw = task["updated_at"] if "updated_at" in task_row_keys else None
 
                 result.append(
                     TaskStatus(
@@ -1685,6 +1750,7 @@ class CoordinationService:
                         tags=task_tags,
                         outcome=outcome,
                         resolved_at=_parse_datetime(resolved_at_raw),
+                        updated_at=_parse_datetime(updated_at_raw),
                     )
                 )
 
@@ -2520,6 +2586,8 @@ class CoordinationService:
         inherit_tags: bool = True,
         inherit_context: bool = True,
         metadata: dict[str, Any] | None = None,
+        *,
+        now: datetime | None = None,
     ) -> str:
         """Create a follow-on task linked to ``source_task_id``.
 
@@ -2561,6 +2629,7 @@ class CoordinationService:
             tags=spawned_tags,
             metadata=merged_meta or None,
             task_type="task",
+            now=now,
         )
         await self.upsert_task_edge(source_task_id, new_id, relation_type, agent)
         logger.info(

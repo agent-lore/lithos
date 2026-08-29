@@ -18,7 +18,7 @@
       },
       "Coordination": {
         "functions_over_10": 5,
-        "max_complexity": 20,
+        "max_complexity": 21,
         "max_function": "lithos.coordination.CoordinationService.create_task"
       },
       "Entrypoints": {
@@ -130,7 +130,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 795
+    "total_functions": 796
   },
   "domain": {
     "associations": 26,
@@ -349,23 +349,23 @@
       },
       "Coordination": {
         "classes": 8,
-        "functions": 63,
+        "functions": 64,
         "largest_module": "lithos.coordination",
-        "largest_module_lines": 2755,
-        "lines": 2755,
+        "largest_module_lines": 2824,
+        "lines": 2824,
         "modules": 1,
         "public_symbols": 8,
-        "sloc": 2323
+        "sloc": 2388
       },
       "Entrypoints": {
         "classes": 5,
         "functions": 141,
         "largest_module": "lithos.tools.tasks",
-        "largest_module_lines": 1049,
-        "lines": 6084,
+        "largest_module_lines": 1103,
+        "lines": 6138,
         "modules": 13,
         "public_symbols": 32,
-        "sloc": 4889
+        "sloc": 4942
       },
       "Errors": {
         "classes": 12,
@@ -489,7 +489,7 @@
       }
     },
     "max_module": "lithos.coordination",
-    "max_module_lines": 2755,
+    "max_module_lines": 2824,
     "modules_over_800": [
       "lithos.cli",
       "lithos.cognitive_memory",
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 25982,
+    "total_lines": 26105,
     "total_modules": 45,
-    "total_sloc": 20893
+    "total_sloc": 21011
   },
   "tests": {
     "ratio": 1.87,
-    "src_lines": 25982,
-    "test_lines": 48536
+    "src_lines": 26105,
+    "test_lines": 48806
   }
 }

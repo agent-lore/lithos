@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Tasks expose `updated_at`, a last-modified stamp bumped by every row write (#415)
+
+Task records now carry `updated_at`, set on create (`= created_at`) and bumped
+by every task-row mutation: any `lithos_task_update` (including metadata-only
+merges — even `metadata={}`, which changes no keys but still writes the row),
+complete/cancel (`= resolved_at`), and reopen. Claim operations
+(claim/renew/release) touch only the claims table and never bump the stamp, so
+lease heartbeats cannot masquerade as edits. The stamp is returned in
+`lithos_task_get`/`lithos_task_list`/`lithos_task_status` (and the ready/
+blocked/children pass-throughs), carried in the row-mutating event payloads
+(`task.created`/`updated`/`completed`/`cancelled`/`reopened` — not
+claimed/released), and echoed in the mutating tool responses so a writer can
+record the exact stamp its own write produced without a racy re-read.
+Consumers detecting "edited since X" compare stamps for equality. Existing
+databases are migrated in place: the column is added at `initialize()` time
+with a one-time backfill of `COALESCE(resolved_at, created_at)`.
+
 ### Short id prefixes accepted everywhere; mutating responses echo the resolved id + title (task 83257ced)
 
 Every tool parameter that takes a task or note id now also accepts an
