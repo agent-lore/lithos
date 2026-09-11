@@ -2584,6 +2584,93 @@ class TestTaskUpdateTool:
         assert result["status"] == "error"
         assert result["code"] == "invalid_input"
 
+    @pytest.mark.asyncio
+    async def test_update_task_cas_conflict_envelope(self, server: LithosServer):
+        """Stale expected_updated_at → version_conflict envelope with the current stamp."""
+        task_id = await server.coordination.create_task(title="CAS", agent="test-agent")
+        task = await server.coordination.get_task(task_id)
+        assert task is not None and task.updated_at is not None
+        stale_token = task.updated_at.isoformat()
+
+        # Another writer moves the task on.
+        first = await self._call_task_update(
+            server, task_id=task_id, agent="writer-a", description="A's edit"
+        )
+        assert first["success"] is True
+
+        result = await self._call_task_update(
+            server,
+            task_id=task_id,
+            agent="writer-b",
+            description="B's edit",
+            expected_updated_at=stale_token,
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "version_conflict"
+        assert result["current_updated_at"] == first["updated_at"]
+
+        task = await server.coordination.get_task(task_id)
+        assert task is not None
+        assert task.description == "A's edit"  # nothing was written
+
+        # Retrying with the echoed stamp succeeds.
+        retry = await self._call_task_update(
+            server,
+            task_id=task_id,
+            agent="writer-b",
+            description="B's edit",
+            expected_updated_at=result["current_updated_at"],
+        )
+        assert retry["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_task_cas_matching_token_succeeds(self, server: LithosServer):
+        """The response's updated_at echo is a valid token for the next edit."""
+        task_id = await server.coordination.create_task(title="Chain", agent="test-agent")
+        first = await self._call_task_update(
+            server, task_id=task_id, agent="test-agent", description="one"
+        )
+        second = await self._call_task_update(
+            server,
+            task_id=task_id,
+            agent="test-agent",
+            description="two",
+            expected_updated_at=first["updated_at"],
+        )
+        assert second["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_task_tag_set_ops(self, server: LithosServer):
+        """add_tags/remove_tags apply as set operations through the tool."""
+        task_id = await server.coordination.create_task(
+            title="Tagged", agent="test-agent", tags=["a", "b"]
+        )
+        result = await self._call_task_update(
+            server,
+            task_id=task_id,
+            agent="test-agent",
+            add_tags=["c", "b"],
+            remove_tags=["a"],
+        )
+        assert result["success"] is True
+        task = await server.coordination.get_task(task_id)
+        assert task is not None
+        assert task.tags == ["b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_update_task_tags_replace_conflicts_with_set_ops(self, server: LithosServer):
+        """tags= (wholesale replace) with add_tags is rejected as invalid_input."""
+        task_id = await server.coordination.create_task(title="X", agent="test-agent")
+        result = await self._call_task_update(
+            server,
+            task_id=task_id,
+            agent="test-agent",
+            tags=["a"],
+            add_tags=["b"],
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+
 
 class TestTaskCancelTool:
     """Tests for lithos_task_cancel MCP tool."""

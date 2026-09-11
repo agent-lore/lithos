@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### `lithos_task_update` gains compare-and-set and tag set operations (task 6dbc3b80)
+
+Two agents that each read a task, think, and write back can no longer
+silently destroy each other's work. `lithos_task_update` accepts an optional
+`expected_updated_at` token — the `updated_at` stamp from a prior read or
+update echo, compared byte-for-byte. On mismatch nothing is written, no
+event is emitted, and the tool returns the canonical error envelope
+`{status: "error", code: "version_conflict", message, current_updated_at}`
+so the caller can retry from the current stamp without re-reading. Without
+the token, behavior is unchanged (last-writer-wins). Note the dialect
+difference from the note side: notes keep their top-level
+`status: "version_conflict"` write outcome; the task-side conflict is an
+error envelope, matching every other task-tool failure.
+
+New `add_tags`/`remove_tags` parameters edit the tag list as set operations
+(append without duplicates, drop removals, preserve order), applied
+read-modify-write under `BEGIN IMMEDIATE` — so incremental tag edits from
+stale reads compose instead of clobbering, which matters now that tags are
+a dispatch mechanism (`trigger:` prefixes). They are mutually exclusive
+with the wholesale `tags` replace and must not overlap each other.
+
 ### Tasks expose `updated_at`, a last-modified stamp bumped by every row write (#415)
 
 Task records now carry `updated_at`, set on create (`= created_at`) and bumped

@@ -1805,6 +1805,284 @@ class TestUpdatedAtStamp:
         assert task.updated_at == t0
 
 
+class TestTaskUpdateOptimisticConcurrency:
+    """expected_updated_at compare-and-set on update_task (task 6dbc3b80).
+
+    The token is the updated_at stamp compared byte-for-byte; on mismatch
+    the row is untouched and version_conflict carries current_updated_at.
+    """
+
+    T0 = datetime(2025, 5, 1, 10, 0, 0, 123456, tzinfo=UTC)
+    T1 = datetime(2025, 5, 1, 11, 0, 0, 654321, tzinfo=UTC)
+    T2 = datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
+
+    async def test_matching_token_updates_fast_path(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(title="CAS", agent="agent", now=self.T0)
+        ok = await coordination_service.update_task(
+            task_id,
+            "agent",
+            title="Edited",
+            expected_updated_at=self.T0.isoformat(),
+            now=self.T1,
+        )
+        assert ok
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.title == "Edited"
+        assert task.updated_at == self.T1
+
+    async def test_stale_token_conflicts_and_leaves_row_untouched(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(
+            title="Original", agent="agent", now=self.T0
+        )
+        assert await coordination_service.update_task(
+            task_id, "writer-a", description="A's edit", now=self.T1
+        )
+
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.update_task(
+                task_id,
+                "writer-b",
+                description="B's edit from a stale read",
+                expected_updated_at=self.T0.isoformat(),
+                now=self.T2,
+            )
+        assert exc_info.value.code == "version_conflict"
+        assert exc_info.value.extra["current_updated_at"] == self.T1.isoformat()
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.description == "A's edit"
+        assert task.updated_at == self.T1
+
+    async def test_matching_token_updates_merge_path(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(title="Meta", agent="agent", now=self.T0)
+        ok = await coordination_service.update_task(
+            task_id,
+            "agent",
+            metadata={"k": "v"},
+            expected_updated_at=self.T0.isoformat(),
+            now=self.T1,
+        )
+        assert ok
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {"k": "v"}
+        assert task.updated_at == self.T1
+
+    async def test_stale_token_conflicts_on_merge_path(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(title="Meta", agent="agent", now=self.T0)
+        assert await coordination_service.update_task(task_id, "agent", title="Moved", now=self.T1)
+
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.update_task(
+                task_id,
+                "agent",
+                metadata={"k": "v"},
+                expected_updated_at=self.T0.isoformat(),
+                now=self.T2,
+            )
+        assert exc_info.value.code == "version_conflict"
+        assert exc_info.value.extra["current_updated_at"] == self.T1.isoformat()
+
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.metadata == {}
+        assert task.updated_at == self.T1
+
+    async def test_unknown_task_returns_false_not_conflict(
+        self, coordination_service: CoordinationService
+    ):
+        """Not-found stays not-found: the CAS token never masks a missing row."""
+        ok = await coordination_service.update_task(
+            "ghost", "agent", title="x", expected_updated_at=self.T0.isoformat()
+        )
+        assert ok is False
+
+    async def test_terminal_transition_invalidates_token(
+        self, coordination_service: CoordinationService
+    ):
+        """complete_task bumps updated_at, so a pre-completion token conflicts."""
+        task_id = await coordination_service.create_task(title="Done", agent="agent", now=self.T0)
+        assert await coordination_service.complete_task(task_id, "agent", now=self.T1)
+
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.update_task(
+                task_id,
+                "agent",
+                description="stale",
+                expected_updated_at=self.T0.isoformat(),
+                now=self.T2,
+            )
+        assert exc_info.value.code == "version_conflict"
+
+        # The post-completion stamp is a valid token (terminal tasks are updatable).
+        assert await coordination_service.update_task(
+            task_id,
+            "agent",
+            description="annotated",
+            expected_updated_at=self.T1.isoformat(),
+            now=self.T2,
+        )
+
+    async def test_noop_update_still_checks_token(self, coordination_service: CoordinationService):
+        """An all-None update writes nothing but a stale token still conflicts."""
+        task_id = await coordination_service.create_task(title="Noop", agent="agent", now=self.T0)
+        with pytest.raises(CoordinationError):
+            await coordination_service.update_task(
+                task_id, "agent", expected_updated_at=self.T1.isoformat()
+            )
+        assert await coordination_service.update_task(
+            task_id, "agent", expected_updated_at=self.T0.isoformat()
+        )
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == self.T0  # still no bump on noop
+
+    async def test_two_writers_from_one_read_second_fails_then_retries(
+        self, coordination_service: CoordinationService
+    ):
+        """The 6dbc3b80 incident scenario, now loud and recoverable."""
+        task_id = await coordination_service.create_task(title="Doc", agent="agent", now=self.T0)
+        token = self.T0.isoformat()
+
+        assert await coordination_service.update_task(
+            task_id, "writer-a", description="A", expected_updated_at=token, now=self.T1
+        )
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.update_task(
+                task_id, "writer-b", description="B", expected_updated_at=token, now=self.T2
+            )
+        current = exc_info.value.extra["current_updated_at"]
+        assert current == self.T1.isoformat()
+
+        # B re-reads (or uses the echoed stamp) and retries successfully.
+        assert await coordination_service.update_task(
+            task_id, "writer-b", description="A\n\nB", expected_updated_at=current, now=self.T2
+        )
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.description == "A\n\nB"
+
+
+class TestTaskTagSetOps:
+    """add_tags/remove_tags set operations on update_task (task 6dbc3b80).
+
+    Applied read-modify-write under BEGIN IMMEDIATE so incremental tag edits
+    from stale reads compose instead of clobbering — load-bearing now that
+    loom dispatches on ``trigger:`` tag prefixes.
+    """
+
+    async def test_add_tags_appends_dedupes_preserves_order(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(
+            title="Tagged", agent="agent", tags=["a", "b"]
+        )
+        assert await coordination_service.update_task(task_id, "agent", add_tags=["b", "c"])
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.tags == ["a", "b", "c"]
+
+    async def test_remove_tags_drops_present_ignores_absent(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(
+            title="Tagged", agent="agent", tags=["a", "b", "c"]
+        )
+        assert await coordination_service.update_task(task_id, "agent", remove_tags=["b", "nope"])
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.tags == ["a", "c"]
+
+    async def test_add_and_remove_in_one_call(self, coordination_service: CoordinationService):
+        task_id = await coordination_service.create_task(
+            title="Tagged", agent="agent", tags=["a", "b"]
+        )
+        assert await coordination_service.update_task(
+            task_id, "agent", add_tags=["c"], remove_tags=["a"]
+        )
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.tags == ["b", "c"]
+
+    async def test_add_tags_on_untagged_task(self, coordination_service: CoordinationService):
+        task_id = await coordination_service.create_task(title="Bare", agent="agent")
+        assert await coordination_service.update_task(task_id, "agent", add_tags=["first"])
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.tags == ["first"]
+
+    async def test_replace_and_set_ops_are_mutually_exclusive(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(title="X", agent="agent")
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.update_task(task_id, "agent", tags=["a"], add_tags=["b"])
+        assert exc_info.value.code == "invalid_input"
+
+    async def test_overlapping_add_and_remove_rejected(
+        self, coordination_service: CoordinationService
+    ):
+        task_id = await coordination_service.create_task(title="X", agent="agent")
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.update_task(
+                task_id, "agent", add_tags=["a", "b"], remove_tags=["b"]
+            )
+        assert exc_info.value.code == "invalid_input"
+
+    async def test_set_ops_bump_updated_at(self, coordination_service: CoordinationService):
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="X", agent="agent", now=t0)
+        assert await coordination_service.update_task(task_id, "agent", add_tags=["t"], now=t1)
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at == t1
+
+    async def test_stale_incremental_edits_compose_without_cas(
+        self, coordination_service: CoordinationService
+    ):
+        """The dispatch-tag scenario: two agents tagging from stale reads both land."""
+        task_id = await coordination_service.create_task(
+            title="Dispatch", agent="agent", tags=["base"]
+        )
+        # Both writers "read" before either wrote; neither passes a token.
+        assert await coordination_service.update_task(
+            task_id, "writer-a", add_tags=["trigger:review"]
+        )
+        assert await coordination_service.update_task(
+            task_id, "writer-b", add_tags=["trigger:docs-sync"]
+        )
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.tags == ["base", "trigger:review", "trigger:docs-sync"]
+
+    async def test_set_ops_respect_cas_token(self, coordination_service: CoordinationService):
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(
+            title="X", agent="agent", tags=["a"], now=t0
+        )
+        assert await coordination_service.update_task(task_id, "agent", add_tags=["b"], now=t1)
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.update_task(
+                task_id, "agent", add_tags=["c"], expected_updated_at=t0.isoformat()
+            )
+        assert exc_info.value.code == "version_conflict"
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.tags == ["a", "b"]
+
+
 class TestTaskMetadata:
     """Tests for metadata JSON field on tasks (#215)."""
 

@@ -130,5 +130,5 @@ lithos_task_renew(task_id: str, aspect: str, agent: str, ttl_minutes: int = 60)
 lithos_task_reopen(task_id: str, agent: str)
 lithos_task_spawn(source_task_id: str, title: str, agent: str, description: str | None = None, relation_type: str = 'discovered_from', inherit_project: bool = True, inherit_tags: bool = True, inherit_context: bool = True, metadata: dict[str, Any] | None = None)
 lithos_task_status(task_id: str)
-lithos_task_update(task_id: str, agent: str, title: str | None = None, description: str | None = None, tags: list[str] | None = None, metadata: dict[str, Any] | None = None)
+lithos_task_update(task_id: str, agent: str, title: str | None = None, description: str | None = None, tags: list[str] | None = None, metadata: dict[str, Any] | None = None, add_tags: list[str] | None = None, remove_tags: list[str] | None = None, expected_updated_at: str | None = None)
 ```

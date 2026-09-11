@@ -12,7 +12,11 @@ Contract under test:
   ``status: "invalid_input"`` dialect.
 * Actionable write outcomes keep their own top-level status —
   ``version_conflict`` (with ``current_version``), ``duplicate``,
-  ``slug_collision``, ``path_collision`` — they are not errors.
+  ``slug_collision``, ``path_collision`` — they are not errors. That
+  dialect is scoped to the note write path (``lithos_write`` /
+  ``lithos_note_update``); the task-side CAS conflict on
+  ``lithos_task_update`` is a canonical error envelope
+  (``code: "version_conflict"`` with ``current_updated_at``).
 """
 
 from typing import Any
@@ -237,6 +241,30 @@ class TestVersionConflictStaysAnOutcome:
         assert isinstance(result["message"], str) and result["message"]
         assert isinstance(result["warnings"], list)
         assert "code" not in result
+
+    async def test_task_update_conflict_is_a_canonical_error(self, server: LithosServer):
+        """Task-side CAS conflicts use the error dialect, not the write-outcome
+        dialect: task tools are canonical-envelope tools, and the top-level
+        ``version_conflict`` status stays scoped to the note write path."""
+        created = await call_tool(server, "lithos_task_create", {"title": "t", "agent": "a"})
+        moved = await call_tool(
+            server,
+            "lithos_task_update",
+            {"task_id": created["task_id"], "agent": "a", "title": "moved"},
+        )
+
+        result = await call_tool(
+            server,
+            "lithos_task_update",
+            {
+                "task_id": created["task_id"],
+                "agent": "a",
+                "title": "stale",
+                "expected_updated_at": created["updated_at"],
+            },
+        )
+        assert_error_envelope(result, code="version_conflict")
+        assert result["current_updated_at"] == moved["updated_at"]
 
 
 class TestGoldenInvalidInputEnvelope:

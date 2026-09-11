@@ -7,6 +7,8 @@ appropriate level of specificity.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class LithosError(Exception):
     """Base error for all Lithos operations."""
@@ -114,12 +116,15 @@ class CoordinationError(LithosError):
 
     Carries a stable ``code`` and human ``message`` so the MCP layer can map it
     onto the standard ``{"status": "error", "code", "message"}`` envelope without
-    re-deriving the reason.
+    re-deriving the reason. ``extra`` carries documented code-specific
+    supplementary envelope keys (e.g. ``current_updated_at`` on
+    ``version_conflict``); it must not name the canonical keys.
     """
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, extra: dict[str, Any] | None = None) -> None:
         self.code = code
         self.message = message
+        self.extra: dict[str, Any] = extra or {}
         super().__init__(message)
 
 

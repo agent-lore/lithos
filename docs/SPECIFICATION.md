@@ -799,13 +799,18 @@ Update mutable task fields.
 | `agent` | string | Yes | Agent making the update |
 | `title` | string | No | Replacement title |
 | `description` | string | No | Replacement description |
-| `tags` | string[] | No | Replacement tags |
+| `tags` | string[] | No | Replacement tags (wholesale replace; prefer `add_tags`/`remove_tags` for incremental edits) |
 | `metadata` | object | No | Additive per-key merge patch into the existing task metadata dict. See **Behavior** for merge semantics. Must **not** contain `depends_on`/`blocked_on` (rejected with `invalid_metadata_key`); dependencies are task edges. |
+| `add_tags` | string[] | No | Tags to add to the current list (set operation; mutually exclusive with `tags`) |
+| `remove_tags` | string[] | No | Tags to remove from the current list (set operation; mutually exclusive with `tags`) |
+| `expected_updated_at` | string | No | Optimistic-concurrency token: the `updated_at` stamp this caller last read. On mismatch nothing is written and `version_conflict` is returned. |
 
-**Returns:** `{ success: true, message, task_id: string, title: string, updated_at: string }` on success (the resolved full id; `title` reflects a title change in the same call; `updated_at` is the stamp this update wrote), or `{ status: "error", code, message }` on failure (codes: `invalid_input`, `invalid_metadata_key`, `task_not_found`).
+**Returns:** `{ success: true, message, task_id: string, title: string, updated_at: string }` on success (the resolved full id; `title` reflects a title change in the same call; `updated_at` is the stamp this update wrote), or `{ status: "error", code, message }` on failure (codes: `invalid_input`, `invalid_metadata_key`, `task_not_found`, `version_conflict` — the latter with `current_updated_at`).
 
 **Behavior:**
-- At least one of `title`, `description`, `tags`, or `metadata` must be provided.
+- At least one of `title`, `description`, `tags`, `metadata`, `add_tags`, or `remove_tags` must be provided.
+- **Optimistic concurrency (task 6dbc3b80).** When `expected_updated_at` is supplied, the update applies only if the stored stamp is **byte-equal** to it (opaque string comparison, never parsed — the round-trip guarantee under `updated_at` in §7 is what makes this sound). On mismatch the row is untouched, no event is emitted, and the tool returns `{ status: "error", code: "version_conflict", message, current_updated_at }`; the caller re-reads (or uses `current_updated_at` directly) and retries. Without the token the historical last-writer-wins behavior is unchanged. Any row write — including complete/cancel/reopen — invalidates an older token.
+- **Tag set operations.** `add_tags`/`remove_tags` are applied read-modify-write inside the same `BEGIN IMMEDIATE` transaction as metadata merges: additions are appended without duplicates, removals dropped, existing order preserved. Two agents editing individual tags from stale reads therefore compose instead of clobbering — the property tag-triggered dispatch relies on. They are mutually exclusive with the wholesale `tags` replace, and the two lists must not overlap (both cases `invalid_input`).
 - A `metadata` patch containing `depends_on`/`blocked_on` (any value, including a `null` delete) is rejected — those keys are no longer read, and closing the write path prevents stale scheduler-invisible dependency state being recreated.
 - **Terminal tasks are updatable (#303).** `task_update` works on `completed`/`cancelled` tasks too — useful for annotating an archived task (e.g. a `metadata` snapshot) without reviving it. `task_not_found` now means the task genuinely does not exist. To bring a task back to active work, use `lithos_task_reopen`.
 - `metadata` is applied as an **additive per-key merge**: keys with non-null values overwrite the existing value, keys whose value is `null` are deleted from the existing metadata, and keys not mentioned are preserved. `metadata={}` preserves all existing keys (though it still writes the row and bumps `updated_at`); there is no wholesale-clear affordance. To clear a specific key, pass `{"key": null}`. The merge is performed atomically (single `BEGIN IMMEDIATE` transaction) so concurrent writers updating different keys never clobber each other.
@@ -1439,6 +1444,8 @@ CREATE TABLE findings (
 
 **`updated_at` (last-modified stamp, #415).** Every write to a task row sets `updated_at`: create (`updated_at = created_at`), any `lithos_task_update` (including a metadata-only merge — even `metadata={}`, which changes no keys but still writes the row), complete/cancel (`updated_at = resolved_at`), and reopen. Claim operations (`claim`/`renew`/`release`) touch only the `claims` table and **never** bump the stamp — a lease heartbeat is not an edit. Consumers detecting "edited since X" should compare stamps for **equality** (record the stamp, later decline iff unchanged), not ordering. Mutating tool responses echo the stamp they wrote, so a writer can record its own post-write stamp without a racy re-read. When the column is first added to an existing database, a one-time backfill (tied to the column-addition branch) sets `updated_at = COALESCE(resolved_at, created_at)` — the last write the store can still attest to.
 
+The stamp doubles as the **optimistic-concurrency token** for `lithos_task_update` (`expected_updated_at`, task 6dbc3b80): because every row write bumps it and the stored TEXT round-trips byte-identically, "the stamp I read is still the stamp stored" is exactly "nobody has written since I read". The comparison is byte-equality on the opaque string — never parsed, never ordered.
+
 ---
 
 ## 8. Event System
@@ -1690,7 +1697,9 @@ Tools indicate routine domain failures through return values, and unexpected bac
 | Unknown 6–35-char task id prefix | `{ status: "error", code: "task_not_found" }` — including on tools whose full-length miss reports `claim_failed` / `claim_not_found` / an empty list |
 | `lithos_write` with unknown `id` | `{ status: "error", code: "note_not_found" }` (was an uncaught protocol-level error before short-id resolution landed) |
 | Slug collision on create/update | `lithos_write` returns `{ status: "error", code: "slug_collision" }` |
-| Optimistic lock mismatch | `lithos_write` returns `{ status: "error", code: "version_conflict", current_version }` |
+| Optimistic lock mismatch (notes) | `lithos_write` / `lithos_note_update` return the actionable write outcome `{ status: "version_conflict", message, warnings, current_version }` — a top-level status, not an error envelope (see §4) |
+| Optimistic lock mismatch (tasks) | `lithos_task_update` with a stale `expected_updated_at` returns `{ status: "error", code: "version_conflict", current_updated_at }` — the canonical error envelope; task tools do not use the write-outcome dialect |
+| `tags` combined with `add_tags`/`remove_tags`, or overlapping set-ops | `lithos_task_update` returns `{ status: "error", code: "invalid_input" }` |
 
 ### 10.3 Short ID Prefixes
 

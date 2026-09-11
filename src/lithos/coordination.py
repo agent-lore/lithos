@@ -1183,7 +1183,10 @@ class CoordinationService:
         description: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
         *,
+        expected_updated_at: str | None = None,
         now: datetime | None = None,
     ) -> bool:
         """Update mutable task metadata.
@@ -1199,19 +1202,47 @@ class CoordinationService:
         but still writes the row (and bumps ``updated_at``). There is no
         wholesale-clear affordance (#290).
 
+        ``add_tags``/``remove_tags`` are set operations against the current
+        tag list (existing order preserved, additions appended, no
+        duplicates) and are mutually exclusive with the wholesale
+        ``tags`` replace. They read-modify-write under ``BEGIN IMMEDIATE``,
+        so concurrent set-ops compose instead of clobbering.
+
+        ``expected_updated_at`` is an optimistic-concurrency token: when
+        provided, the update applies only if the stored ``updated_at`` stamp
+        is byte-equal to it (the stamp is compared as an opaque string, never
+        parsed). On mismatch the row is untouched and ``version_conflict``
+        is raised carrying ``current_updated_at`` so the caller can re-read
+        and retry.
+
         Every row write also bumps ``updated_at`` (#415); a call where all
-        field arguments are ``None`` writes nothing and bumps nothing.
+        field arguments are ``None`` writes nothing and bumps nothing
+        (though ``expected_updated_at`` is still checked).
 
         Returns:
             True if task was found and updated; False if no such task exists
 
         Raises:
             CoordinationError: ``metadata`` contains a forbidden scheduling key
-                (``depends_on``/``blocked_on``).
+                (``depends_on``/``blocked_on``); ``tags`` combined with
+                ``add_tags``/``remove_tags`` or the set-ops overlap
+                (``invalid_input``); ``expected_updated_at`` does not match
+                the stored stamp (``version_conflict``).
         """
         import json
 
         _reject_scheduling_metadata(metadata)
+        if tags is not None and (add_tags is not None or remove_tags is not None):
+            raise CoordinationError(
+                "invalid_input",
+                "tags (wholesale replace) cannot be combined with add_tags/remove_tags",
+            )
+        overlap = set(add_tags or []) & set(remove_tags or [])
+        if overlap:
+            raise CoordinationError(
+                "invalid_input",
+                f"add_tags and remove_tags must be disjoint; both contain: {sorted(overlap)}",
+            )
         lithos_metrics.coordination_ops.add(1, {"op": "update_task"})
         await self.ensure_agent_known(agent)
 
@@ -1229,13 +1260,53 @@ class CoordinationService:
             non_metadata_params.append(json.dumps(tags))
 
         stamp = _format_datetime(now or datetime.now(UTC))
-        if metadata is None:
+        if metadata is None and add_tags is None and remove_tags is None:
             return await self._update_task_fast(
-                task_id, agent, non_metadata_sets, non_metadata_params, stamp
+                task_id,
+                agent,
+                non_metadata_sets,
+                non_metadata_params,
+                stamp,
+                expected_updated_at=expected_updated_at,
             )
         return await self._update_task_with_merge(
-            task_id, agent, non_metadata_sets, non_metadata_params, metadata, stamp
+            task_id,
+            agent,
+            non_metadata_sets,
+            non_metadata_params,
+            metadata,
+            add_tags,
+            remove_tags,
+            stamp,
+            expected_updated_at=expected_updated_at,
         )
+
+    @staticmethod
+    def _version_conflict(task_id: str, expected: str, current: str | None) -> CoordinationError:
+        """Build the ``version_conflict`` error for a failed CAS check.
+
+        Carries ``current_updated_at`` so the caller can re-read-free retry.
+        """
+        return CoordinationError(
+            "version_conflict",
+            f"Task {task_id} was modified since it was read: expected "
+            f"updated_at {expected!r} but current is {current!r}. "
+            f"Re-read the task and retry with the current stamp.",
+            extra={"current_updated_at": current},
+        )
+
+    @classmethod
+    def _check_expected_updated_at(
+        cls, task_id: str, expected: str | None, current: str | None
+    ) -> None:
+        """Raise ``version_conflict`` when a CAS token doesn't match the row.
+
+        Byte-equality on the stored TEXT stamp — the round-trip guarantee
+        (#415) means the value a reader saw is exactly the value stored, so
+        no datetime parsing is involved.
+        """
+        if expected is not None and current != expected:
+            raise cls._version_conflict(task_id, expected, current)
 
     async def _update_task_fast(
         self,
@@ -1244,6 +1315,8 @@ class CoordinationService:
         sets: list[str],
         params: list[Any],
         stamp: str,
+        *,
+        expected_updated_at: str | None = None,
     ) -> bool:
         """Update title/description/tags without touching metadata.
 
@@ -1251,22 +1324,42 @@ class CoordinationService:
         passed only no-op arguments — we still return True/False based on
         whether the task exists, matching the contract of the merge path.
         Terminal tasks (completed/cancelled) are updatable too (#303).
+
+        A caller-supplied ``expected_updated_at`` becomes part of the WHERE
+        clause, so check-and-write is a single atomic statement; a zero
+        rowcount is then disambiguated by one follow-up SELECT into
+        not-found (False) vs ``version_conflict`` (raise).
         """
         if not sets:
             async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
-                return await cursor.fetchone() is not None
+                cursor = await db.execute("SELECT updated_at FROM tasks WHERE id = ?", (task_id,))
+                row = await cursor.fetchone()
+                if row is None:
+                    return False
+                self._check_expected_updated_at(task_id, expected_updated_at, row[0])
+                return True
 
         # Log fields from the caller's sets, before the updated_at bump joins.
         updated_fields = [clause.split(" = ")[0] for clause in sets]
         params_with_id = [*params, stamp, task_id]
+        where = "id = ?"
+        if expected_updated_at is not None:
+            where = "id = ? AND updated_at = ?"
+            params_with_id.append(expected_updated_at)
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                f"UPDATE tasks SET {', '.join([*sets, 'updated_at = ?'])} WHERE id = ?",
+                f"UPDATE tasks SET {', '.join([*sets, 'updated_at = ?'])} WHERE {where}",
                 params_with_id,
             )
             await db.commit()
             updated = cursor.rowcount > 0
+            if not updated and expected_updated_at is not None:
+                cursor = await db.execute("SELECT updated_at FROM tasks WHERE id = ?", (task_id,))
+                row = await cursor.fetchone()
+                if row is not None:
+                    # The CAS predicate missed on a row that exists: a conflict
+                    # by definition, even if the stamp has since drifted back.
+                    raise self._version_conflict(task_id, expected_updated_at, row[0])
             if updated:
                 logger.info(
                     "Task updated: task_id=%s agent=%s fields=%s",
@@ -1283,16 +1376,23 @@ class CoordinationService:
         agent: str,
         non_metadata_sets: list[str],
         non_metadata_params: list[Any],
-        metadata_patch: dict[str, Any],
+        metadata_patch: dict[str, Any] | None,
+        add_tags: list[str] | None,
+        remove_tags: list[str] | None,
         stamp: str,
+        *,
+        expected_updated_at: str | None = None,
     ) -> bool:
-        """Read-merge-write the metadata column inside BEGIN IMMEDIATE.
+        """Read-modify-write metadata merges and tag set-ops inside BEGIN IMMEDIATE.
 
         BEGIN IMMEDIATE acquires the database-level write lock at the start
         of the transaction, so two concurrent callers writing different
         keys cannot both pass the SELECT and then race on the UPDATE — the
         second caller blocks until the first commits, then reads the merged
-        state. This is the property the #290 multi-writer guarantee relies on.
+        state. This is the property the #290 multi-writer guarantee relies on,
+        and it makes tag set-ops compose the same way. The CAS check against
+        ``expected_updated_at`` happens inside the same critical section, so
+        check-and-write is atomic.
         """
         import json
 
@@ -1300,25 +1400,44 @@ class CoordinationService:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 cursor = await db.execute(
-                    "SELECT task_type, metadata FROM tasks WHERE id = ?",
+                    "SELECT task_type, metadata, updated_at, tags FROM tasks WHERE id = ?",
                     (task_id,),
                 )
                 row = await cursor.fetchone()
                 if row is None:
                     await db.execute("ROLLBACK")
                     return False
+                self._check_expected_updated_at(task_id, expected_updated_at, row[2])
 
-                existing = _decode_metadata(row[1])
-                merged = merge_metadata(existing, metadata_patch)
-                # A gate's metadata must stay valid: revalidate (and re-normalize a
-                # timer ready_at) so a patch like {"gate_type": None} can't strip
-                # the gate invariants and spuriously ready its waiters.
-                if row[0] == "gate":
-                    merged = _validate_gate_metadata(merged)
-                merged_json = json.dumps(merged)
+                sets = [*non_metadata_sets]
+                params: list[Any] = [*non_metadata_params]
+                updated_fields = [clause.split(" = ")[0] for clause in non_metadata_sets]
 
-                sets = [*non_metadata_sets, "metadata = ?", "updated_at = ?"]
-                params = [*non_metadata_params, merged_json, stamp, task_id]
+                if metadata_patch is not None:
+                    existing = _decode_metadata(row[1])
+                    merged = merge_metadata(existing, metadata_patch)
+                    # A gate's metadata must stay valid: revalidate (and re-normalize a
+                    # timer ready_at) so a patch like {"gate_type": None} can't strip
+                    # the gate invariants and spuriously ready its waiters.
+                    if row[0] == "gate":
+                        merged = _validate_gate_metadata(merged)
+                    sets.append("metadata = ?")
+                    params.append(json.dumps(merged))
+                    updated_fields.append("metadata")
+
+                if add_tags is not None or remove_tags is not None:
+                    current_tags: list[str] = json.loads(row[3]) if row[3] else []
+                    removals = set(remove_tags or [])
+                    new_tags = [t for t in current_tags if t not in removals]
+                    for tag in add_tags or []:
+                        if tag not in new_tags:
+                            new_tags.append(tag)
+                    sets.append("tags = ?")
+                    params.append(json.dumps(new_tags))
+                    updated_fields.append("tags")
+
+                sets.append("updated_at = ?")
+                params.extend([stamp, task_id])
                 await db.execute(
                     f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
                     params,
@@ -1328,9 +1447,6 @@ class CoordinationService:
                 with contextlib.suppress(Exception):
                     await db.execute("ROLLBACK")
                 raise
-
-        updated_fields = [clause.split(" = ")[0] for clause in non_metadata_sets]
-        updated_fields.append("metadata")
         logger.info(
             "Task updated: task_id=%s agent=%s fields=%s",
             task_id,
