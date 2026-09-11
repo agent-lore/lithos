@@ -364,6 +364,32 @@ def _format_datetime(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _advance_stamp(now_dt: datetime, prior_raw: str | None) -> str:
+    """Committed ``updated_at`` for a row write: wall clock, but strictly
+    after the row's prior stamp.
+
+    Guarantees a write never reuses the stamp it replaces even when the
+    clock repeats or moves backward (#420): committed =
+    ``max(now, prior + 1µs)``. Without this, a guarded update whose wall
+    clock equals the token it consumed would leave the token valid — a
+    second stale writer holding the same token would then also pass CAS.
+
+    A ``prior_raw`` that cannot be parsed (legacy/foreign format) can never
+    byte-equal our ISO output, so the wall clock alone already differs; a
+    naive prior is treated as UTC for the comparison only.
+    """
+    if prior_raw:
+        prior = _parse_datetime(prior_raw)
+        if prior is not None:
+            if prior.tzinfo is None:
+                prior = prior.replace(tzinfo=UTC)
+            now_cmp = now_dt if now_dt.tzinfo is not None else now_dt.replace(tzinfo=UTC)
+            bumped = prior + timedelta(microseconds=1)
+            if bumped > now_cmp:
+                return _format_datetime(bumped)
+    return _format_datetime(now_dt)
+
+
 def _json_path_for_key(key: str) -> str:
     """Build a SQLite JSON path addressing a top-level metadata ``key`` (#306).
 
@@ -538,6 +564,7 @@ class CoordinationService:
             await self._migrate_tasks_add_metadata(db)
             await self._migrate_tasks_add_task_type(db)
             await self._migrate_tasks_add_updated_at(db)
+            await self._migrate_tasks_normalize_updated_at(db)
             await db.commit()
         logger.info("coordination service initialized: db_path=%s", self.db_path)
 
@@ -693,6 +720,44 @@ class CoordinationService:
         await db.execute("ALTER TABLE tasks ADD COLUMN updated_at TIMESTAMP")
         await db.execute("UPDATE tasks SET updated_at = COALESCE(resolved_at, created_at)")
         logger.info("coordination.db migration applied: added and backfilled tasks.updated_at")
+
+    @staticmethod
+    async def _migrate_tasks_normalize_updated_at(db: aiosqlite.Connection) -> None:
+        """Rewrite legacy ``updated_at`` stamps to the canonical serialized form.
+
+        The #415 backfill copied ``created_at``/``resolved_at`` text verbatim,
+        which for SQLite-default timestamps is ``YYYY-MM-DD HH:MM:SS`` — but
+        task serialization parses and re-emits ``datetime.isoformat()``
+        (``T`` separator), so a client reading such a row would hold a token
+        that can never byte-match the stored string and every guarded update
+        would spuriously conflict. Normalizing stored stamps to exactly what
+        serialization emits restores the byte-round-trip the CAS contract
+        relies on (task 6dbc3b80, review finding 2).
+
+        Idempotent by construction (canonical values rewrite to themselves and
+        are skipped); runs on every ``initialize()`` — the tasks table is
+        small and this is startup-only. Unparseable stamps are left alone
+        (they surface via ``_parse_datetime``'s WARNING at read time).
+        """
+        cursor = await db.execute("SELECT id, updated_at FROM tasks WHERE updated_at IS NOT NULL")
+        rows = await cursor.fetchall()
+        normalized = 0
+        for task_id, raw in rows:
+            parsed = _parse_datetime(raw)
+            if parsed is None:
+                continue
+            canonical = _format_datetime(parsed)
+            if canonical != raw:
+                await db.execute(
+                    "UPDATE tasks SET updated_at = ? WHERE id = ?", (canonical, task_id)
+                )
+                normalized += 1
+        if normalized:
+            logger.info(
+                "coordination.db migration applied: normalized %d legacy tasks.updated_at "
+                "stamp(s) to canonical serialized form",
+                normalized,
+            )
 
     @staticmethod
     async def _backfill_task_edges_from_metadata(db: aiosqlite.Connection) -> int:
@@ -1188,7 +1253,7 @@ class CoordinationService:
         *,
         expected_updated_at: str | None = None,
         now: datetime | None = None,
-    ) -> bool:
+    ) -> str | None:
         """Update mutable task metadata.
 
         Only updates fields that are not None (partial update pattern).
@@ -1217,10 +1282,20 @@ class CoordinationService:
 
         Every row write also bumps ``updated_at`` (#415); a call where all
         field arguments are ``None`` writes nothing and bumps nothing
-        (though ``expected_updated_at`` is still checked).
+        (though ``expected_updated_at`` is still checked). Guarded writes
+        and merge-path writes advance the stamp **strictly past** the prior
+        value (``max(now, prior + 1µs)``, #420) so a consumed token can
+        never remain valid even when the wall clock repeats; the committed
+        stamp is the return value, which is why callers must echo the
+        return value rather than the ``now`` they passed. Unguarded
+        fast-path writes (plain title/description/tags replace with no
+        token) stamp the wall clock as before — strict advancement there is
+        #420's remit.
 
         Returns:
-            True if task was found and updated; False if no such task exists
+            The committed ``updated_at`` stamp when the task was found (for
+            an all-``None`` no-op, the stored stamp, unchanged); ``None``
+            if no such task exists.
 
         Raises:
             CoordinationError: ``metadata`` contains a forbidden scheduling key
@@ -1259,14 +1334,14 @@ class CoordinationService:
             non_metadata_sets.append("tags = ?")
             non_metadata_params.append(json.dumps(tags))
 
-        stamp = _format_datetime(now or datetime.now(UTC))
+        now_dt = now or datetime.now(UTC)
         if metadata is None and add_tags is None and remove_tags is None:
             return await self._update_task_fast(
                 task_id,
                 agent,
                 non_metadata_sets,
                 non_metadata_params,
-                stamp,
+                now_dt,
                 expected_updated_at=expected_updated_at,
             )
         return await self._update_task_with_merge(
@@ -1277,7 +1352,7 @@ class CoordinationService:
             metadata,
             add_tags,
             remove_tags,
-            stamp,
+            now_dt,
             expected_updated_at=expected_updated_at,
         )
 
@@ -1314,33 +1389,41 @@ class CoordinationService:
         agent: str,
         sets: list[str],
         params: list[Any],
-        stamp: str,
+        now_dt: datetime,
         *,
         expected_updated_at: str | None = None,
-    ) -> bool:
+    ) -> str | None:
         """Update title/description/tags without touching metadata.
 
         Single UPDATE, no SELECT needed. When ``sets`` is empty the caller
-        passed only no-op arguments — we still return True/False based on
+        passed only no-op arguments — we still report found/missing based on
         whether the task exists, matching the contract of the merge path.
         Terminal tasks (completed/cancelled) are updatable too (#303).
 
         A caller-supplied ``expected_updated_at`` becomes part of the WHERE
         clause, so check-and-write is a single atomic statement; a zero
         rowcount is then disambiguated by one follow-up SELECT into
-        not-found (False) vs ``version_conflict`` (raise).
+        not-found (``None``) vs ``version_conflict`` (raise). On a guarded
+        write the WHERE match proves the prior stamp equals the token, so
+        the committed stamp can advance strictly past it (#420) without a
+        read.
         """
         if not sets:
             async with aiosqlite.connect(self.db_path) as db:
                 cursor = await db.execute("SELECT updated_at FROM tasks WHERE id = ?", (task_id,))
                 row = await cursor.fetchone()
                 if row is None:
-                    return False
+                    return None
                 self._check_expected_updated_at(task_id, expected_updated_at, row[0])
-                return True
+                # No write happens: the stored stamp stays the current token.
+                # Service-written rows always carry one (create + backfill).
+                return row[0]
 
         # Log fields from the caller's sets, before the updated_at bump joins.
         updated_fields = [clause.split(" = ")[0] for clause in sets]
+        # Guarded: the WHERE clause guarantees the row's prior stamp equals
+        # the token, so advance past it. Unguarded: wall clock, as before.
+        stamp = _advance_stamp(now_dt, expected_updated_at)
         params_with_id = [*params, stamp, task_id]
         where = "id = ?"
         if expected_updated_at is not None:
@@ -1368,7 +1451,8 @@ class CoordinationService:
                     updated_fields,
                     extra={"task_id": task_id, "agent": agent, "fields": updated_fields},
                 )
-            return updated
+                return stamp
+            return None
 
     async def _update_task_with_merge(
         self,
@@ -1379,10 +1463,10 @@ class CoordinationService:
         metadata_patch: dict[str, Any] | None,
         add_tags: list[str] | None,
         remove_tags: list[str] | None,
-        stamp: str,
+        now_dt: datetime,
         *,
         expected_updated_at: str | None = None,
-    ) -> bool:
+    ) -> str | None:
         """Read-modify-write metadata merges and tag set-ops inside BEGIN IMMEDIATE.
 
         BEGIN IMMEDIATE acquires the database-level write lock at the start
@@ -1392,7 +1476,9 @@ class CoordinationService:
         state. This is the property the #290 multi-writer guarantee relies on,
         and it makes tag set-ops compose the same way. The CAS check against
         ``expected_updated_at`` happens inside the same critical section, so
-        check-and-write is atomic.
+        check-and-write is atomic — and since the prior stamp is read here
+        anyway, the committed stamp always advances strictly past it (#420),
+        guarded or not.
         """
         import json
 
@@ -1406,8 +1492,9 @@ class CoordinationService:
                 row = await cursor.fetchone()
                 if row is None:
                     await db.execute("ROLLBACK")
-                    return False
+                    return None
                 self._check_expected_updated_at(task_id, expected_updated_at, row[2])
+                stamp = _advance_stamp(now_dt, row[2])
 
                 sets = [*non_metadata_sets]
                 params: list[Any] = [*non_metadata_params]
@@ -1454,7 +1541,7 @@ class CoordinationService:
             updated_fields,
             extra={"task_id": task_id, "agent": agent, "fields": updated_fields},
         )
-        return True
+        return stamp
 
     @traced("lithos.coordination.complete_task")
     async def complete_task(

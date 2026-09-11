@@ -353,7 +353,7 @@ class TestTaskLifecycle:
         ok = await coordination_service.update_task(
             done, "agent", title="Done (renamed)", metadata={"b": 2}
         )
-        assert ok is True
+        assert ok is not None
         task = await coordination_service.get_task(done)
         assert task is not None
         assert task.title == "Done (renamed)"
@@ -361,7 +361,7 @@ class TestTaskLifecycle:
 
         cancelled = await coordination_service.create_task(title="Gone", agent="agent")
         await coordination_service.cancel_task(cancelled, "agent")
-        assert await coordination_service.update_task(cancelled, "agent", metadata={"x": 1}) is True
+        assert await coordination_service.update_task(cancelled, "agent", metadata={"x": 1})
 
     @pytest.mark.asyncio
     async def test_update_terminal_still_rejects_forbidden_metadata(
@@ -377,7 +377,7 @@ class TestTaskLifecycle:
     async def test_update_missing_task_returns_false(
         self, coordination_service: CoordinationService
     ):
-        assert await coordination_service.update_task("ghost", "agent", title="x") is False
+        assert await coordination_service.update_task("ghost", "agent", title="x") is None
 
     @pytest.mark.asyncio
     async def test_get_task_status(self, coordination_service: CoordinationService):
@@ -1669,6 +1669,65 @@ class TestTaskOutcomeMigration:
         assert open_task is not None
         assert open_task.updated_at == open_task.created_at
 
+    async def test_migration_normalizes_legacy_stamp_for_cas_round_trip(self, tmp_path):
+        """A SQLite-default legacy stamp must round-trip as a CAS token.
+
+        The #415 backfill copied ``created_at`` text verbatim; for rows
+        created with SQLite's ``CURRENT_TIMESTAMP`` that is
+        ``YYYY-MM-DD HH:MM:SS`` — but serialization emits
+        ``datetime.isoformat()`` (``T`` separator), so without normalization
+        a client reading an unchanged migrated task would immediately get
+        ``version_conflict`` when returning the token it was given
+        (task 6dbc3b80, review finding 2).
+        """
+        db_path = tmp_path / "coordination.db"
+
+        legacy_created = "2025-04-01 08:00:00"  # SQLite CURRENT_TIMESTAMP shape
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    tags JSON,
+                    outcome TEXT,
+                    resolved_at TIMESTAMP,
+                    metadata JSON
+                )
+                """
+            )
+            await db.execute(
+                "INSERT INTO tasks (id, title, status, created_by, created_at) "
+                "VALUES (?, ?, 'open', ?, ?)",
+                ("legacy-task", "Legacy", "old-agent", legacy_created),
+            )
+            await db.commit()
+
+        config = LithosConfig(storage=StorageConfig(data_dir=tmp_path))
+        service = CoordinationService(config=config)
+        service._db_path = db_path
+        await service.initialize()
+
+        # The stored stamp now matches what serialization emits...
+        task = await service.get_task("legacy-task")
+        assert task is not None
+        assert task.updated_at is not None
+        token = task.updated_at.isoformat()
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("SELECT updated_at FROM tasks WHERE id = 'legacy-task'")
+            row = await cursor.fetchone()
+        assert row is not None and row[0] == token
+
+        # ...so a client returning the token it was given passes CAS.
+        committed = await service.update_task(
+            "legacy-task", "agent", title="Edited", expected_updated_at=token
+        )
+        assert committed is not None
+
 
 class TestUpdatedAtStamp:
     """updated_at bumps on every task-row write and nothing else (#415)."""
@@ -1898,14 +1957,14 @@ class TestTaskUpdateOptimisticConcurrency:
         assert task.metadata == {}
         assert task.updated_at == self.T1
 
-    async def test_unknown_task_returns_false_not_conflict(
+    async def test_unknown_task_returns_none_not_conflict(
         self, coordination_service: CoordinationService
     ):
         """Not-found stays not-found: the CAS token never masks a missing row."""
         ok = await coordination_service.update_task(
             "ghost", "agent", title="x", expected_updated_at=self.T0.isoformat()
         )
-        assert ok is False
+        assert ok is None
 
     async def test_terminal_transition_invalidates_token(
         self, coordination_service: CoordinationService
@@ -1971,6 +2030,59 @@ class TestTaskUpdateOptimisticConcurrency:
         task = await coordination_service.get_task(task_id)
         assert task is not None
         assert task.description == "A\n\nB"
+
+    async def test_guarded_write_at_token_instant_still_invalidates_token(
+        self, coordination_service: CoordinationService
+    ):
+        """A repeated clock cannot leave a consumed token valid (#420).
+
+        Create and both guarded updates share one wall-clock instant. The
+        first guarded write must advance the stamp strictly past the token
+        it consumed (max(now, token + 1µs)), so the second stale writer
+        conflicts instead of silently overwriting — on both the fast path
+        (title) and the merge path (metadata).
+        """
+        for kwargs in ({"title": "fast"}, {"metadata": {"k": "v"}}):
+            task_id = await coordination_service.create_task(
+                title="Same instant", agent="agent", now=self.T0
+            )
+            token = self.T0.isoformat()
+
+            committed = await coordination_service.update_task(
+                task_id, "writer-a", expected_updated_at=token, now=self.T0, **kwargs
+            )
+            assert committed is not None
+            assert committed != token  # the consumed token is invalidated
+
+            with pytest.raises(CoordinationError) as exc_info:
+                await coordination_service.update_task(
+                    task_id,
+                    "writer-b",
+                    description="stale overwrite",
+                    expected_updated_at=token,
+                    now=self.T0,
+                )
+            assert exc_info.value.code == "version_conflict"
+            assert exc_info.value.extra["current_updated_at"] == committed
+
+    async def test_returned_stamp_is_the_committed_stamp(
+        self, coordination_service: CoordinationService
+    ):
+        """The return value is byte-identical to what a subsequent read
+        serializes — including when advancement moved it past ``now``."""
+        task_id = await coordination_service.create_task(title="Echo", agent="agent", now=self.T0)
+        committed = await coordination_service.update_task(
+            task_id,
+            "agent",
+            title="Edited",
+            expected_updated_at=self.T0.isoformat(),
+            now=self.T0,  # forces the +1µs advancement branch
+        )
+        assert committed is not None
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at is not None
+        assert task.updated_at.isoformat() == committed
 
 
 class TestTaskTagSetOps:
@@ -2427,7 +2539,7 @@ class TestTaskUpdateMetadataMerge:
         updated = await coordination_service.update_task(
             task_id=task_id, agent="agent", metadata={"b": 2}
         )
-        assert updated is True
+        assert updated is not None
 
         task = await coordination_service.get_task(task_id)
         assert task is not None

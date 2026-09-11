@@ -722,7 +722,7 @@ class TestGates:
         ok = await coordination_service.update_task(
             timer, "a", metadata={"ready_at": "2031-01-01T00:00:00Z"}
         )
-        assert ok is True
+        assert ok is not None
         row = await coordination_service.get_task(timer)
         assert row is not None
         assert row.metadata["ready_at"] == "2031-01-01T00:00:00+00:00"

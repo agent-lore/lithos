@@ -16,6 +16,15 @@ difference from the note side: notes keep their top-level
 `status: "version_conflict"` write outcome; the task-side conflict is an
 error envelope, matching every other task-tool failure.
 
+Two review hardenings make the token collision-proof in practice (#420):
+a guarded (or metadata/tag) write commits `max(now, prior + 1µs)` instead
+of the raw wall clock — so a consumed token is always invalidated, even
+when the clock repeats — with the committed stamp echoed in the response
+and event; and an idempotent startup migration normalizes legacy
+SQLite-format `updated_at` values (`YYYY-MM-DD HH:MM:SS` from the #415
+backfill) to the canonical serialized form, so tokens read from migrated
+rows byte-round-trip instead of spuriously conflicting.
+
 New `add_tags`/`remove_tags` parameters edit the tag list as set operations
 (append without duplicates, drop removals, preserve order), applied
 read-modify-write under `BEGIN IMMEDIATE` — so incremental tag edits from

@@ -197,7 +197,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         rewriting ``description``, ``title``, or ``tags`` from an earlier read.
 
         Every successful update bumps the task's ``updated_at`` stamp, echoed
-        in the response.
+        in the response. The echo is the **committed** stamp: a guarded write
+        advances it strictly past the token it consumed even when the wall
+        clock repeats, so always chain from the response, never from your own
+        clock.
 
         Args:
             task_id: Task ID to update (full id or unambiguous >= 6-char prefix)
@@ -236,9 +239,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.task_id", task_id)
-        now = datetime.now(UTC)
-        updated_at = now.isoformat()
-        updated = await server.coordination.update_task(
+        # The committed stamp comes back from the coordination layer: under a
+        # CAS guard (or a merge-path write) it can advance strictly past the
+        # prior stamp (#420), so the wall-clock value here is only an input.
+        updated_at = await server.coordination.update_task(
             task_id=task_id,
             agent=agent,
             title=title,
@@ -248,11 +252,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             add_tags=add_tags,
             remove_tags=remove_tags,
             expected_updated_at=expected_updated_at,
-            now=now,
+            now=datetime.now(UTC),
         )
-        span.set_attribute("lithos.success", updated)
+        span.set_attribute("lithos.success", updated_at is not None)
 
-        if updated:
+        if updated_at is not None:
             await server._emit(
                 LithosEvent(
                     type=TASK_UPDATED,
