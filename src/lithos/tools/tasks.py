@@ -486,17 +486,17 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             if error is not None:
                 return error
 
-        now = datetime.now(UTC)
-        updated_at = now.isoformat()
-        success = await server.coordination.complete_task(
+        # The committed stamp comes back from the coordination layer — it can
+        # advance strictly past the prior stamp (#420), so echo it verbatim.
+        updated_at = await server.coordination.complete_task(
             task_id=task_id,
             agent=agent,
             outcome=outcome,
-            now=now,
+            now=datetime.now(UTC),
         )
-        span.set_attribute("lithos.success", success)
+        span.set_attribute("lithos.success", updated_at is not None)
 
-        if not success:
+        if updated_at is None:
             return error_envelope(
                 "task_not_found", f"Task '{task_id}' not found or not in an open state."
             )
@@ -567,17 +567,15 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.task_id", task_id)
-        now = datetime.now(UTC)
-        updated_at = now.isoformat()
-        success = await server.coordination.cancel_task(
+        updated_at = await server.coordination.cancel_task(
             task_id=task_id,
             agent=agent,
             reason=reason,
-            now=now,
+            now=datetime.now(UTC),
         )
-        span.set_attribute("lithos.success", success)
+        span.set_attribute("lithos.success", updated_at is not None)
 
-        if success:
+        if updated_at is not None:
             await server._emit(
                 LithosEvent(
                     type=TASK_CANCELLED,
@@ -633,10 +631,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.task_id", task_id)
-        now = datetime.now(UTC)
-        updated_at = now.isoformat()
-        prior_status, prior_outcome = await server.coordination.reopen_task(
-            task_id=task_id, agent=agent, now=now
+        prior_status, prior_outcome, updated_at = await server.coordination.reopen_task(
+            task_id=task_id, agent=agent, now=datetime.now(UTC)
         )
         # Durable audit: a queryable finding recording the prior terminal state.
         summary = f"[Reopened] task reopened (was {prior_status})"

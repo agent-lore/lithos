@@ -311,7 +311,7 @@ class TestTaskLifecycle:
         task_id = await coordination_service.create_task(title="Done", agent="agent")
         await coordination_service.complete_task(task_id, "agent", outcome="shipped")
 
-        prior_status, prior_outcome = await coordination_service.reopen_task(task_id, "agent")
+        prior_status, prior_outcome, _ = await coordination_service.reopen_task(task_id, "agent")
         assert prior_status == "completed"
         assert prior_outcome == "shipped"
 
@@ -325,7 +325,7 @@ class TestTaskLifecycle:
     async def test_reopen_cancelled_task(self, coordination_service: CoordinationService):
         task_id = await coordination_service.create_task(title="Gone", agent="agent")
         await coordination_service.cancel_task(task_id, "agent")
-        prior_status, _ = await coordination_service.reopen_task(task_id, "agent")
+        prior_status, _, _ = await coordination_service.reopen_task(task_id, "agent")
         assert prior_status == "cancelled"
         task = await coordination_service.get_task(task_id)
         assert task is not None and task.status == "open" and task.resolved_at is None
@@ -1811,8 +1811,9 @@ class TestUpdatedAtStamp:
     async def test_complete_sets_updated_at_equal_to_resolved_at(
         self, coordination_service: CoordinationService
     ):
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
         t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
-        task_id = await coordination_service.create_task(title="Done", agent="agent")
+        task_id = await coordination_service.create_task(title="Done", agent="agent", now=t0)
         assert await coordination_service.complete_task(task_id, "agent", now=t1)
         task = await coordination_service.get_task(task_id)
         assert task is not None
@@ -1823,8 +1824,9 @@ class TestUpdatedAtStamp:
     async def test_cancel_sets_updated_at_equal_to_resolved_at(
         self, coordination_service: CoordinationService
     ):
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
         t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
-        task_id = await coordination_service.create_task(title="Gone", agent="agent")
+        task_id = await coordination_service.create_task(title="Gone", agent="agent", now=t0)
         assert await coordination_service.cancel_task(task_id, "agent", now=t1)
         task = await coordination_service.get_task(task_id)
         assert task is not None
@@ -1833,14 +1835,35 @@ class TestUpdatedAtStamp:
 
     @pytest.mark.asyncio
     async def test_reopen_bumps_updated_at(self, coordination_service: CoordinationService):
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        t1 = datetime(2025, 5, 1, 11, 0, 0, tzinfo=UTC)
         t2 = datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
-        task_id = await coordination_service.create_task(title="Back", agent="agent")
-        await coordination_service.complete_task(task_id, "agent")
+        task_id = await coordination_service.create_task(title="Back", agent="agent", now=t0)
+        await coordination_service.complete_task(task_id, "agent", now=t1)
         await coordination_service.reopen_task(task_id, "agent", now=t2)
         task = await coordination_service.get_task(task_id)
         assert task is not None
         assert task.updated_at == t2
         assert task.resolved_at is None
+
+    @pytest.mark.asyncio
+    async def test_backwards_clock_never_regresses_the_stamp(
+        self, coordination_service: CoordinationService
+    ):
+        """A mutation with an earlier wall clock still advances the stamp (#420).
+
+        Writing the raw clock would restore a previously issued token; the
+        committed stamp must be strictly past the prior one instead.
+        """
+        t0 = datetime(2025, 5, 1, 10, 0, 0, tzinfo=UTC)
+        earlier = datetime(2025, 5, 1, 9, 0, 0, tzinfo=UTC)
+        task_id = await coordination_service.create_task(title="Rewind", agent="agent", now=t0)
+        committed = await coordination_service.complete_task(task_id, "agent", now=earlier)
+        assert committed is not None
+        task = await coordination_service.get_task(task_id)
+        assert task is not None
+        assert task.updated_at is not None
+        assert task.updated_at > t0  # advanced past prior, not rewound to `earlier`
 
     @pytest.mark.asyncio
     async def test_claim_renew_release_do_not_bump(self, coordination_service: CoordinationService):
@@ -2083,6 +2106,64 @@ class TestTaskUpdateOptimisticConcurrency:
         assert task is not None
         assert task.updated_at is not None
         assert task.updated_at.isoformat() == committed
+
+    async def test_every_mutator_at_token_instant_invalidates_token(
+        self, coordination_service: CoordinationService
+    ):
+        """Any intervening row mutation at the token's own instant must
+        invalidate the token — CAS is only sound if EVERY write does
+        (PR #419 re-review; #420).
+
+        Covers the unguarded update and each lifecycle transition sharing
+        the prior stamp's wall-clock instant, each followed by a guarded
+        write using the now-stale token.
+        """
+
+        async def unguarded_edit(task_id: str) -> None:
+            assert await coordination_service.update_task(
+                task_id, "other", title="intervening", now=self.T0
+            )
+
+        async def complete(task_id: str) -> None:
+            assert await coordination_service.complete_task(task_id, "other", now=self.T0)
+
+        async def cancel(task_id: str) -> None:
+            assert await coordination_service.cancel_task(task_id, "other", now=self.T0)
+
+        async def complete_then_reopen(task_id: str) -> None:
+            # Both transitions at T0: the reopened row's stamp must still
+            # have advanced past the create-time token.
+            assert await coordination_service.complete_task(task_id, "other", now=self.T0)
+            await coordination_service.reopen_task(task_id, "other", now=self.T0)
+
+        for mutate in (unguarded_edit, complete, cancel, complete_then_reopen):
+            task_id = await coordination_service.create_task(
+                title=f"Interleaved via {mutate.__name__}", agent="agent", now=self.T0
+            )
+            stale_token = self.T0.isoformat()
+
+            await mutate(task_id)
+
+            with pytest.raises(CoordinationError) as exc_info:
+                await coordination_service.update_task(
+                    task_id,
+                    "stale-writer",
+                    description="write from a stale read",
+                    expected_updated_at=stale_token,
+                    now=self.T0,
+                )
+            assert exc_info.value.code == "version_conflict", mutate.__name__
+
+            # The conflict's echoed stamp is the live token: a retry with it succeeds.
+            current = exc_info.value.extra["current_updated_at"]
+            assert current != stale_token, mutate.__name__
+            assert await coordination_service.update_task(
+                task_id,
+                "stale-writer",
+                description="retry with the live token",
+                expected_updated_at=current,
+                now=self.T0,
+            )
 
 
 class TestTaskTagSetOps:

@@ -16,11 +16,14 @@ difference from the note side: notes keep their top-level
 `status: "version_conflict"` write outcome; the task-side conflict is an
 error envelope, matching every other task-tool failure.
 
-Two review hardenings make the token collision-proof in practice (#420):
-a guarded (or metadata/tag) write commits `max(now, prior + 1µs)` instead
-of the raw wall clock — so a consumed token is always invalidated, even
-when the clock repeats — with the committed stamp echoed in the response
-and event; and an idempotent startup migration normalizes legacy
+Two review hardenings make the token collision-proof (#420): every
+mutation of an existing task row — update (guarded or not), complete,
+cancel, reopen — now reads the prior stamp inside its write transaction
+and commits `max(now, prior + 1µs)` instead of the raw wall clock, so no
+mutation can reuse or restore a previously issued stamp even when the
+clock repeats or moves backward, and a CAS token is invalidated by ANY
+intervening write; the committed stamp is echoed in responses and
+events. And an idempotent startup migration normalizes legacy
 SQLite-format `updated_at` values (`YYYY-MM-DD HH:MM:SS` from the #415
 backfill) to the canonical serialized form, so tokens read from migrated
 rows byte-round-trip instead of spuriously conflicting.
