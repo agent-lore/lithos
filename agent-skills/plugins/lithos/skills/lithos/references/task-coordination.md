@@ -71,9 +71,19 @@ lithos_task_update(task_id="...", agent="<id>", title=..., description=..., tags
 
 - At least one of `title` / `description` / `tags` / `metadata` is required
 - Works on **terminal** tasks — annotate completed/cancelled tasks without reviving them
-- `metadata` is an additive per-key merge: a value overwrites that key, `null` deletes it, unmentioned keys are preserved, `{}` is a no-op
+- `metadata` is an additive per-key merge: a value overwrites that key, `null` deletes it, unmentioned keys are preserved, `{}` changes no keys (but still writes the row and bumps `updated_at`)
 - `tags` replaces the whole list
 - Same forbidden keys as create: `depends_on` / `blocked_on` → `invalid_metadata_key`
+
+---
+
+## Change Detection: `updated_at`
+
+Every task record carries `updated_at` — a last-modified stamp returned by `lithos_task_get` / `lithos_task_list` / `lithos_task_status` (and the ready/blocked/children views), carried in row-mutating event payloads, and echoed by every mutating tool response.
+
+- Bumped by every task-**row** write: create (`= created_at`), any `lithos_task_update` (even a `metadata={}` no-op merge), complete/cancel (`= resolved_at`), reopen
+- **Never** bumped by claim/renew/release — lease heartbeats don't count as edits
+- To detect "edited since I last looked", record the stamp (your own mutation's echo saves a racy re-read) and compare for **equality** — a differing stamp means someone wrote the row; don't rely on ordering
 
 ---
 
