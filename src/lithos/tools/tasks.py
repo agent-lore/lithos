@@ -158,14 +158,18 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         description: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
+        expected_updated_at: str | None = None,
     ) -> dict[str, Any]:
         """Update mutable task fields (title, description, tags, metadata).
 
-        At least one of title, description, tags, or metadata must be provided.
-        Works on terminal (completed/cancelled) tasks too — useful for annotating
-        an archived task (e.g. a metadata snapshot) without reviving it; use
-        ``lithos_task_reopen`` to bring a task back to active work. ``task_not_found``
-        now means the task genuinely does not exist.
+        At least one of title, description, tags, metadata, add_tags, or
+        remove_tags must be provided. Works on terminal (completed/cancelled)
+        tasks too — useful for annotating an archived task (e.g. a metadata
+        snapshot) without reviving it; use ``lithos_task_reopen`` to bring a
+        task back to active work. ``task_not_found`` now means the task
+        genuinely does not exist.
 
         ``metadata`` is applied as an additive per-key merge: keys with non-null
         values overwrite the existing value, keys whose value is ``None`` are
@@ -174,26 +178,60 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         wholesale-clear affordance — ``metadata={}`` preserves all existing keys
         (though it still writes the row and bumps ``updated_at``).
 
+        ``add_tags``/``remove_tags`` are set operations against the current tag
+        list — additions are appended without duplicates, removals dropped,
+        existing order preserved — applied atomically server-side, so two
+        agents tagging the same task from stale reads cannot clobber each
+        other. They are mutually exclusive with the wholesale ``tags`` replace
+        and must not overlap each other (``invalid_input``). Prefer them over
+        ``tags`` whenever editing individual tags.
+
+        --- Concurrency ---
+        ``expected_updated_at`` enables optimistic locking: pass the exact
+        ``updated_at`` stamp from a prior read (``lithos_task_get``/
+        ``lithos_task_status``) or update echo, compared byte-for-byte. If the
+        task was modified since, nothing is written and the error envelope
+        ``{status: "error", code: "version_conflict", message,
+        current_updated_at}`` is returned — re-read (or use
+        ``current_updated_at`` directly) and retry. Recommended whenever
+        rewriting ``description``, ``title``, or ``tags`` from an earlier read.
+
         Every successful update bumps the task's ``updated_at`` stamp, echoed
-        in the response.
+        in the response. The echo is the **committed** stamp: a guarded write
+        advances it strictly past the token it consumed even when the wall
+        clock repeats, so always chain from the response, never from your own
+        clock.
 
         Args:
             task_id: Task ID to update (full id or unambiguous >= 6-char prefix)
             agent: Agent making the update
             title: New task title (optional)
             description: New task description (optional)
-            tags: New task tags (optional)
+            tags: New task tags — wholesale replace (optional; prefer
+                add_tags/remove_tags for incremental edits)
             metadata: Per-key merge patch into the existing metadata dict
                 (optional). See merge contract above.
+            add_tags: Tags to add to the current list (optional)
+            remove_tags: Tags to remove from the current list (optional)
+            expected_updated_at: Optimistic-concurrency token — the
+                ``updated_at`` stamp this caller last read (optional)
 
         Returns:
             Dict with success, message, updated_at, and the resolved
             task_id + title
         """
-        if title is None and description is None and tags is None and metadata is None:
+        if (
+            title is None
+            and description is None
+            and tags is None
+            and metadata is None
+            and add_tags is None
+            and remove_tags is None
+        ):
             return error_envelope(
                 "invalid_input",
-                "At least one of title, description, tags, or metadata must be provided",
+                "At least one of title, description, tags, metadata, "
+                "add_tags, or remove_tags must be provided",
             )
 
         task_id, task_title = await server.coordination.resolve_task_id(task_id)
@@ -201,20 +239,24 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.task_id", task_id)
-        now = datetime.now(UTC)
-        updated_at = now.isoformat()
-        updated = await server.coordination.update_task(
+        # The committed stamp comes back from the coordination layer: under a
+        # CAS guard (or a merge-path write) it can advance strictly past the
+        # prior stamp (#420), so the wall-clock value here is only an input.
+        updated_at = await server.coordination.update_task(
             task_id=task_id,
             agent=agent,
             title=title,
             description=description,
             tags=tags,
             metadata=metadata,
-            now=now,
+            add_tags=add_tags,
+            remove_tags=remove_tags,
+            expected_updated_at=expected_updated_at,
+            now=datetime.now(UTC),
         )
-        span.set_attribute("lithos.success", updated)
+        span.set_attribute("lithos.success", updated_at is not None)
 
-        if updated:
+        if updated_at is not None:
             await server._emit(
                 LithosEvent(
                     type=TASK_UPDATED,
@@ -444,17 +486,17 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             if error is not None:
                 return error
 
-        now = datetime.now(UTC)
-        updated_at = now.isoformat()
-        success = await server.coordination.complete_task(
+        # The committed stamp comes back from the coordination layer — it can
+        # advance strictly past the prior stamp (#420), so echo it verbatim.
+        updated_at = await server.coordination.complete_task(
             task_id=task_id,
             agent=agent,
             outcome=outcome,
-            now=now,
+            now=datetime.now(UTC),
         )
-        span.set_attribute("lithos.success", success)
+        span.set_attribute("lithos.success", updated_at is not None)
 
-        if not success:
+        if updated_at is None:
             return error_envelope(
                 "task_not_found", f"Task '{task_id}' not found or not in an open state."
             )
@@ -525,17 +567,15 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.task_id", task_id)
-        now = datetime.now(UTC)
-        updated_at = now.isoformat()
-        success = await server.coordination.cancel_task(
+        updated_at = await server.coordination.cancel_task(
             task_id=task_id,
             agent=agent,
             reason=reason,
-            now=now,
+            now=datetime.now(UTC),
         )
-        span.set_attribute("lithos.success", success)
+        span.set_attribute("lithos.success", updated_at is not None)
 
-        if success:
+        if updated_at is not None:
             await server._emit(
                 LithosEvent(
                     type=TASK_CANCELLED,
@@ -591,10 +631,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span = get_current_span()
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.task_id", task_id)
-        now = datetime.now(UTC)
-        updated_at = now.isoformat()
-        prior_status, prior_outcome = await server.coordination.reopen_task(
-            task_id=task_id, agent=agent, now=now
+        prior_status, prior_outcome, updated_at = await server.coordination.reopen_task(
+            task_id=task_id, agent=agent, now=datetime.now(UTC)
         )
         # Durable audit: a queryable finding recording the prior terminal state.
         summary = f"[Reopened] task reopened (was {prior_status})"

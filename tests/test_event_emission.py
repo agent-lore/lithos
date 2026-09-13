@@ -336,6 +336,40 @@ class TestTaskEventEmission:
         server.event_bus.unsubscribe(queue)
 
     @pytest.mark.asyncio
+    async def test_lithos_task_update_no_event_on_version_conflict(
+        self, server: LithosServer
+    ) -> None:
+        """A CAS-rejected update writes nothing, so it must not emit task.updated."""
+        create_result = await call_tool(
+            server,
+            "lithos_task_create",
+            {"title": "CAS Target", "agent": "test-agent"},
+        )
+        task_id = create_result["task_id"]
+        stale_token = create_result["updated_at"]
+        await call_tool(
+            server,
+            "lithos_task_update",
+            {"task_id": task_id, "agent": "test-agent", "title": "moved on"},
+        )
+
+        queue = server.event_bus.subscribe(event_types=[TASK_UPDATED])
+        result = await call_tool(
+            server,
+            "lithos_task_update",
+            {
+                "task_id": task_id,
+                "agent": "test-agent",
+                "title": "stale write",
+                "expected_updated_at": stale_token,
+            },
+        )
+        assert result["status"] == "error"
+        assert result["code"] == "version_conflict"
+        assert queue.empty()
+        server.event_bus.unsubscribe(queue)
+
+    @pytest.mark.asyncio
     async def test_row_mutating_events_carry_updated_at(self, server: LithosServer) -> None:
         """#415: created/updated/completed/cancelled/reopened payloads carry the
         stamp, and event payload == response echo == what task_get then returns."""

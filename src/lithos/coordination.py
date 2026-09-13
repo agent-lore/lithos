@@ -364,6 +364,32 @@ def _format_datetime(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _advance_stamp(now_dt: datetime, prior_raw: str | None) -> str:
+    """Committed ``updated_at`` for a row write: wall clock, but strictly
+    after the row's prior stamp.
+
+    Guarantees a write never reuses the stamp it replaces even when the
+    clock repeats or moves backward (#420): committed =
+    ``max(now, prior + 1µs)``. Without this, a guarded update whose wall
+    clock equals the token it consumed would leave the token valid — a
+    second stale writer holding the same token would then also pass CAS.
+
+    A ``prior_raw`` that cannot be parsed (legacy/foreign format) can never
+    byte-equal our ISO output, so the wall clock alone already differs; a
+    naive prior is treated as UTC for the comparison only.
+    """
+    if prior_raw:
+        prior = _parse_datetime(prior_raw)
+        if prior is not None:
+            if prior.tzinfo is None:
+                prior = prior.replace(tzinfo=UTC)
+            now_cmp = now_dt if now_dt.tzinfo is not None else now_dt.replace(tzinfo=UTC)
+            bumped = prior + timedelta(microseconds=1)
+            if bumped > now_cmp:
+                return _format_datetime(bumped)
+    return _format_datetime(now_dt)
+
+
 def _json_path_for_key(key: str) -> str:
     """Build a SQLite JSON path addressing a top-level metadata ``key`` (#306).
 
@@ -538,6 +564,7 @@ class CoordinationService:
             await self._migrate_tasks_add_metadata(db)
             await self._migrate_tasks_add_task_type(db)
             await self._migrate_tasks_add_updated_at(db)
+            await self._migrate_tasks_normalize_updated_at(db)
             await db.commit()
         logger.info("coordination service initialized: db_path=%s", self.db_path)
 
@@ -693,6 +720,44 @@ class CoordinationService:
         await db.execute("ALTER TABLE tasks ADD COLUMN updated_at TIMESTAMP")
         await db.execute("UPDATE tasks SET updated_at = COALESCE(resolved_at, created_at)")
         logger.info("coordination.db migration applied: added and backfilled tasks.updated_at")
+
+    @staticmethod
+    async def _migrate_tasks_normalize_updated_at(db: aiosqlite.Connection) -> None:
+        """Rewrite legacy ``updated_at`` stamps to the canonical serialized form.
+
+        The #415 backfill copied ``created_at``/``resolved_at`` text verbatim,
+        which for SQLite-default timestamps is ``YYYY-MM-DD HH:MM:SS`` — but
+        task serialization parses and re-emits ``datetime.isoformat()``
+        (``T`` separator), so a client reading such a row would hold a token
+        that can never byte-match the stored string and every guarded update
+        would spuriously conflict. Normalizing stored stamps to exactly what
+        serialization emits restores the byte-round-trip the CAS contract
+        relies on (task 6dbc3b80, review finding 2).
+
+        Idempotent by construction (canonical values rewrite to themselves and
+        are skipped); runs on every ``initialize()`` — the tasks table is
+        small and this is startup-only. Unparseable stamps are left alone
+        (they surface via ``_parse_datetime``'s WARNING at read time).
+        """
+        cursor = await db.execute("SELECT id, updated_at FROM tasks WHERE updated_at IS NOT NULL")
+        rows = await cursor.fetchall()
+        normalized = 0
+        for task_id, raw in rows:
+            parsed = _parse_datetime(raw)
+            if parsed is None:
+                continue
+            canonical = _format_datetime(parsed)
+            if canonical != raw:
+                await db.execute(
+                    "UPDATE tasks SET updated_at = ? WHERE id = ?", (canonical, task_id)
+                )
+                normalized += 1
+        if normalized:
+            logger.info(
+                "coordination.db migration applied: normalized %d legacy tasks.updated_at "
+                "stamp(s) to canonical serialized form",
+                normalized,
+            )
 
     @staticmethod
     async def _backfill_task_edges_from_metadata(db: aiosqlite.Connection) -> int:
@@ -1183,9 +1248,12 @@ class CoordinationService:
         description: str | None = None,
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
         *,
+        expected_updated_at: str | None = None,
         now: datetime | None = None,
-    ) -> bool:
+    ) -> str | None:
         """Update mutable task metadata.
 
         Only updates fields that are not None (partial update pattern).
@@ -1199,19 +1267,54 @@ class CoordinationService:
         but still writes the row (and bumps ``updated_at``). There is no
         wholesale-clear affordance (#290).
 
+        ``add_tags``/``remove_tags`` are set operations against the current
+        tag list (existing order preserved, additions appended, no
+        duplicates) and are mutually exclusive with the wholesale
+        ``tags`` replace. They read-modify-write under ``BEGIN IMMEDIATE``,
+        so concurrent set-ops compose instead of clobbering.
+
+        ``expected_updated_at`` is an optimistic-concurrency token: when
+        provided, the update applies only if the stored ``updated_at`` stamp
+        is byte-equal to it (the stamp is compared as an opaque string, never
+        parsed). On mismatch the row is untouched and ``version_conflict``
+        is raised carrying ``current_updated_at`` so the caller can re-read
+        and retry.
+
         Every row write also bumps ``updated_at`` (#415); a call where all
-        field arguments are ``None`` writes nothing and bumps nothing.
+        field arguments are ``None`` writes nothing and bumps nothing
+        (though ``expected_updated_at`` is still checked). Every write
+        advances the stamp **strictly past** the prior value
+        (``max(now, prior + 1µs)``, #420) so no update can reuse the stamp
+        it replaces even when the wall clock repeats or steps backward; the
+        committed stamp is the return value, which is why callers must echo
+        the return value rather than the ``now`` they passed.
 
         Returns:
-            True if task was found and updated; False if no such task exists
+            The committed ``updated_at`` stamp when the task was found (for
+            an all-``None`` no-op, the stored stamp, unchanged); ``None``
+            if no such task exists.
 
         Raises:
             CoordinationError: ``metadata`` contains a forbidden scheduling key
-                (``depends_on``/``blocked_on``).
+                (``depends_on``/``blocked_on``); ``tags`` combined with
+                ``add_tags``/``remove_tags`` or the set-ops overlap
+                (``invalid_input``); ``expected_updated_at`` does not match
+                the stored stamp (``version_conflict``).
         """
         import json
 
         _reject_scheduling_metadata(metadata)
+        if tags is not None and (add_tags is not None or remove_tags is not None):
+            raise CoordinationError(
+                "invalid_input",
+                "tags (wholesale replace) cannot be combined with add_tags/remove_tags",
+            )
+        overlap = set(add_tags or []) & set(remove_tags or [])
+        if overlap:
+            raise CoordinationError(
+                "invalid_input",
+                f"add_tags and remove_tags must be disjoint; both contain: {sorted(overlap)}",
+            )
         lithos_metrics.coordination_ops.add(1, {"op": "update_task"})
         await self.ensure_agent_known(agent)
 
@@ -1228,71 +1331,76 @@ class CoordinationService:
             non_metadata_sets.append("tags = ?")
             non_metadata_params.append(json.dumps(tags))
 
-        stamp = _format_datetime(now or datetime.now(UTC))
-        if metadata is None:
-            return await self._update_task_fast(
-                task_id, agent, non_metadata_sets, non_metadata_params, stamp
-            )
-        return await self._update_task_with_merge(
-            task_id, agent, non_metadata_sets, non_metadata_params, metadata, stamp
+        now_dt = now or datetime.now(UTC)
+        return await self._apply_task_update(
+            task_id,
+            agent,
+            non_metadata_sets,
+            non_metadata_params,
+            metadata,
+            add_tags,
+            remove_tags,
+            now_dt,
+            expected_updated_at=expected_updated_at,
         )
 
-    async def _update_task_fast(
-        self,
-        task_id: str,
-        agent: str,
-        sets: list[str],
-        params: list[Any],
-        stamp: str,
-    ) -> bool:
-        """Update title/description/tags without touching metadata.
+    @staticmethod
+    def _version_conflict(task_id: str, expected: str, current: str | None) -> CoordinationError:
+        """Build the ``version_conflict`` error for a failed CAS check.
 
-        Single UPDATE, no SELECT needed. When ``sets`` is empty the caller
-        passed only no-op arguments — we still return True/False based on
-        whether the task exists, matching the contract of the merge path.
-        Terminal tasks (completed/cancelled) are updatable too (#303).
+        Carries ``current_updated_at`` so the caller can re-read-free retry.
         """
-        if not sets:
-            async with aiosqlite.connect(self.db_path) as db:
-                cursor = await db.execute("SELECT id FROM tasks WHERE id = ?", (task_id,))
-                return await cursor.fetchone() is not None
+        return CoordinationError(
+            "version_conflict",
+            f"Task {task_id} was modified since it was read: expected "
+            f"updated_at {expected!r} but current is {current!r}. "
+            f"Re-read the task and retry with the current stamp.",
+            extra={"current_updated_at": current},
+        )
 
-        # Log fields from the caller's sets, before the updated_at bump joins.
-        updated_fields = [clause.split(" = ")[0] for clause in sets]
-        params_with_id = [*params, stamp, task_id]
-        async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                f"UPDATE tasks SET {', '.join([*sets, 'updated_at = ?'])} WHERE id = ?",
-                params_with_id,
-            )
-            await db.commit()
-            updated = cursor.rowcount > 0
-            if updated:
-                logger.info(
-                    "Task updated: task_id=%s agent=%s fields=%s",
-                    task_id,
-                    agent,
-                    updated_fields,
-                    extra={"task_id": task_id, "agent": agent, "fields": updated_fields},
-                )
-            return updated
+    @classmethod
+    def _check_expected_updated_at(
+        cls, task_id: str, expected: str | None, current: str | None
+    ) -> None:
+        """Raise ``version_conflict`` when a CAS token doesn't match the row.
 
-    async def _update_task_with_merge(
+        Byte-equality on the stored TEXT stamp — the round-trip guarantee
+        (#415) means the value a reader saw is exactly the value stored, so
+        no datetime parsing is involved.
+        """
+        if expected is not None and current != expected:
+            raise cls._version_conflict(task_id, expected, current)
+
+    async def _apply_task_update(
         self,
         task_id: str,
         agent: str,
         non_metadata_sets: list[str],
         non_metadata_params: list[Any],
-        metadata_patch: dict[str, Any],
-        stamp: str,
-    ) -> bool:
-        """Read-merge-write the metadata column inside BEGIN IMMEDIATE.
+        metadata_patch: dict[str, Any] | None,
+        add_tags: list[str] | None,
+        remove_tags: list[str] | None,
+        now_dt: datetime,
+        *,
+        expected_updated_at: str | None = None,
+    ) -> str | None:
+        """Apply every task update read-modify-write inside BEGIN IMMEDIATE.
 
-        BEGIN IMMEDIATE acquires the database-level write lock at the start
-        of the transaction, so two concurrent callers writing different
-        keys cannot both pass the SELECT and then race on the UPDATE — the
-        second caller blocks until the first commits, then reads the merged
-        state. This is the property the #290 multi-writer guarantee relies on.
+        The single write path for ``update_task`` — plain field replaces,
+        metadata merges, and tag set-ops alike. BEGIN IMMEDIATE acquires the
+        database-level write lock at the start of the transaction, so two
+        concurrent callers writing different keys cannot both pass the SELECT
+        and then race on the UPDATE — the second caller blocks until the first
+        commits, then reads the merged state. This is the property the #290
+        multi-writer guarantee relies on, and it makes tag set-ops compose the
+        same way. The CAS check against ``expected_updated_at`` happens inside
+        the same critical section, so check-and-write is atomic — and since
+        the prior stamp is read here for every write, the committed stamp
+        always advances strictly past it (#420), guarded or not.
+
+        With nothing to write (all field arguments ``None``) the row is left
+        untouched: after the CAS check, the stored stamp is returned as the
+        still-current token.
         """
         import json
 
@@ -1300,25 +1408,58 @@ class CoordinationService:
             await db.execute("BEGIN IMMEDIATE")
             try:
                 cursor = await db.execute(
-                    "SELECT task_type, metadata FROM tasks WHERE id = ?",
+                    "SELECT task_type, metadata, updated_at, tags FROM tasks WHERE id = ?",
                     (task_id,),
                 )
                 row = await cursor.fetchone()
                 if row is None:
                     await db.execute("ROLLBACK")
-                    return False
+                    return None
+                self._check_expected_updated_at(task_id, expected_updated_at, row[2])
 
-                existing = _decode_metadata(row[1])
-                merged = merge_metadata(existing, metadata_patch)
-                # A gate's metadata must stay valid: revalidate (and re-normalize a
-                # timer ready_at) so a patch like {"gate_type": None} can't strip
-                # the gate invariants and spuriously ready its waiters.
-                if row[0] == "gate":
-                    merged = _validate_gate_metadata(merged)
-                merged_json = json.dumps(merged)
+                if (
+                    not non_metadata_sets
+                    and metadata_patch is None
+                    and add_tags is None
+                    and remove_tags is None
+                ):
+                    # No-op update: nothing to write, no stamp bump. The
+                    # stored stamp stays the current token (service-written
+                    # rows always carry one — create + backfill).
+                    await db.execute("ROLLBACK")
+                    return row[2]
 
-                sets = [*non_metadata_sets, "metadata = ?", "updated_at = ?"]
-                params = [*non_metadata_params, merged_json, stamp, task_id]
+                stamp = _advance_stamp(now_dt, row[2])
+
+                sets = [*non_metadata_sets]
+                params: list[Any] = [*non_metadata_params]
+                updated_fields = [clause.split(" = ")[0] for clause in non_metadata_sets]
+
+                if metadata_patch is not None:
+                    existing = _decode_metadata(row[1])
+                    merged = merge_metadata(existing, metadata_patch)
+                    # A gate's metadata must stay valid: revalidate (and re-normalize a
+                    # timer ready_at) so a patch like {"gate_type": None} can't strip
+                    # the gate invariants and spuriously ready its waiters.
+                    if row[0] == "gate":
+                        merged = _validate_gate_metadata(merged)
+                    sets.append("metadata = ?")
+                    params.append(json.dumps(merged))
+                    updated_fields.append("metadata")
+
+                if add_tags is not None or remove_tags is not None:
+                    current_tags: list[str] = json.loads(row[3]) if row[3] else []
+                    removals = set(remove_tags or [])
+                    new_tags = [t for t in current_tags if t not in removals]
+                    for tag in add_tags or []:
+                        if tag not in new_tags:
+                            new_tags.append(tag)
+                    sets.append("tags = ?")
+                    params.append(json.dumps(new_tags))
+                    updated_fields.append("tags")
+
+                sets.append("updated_at = ?")
+                params.extend([stamp, task_id])
                 await db.execute(
                     f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
                     params,
@@ -1328,9 +1469,6 @@ class CoordinationService:
                 with contextlib.suppress(Exception):
                     await db.execute("ROLLBACK")
                 raise
-
-        updated_fields = [clause.split(" = ")[0] for clause in non_metadata_sets]
-        updated_fields.append("metadata")
         logger.info(
             "Task updated: task_id=%s agent=%s fields=%s",
             task_id,
@@ -1338,7 +1476,7 @@ class CoordinationService:
             updated_fields,
             extra={"task_id": task_id, "agent": agent, "fields": updated_fields},
         )
-        return True
+        return stamp
 
     @traced("lithos.coordination.complete_task")
     async def complete_task(
@@ -1348,7 +1486,7 @@ class CoordinationService:
         outcome: str | None = None,
         *,
         now: datetime | None = None,
-    ) -> bool:
+    ) -> str | None:
         """Mark task as completed and release all claims.
 
         Args:
@@ -1357,40 +1495,56 @@ class CoordinationService:
             outcome: Optional free-text completion summary persisted alongside
                 the task. Downstream consolidation (LCMA enrich) can use this
                 as the ``outcome`` slot of the frame extracted from the task.
-            now: Write timestamp (defaults to the current time); becomes both
-                ``resolved_at`` and ``updated_at``.
+            now: Write timestamp (defaults to the current time); the committed
+                stamp — advanced strictly past the row's prior ``updated_at``
+                (#420) — becomes both ``resolved_at`` and ``updated_at``.
 
         Returns:
-            True if task was completed
+            The committed ``updated_at`` stamp when the task was completed;
+            ``None`` when it doesn't exist or is not open.
         """
         lithos_metrics.coordination_ops.add(1, {"op": "complete"})
         await self.ensure_agent_known(agent)
 
-        stamp = _format_datetime(now or datetime.now(UTC))
+        now_dt = now or datetime.now(UTC)
 
         async with aiosqlite.connect(self.db_path) as db:
-            # Update task status, outcome, resolved_at and updated_at in one statement
-            cursor = await db.execute(
-                """
-                UPDATE tasks
-                   SET status = 'completed',
-                       outcome = ?,
-                       resolved_at = ?,
-                       updated_at = ?
-                 WHERE id = ? AND status = 'open'
-                """,
-                (outcome, stamp, stamp, task_id),
-            )
-            if cursor.rowcount == 0:
-                return False
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT status, updated_at FROM tasks WHERE id = ?", (task_id,)
+                )
+                row = await cursor.fetchone()
+                if row is None or row[0] != "open":
+                    await db.execute("ROLLBACK")
+                    return None
+                # Strictly past the prior stamp, so completing at a repeated
+                # wall clock still invalidates every previously issued token.
+                stamp = _advance_stamp(now_dt, row[1])
 
-            # Release all claims
-            await db.execute(
-                "DELETE FROM claims WHERE task_id = ?",
-                (task_id,),
-            )
+                await db.execute(
+                    """
+                    UPDATE tasks
+                       SET status = 'completed',
+                           outcome = ?,
+                           resolved_at = ?,
+                           updated_at = ?
+                     WHERE id = ? AND status = 'open'
+                    """,
+                    (outcome, stamp, stamp, task_id),
+                )
 
-            await db.commit()
+                # Release all claims
+                await db.execute(
+                    "DELETE FROM claims WHERE task_id = ?",
+                    (task_id,),
+                )
+
+                await db.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    await db.execute("ROLLBACK")
+                raise
             logger.info(
                 "Task completed: task_id=%s agent=%s outcome_len=%d",
                 task_id,
@@ -1403,7 +1557,7 @@ class CoordinationService:
                     "outcome_len": len(outcome) if outcome else 0,
                 },
             )
-            return True
+            return stamp
 
     @traced("lithos.coordination.cancel_task")
     async def cancel_task(
@@ -1413,37 +1567,52 @@ class CoordinationService:
         reason: str | None = None,
         *,
         now: datetime | None = None,
-    ) -> bool:
+    ) -> str | None:
         """Mark task as cancelled and release all claims.
 
         Returns:
-            True if task was cancelled
+            The committed ``updated_at`` stamp (advanced strictly past the
+            prior stamp, #420) when the task was cancelled; ``None`` when it
+            doesn't exist or is not open.
         """
         lithos_metrics.coordination_ops.add(1, {"op": "cancel"})
         await self.ensure_agent_known(agent)
 
-        stamp = _format_datetime(now or datetime.now(UTC))
+        now_dt = now or datetime.now(UTC)
 
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                """
-                UPDATE tasks
-                   SET status = 'cancelled',
-                       resolved_at = ?,
-                       updated_at = ?
-                 WHERE id = ? AND status = 'open'
-                """,
-                (stamp, stamp, task_id),
-            )
-            if cursor.rowcount == 0:
-                return False
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT status, updated_at FROM tasks WHERE id = ?", (task_id,)
+                )
+                row = await cursor.fetchone()
+                if row is None or row[0] != "open":
+                    await db.execute("ROLLBACK")
+                    return None
+                stamp = _advance_stamp(now_dt, row[1])
 
-            await db.execute(
-                "DELETE FROM claims WHERE task_id = ?",
-                (task_id,),
-            )
+                await db.execute(
+                    """
+                    UPDATE tasks
+                       SET status = 'cancelled',
+                           resolved_at = ?,
+                           updated_at = ?
+                     WHERE id = ? AND status = 'open'
+                    """,
+                    (stamp, stamp, task_id),
+                )
 
-            await db.commit()
+                await db.execute(
+                    "DELETE FROM claims WHERE task_id = ?",
+                    (task_id,),
+                )
+
+                await db.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    await db.execute("ROLLBACK")
+                raise
             logger.info(
                 "Task cancelled: task_id=%s agent=%s reason=%s",
                 task_id,
@@ -1451,18 +1620,20 @@ class CoordinationService:
                 reason,
                 extra={"task_id": task_id, "agent": agent, "reason": reason},
             )
-            return True
+            return stamp
 
     @traced("lithos.coordination.reopen_task")
     async def reopen_task(
         self, task_id: str, agent: str, *, now: datetime | None = None
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, str]:
         """Move a terminal task back to ``open`` (the inverse of complete/cancel).
 
         Clears ``resolved_at`` and ``outcome`` — a reopened task is no longer
         resolved. Claims were already released on complete/cancel, so there is
-        nothing to restore. Returns ``(prior_status, prior_outcome)`` so the
-        caller can record the reopen in an event/finding.
+        nothing to restore. Returns ``(prior_status, prior_outcome,
+        committed_updated_at)`` so the caller can record the reopen in an
+        event/finding and echo the committed stamp (advanced strictly past
+        the prior stamp, #420).
 
         Raises:
             CoordinationError: ``task_not_found`` (unknown id) or
@@ -1471,25 +1642,35 @@ class CoordinationService:
         lithos_metrics.coordination_ops.add(1, {"op": "reopen"})
         await self.ensure_agent_known(agent)
 
+        now_dt = now or datetime.now(UTC)
+
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "SELECT status, outcome FROM tasks WHERE id = ?",
-                (task_id,),
-            )
-            row = await cursor.fetchone()
-            if row is None:
-                raise CoordinationError("task_not_found", f"Task '{task_id}' not found.")
-            prior_status, prior_outcome = row[0], row[1]
-            if prior_status == "open":
-                raise CoordinationError(
-                    "task_not_resolved", f"Task '{task_id}' is already open; nothing to reopen."
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await db.execute(
+                    "SELECT status, outcome, updated_at FROM tasks WHERE id = ?",
+                    (task_id,),
                 )
-            await db.execute(
-                "UPDATE tasks SET status = 'open', resolved_at = NULL, outcome = NULL, "
-                "updated_at = ? WHERE id = ?",
-                (_format_datetime(now or datetime.now(UTC)), task_id),
-            )
-            await db.commit()
+                row = await cursor.fetchone()
+                if row is None:
+                    raise CoordinationError("task_not_found", f"Task '{task_id}' not found.")
+                prior_status, prior_outcome = row[0], row[1]
+                if prior_status == "open":
+                    raise CoordinationError(
+                        "task_not_resolved",
+                        f"Task '{task_id}' is already open; nothing to reopen.",
+                    )
+                stamp = _advance_stamp(now_dt, row[2])
+                await db.execute(
+                    "UPDATE tasks SET status = 'open', resolved_at = NULL, outcome = NULL, "
+                    "updated_at = ? WHERE id = ?",
+                    (stamp, task_id),
+                )
+                await db.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    await db.execute("ROLLBACK")
+                raise
 
         logger.info(
             "Task reopened: task_id=%s agent=%s prior_status=%s",
@@ -1498,7 +1679,7 @@ class CoordinationService:
             prior_status,
             extra={"task_id": task_id, "agent": agent, "prior_status": prior_status},
         )
-        return prior_status, prior_outcome
+        return prior_status, prior_outcome, stamp
 
     @traced("lithos.coordination.newly_reblocked_by")
     async def newly_reblocked_by(self, task_id: str, prior_status: str) -> list[str]:

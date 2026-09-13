@@ -59,6 +59,7 @@ def coordination_error_envelope(exc: CoordinationError) -> dict[str, Any]:
     """Map a :class:`~lithos.errors.CoordinationError` onto the canonical envelope.
 
     The single construction point for the mapping the exception was designed
-    for — handlers must not restate the dict.
+    for — handlers must not restate the dict. The exception's ``extra``
+    keys pass through as code-specific supplementary envelope keys.
     """
-    return error_envelope(exc.code, exc.message)
+    return error_envelope(exc.code, exc.message, **exc.extra)

@@ -722,7 +722,7 @@ class TestGates:
         ok = await coordination_service.update_task(
             timer, "a", metadata={"ready_at": "2031-01-01T00:00:00Z"}
         )
-        assert ok is True
+        assert ok is not None
         row = await coordination_service.get_task(timer)
         assert row is not None
         assert row.metadata["ready_at"] == "2031-01-01T00:00:00+00:00"
@@ -767,7 +767,7 @@ class TestReopen:
         await coordination_service.complete_task(a, "a")
         assert b in _ids(await coordination_service.list_ready())  # A done -> B ready
 
-        prior, _ = await coordination_service.reopen_task(a, "a")
+        prior, _, _ = await coordination_service.reopen_task(a, "a")
         assert prior == "completed"
         reblocked = await coordination_service.newly_reblocked_by(a, prior)
         assert reblocked == [b]
@@ -786,7 +786,7 @@ class TestReopen:
             == "blocker_unsatisfiable"
         )
 
-        prior, _ = await coordination_service.reopen_task(a, "a")
+        prior, _, _ = await coordination_service.reopen_task(a, "a")
         assert prior == "cancelled"
         # cancelled-reopen newly-blocks no one (B was already blocked)
         assert await coordination_service.newly_reblocked_by(a, prior) == []
@@ -803,7 +803,7 @@ class TestReopen:
         await coordination_service.complete_task(gate, "a")
         assert w in _ids(await coordination_service.list_ready())
 
-        prior, _ = await coordination_service.reopen_task(gate, "a")
+        prior, _, _ = await coordination_service.reopen_task(gate, "a")
         assert await coordination_service.newly_reblocked_by(gate, prior) == [w]
         assert _blocker(await coordination_service.list_blocked(), w)["kind"] == "gate"
 
@@ -817,7 +817,7 @@ class TestReopen:
         b = await _mk(coordination_service, "B", depends_on=[a, x])
         await coordination_service.complete_task(a, "a")
         assert b not in _ids(await coordination_service.list_ready())  # X still blocks
-        prior, _ = await coordination_service.reopen_task(a, "a")
+        prior, _, _ = await coordination_service.reopen_task(a, "a")
         assert await coordination_service.newly_reblocked_by(a, prior) == []
 
     async def test_reblocked_excludes_terminal_dependent(
@@ -829,7 +829,7 @@ class TestReopen:
         b = await _mk(coordination_service, "B", depends_on=[a])
         await coordination_service.complete_task(a, "a")
         await coordination_service.complete_task(b, "b")
-        prior, _ = await coordination_service.reopen_task(a, "a")
+        prior, _, _ = await coordination_service.reopen_task(a, "a")
         assert prior == "completed"
         assert await coordination_service.newly_reblocked_by(a, prior) == []
 
