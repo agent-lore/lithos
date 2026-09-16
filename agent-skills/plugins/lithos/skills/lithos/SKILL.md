@@ -29,7 +29,7 @@ Every session, before any significant work:
 Your `agent_id` is a stable identity that follows you across sessions. Resolve it in this order, stopping at the first step that works:
 
 1. **Remember it.** If your own memory or config records your id, use it — no lookup needed. Persist it there the first time you settle on one.
-2. **Look it up.** Otherwise call `lithos_agent_list()` (`type="<agent-type>"` narrows it) and find the row that is *you* — same tool, host and role. Reuse that `id`.
+2. **Look it up.** Otherwise call `lithos_agent_list()` **unfiltered** and find the row that is *you* — same tool, host and role. Reuse that `id`. Do not narrow with `type=`: rows auto-created by ordinary writes have no `type`, and an exact-match filter would hide your existing identity.
 3. **Register only if absent.** No matching row → `lithos_agent_register(id="<your-agent-id>", name="<display-name>", type="<agent-type>")`. Re-registering an existing id is idempotent (returns `created: false`) and is how you refresh `name`, `type` or `metadata`; registering a *new* id for an existing actor is not.
 
 **Id convention:** kebab-case `<tool>-<host>-<role>`, e.g. `claude-code-samsara-loom-dev`, `agent-zero-primary`.
@@ -40,10 +40,11 @@ Your `agent_id` is a stable identity that follows you across sessions. Resolve i
 
 Worked example (fresh session, no remembered id):
 ```
-lithos_agent_list(type="claude-code")
+lithos_agent_list()                      # unfiltered — a type= filter hides auto-registered rows
 # → {"agents": [{"id": "claude-code-samsara-loom-dev", "name": "Claude Code — loom dev on samsara",
-#                "type": "claude-code", "last_seen_at": "..."}, ...]}
-# That row is me → use id="claude-code-samsara-loom-dev" for every agent= argument. Done — do not register.
+#                "type": "claude-code", "last_seen_at": "..."},
+#               {"id": "agent-zero-primary", "name": null, "type": null, "last_seen_at": "..."}, ...]}
+# The samsara/loom-dev row is me → use id="claude-code-samsara-loom-dev" for every agent= argument. Done — do not register.
 
 # Only if no row matched:
 lithos_agent_register(id="claude-code-samsara-loom-dev", name="Claude Code — loom dev on samsara", type="claude-code")
