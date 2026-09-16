@@ -24,11 +24,32 @@ Load this skill when you need to:
 
 Every session, before any significant work:
 
-**1. Register yourself**
+**1. Identify yourself — reuse your id, never mint one per session**
+
+Your `agent_id` is a stable identity that follows you across sessions. Resolve it in this order, stopping at the first step that works:
+
+1. **Remember it.** If your own memory or config records your id, use it — no lookup needed. Persist it there the first time you settle on one.
+2. **Look it up.** Otherwise call `lithos_agent_list()` **unfiltered** and find the row that is *you* — same tool, host and role. Reuse that `id`. Do not narrow with `type=`: rows auto-created by ordinary writes have no `type`, and an exact-match filter would hide your existing identity.
+3. **Register only if absent.** No matching row → `lithos_agent_register(id="<your-agent-id>", name="<display-name>", type="<agent-type>")`. Re-registering an existing id is idempotent (returns `created: false`) and is how you refresh `name`, `type` or `metadata`; registering a *new* id for an existing actor is not.
+
+**Id convention:** kebab-case `<tool>-<host>-<role>`, e.g. `claude-code-samsara-loom-dev`, `agent-zero-primary`.
+- Lowercase letters, digits and hyphens only — no spaces, parentheses or other punctuation
+- No model names, dates, or per-session/per-instance suffixes — a new model version or a restart is still the same actor
+- Human-readable text goes in `name` (`name="Claude Code — loom dev on samsara"`), never in `id`
+- Tests and probes use a `test-` prefix (`test-skill-verify`) so they can be swept — never register from a test without one
+
+Worked example (fresh session, no remembered id):
 ```
-lithos_agent_register(id="<your-agent-id>", name="<display-name>", type="<agent-type>")
+lithos_agent_list()                      # unfiltered — a type= filter hides auto-registered rows
+# → {"agents": [{"id": "claude-code-samsara-loom-dev", "name": "Claude Code — loom dev on samsara",
+#                "type": "claude-code", "last_seen_at": "..."},
+#               {"id": "agent-zero-primary", "name": null, "type": null, "last_seen_at": "..."}, ...]}
+# The samsara/loom-dev row is me → use id="claude-code-samsara-loom-dev" for every agent= argument. Done — do not register.
+
+# Only if no row matched:
+lithos_agent_register(id="claude-code-samsara-loom-dev", name="Claude Code — loom dev on samsara", type="claude-code")
+# → {"success": true, "created": true}
 ```
-Do this once on first run. Your `agent_id` follows you across sessions — pick a stable, descriptive ID.
 
 **2. Search before you work**
 ```
@@ -156,6 +177,7 @@ Run both task queries and union results — no single query covers all agents' c
 
 ## Pitfalls
 
+- **Don't mint a new agent id per session** — look up your existing id first (see Required First Steps). A fresh id per session splits your history across agents and litters `lithos_agent_list` for everyone
 - **Don't reconstruct full UUIDs from context** — pass the short id as a prefix instead (see Short ID Prefixes). A fabricated UUID that happens to exist silently writes to the wrong record
 - **Don't skip the search step** — the most common mistake. Always `lithos_cache_lookup` or `lithos_search` before writing new knowledge
 - **Don't use `lithos_search` when quality matters** — it doesn't enforce access scopes or track salience. Use `lithos_retrieve` for actual work
