@@ -4,6 +4,14 @@ on:
   pull_request:
     paths:
       - 'agent-skills/**'
+      - '.github/workflows/review-agent-skills.yml'
+
+# `tessl skill review` was removed from the CLI in favour of `tessl review run`,
+# which needs a workspace when run non-interactively. The threshold is a sanity
+# floor, not a target: the last legacy run scored lithos 92% / influx-inbox 84%.
+env:
+  TESSL_WORKSPACE: agent-lore
+  TESSL_REVIEW_THRESHOLD: 70
 
 jobs:
   review:
@@ -14,6 +22,10 @@ jobs:
         with:
           token: ${{ secrets.TESSL_TOKEN }}
       - name: Review lithos skill
-        run: tessl skill review agent-skills/plugins/lithos/skills/lithos/SKILL.md
+        run: >
+          tessl review run agent-skills/plugins/lithos/skills/lithos
+          --workspace "$TESSL_WORKSPACE" --threshold "$TESSL_REVIEW_THRESHOLD"
       - name: Review influx-inbox skill
-        run: tessl skill review agent-skills/plugins/influx-inbox/skills/influx-inbox/SKILL.md
+        run: >
+          tessl review run agent-skills/plugins/influx-inbox/skills/influx-inbox
+          --workspace "$TESSL_WORKSPACE" --threshold "$TESSL_REVIEW_THRESHOLD"
