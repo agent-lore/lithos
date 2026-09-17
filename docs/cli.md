@@ -99,7 +99,7 @@ lithos stats
 lithos --data-dir ./docker/data stats
 ```
 
-Outputs document count, search chunks, graph nodes/edges, tags, registered agents, active tasks, and open claims.
+Outputs document count, search chunks, graph nodes/edges, tags, active (non-archived) agents, active tasks, and open claims.
 
 ### `reindex` — Rebuild search indices
 

@@ -84,6 +84,7 @@ classDiagram
     +first_seen_at datetime | None
     +last_seen_at datetime | None
     +metadata dict[str, Any]
+    +archived_at datetime | None
   }
   class Claim {
     +task_id str

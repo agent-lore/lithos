@@ -3,6 +3,7 @@
 import pytest
 
 from lithos.events import (
+    AGENT_ARCHIVED,
     AGENT_REGISTERED,
     FINDING_POSTED,
     NOTE_CREATED,
@@ -472,6 +473,39 @@ class TestAgentEventEmission:
         assert event.agent == "event-test-agent"
         assert event.payload["agent_id"] == "event-test-agent"
         assert event.payload["name"] == "Event Test Agent"
+        server.event_bus.unsubscribe(queue)
+
+    @pytest.mark.asyncio
+    async def test_lithos_agent_archive_emits_agent_archived(self, server: LithosServer) -> None:
+        await call_tool(server, "lithos_agent_register", {"id": "to-archive"})
+        queue = server.event_bus.subscribe(event_types=[AGENT_ARCHIVED])
+
+        result = await call_tool(
+            server, "lithos_agent_archive", {"id": "to-archive", "agent": "archivist"}
+        )
+        assert result["success"] is True
+        assert result["already_archived"] is False
+
+        event = queue.get_nowait()
+        assert event.type == AGENT_ARCHIVED
+        assert event.agent == "archivist"
+        assert event.payload["agent_id"] == "to-archive"
+        assert event.payload["archived_at"] == result["archived_at"]
+        server.event_bus.unsubscribe(queue)
+
+    @pytest.mark.asyncio
+    async def test_re_archive_emits_no_event(self, server: LithosServer) -> None:
+        await call_tool(server, "lithos_agent_register", {"id": "twice"})
+        await call_tool(server, "lithos_agent_archive", {"id": "twice", "agent": "archivist"})
+        queue = server.event_bus.subscribe(event_types=[AGENT_ARCHIVED])
+
+        result = await call_tool(
+            server, "lithos_agent_archive", {"id": "twice", "agent": "archivist"}
+        )
+
+        assert result["success"] is True
+        assert result["already_archived"] is True
+        assert queue.empty()
         server.event_bus.unsubscribe(queue)
 
 

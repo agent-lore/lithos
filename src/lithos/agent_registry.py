@@ -12,13 +12,14 @@ import contextlib
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
 
+from lithos.errors import CoordinationError
 from lithos.sqlite_datetime import format_datetime, parse_datetime
 
 logger = logging.getLogger(__name__)
@@ -34,9 +35,24 @@ AGENTS_DDL: tuple[str, ...] = (
         type TEXT,
         first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        metadata JSON
+        metadata JSON,
+        archived_at TIMESTAMP
     )
     """,
+    # Case-insensitive name lookup (#423). An expression index so the
+    # collision check is a SEARCH, never a table scan — pinned by an
+    # EXPLAIN QUERY PLAN test.
+    "CREATE INDEX IF NOT EXISTS idx_agents_name_lower ON agents(lower(name))",
+)
+
+# Name-collision probe (#423). Bind the *raw* name: SQLite's lower() folds
+# ASCII only, so pre-folding with Python's Unicode-aware str.lower() would
+# make non-ASCII names miss the index. NULL names never match. Public so the
+# query-plan test needn't import a private name.
+AGENT_NAME_COLLISION_SQL = (
+    "SELECT * FROM agents "
+    "WHERE lower(name) = lower(?) AND archived_at IS NULL AND id != ? "
+    "ORDER BY last_seen_at DESC LIMIT 10"
 )
 
 
@@ -50,6 +66,7 @@ class Agent:
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    archived_at: datetime | None = None
 
 
 class AgentRegistry:
@@ -69,18 +86,41 @@ class AgentRegistry:
         return self._db_path()
 
     async def ensure_schema(self, db: aiosqlite.Connection) -> None:
-        """Apply the registry DDL on the caller's connection. Does not commit."""
+        """Apply the registry DDL and migrations on the caller's connection.
+        Does not commit."""
         for statement in AGENTS_DDL:
             await db.execute(statement)
+        await self._migrate_agents_add_archived_at(db)
+
+    @staticmethod
+    async def _migrate_agents_add_archived_at(db: aiosqlite.Connection) -> None:
+        """Add ``agents.archived_at`` (#423) to a pre-existing table.
+
+        Idempotent: guarded by ``PRAGMA table_info``. Nullable with no
+        default, so every existing row starts active. The lower(name) index
+        in ``AGENTS_DDL`` needs no migration — ``CREATE INDEX IF NOT EXISTS``
+        is safe on a legacy table.
+        """
+        cursor = await db.execute("PRAGMA table_info(agents)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "archived_at" in columns:
+            return
+        await db.execute("ALTER TABLE agents ADD COLUMN archived_at TIMESTAMP")
+        logger.info("coordination.db migration applied: added agents.archived_at")
 
     async def ensure_agent_known(self, agent_id: str) -> None:
-        """Ensure agent is registered, auto-registering if needed."""
+        """Ensure agent is registered, auto-registering if needed.
+
+        Any activity resurrects an archived agent (#423): archived means
+        "no activity since archiving", so the stamp bump also clears
+        ``archived_at``.
+        """
         logger.debug("ensure_agent_known: agent_id=%s", agent_id)
         now = format_datetime(datetime.now(UTC))
         async with aiosqlite.connect(self.db_path) as db:
             # Try to update last_seen_at
             cursor = await db.execute(
-                "UPDATE agents SET last_seen_at = ? WHERE id = ?",
+                "UPDATE agents SET last_seen_at = ?, archived_at = NULL WHERE id = ?",
                 (now, agent_id),
             )
             if cursor.rowcount == 0:
@@ -128,7 +168,8 @@ class AgentRegistry:
                     SET name = COALESCE(?, name),
                         type = COALESCE(?, type),
                         metadata = COALESCE(?, metadata),
-                        last_seen_at = ?
+                        last_seen_at = ?,
+                        archived_at = NULL
                     WHERE id = ?
                     """,
                     (name, agent_type, metadata_json, now, agent_id),
@@ -180,10 +221,18 @@ class AgentRegistry:
         self,
         agent_type: str | None = None,
         active_since: datetime | None = None,
+        *,
+        include_archived: bool = False,
     ) -> list[Agent]:
-        """List all known agents."""
+        """List known agents, most recently active first.
+
+        Archived agents are hidden unless ``include_archived`` is set.
+        """
         query = "SELECT * FROM agents WHERE 1=1"
         params: list[Any] = []
+
+        if not include_archived:
+            query += " AND archived_at IS NULL"
 
         if agent_type:
             query += " AND type = ?"
@@ -201,6 +250,49 @@ class AgentRegistry:
             rows = await cursor.fetchall()
             return [self._row_to_agent(row) for row in rows]
 
+    async def archive_agent(self, agent_id: str) -> tuple[Agent, bool]:
+        """Archive an agent (#423): it keeps its history and ``agent_info``,
+        but leaves ``list_agents`` until it is next active.
+
+        Idempotent — an already-archived agent keeps its original stamp.
+        Does not touch ``last_seen_at``: archiving is the archiver's
+        activity, not the target's.
+
+        Returns:
+            ``(agent, newly_archived)``
+
+        Raises:
+            CoordinationError: ``agent_not_found`` when no such agent exists.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
+            row = await cursor.fetchone()
+            if row is None:
+                raise CoordinationError("agent_not_found", f"Agent {agent_id!r} not found")
+            agent = self._row_to_agent(row)
+            if agent.archived_at is not None:
+                return agent, False
+
+            stamp = datetime.now(UTC)
+            await db.execute(
+                "UPDATE agents SET archived_at = ? WHERE id = ?",
+                (format_datetime(stamp), agent_id),
+            )
+            await db.commit()
+            logger.info("Agent archived: agent_id=%s", agent_id, extra={"agent_id": agent_id})
+            return replace(agent, archived_at=stamp), True
+
+    async def find_name_collisions(self, name: str | None, *, exclude_id: str) -> list[Agent]:
+        """Active agents (other than ``exclude_id``) whose ``name`` matches
+        case-insensitively. Blank or missing names never collide."""
+        if name is None or not name.strip():
+            return []
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(AGENT_NAME_COLLISION_SQL, (name, exclude_id))
+            return [self._row_to_agent(row) for row in await cursor.fetchall()]
+
     @staticmethod
     def _row_to_agent(row: aiosqlite.Row) -> Agent:
         """Decode one ``agents`` row; unreadable metadata degrades to ``{}``."""
@@ -216,4 +308,5 @@ class AgentRegistry:
             first_seen_at=parse_datetime(row["first_seen_at"]),
             last_seen_at=parse_datetime(row["last_seen_at"]),
             metadata=metadata,
+            archived_at=parse_datetime(row["archived_at"]),
         )

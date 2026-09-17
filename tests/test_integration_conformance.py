@@ -956,6 +956,85 @@ class TestAgentAndCoordinationMCPTools:
         assert any(agent["id"] == "agent-roundtrip" for agent in listing["agents"])
 
     @pytest.mark.asyncio
+    async def test_agent_archive_roundtrip(self, server: LithosServer):
+        """#423: archive hides an agent from the default list, keeps it
+        readable, and any write by it brings it back."""
+        await call_tool(server, "lithos_agent_register", {"id": "keeper", "name": "Keeper"})
+        await call_tool(server, "lithos_agent_register", {"id": "retiree", "name": "Retiree"})
+
+        archived = await call_tool(
+            server, "lithos_agent_archive", {"id": "retiree", "agent": "keeper"}
+        )
+        assert archived["success"] is True
+        assert archived["id"] == "retiree"
+        assert archived["already_archived"] is False
+        assert archived["archived_at"] is not None
+
+        default = await call_tool(server, "lithos_agent_list", {})
+        assert {a["id"] for a in default["agents"]} >= {"keeper"}
+        assert "retiree" not in {a["id"] for a in default["agents"]}
+        assert all(a["archived_at"] is None for a in default["agents"])
+
+        everything = await call_tool(server, "lithos_agent_list", {"include_archived": True})
+        rows = {a["id"]: a for a in everything["agents"]}
+        assert rows["retiree"]["archived_at"] == archived["archived_at"]
+        assert rows["keeper"]["archived_at"] is None
+
+        info = await call_tool(server, "lithos_agent_info", {"id": "retiree"})
+        info = info.get("result", info)
+        assert info["name"] == "Retiree"
+        assert info["archived_at"] == archived["archived_at"]
+
+        # Any write by the archived id resurrects it.
+        await call_tool(server, "lithos_task_create", {"title": "Back", "agent": "retiree"})
+        default = await call_tool(server, "lithos_agent_list", {})
+        rows = {a["id"]: a for a in default["agents"]}
+        assert "retiree" in rows
+        assert rows["retiree"]["archived_at"] is None
+
+        # Idempotent re-archive after a fresh archive.
+        again = await call_tool(
+            server, "lithos_agent_archive", {"id": "retiree", "agent": "keeper"}
+        )
+        assert again["already_archived"] is False
+        again = await call_tool(
+            server, "lithos_agent_archive", {"id": "retiree", "agent": "keeper"}
+        )
+        assert again["already_archived"] is True
+
+    @pytest.mark.asyncio
+    async def test_agent_register_warns_on_name_collision(self, server: LithosServer):
+        """#423: a second id under an existing name registers fine but is warned."""
+        first = await call_tool(
+            server, "lithos_agent_register", {"id": "lens-main", "name": "Lithos Lens"}
+        )
+        assert first["created"] is True
+        assert first["warnings"] == []
+
+        second = await call_tool(
+            server, "lithos_agent_register", {"id": "lens-pr4", "name": "lithos lens"}
+        )
+        assert second["success"] is True
+        assert second["created"] is True
+        assert len(second["warnings"]) == 1
+        assert "'lens-main'" in second["warnings"][0]
+
+        # Same id re-registering is not a collision with itself.
+        again = await call_tool(
+            server, "lithos_agent_register", {"id": "lens-pr4", "name": "lithos lens"}
+        )
+        assert again["created"] is False
+        assert "'lens-main'" in again["warnings"][0]
+        assert not any("'lens-pr4'" in w for w in again["warnings"])
+
+        # Archived agents no longer collide.
+        await call_tool(server, "lithos_agent_archive", {"id": "lens-main", "agent": "lens-pr4"})
+        clean = await call_tool(
+            server, "lithos_agent_register", {"id": "lens-pr4", "name": "lithos lens"}
+        )
+        assert clean["warnings"] == []
+
+    @pytest.mark.asyncio
     async def test_integration_mcp_task_lifecycle_full(self, server: LithosServer):
         created = await call_tool(
             server,

@@ -743,32 +743,52 @@ Explicitly register an agent with metadata (optional, agents are auto-registered
 | `type` | string | No | Agent type ("agent-zero", "openclaw", "claude-code", "custom") |
 | `metadata` | object | No | Additional metadata (capabilities, version, etc.) |
 
-**Returns:** `{ success: boolean, created: boolean }`
+**Returns:** `{ success: boolean, created: boolean, warnings: string[] }`
 
 **Response semantics:**
-- `{ success: true, created: true }` — New agent registered
-- `{ success: true, created: false }` — Agent already existed, metadata updated, `last_seen_at` refreshed
+- `{ success: true, created: true, warnings: [] }` — New agent registered
+- `{ success: true, created: false, warnings: [] }` — Agent already existed, metadata updated, `last_seen_at` refreshed, `archived_at` cleared (re-registering un-archives)
+- `warnings` names every *other* active agent whose `name` matches case-insensitively (#423). Registration still succeeds — the warning is a nudge that the caller probably already has an id and should reuse it. A NULL or blank `name` never warns. The lookup is an index search on `lower(name)`, never a table scan.
+
+#### `lithos_agent_archive`
+Retire an agent from the roster (#423). The agent keeps its history — tasks, claims, findings and access-log entries still attribute to it — and stays readable through `lithos_agent_info`, but it drops out of `lithos_agent_list` (and the `agents` count in `lithos_stats`) until it is next active. **Any activity resurrects it:** every write by the archived id (`ensure_agent_known`) and `lithos_agent_register` clear `archived_at`. Archived therefore means "no activity since archiving".
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | string | Yes | Agent to archive |
+| `agent` | string | Yes | Agent performing the archive (attribution; its own `last_seen_at` is bumped) |
+
+**Returns:** `{ success: true, id, archived_at, already_archived: boolean }`
+
+**Response semantics:**
+- `already_archived: false` — Newly archived; `agent.archived` emitted
+- `already_archived: true` — Idempotent repeat; original `archived_at` kept, no event
+- `{ status: "error", code: "agent_not_found", message }` — No such agent
+
+Archiving does not touch the target's `last_seen_at` (it is the archiver's activity, not the target's).
 
 #### `lithos_agent_info`
-Get information about an agent.
+Get information about an agent, archived or not.
 
 **Arguments:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `id` | string | Yes | Agent identifier |
 
-**Returns:** `{ id, name, type, first_seen_at, last_seen_at, metadata }`
+**Returns:** `{ id, name, type, first_seen_at, last_seen_at, archived_at, metadata }` — `archived_at` is `null` while active.
 
 #### `lithos_agent_list`
-List all known agents.
+List known agents, most recently active first. Archived agents are hidden by default.
 
 **Arguments:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `type` | string | No | Filter by agent type |
+| `type` | string | No | Filter by agent type (exact match; auto-registered agents have no type) |
 | `active_since` | string | No | Only agents seen since (ISO 8601) |
+| `include_archived` | boolean | No | Also list archived agents (default `false`) |
 
-**Returns:** `{ agents: [{ id, name, type, last_seen_at }] }`
+**Returns:** `{ agents: [{ id, name, type, last_seen_at, archived_at }] }` — one row shape; `archived_at` is `null` while active.
 
 ### 5.4 Coordination Operations
 
@@ -1486,6 +1506,7 @@ Lithos includes an in-memory event bus that emits `LithosEvent` on all write, de
 | `task.reopened` | `lithos_task_reopen` | `task_id`, `agent`, `prior_status`, `prior_outcome`, `updated_at` |
 | `finding.posted` | `lithos_finding_post` | `finding_id`, `task_id`, `agent` |
 | `agent.registered` | `lithos_agent_register` | `agent_id`, `name` |
+| `agent.archived` | `lithos_agent_archive` (only when newly archived) | `agent_id`, `archived_at` |
 
 For `task.completed`, the current implementation emits `cited_nodes`, `misleading_nodes`, and `receipt_id` as JSON-encoded strings in the event payload (for example `"[\"node-1\"]"` or `"null"`), while `outcome` is emitted as a normal string or `null`.
 | `batch.queued` | Defined constant only; not currently emitted by server tool paths | — |
@@ -1829,14 +1850,14 @@ These are explicitly not part of the initial implementation but may be considere
 |----------|-------|
 | Knowledge | `lithos_write`, `lithos_note_update`, `lithos_read`, `lithos_delete`, `lithos_search`, `lithos_list`, `lithos_cache_lookup` |
 | Graph | `lithos_tags`, `lithos_related` |
-| Agent | `lithos_agent_register`, `lithos_agent_info`, `lithos_agent_list` |
+| Agent | `lithos_agent_register`, `lithos_agent_archive`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_reopen`, `lithos_task_list`, `lithos_task_status`, `lithos_task_get`, `lithos_finding_post`, `lithos_finding_list` |
 | Task Graph | `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, `lithos_task_blocked`, `lithos_task_children`, `lithos_task_spawn` |
 | System | `lithos_stats` |
 | LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
 | HTTP | `GET /health`, `GET /events`, `GET /audit` (not MCP tools; see §5.7 and §8.7) |
 
-**Total: 37 MCP tools + 3 HTTP endpoints** (`lithos_note_update` adds a frontmatter-only note patch — tags/metadata/title/status without the body — at parity with `lithos_task_update` (#362); task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_reopen` completes the lifecycle (terminal → open, the remediation for stranded dependents) and `lithos_task_update` now accepts terminal tasks (#303); `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
+**Total: 38 MCP tools + 3 HTTP endpoints** (`lithos_agent_archive` retires an agent from the roster without losing its history (#423); `lithos_note_update` adds a frontmatter-only note patch — tags/metadata/title/status without the body — at parity with `lithos_task_update` (#362); task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_reopen` completes the lifecycle (terminal → open, the remediation for stranded dependents) and `lithos_task_update` now accepts terminal tasks (#303); `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
 
 ---
 

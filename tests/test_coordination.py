@@ -106,6 +106,278 @@ class TestAgentRegistry:
         assert agent_after.last_seen_at >= first_seen
 
 
+async def _backdate_agent(db_path, agent_id: str, *, archived: bool) -> None:
+    """Push an agent's stamps into the past so a bump is unambiguous without sleeps."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "UPDATE agents SET last_seen_at = ?, archived_at = ? WHERE id = ?",
+            (
+                "2000-01-01T00:00:00+00:00",
+                "2000-01-02T00:00:00+00:00" if archived else None,
+                agent_id,
+            ),
+        )
+        await db.commit()
+
+
+class TestAgentArchive:
+    """#423: archived agents keep their history but leave the default list;
+    any activity resurrects them."""
+
+    async def test_archive_hides_from_list_by_default(
+        self, coordination_service: CoordinationService
+    ):
+        await coordination_service.register_agent("keep", name="Keep")
+        await coordination_service.register_agent("retire", name="Retire")
+
+        agent, newly = await coordination_service.archive_agent("retire")
+
+        assert newly is True
+        assert agent.id == "retire"
+        assert agent.archived_at is not None
+        ids = {a.id for a in await coordination_service.list_agents()}
+        assert ids == {"keep"}
+
+    async def test_archive_include_archived_lists_it_with_stamp(
+        self, coordination_service: CoordinationService
+    ):
+        await coordination_service.register_agent("keep")
+        await coordination_service.register_agent("retire")
+        await coordination_service.archive_agent("retire")
+
+        rows = {a.id: a for a in await coordination_service.list_agents(include_archived=True)}
+
+        assert set(rows) == {"keep", "retire"}
+        assert rows["keep"].archived_at is None
+        assert rows["retire"].archived_at is not None
+
+    async def test_get_agent_returns_archived_with_stamp(
+        self, coordination_service: CoordinationService
+    ):
+        await coordination_service.register_agent("retire", name="Retire", agent_type="t")
+        await coordination_service.archive_agent("retire")
+
+        agent = await coordination_service.get_agent("retire")
+
+        assert agent is not None
+        assert agent.name == "Retire"
+        assert agent.archived_at is not None
+
+    async def test_archive_is_idempotent_and_preserves_stamp(
+        self, coordination_service: CoordinationService
+    ):
+        await coordination_service.register_agent("retire")
+        first, newly_first = await coordination_service.archive_agent("retire")
+        second, newly_second = await coordination_service.archive_agent("retire")
+
+        assert newly_first is True
+        assert newly_second is False
+        assert second.archived_at == first.archived_at
+
+    async def test_archive_does_not_bump_targets_last_seen(
+        self, coordination_service: CoordinationService
+    ):
+        """Archiving is the archiver's activity, not the target's."""
+        await coordination_service.register_agent("retire")
+        await _backdate_agent(coordination_service.db_path, "retire", archived=False)
+
+        agent, _ = await coordination_service.archive_agent("retire")
+
+        assert agent.last_seen_at is not None
+        assert agent.last_seen_at.year == 2000
+
+    async def test_archive_unknown_agent_raises_agent_not_found(
+        self, coordination_service: CoordinationService
+    ):
+        with pytest.raises(CoordinationError) as exc_info:
+            await coordination_service.archive_agent("no-such-agent")
+        assert exc_info.value.code == "agent_not_found"
+        assert "no-such-agent" in exc_info.value.message
+
+    async def test_ensure_agent_known_resurrects_archived(
+        self, coordination_service: CoordinationService
+    ):
+        await coordination_service.register_agent("retire")
+        await coordination_service.archive_agent("retire")
+
+        await coordination_service.ensure_agent_known("retire")
+
+        agent = await coordination_service.get_agent("retire")
+        assert agent is not None
+        assert agent.archived_at is None
+        assert "retire" in {a.id for a in await coordination_service.list_agents()}
+
+    async def test_register_resurrects_archived(self, coordination_service: CoordinationService):
+        await coordination_service.register_agent("retire", name="Old")
+        await coordination_service.archive_agent("retire")
+
+        success, created = await coordination_service.register_agent("retire", name="New")
+
+        assert success and not created
+        agent = await coordination_service.get_agent("retire")
+        assert agent is not None
+        assert agent.archived_at is None
+        assert agent.name == "New"
+
+    async def test_active_since_and_archived_compose(
+        self, coordination_service: CoordinationService
+    ):
+        await coordination_service.register_agent("fresh")
+        await coordination_service.register_agent("retired-fresh")
+        await coordination_service.archive_agent("retired-fresh")
+        since = datetime.now(UTC) - timedelta(hours=1)
+
+        default = {a.id for a in await coordination_service.list_agents(active_since=since)}
+        everything = {
+            a.id
+            for a in await coordination_service.list_agents(
+                active_since=since, include_archived=True
+            )
+        }
+
+        assert default == {"fresh"}
+        assert everything == {"fresh", "retired-fresh"}
+
+    async def test_get_stats_excludes_archived_agents(
+        self, coordination_service: CoordinationService
+    ):
+        await coordination_service.register_agent("a")
+        await coordination_service.register_agent("b")
+        before = (await coordination_service.get_stats())["agents"]
+
+        await coordination_service.archive_agent("b")
+
+        after = (await coordination_service.get_stats())["agents"]
+        assert after == before - 1
+
+    # ---- name collisions (warn, never block) ----
+
+    async def test_name_collision_case_insensitive(self, coordination_service: CoordinationService):
+        await coordination_service.register_agent("lens-main", name="Lithos Lens")
+        await coordination_service.register_agent("lens-pr4", name="lithos lens")
+
+        others = await coordination_service.find_agent_name_collisions(
+            "LITHOS LENS", exclude_id="lens-new"
+        )
+
+        assert {a.id for a in others} == {"lens-main", "lens-pr4"}
+
+    async def test_name_collision_excludes_archived(
+        self, coordination_service: CoordinationService
+    ):
+        await coordination_service.register_agent("lens-main", name="Lithos Lens")
+        await coordination_service.register_agent("lens-old", name="Lithos Lens")
+        await coordination_service.archive_agent("lens-old")
+
+        others = await coordination_service.find_agent_name_collisions(
+            "Lithos Lens", exclude_id="lens-new"
+        )
+
+        assert [a.id for a in others] == ["lens-main"]
+
+    async def test_name_collision_excludes_same_id(self, coordination_service: CoordinationService):
+        await coordination_service.register_agent("lens-main", name="Lithos Lens")
+
+        others = await coordination_service.find_agent_name_collisions(
+            "Lithos Lens", exclude_id="lens-main"
+        )
+
+        assert others == []
+
+    async def test_name_collision_null_and_blank_names_never_match(
+        self, coordination_service: CoordinationService
+    ):
+        await coordination_service.ensure_agent_known("nameless")  # NULL name row
+        await coordination_service.register_agent("named", name="Named")
+
+        assert await coordination_service.find_agent_name_collisions("", exclude_id="x") == []
+        assert await coordination_service.find_agent_name_collisions("  ", exclude_id="x") == []
+        # A NULL-named row never collides with anything, including a NULL query.
+        assert await coordination_service.find_agent_name_collisions(None, exclude_id="x") == []
+
+    async def test_name_collision_query_plan_uses_expression_index(
+        self, coordination_service: CoordinationService
+    ):
+        """The sub-linear rule: the case-insensitive lookup must SEARCH the
+        lower(name) expression index, never SCAN the table."""
+        from lithos.agent_registry import AGENT_NAME_COLLISION_SQL
+
+        async with aiosqlite.connect(coordination_service.db_path) as db:
+            cursor = await db.execute(
+                f"EXPLAIN QUERY PLAN {AGENT_NAME_COLLISION_SQL}", ("Lithos Lens", "x")
+            )
+            plan = [row[3] for row in await cursor.fetchall()]
+        assert plan, "EXPLAIN QUERY PLAN returned no rows"
+        assert all("SCAN" not in detail for detail in plan), plan
+        assert any("idx_agents_name_lower" in detail for detail in plan), plan
+
+    # ---- #423 item 3: every coordination mutator bumps last_seen_at ----
+
+    @pytest.mark.parametrize(
+        "op",
+        [
+            "create_task",
+            "update_task",
+            "complete_task",
+            "cancel_task",
+            "reopen_task",
+            "claim_task",
+            "renew_claim",
+            "release_claim",
+            "post_finding",
+            "upsert_task_edge",
+            "spawn_task",
+        ],
+    )
+    async def test_every_coordination_mutator_bumps_last_seen_and_resurrects(
+        self, coordination_service: CoordinationService, op: str
+    ):
+        """Any write by an agent stamps last_seen_at and clears archived_at —
+        the invariant the archive feature and the skill's identity step rely on."""
+        svc = coordination_service
+        actor = "matrix-agent"
+        # Fixtures owned by a different agent so the op under test is the
+        # actor's only write.
+        task_id = await svc.create_task(title="Fixture", agent="fixture-agent")
+        other_id = await svc.create_task(title="Other", agent="fixture-agent")
+        if op in {"renew_claim", "release_claim"}:
+            ok, _ = await svc.claim_task(task_id, "work", actor)
+            assert ok
+        if op == "reopen_task":
+            await svc.complete_task(task_id, "fixture-agent", outcome="done")
+
+        await svc.ensure_agent_known(actor)
+        await _backdate_agent(svc.db_path, actor, archived=True)
+
+        if op == "create_task":
+            await svc.create_task(title="T", agent=actor)
+        elif op == "update_task":
+            await svc.update_task(task_id, actor, title="Renamed")
+        elif op == "complete_task":
+            await svc.complete_task(task_id, actor, outcome="done")
+        elif op == "cancel_task":
+            await svc.cancel_task(task_id, actor, reason="no")
+        elif op == "reopen_task":
+            await svc.reopen_task(task_id, actor)
+        elif op == "claim_task":
+            await svc.claim_task(task_id, "work", actor)
+        elif op == "renew_claim":
+            await svc.renew_claim(task_id, "work", actor)
+        elif op == "release_claim":
+            await svc.release_claim(task_id, "work", actor)
+        elif op == "post_finding":
+            await svc.post_finding(task_id, actor, "found")
+        elif op == "upsert_task_edge":
+            await svc.upsert_task_edge(other_id, task_id, "blocks", actor)
+        elif op == "spawn_task":
+            await svc.spawn_task(task_id, "Spawned", actor)
+
+        agent = await svc.get_agent(actor)
+        assert agent is not None
+        assert agent.last_seen_at is not None and agent.last_seen_at.year > 2000, op
+        assert agent.archived_at is None, op
+
+
 class TestTaskLifecycle:
     """Tests for task creation and lifecycle."""
 
@@ -1668,6 +1940,55 @@ class TestTaskOutcomeMigration:
         open_task = await service.get_task("open-task")
         assert open_task is not None
         assert open_task.updated_at == open_task.created_at
+
+    async def test_migration_adds_archived_at_and_name_index_to_legacy_agents(self, tmp_path):
+        """A pre-#423 agents table gains archived_at and the lower(name) index,
+        idempotently, with existing rows (NULL names included) untouched."""
+        db_path = tmp_path / "coordination.db"
+
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE agents (
+                    id TEXT PRIMARY KEY,
+                    name TEXT,
+                    type TEXT,
+                    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    metadata JSON
+                )
+                """
+            )
+            await db.execute(
+                "INSERT INTO agents (id, name, type) VALUES (?, ?, ?)",
+                ("named", "Named Agent", "t"),
+            )
+            await db.execute("INSERT INTO agents (id) VALUES (?)", ("nameless",))
+            await db.commit()
+
+        config = LithosConfig(storage=StorageConfig(data_dir=tmp_path))
+        service = CoordinationService(config=config)
+        service._db_path = db_path
+        await service.initialize()
+
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute("PRAGMA table_info(agents)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            cursor = await db.execute("PRAGMA index_list(agents)")
+            indexes = {row[1] for row in await cursor.fetchall()}
+        assert "archived_at" in columns
+        assert "idx_agents_name_lower" in indexes
+
+        rows = {a.id: a for a in await service.list_agents(include_archived=True)}
+        assert set(rows) == {"named", "nameless"}
+        assert rows["named"].name == "Named Agent"
+        assert all(a.archived_at is None for a in rows.values())
+
+        # Idempotency: a second initialize() is a no-op.
+        service2 = CoordinationService(config=config)
+        service2._db_path = db_path
+        await service2.initialize()
+        assert {a.id for a in await service2.list_agents()} == {"named", "nameless"}
 
     async def test_migration_normalizes_legacy_stamp_for_cas_round_trip(self, tmp_path):
         """A SQLite-default legacy stamp must round-trip as a CAS token.

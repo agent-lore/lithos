@@ -31,6 +31,7 @@ pytestmark = pytest.mark.integration
 
 
 EXPECTED_TOOLS = [
+    "lithos_agent_archive",
     "lithos_agent_info",
     "lithos_agent_list",
     "lithos_agent_register",
@@ -125,6 +126,7 @@ VALIDATION_CASES: list[tuple[str, dict[str, Any], str]] = [
     ("lithos_agent_list", {"active_since": "not-a-date"}, "invalid_input"),
     ("lithos_finding_list", {"task_id": "any-task", "since": "not-a-date"}, "invalid_input"),
     # not-found family
+    ("lithos_agent_archive", {"id": "no-such-agent", "agent": "a"}, "agent_not_found"),
     (
         "lithos_read",
         {"id": "00000000-0000-0000-0000-000000000000", "agent_id": "a"},

@@ -413,6 +413,7 @@ class TestEventTypeConstants:
             "finding.posted",
             "edge.upserted",
             "agent.registered",
+            "agent.archived",
             "batch.queued",
             "batch.applying",
             "batch.projecting",
