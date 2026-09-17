@@ -14,10 +14,10 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 74 | 74 | 0 |
 | `cross_module_private_refs` | 30 | 42 | 12 |
-| `max_module_lines` | 3005 | 3050 | 45 |
+| `max_module_lines` | 2823 | 2900 | 77 |
 | `module_cycles` | 1 | 1 | 0 |
 | `modules_over_800_lines` | 12 | 12 | 0 |
-| `tests_private_imports` | 91 | 91 | 0 |
+| `tests_private_imports` | 89 | 89 | 0 |
 
 ## Import graph
 
@@ -37,7 +37,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Codec | 1 | 808 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
 | CognitiveMemory | 1 | 1158 | 953 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 546 | 378 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
-| Coordination | 1 | 3005 | 2549 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
+| Coordination | 3 | 3082 | 2607 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
 | Entrypoints | 13 | 6176 | 4973 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 15 |
 | Errors | 2 | 276 | 205 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 350 | 281 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
@@ -54,8 +54,8 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **45**, lines: **26330**, SLOC: **21208**
-- Largest module: `lithos.coordination` (3005 lines)
+- Modules: **47**, lines: **26407**, SLOC: **21266**
+- Largest module: `lithos.coordination` (2823 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
   - `lithos.cognitive_memory`
@@ -72,7 +72,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **799**, cyclomatic > 10: **64**
+- Functions: **807**, cyclomatic > 10: **64**
 
 Top 10 most complex functions:
 
@@ -116,7 +116,7 @@ Private-name reaches across module seams. Both counts can be pinned as
   - `lithos.tools.findings_stats -> lithos.server.LithosServer._emit`
   - `lithos.tools.notes -> lithos.knowledge._UNSET`
   - `lithos.tools.notes -> lithos.knowledge._UnsetType`
-- Tests importing src privates: **91**
+- Tests importing src privates: **89**
   - `tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x19)`
   - `tests/test_telemetry.py -> lithos.telemetry._lcma_metrics_registered (x8)`
   - `tests/test_telemetry.py -> lithos.telemetry._initialized (x7)`
@@ -124,7 +124,6 @@ Private-name reaches across module seams. Both counts can be pinned as
   - `tests/test_entities.py -> lithos.lcma.entities._cap_entities (x5)`
   - `tests/test_knowledge.py -> lithos.frontmatter_codec._KNOWN_METADATA_KEYS (x3)`
   - `tests/test_retrieve.py -> lithos.lcma.retrieve._mmr_diversify (x3)`
-  - `tests/test_coordination.py -> lithos.coordination._parse_datetime (x2)`
   - `tests/test_entities.py -> lithos.lcma.entities._clean_candidate (x2)`
   - `tests/test_knowledge.py -> lithos.knowledge._UNSET (x2)`
   - `tests/test_retrieve.py -> lithos.lcma.retrieve._rerank_fast (x2)`
@@ -147,10 +146,11 @@ Private-name reaches across module seams. Both counts can be pinned as
   - `tests/test_event_delivery.py -> lithos.server._format_resync_sse`
   - `tests/test_event_delivery.py -> lithos.server._format_sse`
   - `tests/test_knowledge.py -> lithos.knowledge._atomic_write`
+  - `tests/test_lcma_config.py -> lithos.config._DEFAULT_NOTE_TYPE_PRIORS`
   - … (list capped at 30 pairs)
 
 ## Domain, tools & tests
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **37** (0 without docstrings)
-- Test-to-source line ratio: **1.88** (49426 test lines / 26330 source lines)
+- Test-to-source line ratio: **1.87** (49426 test lines / 26407 source lines)

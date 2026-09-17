@@ -13,6 +13,7 @@ from typing import Any, Literal
 import aiosqlite
 
 from lithos._merge import merge_metadata
+from lithos.agent_registry import Agent, AgentRegistry
 from lithos.config import LithosConfig, get_config
 
 # CoordinationError lives in lithos.errors (the shared taxonomy); this import
@@ -21,6 +22,7 @@ from lithos.config import LithosConfig, get_config
 # not a maintained contract; import from ``lithos.errors``.
 from lithos.errors import AmbiguousIdPrefixError, CoordinationError
 from lithos.id_resolution import AMBIGUITY_CANDIDATE_CAP, MIN_PREFIX_LEN, prefix_upper_bound
+from lithos.sqlite_datetime import format_datetime, parse_datetime
 from lithos.telemetry import lithos_metrics, traced
 
 logger = logging.getLogger(__name__)
@@ -125,7 +127,7 @@ def _validate_gate_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
         )
     if gate_type == "timer":
         raw = md.get("ready_at")
-        parsed = _parse_datetime(raw) if raw is not None else None
+        parsed = parse_datetime(raw) if raw is not None else None
         if parsed is None:
             raise CoordinationError(
                 "invalid_input",
@@ -139,16 +141,6 @@ def _validate_gate_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
 
 # SQL Schema
 SCHEMA = """
--- Agent registry
-CREATE TABLE IF NOT EXISTS agents (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    type TEXT,
-    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    metadata JSON
-);
-
 -- Tasks
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
@@ -224,18 +216,6 @@ CREATE INDEX IF NOT EXISTS idx_access_log_agent_id ON access_log(agent_id);
 CREATE INDEX IF NOT EXISTS idx_access_log_doc_id ON access_log(doc_id);
 CREATE INDEX IF NOT EXISTS idx_access_log_timestamp ON access_log(timestamp);
 """
-
-
-@dataclass
-class Agent:
-    """Agent information."""
-
-    id: str
-    name: str | None = None
-    type: str | None = None
-    first_seen_at: datetime | None = None
-    last_seen_at: datetime | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -334,36 +314,6 @@ class AccessLogEntry:
     timestamp: datetime | None = None
 
 
-def _parse_datetime(value: str | datetime | None) -> datetime | None:
-    """Parse a datetime from SQLite.
-
-    Returns ``None`` for legitimately-missing values (the field is NULL or
-    already ``None``) and *also* for values the parser could not interpret.
-    Unparseable values are logged at WARNING with the offending raw input so
-    that silent data corruption (a partial write, a manual edit, a schema
-    mismatch) shows up in operator logs rather than degrading silently to
-    ``None`` and then to ``datetime.now()`` at the call site (#205).
-    """
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    try:
-        # SQLite stores as ISO format string
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        logger.warning(
-            "Failed to parse datetime from SQLite value %r; treating as missing",
-            value,
-        )
-        return None
-
-
-def _format_datetime(dt: datetime) -> str:
-    """Format datetime for SQLite."""
-    return dt.isoformat()
-
-
 def _advance_stamp(now_dt: datetime, prior_raw: str | None) -> str:
     """Committed ``updated_at`` for a row write: wall clock, but strictly
     after the row's prior stamp.
@@ -379,15 +329,15 @@ def _advance_stamp(now_dt: datetime, prior_raw: str | None) -> str:
     naive prior is treated as UTC for the comparison only.
     """
     if prior_raw:
-        prior = _parse_datetime(prior_raw)
+        prior = parse_datetime(prior_raw)
         if prior is not None:
             if prior.tzinfo is None:
                 prior = prior.replace(tzinfo=UTC)
             now_cmp = now_dt if now_dt.tzinfo is not None else now_dt.replace(tzinfo=UTC)
             bumped = prior + timedelta(microseconds=1)
             if bumped > now_cmp:
-                return _format_datetime(bumped)
-    return _format_datetime(now_dt)
+                return format_datetime(bumped)
+    return format_datetime(now_dt)
 
 
 def _json_path_for_key(key: str) -> str:
@@ -529,6 +479,9 @@ class CoordinationService:
         """
         self._config = config
         self._db_path: Path | None = None
+        # Path provider, not a path: ``db_path`` is a property that tests
+        # override after construction.
+        self._agents = AgentRegistry(lambda: self.db_path)
 
     @property
     def config(self) -> LithosConfig:
@@ -559,6 +512,7 @@ class CoordinationService:
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            await self._agents.ensure_schema(db)
             await self._migrate_tasks_add_outcome(db)
             await self._migrate_tasks_ensure_resolved_at(db)
             await self._migrate_tasks_add_metadata(db)
@@ -737,16 +691,16 @@ class CoordinationService:
         Idempotent by construction (canonical values rewrite to themselves and
         are skipped); runs on every ``initialize()`` — the tasks table is
         small and this is startup-only. Unparseable stamps are left alone
-        (they surface via ``_parse_datetime``'s WARNING at read time).
+        (they surface via ``parse_datetime``'s WARNING at read time).
         """
         cursor = await db.execute("SELECT id, updated_at FROM tasks WHERE updated_at IS NOT NULL")
         rows = await cursor.fetchall()
         normalized = 0
         for task_id, raw in rows:
-            parsed = _parse_datetime(raw)
+            parsed = parse_datetime(raw)
             if parsed is None:
                 continue
-            canonical = _format_datetime(parsed)
+            canonical = format_datetime(parsed)
             if canonical != raw:
                 await db.execute(
                     "UPDATE tasks SET updated_at = ? WHERE id = ?", (canonical, task_id)
@@ -780,7 +734,7 @@ class CoordinationService:
 
         cursor = await db.execute("SELECT id, metadata FROM tasks WHERE status = 'open'")
         rows = await cursor.fetchall()
-        now = _format_datetime(datetime.now(UTC))
+        now = format_datetime(datetime.now(UTC))
         created = 0
         for task_id, metadata_raw in rows:
             md = _decode_metadata(metadata_raw)
@@ -818,25 +772,13 @@ class CoordinationService:
         return await aiosqlite.connect(self.db_path)
 
     # ==================== Agent Operations ====================
+    # Thin delegators over :class:`AgentRegistry` (``lithos.agent_registry``);
+    # the signatures are the maintained surface, the registry is the home.
 
     @traced("lithos.coordination.ensure_agent_known")
     async def ensure_agent_known(self, agent_id: str) -> None:
         """Ensure agent is registered, auto-registering if needed."""
-        logger.debug("ensure_agent_known: agent_id=%s", agent_id)
-        now = _format_datetime(datetime.now(UTC))
-        async with aiosqlite.connect(self.db_path) as db:
-            # Try to update last_seen_at
-            cursor = await db.execute(
-                "UPDATE agents SET last_seen_at = ? WHERE id = ?",
-                (now, agent_id),
-            )
-            if cursor.rowcount == 0:
-                # Agent doesn't exist, insert
-                await db.execute(
-                    "INSERT INTO agents (id, first_seen_at, last_seen_at) VALUES (?, ?, ?)",
-                    (agent_id, now, now),
-                )
-            await db.commit()
+        await self._agents.ensure_agent_known(agent_id)
 
     async def register_agent(
         self,
@@ -845,100 +787,14 @@ class CoordinationService:
         agent_type: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> tuple[bool, bool]:
-        """Register or update an agent.
-
-        Args:
-            agent_id: Agent identifier
-            name: Human-friendly name
-            agent_type: Agent type
-            metadata: Additional metadata
-
-        Returns:
-            Tuple of (success, created)
-        """
-        import json
-
-        now = _format_datetime(datetime.now(UTC))
-        metadata_json = json.dumps(metadata) if metadata else None
-
-        async with aiosqlite.connect(self.db_path) as db:
-            # Check if exists
-            cursor = await db.execute(
-                "SELECT id FROM agents WHERE id = ?",
-                (agent_id,),
-            )
-            exists = await cursor.fetchone() is not None
-
-            if exists:
-                # Update existing
-                await db.execute(
-                    """
-                    UPDATE agents
-                    SET name = COALESCE(?, name),
-                        type = COALESCE(?, type),
-                        metadata = COALESCE(?, metadata),
-                        last_seen_at = ?
-                    WHERE id = ?
-                    """,
-                    (name, agent_type, metadata_json, now, agent_id),
-                )
-            else:
-                # Insert new
-                await db.execute(
-                    """
-                    INSERT INTO agents (id, name, type, metadata, first_seen_at, last_seen_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (agent_id, name, agent_type, metadata_json, now, now),
-                )
-
-            await db.commit()
-            created = not exists
-            if created:
-                logger.info(
-                    "Agent registered: agent_id=%s name=%s type=%s",
-                    agent_id,
-                    name,
-                    agent_type,
-                    extra={"agent_id": agent_id, "agent_name": name, "agent_type": agent_type},
-                )
-            else:
-                logger.debug(
-                    "Agent updated: agent_id=%s name=%s type=%s",
-                    agent_id,
-                    name,
-                    agent_type,
-                )
-            return True, created
+        """Register or update an agent. Returns ``(success, created)``."""
+        return await self._agents.register_agent(
+            agent_id, name=name, agent_type=agent_type, metadata=metadata
+        )
 
     async def get_agent(self, agent_id: str) -> Agent | None:
         """Get agent information."""
-        import json
-
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM agents WHERE id = ?",
-                (agent_id,),
-            )
-            row = await cursor.fetchone()
-
-            if not row:
-                return None
-
-            metadata = {}
-            if row["metadata"]:
-                with contextlib.suppress(json.JSONDecodeError):
-                    metadata = json.loads(row["metadata"])
-
-            return Agent(
-                id=row["id"],
-                name=row["name"],
-                type=row["type"],
-                first_seen_at=_parse_datetime(row["first_seen_at"]),
-                last_seen_at=_parse_datetime(row["last_seen_at"]),
-                metadata=metadata,
-            )
+        return await self._agents.get_agent(agent_id)
 
     async def list_agents(
         self,
@@ -946,45 +802,7 @@ class CoordinationService:
         active_since: datetime | None = None,
     ) -> list[Agent]:
         """List all known agents."""
-        import json
-
-        query = "SELECT * FROM agents WHERE 1=1"
-        params: list[Any] = []
-
-        if agent_type:
-            query += " AND type = ?"
-            params.append(agent_type)
-
-        if active_since:
-            query += " AND last_seen_at >= ?"
-            params.append(_format_datetime(active_since))
-
-        query += " ORDER BY last_seen_at DESC"
-
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(query, params)
-            rows = await cursor.fetchall()
-
-            agents = []
-            for row in rows:
-                metadata = {}
-                if row["metadata"]:
-                    with contextlib.suppress(json.JSONDecodeError):
-                        metadata = json.loads(row["metadata"])
-
-                agents.append(
-                    Agent(
-                        id=row["id"],
-                        name=row["name"],
-                        type=row["type"],
-                        first_seen_at=_parse_datetime(row["first_seen_at"]),
-                        last_seen_at=_parse_datetime(row["last_seen_at"]),
-                        metadata=metadata,
-                    )
-                )
-
-            return agents
+        return await self._agents.list_agents(agent_type=agent_type, active_since=active_since)
 
     # ==================== Task Operations ====================
 
@@ -1049,7 +867,7 @@ class CoordinationService:
         task_id = str(uuid.uuid4())
         tags_json = json.dumps(tags) if tags else None
         metadata_json = json.dumps(metadata) if metadata is not None else None
-        stamp = _format_datetime(now or datetime.now(UTC))
+        stamp = format_datetime(now or datetime.now(UTC))
         # Dedupe and drop a self-reference; a brand-new task has no outgoing
         # edges, so depends_on/parent_task_id can never form a cycle (nothing
         # depends on or descends from it yet).
@@ -1231,11 +1049,11 @@ class CoordinationService:
                 status=row["status"],
                 task_type=row["task_type"] if "task_type" in row_keys else "task",
                 created_by=row["created_by"],
-                created_at=_parse_datetime(row["created_at"]),
+                created_at=parse_datetime(row["created_at"]),
                 tags=tags,
                 outcome=outcome,
-                resolved_at=_parse_datetime(resolved_at_raw),
-                updated_at=_parse_datetime(row["updated_at"] if "updated_at" in row_keys else None),
+                resolved_at=parse_datetime(resolved_at_raw),
+                updated_at=parse_datetime(row["updated_at"] if "updated_at" in row_keys else None),
                 metadata=task_metadata,
             )
 
@@ -1821,7 +1639,7 @@ class CoordinationService:
         if not task_ids:
             return {}
 
-        now = _format_datetime(datetime.now(UTC))
+        now = format_datetime(datetime.now(UTC))
         placeholders = ",".join("?" for _ in task_ids)
         cursor = await db.execute(
             f"""
@@ -1835,7 +1653,7 @@ class CoordinationService:
 
         grouped: dict[str, list[dict[str, Any]]] = {tid: [] for tid in task_ids}
         for row in rows:
-            expires_dt = _parse_datetime(row["expires_at"]) or datetime.now(UTC)
+            expires_dt = parse_datetime(row["expires_at"]) or datetime.now(UTC)
             grouped[row["task_id"]].append(
                 {
                     "agent": row["agent"],
@@ -1859,7 +1677,7 @@ class CoordinationService:
         """
         import json
 
-        now = _format_datetime(datetime.now(UTC))
+        now = format_datetime(datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -1898,8 +1716,8 @@ class CoordinationService:
                         task_id=row["task_id"],
                         agent=row["agent"],
                         aspect=row["aspect"],
-                        claimed_at=_parse_datetime(row["claimed_at"]) or datetime.now(UTC),
-                        expires_at=_parse_datetime(row["expires_at"]) or datetime.now(UTC),
+                        claimed_at=parse_datetime(row["claimed_at"]) or datetime.now(UTC),
+                        expires_at=parse_datetime(row["expires_at"]) or datetime.now(UTC),
                     )
                     for row in claim_rows
                 ]
@@ -1927,11 +1745,11 @@ class CoordinationService:
                         description=task["description"],
                         task_type=task["task_type"] if "task_type" in task_row_keys else "task",
                         created_by=task["created_by"],
-                        created_at=_parse_datetime(task["created_at"]),
+                        created_at=parse_datetime(task["created_at"]),
                         tags=task_tags,
                         outcome=outcome,
-                        resolved_at=_parse_datetime(resolved_at_raw),
-                        updated_at=_parse_datetime(updated_at_raw),
+                        resolved_at=parse_datetime(resolved_at_raw),
+                        updated_at=parse_datetime(updated_at_raw),
                     )
                 )
 
@@ -1998,9 +1816,9 @@ class CoordinationService:
                     task_id,
                     agent,
                     aspect,
-                    _format_datetime(now),
-                    _format_datetime(expires_at),
-                    _format_datetime(now),
+                    format_datetime(now),
+                    format_datetime(expires_at),
+                    format_datetime(now),
                 ),
             )
             await db.commit()
@@ -2047,7 +1865,7 @@ class CoordinationService:
                 SELECT agent FROM claims
                 WHERE task_id = ? AND aspect = ? AND expires_at > ?
                 """,
-                (task_id, aspect, _format_datetime(now)),
+                (task_id, aspect, format_datetime(now)),
             )
             row = await cursor.fetchone()
 
@@ -2076,7 +1894,7 @@ class CoordinationService:
                 UPDATE claims SET expires_at = ?
                 WHERE task_id = ? AND aspect = ?
                 """,
-                (_format_datetime(new_expires), task_id, aspect),
+                (format_datetime(new_expires), task_id, aspect),
             )
             await db.commit()
             logger.debug("Claim renewed: task_id=%s aspect=%s agent=%s", task_id, aspect, agent)
@@ -2141,7 +1959,7 @@ class CoordinationService:
         await self.ensure_agent_known(agent)
 
         finding_id = str(uuid.uuid4())
-        now = _format_datetime(datetime.now(UTC))
+        now = format_datetime(datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -2174,7 +1992,7 @@ class CoordinationService:
 
         if since:
             query += " AND created_at > ?"
-            params.append(_format_datetime(since))
+            params.append(format_datetime(since))
 
         query += " ORDER BY created_at ASC"
 
@@ -2190,7 +2008,7 @@ class CoordinationService:
                     agent=row["agent"],
                     summary=row["summary"],
                     knowledge_id=row["knowledge_id"],
-                    created_at=_parse_datetime(row["created_at"]),
+                    created_at=parse_datetime(row["created_at"]),
                 )
                 for row in rows
             ]
@@ -2236,7 +2054,7 @@ class CoordinationService:
 
         lithos_metrics.coordination_ops.add(1, {"op": "upsert_task_edge"})
         await self.ensure_agent_known(agent)
-        now = _format_datetime(datetime.now(UTC))
+        now = format_datetime(datetime.now(UTC))
         metadata_json = json.dumps(metadata) if metadata is not None else None
 
         async with aiosqlite.connect(self.db_path) as db:
@@ -2842,7 +2660,7 @@ class CoordinationService:
                        ``"search_result"`` (document returned in search results).
             agent_id: The agent that triggered the access (default: ``"unknown"``).
         """
-        now = _format_datetime(datetime.now(UTC))
+        now = format_datetime(datetime.now(UTC))
         try:
             async with aiosqlite.connect(self.db_path) as db:
                 await db.execute(
@@ -2875,7 +2693,7 @@ class CoordinationService:
         """
         if not doc_ids:
             return
-        now = _format_datetime(datetime.now(UTC))
+        now = format_datetime(datetime.now(UTC))
         rows = [(agent_id, doc_id, operation, now) for doc_id in doc_ids]
         try:
             async with aiosqlite.connect(self.db_path) as db:
@@ -2940,7 +2758,7 @@ class CoordinationService:
                 agent_id=row[1],
                 doc_id=row[2],
                 operation=row[3],
-                timestamp=_parse_datetime(row[4]),
+                timestamp=parse_datetime(row[4]),
             )
             for row in rows
         ]
@@ -2968,7 +2786,7 @@ class CoordinationService:
 
     async def get_stats(self) -> dict[str, int]:
         """Get coordination statistics."""
-        now = _format_datetime(datetime.now(UTC))
+        now = format_datetime(datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
             # Count agents
