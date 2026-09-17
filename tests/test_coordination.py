@@ -2730,10 +2730,10 @@ class TestParseDatetimeWarnsOnFailure:
         """An unparseable string still returns None but emits a WARNING."""
         import logging
 
-        from lithos.coordination import _parse_datetime
+        from lithos.sqlite_datetime import parse_datetime
 
-        with caplog.at_level(logging.WARNING, logger="lithos.coordination"):
-            result = _parse_datetime("not-a-real-timestamp")
+        with caplog.at_level(logging.WARNING, logger="lithos.sqlite_datetime"):
+            result = parse_datetime("not-a-real-timestamp")
 
         assert result is None
         assert any(
@@ -2746,10 +2746,10 @@ class TestParseDatetimeWarnsOnFailure:
         """Legitimately-missing values stay silent — only corruption is logged."""
         import logging
 
-        from lithos.coordination import _parse_datetime
+        from lithos.sqlite_datetime import parse_datetime
 
-        with caplog.at_level(logging.WARNING, logger="lithos.coordination"):
-            result = _parse_datetime(None)
+        with caplog.at_level(logging.WARNING, logger="lithos.sqlite_datetime"):
+            result = parse_datetime(None)
 
         assert result is None
         assert not any("Failed to parse datetime" in r.getMessage() for r in caplog.records)

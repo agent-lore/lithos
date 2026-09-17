@@ -11,12 +11,17 @@ SQLite-backed task claiming, findings, and the agent registry for multi-agent wo
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.coordination` | XL | 8 | 0 |
+| `lithos.agent_registry` | S | 2 | 0 |
+| `lithos.coordination` | XL | 7 | 0 |
+| `lithos.sqlite_datetime` | XS | 0 | 2 |
 
 ## Public API
 
-### `lithos.coordination`
+### `lithos.agent_registry`
 - class `Agent` — Agent information.
+- class `AgentRegistry` — Registry operations over the ``agents`` table.
+
+### `lithos.coordination`
 - class `Task` — A coordination task.
 - class `TaskEdge` — A typed relation between two tasks in the task graph.
 - class `Claim` — A task aspect claim.
@@ -24,6 +29,10 @@ SQLite-backed task claiming, findings, and the agent registry for multi-agent wo
 - class `TaskStatus` — Task status with claims.
 - class `AccessLogEntry` — A single read-access audit log entry.
 - class `CoordinationService` — SQLite-based coordination service.
+
+### `lithos.sqlite_datetime`
+- def `parse_datetime` — Parse a datetime from SQLite.
+- def `format_datetime` — Format datetime for SQLite.
 
 ## Dependencies
 

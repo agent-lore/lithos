@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Agent registry extracted from `coordination.py` (#423 prep)
+
+No behaviour change. The `agents` table DDL, the `Agent` dataclass and the
+four registry operations (`ensure_agent_known`, `register_agent`,
+`get_agent`, `list_agents`) now live in `lithos.agent_registry`;
+`CoordinationService` keeps thin delegators with the original signatures,
+so every caller is unchanged. The SQLite datetime codec moved to
+`lithos.sqlite_datetime` as public `parse_datetime` / `format_datetime`.
+Both modules are members of the Coordination component. This takes
+`coordination.py` from 3005 lines to 2823 — clear of the 3050 stop-loss it
+was about to breach — so the #423 archive work has room to land.
+
 ### `lithos_task_update` gains compare-and-set and tag set operations (task 6dbc3b80)
 
 Two agents that each read a task, think, and write back can no longer

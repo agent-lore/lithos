@@ -79,7 +79,7 @@ Knowledge       = ["lithos.knowledge", "lithos._merge", "lithos.corpus_index"]
 Codec           = ["lithos.frontmatter_codec"]
 Search          = ["lithos.search"]
 Graph           = ["lithos.graph", "lithos.edge_store"]
-Coordination    = ["lithos.coordination"]
+Coordination    = ["lithos.coordination", "lithos.agent_registry", "lithos.sqlite_datetime"]
 Intake          = ["lithos.intake"]
 Provenance      = ["lithos.provenance"]
 CognitiveMemory = ["lithos.cognitive_memory"]
@@ -115,9 +115,9 @@ cross_component_edges  = 74    # measured 2026-08; task 83257ced short-id-prefix
 component_cycles       = 0    # measured 2026-07; task 4a3836a9 extracted the codec so graph.py/provenance.py import the pure format module, not KnowledgeManager — the 4-component Core SCC (Graph/Knowledge/Provenance/Search) is gone. PR1c had shrunk it from 7; goal: hold at 0
 module_cycles          = 1    # server<->tools; the knowledge<->graph<->search<->provenance SCC broke when the codec moved out (task 4a3836a9); goal: 0
 modules_over_800_lines = 12   # incl. tools.tasks (985) split from server in #374; knowledge.py 2444→1773 (codec out) but still over. 11→12: frontmatter_codec (808) crossed in PR #411 — the #407 review fix (nested date-key normalization + total canonical_metadata_value) landed in a module already at 799; split candidate is the #306 metadata-value cluster (validate_metadata_match / extract_extra / normalize_yaml_dates / canonical_metadata_value), blocked today by _KNOWN_METADATA_KEYS living beside KnowledgeMetadata. Direction: down
-max_module_lines       = 3050 # stop-loss; largest today is coordination.py at 3005 (task 6dbc3b80 CAS + tag set-ops, then the PR #419 review hardenings — every-mutator strict stamp advancement + legacy-stamp normalization — pushed it past the 2900 ceiling; reviewed raises). Split candidate remains coordination.py itself (claims/findings could move out)
+max_module_lines       = 2900 # stop-loss; largest today is coordination.py at 2823 after the agent registry moved out to lithos.agent_registry (#423 prep; was 3005 after task 6dbc3b80 CAS + tag set-ops and the PR #419 review hardenings). Ratcheted 3050→2900. Next split candidate: claims/findings
 cross_module_private_refs = 42  # measured 2026-07; server._emit/_config x12 etc. (normalize_datetime made public in task 4a3836a9); goal: 0
-tests_private_imports     = 91  # measured 2026-07; test_telemetry alone is 46; direction: down. 88→90: two white-box config-wiring tests import _rerank_fast / _usage_from_stats to prove the newly-exposed LcmaConfig rerank/usage fields actually change behaviour (task e7d8ef60, review finding 5). 90→91: the WS1 NoOp-instrument test uses test_telemetry.py's established _reset_for_testing idiom (19 prior uses in that file) to verify the five new lcma_llm_* metrics construct and record as no-ops (task 7387506b, PR #405 review).
+tests_private_imports     = 89  # measured 2026-09; test_telemetry alone is 46; direction: down. 91→89: parse_datetime went public in lithos.sqlite_datetime (#423 prep). 88→90: two white-box config-wiring tests import _rerank_fast / _usage_from_stats to prove the newly-exposed LcmaConfig rerank/usage fields actually change behaviour (task e7d8ef60, review finding 5). 90→91: the WS1 NoOp-instrument test uses test_telemetry.py's established _reset_for_testing idiom (19 prior uses in that file) to verify the five new lcma_llm_* metrics construct and record as no-ops (task 7387506b, PR #405 review).
 
 # MCP tool surface: modules scanned for @…tool()-decorated handlers (counted in
 # the metrics snapshot; catalogued in docs/generated/tool_catalog.md). Omit the
@@ -153,6 +153,7 @@ watch_intake = "Entrypoints"
 [domain]
 include_modules = [
     "lithos.coordination",
+    "lithos.agent_registry",
     "lithos.graph",
     "lithos.events",
     "lithos.knowledge",
