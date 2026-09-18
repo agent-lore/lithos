@@ -174,6 +174,23 @@ class TestAgentArchive:
         assert newly_second is False
         assert second.archived_at == first.archived_at
 
+    async def test_concurrent_archive_calls_agree_on_one_transition(
+        self, coordination_service: CoordinationService
+    ):
+        """Review finding: a read-then-update race let two simultaneous
+        archives both report ``newly_archived`` with different stamps. The
+        transition is a single conditional UPDATE, so exactly one caller
+        wins and every caller sees the winner's stamp."""
+        await coordination_service.register_agent("contended")
+
+        results = await asyncio.gather(
+            *(coordination_service.archive_agent("contended") for _ in range(8))
+        )
+
+        assert sum(newly for _, newly in results) == 1
+        stamps = {agent.archived_at for agent, _ in results}
+        assert len(stamps) == 1 and None not in stamps
+
     async def test_archive_does_not_bump_targets_last_seen(
         self, coordination_service: CoordinationService
     ):

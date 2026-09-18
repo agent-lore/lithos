@@ -11,8 +11,10 @@ most of them auto-registered by a single write and never seen again.
   It keeps its history (tasks, claims, findings, access log still
   attribute to it) and stays readable via `lithos_agent_info`, but drops
   out of `lithos_agent_list` and the `agents` count in `lithos_stats`.
-  Idempotent; unknown id → `{status: "error", code: "agent_not_found"}`.
-  Emits `agent.archived` when newly archived.
+  Idempotent — the transition is one conditional `UPDATE`, so concurrent
+  archives agree on a single stamp and a single event; self-archive
+  follows the same contract. Unknown id → `{status: "error", code:
+  "agent_not_found"}`. Emits `agent.archived` when newly archived.
 - **Any activity resurrects.** Every write by the archived id
   (`ensure_agent_known`) and `lithos_agent_register` clear `archived_at`,
   so "archived" means exactly "no activity since archiving". Note this

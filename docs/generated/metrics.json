@@ -352,20 +352,20 @@
         "functions": 80,
         "largest_module": "lithos.coordination",
         "largest_module_lines": 2836,
-        "lines": 3188,
+        "lines": 3192,
         "modules": 3,
         "public_symbols": 11,
-        "sloc": 2692
+        "sloc": 2693
       },
       "Entrypoints": {
         "classes": 5,
         "functions": 142,
         "largest_module": "lithos.tools.tasks",
         "largest_module_lines": 1141,
-        "lines": 6254,
+        "lines": 6260,
         "modules": 13,
         "public_symbols": 32,
-        "sloc": 5041
+        "sloc": 5044
       },
       "Errors": {
         "classes": 12,
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 26592,
+    "total_lines": 26602,
     "total_modules": 47,
-    "total_sloc": 21420
+    "total_sloc": 21424
   },
   "tests": {
     "ratio": 1.88,
-    "src_lines": 26592,
-    "test_lines": 49904
+    "src_lines": 26602,
+    "test_lines": 49950
   }
 }

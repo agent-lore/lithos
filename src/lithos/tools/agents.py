@@ -93,11 +93,13 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         the archived id — or re-registering it — un-archives it.
 
         Idempotent: archiving an already-archived agent succeeds and keeps
-        the original archived_at.
+        the original archived_at. Self-archive (agent == id) is allowed and
+        follows the same contract.
 
         Args:
             id: Agent to archive
-            agent: Agent performing the archive (attribution)
+            agent: Agent performing the archive (attribution; its own
+                last_seen_at is bumped unless it is archiving itself)
 
         Returns:
             Dict with success, id, archived_at and already_archived; or the
@@ -106,8 +108,12 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         logger.info("lithos_agent_archive id=%s agent=%s", id, agent)
         span = get_current_span()
         span.set_attribute("lithos.agent.id", id)
-        # The archiver's activity counts (and self-archive then works).
-        await server.coordination.ensure_agent_known(agent)
+        # The archiver's activity counts — except when it is archiving
+        # itself: stamping would un-archive the target first, breaking
+        # idempotency, and would create an unknown id instead of reporting
+        # agent_not_found.
+        if agent != id:
+            await server.coordination.ensure_agent_known(agent)
         archived, newly = await server.coordination.archive_agent(id)
         archived_at = archived.archived_at.isoformat() if archived.archived_at else None
         span.set_attribute("lithos.created", newly)

@@ -12,7 +12,7 @@ import contextlib
 import json
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -258,6 +258,10 @@ class AgentRegistry:
         Does not touch ``last_seen_at``: archiving is the archiver's
         activity, not the target's.
 
+        The active→archived transition is one conditional UPDATE, so
+        concurrent calls agree: exactly one sees ``newly_archived`` and all
+        of them return the winner's stamp.
+
         Returns:
             ``(agent, newly_archived)``
 
@@ -266,22 +270,22 @@ class AgentRegistry:
         """
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "UPDATE agents SET archived_at = ? WHERE id = ? AND archived_at IS NULL",
+                (format_datetime(datetime.now(UTC)), agent_id),
+            )
+            newly = cursor.rowcount == 1
+            await db.commit()
+
+            # rowcount 0 is either "already archived" or "no such agent";
+            # the committed row settles it (and carries the winner's stamp).
             cursor = await db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
             row = await cursor.fetchone()
             if row is None:
                 raise CoordinationError("agent_not_found", f"Agent {agent_id!r} not found")
-            agent = self._row_to_agent(row)
-            if agent.archived_at is not None:
-                return agent, False
-
-            stamp = datetime.now(UTC)
-            await db.execute(
-                "UPDATE agents SET archived_at = ? WHERE id = ?",
-                (format_datetime(stamp), agent_id),
-            )
-            await db.commit()
-            logger.info("Agent archived: agent_id=%s", agent_id, extra={"agent_id": agent_id})
-            return replace(agent, archived_at=stamp), True
+            if newly:
+                logger.info("Agent archived: agent_id=%s", agent_id, extra={"agent_id": agent_id})
+            return self._row_to_agent(row), newly
 
     async def find_name_collisions(self, name: str | None, *, exclude_id: str) -> list[Agent]:
         """Active agents (other than ``exclude_id``) whose ``name`` matches

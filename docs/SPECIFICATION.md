@@ -757,7 +757,7 @@ Retire an agent from the roster (#423). The agent keeps its history — tasks, c
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `id` | string | Yes | Agent to archive |
-| `agent` | string | Yes | Agent performing the archive (attribution; its own `last_seen_at` is bumped) |
+| `agent` | string | Yes | Agent performing the archive (attribution; its own `last_seen_at` is bumped — unless it is archiving itself, which would un-archive the target first) |
 
 **Returns:** `{ success: true, id, archived_at, already_archived: boolean }`
 
@@ -766,7 +766,7 @@ Retire an agent from the roster (#423). The agent keeps its history — tasks, c
 - `already_archived: true` — Idempotent repeat; original `archived_at` kept, no event
 - `{ status: "error", code: "agent_not_found", message }` — No such agent
 
-Archiving does not touch the target's `last_seen_at` (it is the archiver's activity, not the target's).
+Archiving does not touch the target's `last_seen_at` (it is the archiver's activity, not the target's). The active→archived transition is a single conditional `UPDATE … WHERE archived_at IS NULL`, so concurrent archives agree: exactly one reports `already_archived: false` and all return the same stamp.
 
 #### `lithos_agent_info`
 Get information about an agent, archived or not.

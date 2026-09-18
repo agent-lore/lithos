@@ -1003,6 +1003,35 @@ class TestAgentAndCoordinationMCPTools:
         assert again["already_archived"] is True
 
     @pytest.mark.asyncio
+    async def test_self_archive_keeps_idempotency_and_not_found_contracts(
+        self, server: LithosServer
+    ):
+        """Review finding: stamping the archiver's activity must not
+        resurrect the target when they are the same agent — otherwise a
+        repeated self-archive re-archives (new stamp, new event) and an
+        unknown id archives "itself" into existence instead of
+        ``agent_not_found``."""
+        await call_tool(server, "lithos_agent_register", {"id": "solo", "name": "Solo"})
+
+        first = await call_tool(server, "lithos_agent_archive", {"id": "solo", "agent": "solo"})
+        assert first["already_archived"] is False
+        second = await call_tool(server, "lithos_agent_archive", {"id": "solo", "agent": "solo"})
+        assert second["already_archived"] is True
+        assert second["archived_at"] == first["archived_at"]
+        listing = await call_tool(server, "lithos_agent_list", {})
+        assert "solo" not in {a["id"] for a in listing["agents"]}
+
+        ghost = await call_tool(server, "lithos_agent_archive", {"id": "ghost", "agent": "ghost"})
+        assert ghost == {
+            "status": "error",
+            "code": "agent_not_found",
+            "message": ghost["message"],
+        }
+        assert "ghost" in ghost["message"]
+        # ...and the attempt did not register "ghost" as a side effect.
+        assert await server.coordination.get_agent("ghost") is None
+
+    @pytest.mark.asyncio
     async def test_agent_register_warns_on_name_collision(self, server: LithosServer):
         """#423: a second id under an existing name registers fine but is warned."""
         first = await call_tool(
