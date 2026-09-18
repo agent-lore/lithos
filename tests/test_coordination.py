@@ -191,6 +191,42 @@ class TestAgentArchive:
         stamps = {agent.archived_at for agent, _ in results}
         assert len(stamps) == 1 and None not in stamps
 
+    async def test_archive_response_reflects_its_own_transition(
+        self, coordination_service: CoordinationService, monkeypatch
+    ):
+        """Review finding: if the row were re-read after commit, a write by
+        the target in between would clear archived_at and the archive would
+        report newly=True with archived_at=None (and emit a null-stamped
+        event). The snapshot is taken inside the write transaction, so a
+        reactivation that lands right after commit is a later fact and the
+        response still carries the stamp this call wrote."""
+        await coordination_service.register_agent("live")
+        db_path = coordination_service.db_path
+        real_commit = aiosqlite.Connection.commit
+        interleaved: list[str] = []
+
+        async def commit_then_reactivate(conn: aiosqlite.Connection) -> None:
+            await real_commit(conn)
+            # Mimic the target writing immediately after the archive commits —
+            # once, on its own connection.
+            if not interleaved:
+                interleaved.append("reactivated")
+                async with aiosqlite.connect(db_path) as other:
+                    await other.execute(
+                        "UPDATE agents SET archived_at = NULL WHERE id = ?", ("live",)
+                    )
+                    await real_commit(other)
+
+        monkeypatch.setattr(aiosqlite.Connection, "commit", commit_then_reactivate)
+        agent, newly = await coordination_service.archive_agent("live")
+
+        assert interleaved == ["reactivated"]
+        assert newly is True
+        assert agent.archived_at is not None
+        # ...and the reactivation is visible as the later fact it is.
+        live = await coordination_service.get_agent("live")
+        assert live is not None and live.archived_at is None
+
     async def test_archive_does_not_bump_targets_last_seen(
         self, coordination_service: CoordinationService
     ):
@@ -278,6 +314,20 @@ class TestAgentArchive:
         )
 
         assert {a.id for a in others} == {"lens-main", "lens-pr4"}
+
+    async def test_name_collision_reports_every_match(
+        self, coordination_service: CoordinationService
+    ):
+        """Review finding: the contract says *every* other active agent with
+        the name is reported — no silent cap."""
+        for i in range(12):
+            await coordination_service.register_agent(f"lens-{i}", name="Lithos Lens")
+
+        others = await coordination_service.find_agent_name_collisions(
+            "lithos lens", exclude_id="lens-new"
+        )
+
+        assert {a.id for a in others} == {f"lens-{i}" for i in range(12)}
 
     async def test_name_collision_excludes_archived(
         self, coordination_service: CoordinationService

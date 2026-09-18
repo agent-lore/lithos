@@ -352,7 +352,7 @@
         "functions": 80,
         "largest_module": "lithos.coordination",
         "largest_module_lines": 2836,
-        "lines": 3192,
+        "lines": 3196,
         "modules": 3,
         "public_symbols": 11,
         "sloc": 2693
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 26602,
+    "total_lines": 26606,
     "total_modules": 47,
     "total_sloc": 21424
   },
   "tests": {
     "ratio": 1.88,
-    "src_lines": 26602,
-    "test_lines": 49950
+    "src_lines": 26606,
+    "test_lines": 50000
   }
 }

@@ -47,12 +47,14 @@ AGENTS_DDL: tuple[str, ...] = (
 
 # Name-collision probe (#423). Bind the *raw* name: SQLite's lower() folds
 # ASCII only, so pre-folding with Python's Unicode-aware str.lower() would
-# make non-ASCII names miss the index. NULL names never match. Public so the
-# query-plan test needn't import a private name.
+# make non-ASCII names miss the index. NULL names never match. No LIMIT: the
+# contract is "every other active agent with this name", and the index
+# bounds the cost by the number of genuine collisions, not the table.
+# Public so the query-plan test needn't import a private name.
 AGENT_NAME_COLLISION_SQL = (
     "SELECT * FROM agents "
     "WHERE lower(name) = lower(?) AND archived_at IS NULL AND id != ? "
-    "ORDER BY last_seen_at DESC LIMIT 10"
+    "ORDER BY last_seen_at DESC"
 )
 
 
@@ -275,12 +277,14 @@ class AgentRegistry:
                 (format_datetime(datetime.now(UTC)), agent_id),
             )
             newly = cursor.rowcount == 1
-            await db.commit()
 
-            # rowcount 0 is either "already archived" or "no such agent";
-            # the committed row settles it (and carries the winner's stamp).
+            # rowcount 0 is either "already archived" or "no such agent"; the
+            # row settles it and carries the winner's stamp. Read it *before*
+            # committing: the write lock keeps a reactivation by the target
+            # from landing between the transition and this snapshot.
             cursor = await db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
             row = await cursor.fetchone()
+            await db.commit()
             if row is None:
                 raise CoordinationError("agent_not_found", f"Agent {agent_id!r} not found")
             if newly:
