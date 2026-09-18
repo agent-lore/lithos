@@ -45,6 +45,7 @@ FINDING_POSTED = "finding.posted"
 EDGE_UPSERTED = "edge.upserted"
 
 AGENT_REGISTERED = "agent.registered"
+AGENT_ARCHIVED = "agent.archived"
 
 # --- Event origin markers ---
 #

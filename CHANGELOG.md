@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Agent archive and name-collision warning (#423)
+
+The agent roster could only grow: prod held 59 agents for ~15 actors,
+most of them auto-registered by a single write and never seen again.
+
+- **`lithos_agent_archive(id, agent)`** retires an agent from the roster.
+  It keeps its history (tasks, claims, findings, access log still
+  attribute to it) and stays readable via `lithos_agent_info`, but drops
+  out of `lithos_agent_list` and the `agents` count in `lithos_stats`.
+  Idempotent — the transition is one conditional `UPDATE`, so concurrent
+  archives agree on a single stamp and a single event; self-archive
+  follows the same contract. Unknown id → `{status: "error", code:
+  "agent_not_found"}`. Emits `agent.archived` when newly archived.
+- **Any activity resurrects.** Every write by the archived id
+  (`ensure_agent_known`) and `lithos_agent_register` clear `archived_at`,
+  so "archived" means exactly "no activity since archiving". Note this
+  includes tool-name fallback ids such as `lithos_edge_upsert`, which an
+  un-attributed edge upsert will bring back — by design.
+- **`lithos_agent_list(include_archived=True)`** shows archived agents;
+  every row (and `lithos_agent_info`) now carries `archived_at`, `null`
+  while active. `lithos inspect agents --include-archived` matches.
+- **`lithos_agent_register` warns on a name collision** — a non-empty
+  `warnings` list names every other active agent with the same `name`
+  (case-insensitive, via an expression index on `lower(name)`).
+  Registration never blocks: distinct running instances legitimately
+  share a display name. The response gains `warnings: []` on success.
+- Startup migration adds `agents.archived_at` and the name index to an
+  existing coordination.db, idempotently.
+
 ### Agent registry extracted from `coordination.py` (#423 prep)
 
 No behaviour change. The `agents` table DDL, the `Agent` dataclass and the

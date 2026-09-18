@@ -800,9 +800,22 @@ class CoordinationService:
         self,
         agent_type: str | None = None,
         active_since: datetime | None = None,
+        *,
+        include_archived: bool = False,
     ) -> list[Agent]:
-        """List all known agents."""
-        return await self._agents.list_agents(agent_type=agent_type, active_since=active_since)
+        """List known agents; archived ones only with ``include_archived``."""
+        return await self._agents.list_agents(
+            agent_type=agent_type, active_since=active_since, include_archived=include_archived
+        )
+
+    async def archive_agent(self, agent_id: str) -> tuple[Agent, bool]:
+        """Archive an agent. Returns ``(agent, newly_archived)``; raises
+        ``CoordinationError("agent_not_found")`` for an unknown id."""
+        return await self._agents.archive_agent(agent_id)
+
+    async def find_agent_name_collisions(self, name: str | None, *, exclude_id: str) -> list[Agent]:
+        """Active agents other than ``exclude_id`` sharing ``name`` (case-insensitive)."""
+        return await self._agents.find_name_collisions(name, exclude_id=exclude_id)
 
     # ==================== Task Operations ====================
 
@@ -2789,8 +2802,8 @@ class CoordinationService:
         now = format_datetime(datetime.now(UTC))
 
         async with aiosqlite.connect(self.db_path) as db:
-            # Count agents
-            cursor = await db.execute("SELECT COUNT(*) FROM agents")
+            # Count active agents (archived ones are out of the roster, #423)
+            cursor = await db.execute("SELECT COUNT(*) FROM agents WHERE archived_at IS NULL")
             row = await cursor.fetchone()
             agents = row[0] if row else 0
 

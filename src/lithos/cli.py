@@ -724,8 +724,14 @@ def inspect_health(ctx: click.Context) -> None:
 
 
 @inspect.command(name="agents")
+@click.option(
+    "--include-archived",
+    is_flag=True,
+    default=False,
+    help="Also list archived agents (hidden by default).",
+)
 @click.pass_context
-def inspect_agents(ctx: click.Context) -> None:
+def inspect_agents(ctx: click.Context, include_archived: bool) -> None:
     """List registered agents and their last-seen time."""
     from lithos.coordination import CoordinationService
 
@@ -734,7 +740,7 @@ def inspect_agents(ctx: click.Context) -> None:
     async def run() -> None:
         coord = CoordinationService(config)
         await coord.initialize()
-        agents = await coord.list_agents()
+        agents = await coord.list_agents(include_archived=include_archived)
 
         click.echo(f"Agents ({len(agents)} total)\n{'=' * 50}")
         if not agents:
@@ -749,6 +755,8 @@ def inspect_agents(ctx: click.Context) -> None:
             click.echo(f"    name:      {agent.name or '—'}")
             click.echo(f"    type:      {agent.type or '—'}")
             click.echo(f"    last seen: {last_seen}")
+            if agent.archived_at:
+                click.echo(f"    archived:  {agent.archived_at.strftime('%Y-%m-%d %H:%M:%S')}")
 
     asyncio.run(run())
 

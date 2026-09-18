@@ -11,7 +11,7 @@ SQLite-backed task claiming, findings, and the agent registry for multi-agent wo
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.agent_registry` | S | 2 | 0 |
+| `lithos.agent_registry` | M | 2 | 0 |
 | `lithos.coordination` | XL | 7 | 0 |
 | `lithos.sqlite_datetime` | XS | 0 | 2 |
 

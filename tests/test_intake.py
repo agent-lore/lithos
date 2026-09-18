@@ -108,6 +108,37 @@ async def test_delete_returns_deleted_outcome_when_doc_exists(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "op", ["write", "note_update", "delete", "assert_edge", "assert_inferred_edge"]
+)
+async def test_every_intake_op_calls_ensure_agent_known(
+    stub_intake: tuple[CorpusIntake, dict[str, Any]], op: str
+) -> None:
+    """#423 item 3: every intake write path stamps the agent's activity
+    (``ensure_agent_known`` bumps ``last_seen_at`` and un-archives), even
+    when the op itself is a no-op or is rejected."""
+    intake, mocks = stub_intake
+    mocks["edge_store"].upsert.return_value = "edge_1"
+    mocks["edge_store"].upsert_inferred.return_value = "edge_2"
+    edge = EdgeRequest(from_id="a", to_id="b", edge_type="related_to", weight=0.5, namespace="d")
+
+    if op == "write":
+        await intake.write("agent-1", WriteRequest(title="t", content="c"))
+    elif op == "note_update":
+        # Unknown id raises (documented); the agent stamp must already have run.
+        with pytest.raises(FileNotFoundError):
+            await intake.note_update("agent-1", NoteUpdateRequest(id="missing", title="x"))
+    elif op == "delete":
+        await intake.delete("agent-1", DeleteRequest(id="missing"))
+    elif op == "assert_edge":
+        await intake.assert_edge("agent-1", edge)
+    elif op == "assert_inferred_edge":
+        await intake.assert_inferred_edge("agent-1", edge)
+
+    mocks["coordination"].ensure_agent_known.assert_awaited_once_with("agent-1")
+
+
+@pytest.mark.asyncio
 async def test_delete_returns_not_found_for_unknown_id(
     stub_intake: tuple[CorpusIntake, dict[str, Any]],
 ) -> None:

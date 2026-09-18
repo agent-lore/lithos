@@ -3,20 +3,22 @@
 
 # MCP tool catalog
 
-37 tools exposed by the server, grouped by source module. "Touches" lists the core components each handler reaches (via `server.<attr>`). Generated from the code — see `docs/architecture.toml` `[tool_catalog]`.
+38 tools exposed by the server, grouped by source module. "Touches" lists the core components each handler reaches (via `server.<attr>`). Generated from the code — see `docs/architecture.toml` `[tool_catalog]`.
 
 ## Agents
 `lithos.tools.agents`
 
 | Tool | Summary | Touches |
 |---|---|---|
+| `lithos_agent_archive` | Archive an agent: it keeps its history (tasks, claims, findings still attribute to it) and stays readable via lithos_agent_info, but drops out of lithos_agent_list until it is next active. Any write by the archived id — or re-registering it — un-archives it. | Coordination, Events |
 | `lithos_agent_info` | Get agent information. | Coordination |
-| `lithos_agent_list` | List all known agents. | Coordination |
+| `lithos_agent_list` | List known agents, most recently active first. | Coordination |
 | `lithos_agent_register` | Register or update an agent. | Coordination, Events |
 
 ```text
+lithos_agent_archive(id: str, agent: str)
 lithos_agent_info(id: str)
-lithos_agent_list(type: str | None = None, active_since: str | None = None)
+lithos_agent_list(type: str | None = None, active_since: str | None = None, include_archived: bool = False)
 lithos_agent_register(id: str, name: str | None = None, type: str | None = None, metadata: dict[str, Any] | None = None)
 ```
 

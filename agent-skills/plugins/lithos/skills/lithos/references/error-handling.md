@@ -28,6 +28,7 @@ always in the same shape; task-graph tools also emit `invalid_edge_type`,
 | `doc_not_found` | ID doesn't exist | Verify the UUID |
 | `note_not_found` | `lithos_note_update` id doesn't exist | Verify the UUID |
 | `task_not_found` | Task doesn't exist or is closed | Verify the task id |
+| `agent_not_found` | `lithos_agent_archive` id doesn't exist | Check `lithos_agent_list(include_archived=True)` for the exact id |
 | `task_not_resolved` | `lithos_task_reopen` on a task that is already open | Nothing to do |
 | `claim_failed` | Claim denied — aspect held by another agent, or task closed/missing | Normal contention; try another task or wait |
 | `claim_not_found` | Renew/release with no matching active claim | Claim expired or not yours; re-claim if still needed |

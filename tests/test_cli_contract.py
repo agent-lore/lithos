@@ -217,6 +217,8 @@ class TestCLIContracts:
                 description="Task completed to validate --all path.",
             )
             await coordination.complete_task(completed_task_id, "cli-agent-a")
+            await coordination.register_agent("cli-agent-old", name="Retired", agent_type="cli")
+            await coordination.archive_agent("cli-agent-old")
 
         asyncio.run(_seed())
 
@@ -225,6 +227,14 @@ class TestCLIContracts:
         assert agents.exit_code == 0, agents.output
         assert "Agents (" in agents.output
         assert "cli-agent-a" in agents.output
+        assert "cli-agent-old" not in agents.output
+
+        all_agents = runner.invoke(
+            cli, ["--data-dir", str(temp_dir), "inspect", "agents", "--include-archived"]
+        )
+        assert all_agents.exit_code == 0, all_agents.output
+        assert "cli-agent-old" in all_agents.output
+        assert "archived:" in all_agents.output
 
         tasks = runner.invoke(cli, ["--data-dir", str(temp_dir), "inspect", "tasks"])
         assert tasks.exit_code == 0, tasks.output
