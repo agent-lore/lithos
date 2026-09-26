@@ -197,6 +197,8 @@ After writing a document:
 lithos_read(id="<returned-id>")   # confirm content and metadata stored correctly
 ```
 
+The read response carries `id`, `title`, `path` (relative to `knowledge/`, the same value `lithos_list` reports), `content`, `metadata`, `links`, `truncated` and `retrieval_count`. Use `path` when deciding where a note lives (e.g. whether it sits under `projects/<slug>/`) — it is present whether you read by `id` or by `path`.
+
 After completing a task:
 ```
 lithos_task_get(task_id="...")    # confirm status is "completed" and outcome is set

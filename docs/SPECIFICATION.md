@@ -532,7 +532,7 @@ Read a knowledge file by ID or path.
 
 *One of `id` or `path` required.
 
-**Returns:** `{ id, title, content, metadata, links, truncated: boolean, retrieval_count: int }`
+**Returns:** `{ id, title, path, content, metadata, links, truncated: boolean, retrieval_count: int }` — `path` is the note's file path relative to `knowledge/`, identical to what `lithos_list` and the `lithos_write` envelope report, for reads by `id` and by `path` alike.
 
 **Metadata includes:** the reserved frontmatter fields, `derived_from_ids` (list of source UUIDs, may be empty), and `extra` (the isolated free-form metadata dict written through `lithos_write(metadata=...)`).
 

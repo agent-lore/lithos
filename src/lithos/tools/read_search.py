@@ -52,8 +52,9 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             agent_id: Caller identity for audit logging (optional)
 
         Returns:
-            Dict with id, title, content, metadata, links, truncated,
-            retrieval_count
+            Dict with id, title, path (relative to knowledge/, as
+            ``lithos_list`` reports it), content, metadata, links,
+            truncated, retrieval_count
         """
         if id is not None:
             resolved = resolve_note_id(server.knowledge, id)
@@ -99,6 +100,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         return {
             "id": doc.id,
             "title": doc.title,
+            "path": str(doc.path),
             "content": doc.content,
             "metadata": meta,
             "links": [{"target": link.target, "display": link.display} for link in doc.links],

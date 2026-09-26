@@ -872,6 +872,47 @@ class TestKnowledgeToolWorkflow:
         assert result["code"] == "doc_not_found"
 
     @pytest.mark.asyncio
+    async def test_lithos_read_by_id_returns_path(self, server: LithosServer):
+        """lithos_read by id returns the note's path, matching lithos_list (task 62a3e952)."""
+        doc = (
+            await server.knowledge.create(
+                title="Bayesian Graph",
+                content="Graph alongside text.",
+                agent="agent",
+                path="projects/lithos-ecosystem",
+            )
+        ).document
+        list_tool = await server.mcp.get_tool("lithos_list")
+        listed = await list_tool.fn(path_prefix="projects/lithos-ecosystem/")
+        assert [i["id"] for i in listed["items"]] == [doc.id]
+        expected_path = listed["items"][0]["path"]
+        assert expected_path.startswith("projects/lithos-ecosystem/")
+
+        read_tool = await server.mcp.get_tool("lithos_read")
+        result = await read_tool.fn(id=doc.id)
+        assert result["path"] == expected_path
+
+    @pytest.mark.asyncio
+    async def test_lithos_read_by_path_returns_path(self, server: LithosServer):
+        """lithos_read by path echoes the same path lithos_list reports (task 62a3e952)."""
+        doc = (
+            await server.knowledge.create(
+                title="Path Echo",
+                content="Read me by path.",
+                agent="agent",
+                path="projects/echo",
+            )
+        ).document
+        list_tool = await server.mcp.get_tool("lithos_list")
+        listed = await list_tool.fn(path_prefix="projects/echo/")
+        expected_path = listed["items"][0]["path"]
+
+        read_tool = await server.mcp.get_tool("lithos_read")
+        result = await read_tool.fn(path=str(doc.path))
+        assert result["id"] == doc.id
+        assert result["path"] == expected_path
+
+    @pytest.mark.asyncio
     async def test_lithos_read_nonexistent_doc_does_not_raise(self, server: LithosServer):
         """lithos_read never raises FileNotFoundError; non-existent docs return structured error (closes #121)."""
         tool = await server.mcp.get_tool("lithos_read")

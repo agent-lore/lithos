@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### `lithos_read` returns the note's `path`
+
+`lithos_read` omitted the note's path — neither top-level nor in
+`metadata` — while `lithos_list`, `lithos_write` and `lithos_delete` all
+report it, so a client reading by id could not learn where a note lives
+(lithos-loom surfaced this as `path=""`). The response now carries
+`path` beside `id` and `title`: the file path relative to `knowledge/`,
+identical to what `lithos_list` returns, for reads by `id` and by `path`
+alike. Additive — no existing key changes.
+
 ### Agent archive and name-collision warning (#423)
 
 The agent roster could only grow: prod held 59 agents for ~15 actors,
