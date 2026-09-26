@@ -6,7 +6,7 @@ Seven weeks of work on `main` since 0.4.0: the LCMA phase-3 groundwork
 (salience recalibration, an LLM-synthesis substrate and typed-edge
 inference), agent-roster hygiene, optimistic concurrency on tasks,
 short id prefixes everywhere, and the 2026-07 architecture-cleanup
-roadmap. The tool surface grows from 38 to 39 (`lithos_agent_archive`).
+roadmap. The tool surface grows from 37 to 38 (`lithos_agent_archive`).
 
 ### Behaviour changes — read before upgrading
 
