@@ -1,109 +1,123 @@
 # Changelog
 
-## Unreleased
+## [0.5.0] — 2026-09-26
 
-### `lithos_read` returns the note's `path`
+Seven weeks of work on `main` since 0.4.0: the LCMA phase-3 groundwork
+(salience recalibration, an LLM-synthesis substrate and typed-edge
+inference), agent-roster hygiene, optimistic concurrency on tasks,
+short id prefixes everywhere, and the 2026-07 architecture-cleanup
+roadmap. The tool surface grows from 38 to 39 (`lithos_agent_archive`).
 
-`lithos_read` omitted the note's path — neither top-level nor in
-`metadata` — while `lithos_list`, `lithos_write` and `lithos_delete` all
-report it, so a client reading by id could not learn where a note lives
-(lithos-loom surfaced this as `path=""`). The response now carries
-`path` beside `id` and `title`: the file path relative to `knowledge/`,
-identical to what `lithos_list` returns, for reads by `id` and by `path`
-alike. Additive — no existing key changes.
+### Behaviour changes — read before upgrading
 
-### Agent archive and name-collision warning (#423)
+Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
+Each is detailed in its own entry below.
 
-The agent roster could only grow: prod held 59 agents for ~15 actors,
-most of them auto-registered by a single write and never seen again.
+- **Error codes tightened for unknown ids.** A 6–35-char task id that
+  matches nothing now returns `task_not_found` on every task tool —
+  including claim/renew/release, which returned `claim_failed` /
+  `claim_not_found`, and status/edge_list/children/finding_list, which
+  returned silently empty results. An id shorter than 6 chars that
+  matches nothing exactly is `invalid_input`. `lithos_write` with an
+  unknown `id` returns a `note_not_found` envelope instead of a
+  protocol-level `ToolError`.
+- **SSE consumers must handle `event: resync`.** `GET /events` now emits
+  a `resync` control event when a reconnecting client's `Last-Event-ID`
+  is not in the replay buffer (evicted, or from a previous server run).
+  Clients that ignore it will silently miss events, exactly as before —
+  the difference is that the gap is now announced.
+- **`lcma.llm_provider` is removed**, replaced by the `lcma.llm` config
+  block. The old field was never read by any code; a `LITHOS_LCMA__LLM_PROVIDER`
+  env var now has no effect.
+- **Salience decay stops at a floor** (`lcma.salience_floor`, default
+  0.3) instead of decaying to zero, and a new usage signal enters
+  reranking. Ranking on existing corpora shifts; run
+  `lithos recalibrate-salience` once to lift collapsed rows.
+- **Three idempotent startup migrations** on existing databases:
+  `agents.archived_at` (+ a `lower(name)` index), `tasks.updated_at`
+  (backfilled from `COALESCE(resolved_at, created_at)`, with legacy
+  stamps normalised to the canonical serialised form), and the
+  `llm_budget` / `edge_inference_log` ledger tables. Rolling back to
+  0.4.0 is safe: the older code ignores the extra columns and tables.
 
-- **`lithos_agent_archive(id, agent)`** retires an agent from the roster.
-  It keeps its history (tasks, claims, findings, access log still
-  attribute to it) and stays readable via `lithos_agent_info`, but drops
-  out of `lithos_agent_list` and the `agents` count in `lithos_stats`.
-  Idempotent — the transition is one conditional `UPDATE`, so concurrent
-  archives agree on a single stamp and a single event; self-archive
-  follows the same contract. Unknown id → `{status: "error", code:
-  "agent_not_found"}`. Emits `agent.archived` when newly archived.
-- **Any activity resurrects.** Every write by the archived id
-  (`ensure_agent_known`) and `lithos_agent_register` clear `archived_at`,
-  so "archived" means exactly "no activity since archiving". Note this
-  includes tool-name fallback ids such as `lithos_edge_upsert`, which an
-  un-attributed edge upsert will bring back — by design.
-- **`lithos_agent_list(include_archived=True)`** shows archived agents;
-  every row (and `lithos_agent_info`) now carries `archived_at`, `null`
-  while active. `lithos inspect agents --include-archived` matches.
-- **`lithos_agent_register` warns on a name collision** — a non-empty
-  `warnings` list names every other active agent with the same `name`
-  (case-insensitive, via an expression index on `lower(name)`).
-  Registration never blocks: distinct running instances legitimately
-  share a display name. The response gains `warnings: []` on success.
-- Startup migration adds `agents.archived_at` and the name index to an
-  existing coordination.db, idempotently.
+### Added — LCMA phase 3 groundwork
 
-### Agent registry extracted from `coordination.py` (#423 prep)
+#### Salience recalibration: decay-to-floor + usage signal (task e7d8ef60, #402)
 
-No behaviour change. The `agents` table DDL, the `Agent` dataclass and the
-four registry operations (`ensure_agent_known`, `register_agent`,
-`get_agent`, `list_agents`) now live in `lithos.agent_registry`;
-`CoordinationService` keeps thin delegators with the original signatures,
-so every caller is unchanged. The SQLite datetime codec moved to
-`lithos.sqlite_datetime` as public `parse_datetime` / `format_datetime`.
-Both modules are members of the Coordination component. This takes
-`coordination.py` from 3005 lines to 2823 — clear of the 3050 stop-loss it
-was about to breach — so the #423 archive work has room to land.
+Salience — the per-node retrieval-utility signal — had collapsed in prod
+(avg 0.076, 86% of nodes ≤ 0.30) because a floor-less daily sweep decayed
+every untouched node toward zero and nothing lifted the cold bulk corpus.
+Time decay now bottoms out at `lcma.salience_floor` (explicit negative
+feedback may still go below). A new non-decaying `usage_score` result
+field — log-scaled retrieval frequency plus exponential recency, computed
+from counters the rerank pre-fetch already reads, so zero extra queries —
+separates learned quality (stored salience) from live popularity. The
+previously hard-coded decay/reinforcement constants and composite weights
+are now `LcmaConfig` fields (`salience_*`, `rerank_*`, `usage_*`). A new
+`lithos recalibrate-salience` CLI command (idempotent; staging-first)
+backfills collapsed databases. The pure math lives in `lithos/lcma/salience.py`.
 
-### `lithos_task_update` gains compare-and-set and tag set operations (task 6dbc3b80)
+#### LLM-synthesis substrate and typed-edge inference (task 7387506b, #405, #406)
 
-Two agents that each read a task, think, and write back can no longer
-silently destroy each other's work. `lithos_task_update` accepts an optional
-`expected_updated_at` token — the `updated_at` stamp from a prior read or
-update echo, compared byte-for-byte. On mismatch nothing is written, no
-event is emitted, and the tool returns the canonical error envelope
-`{status: "error", code: "version_conflict", message, current_updated_at}`
-so the caller can retry from the current stamp without re-reading. Without
-the token, behavior is unchanged (last-writer-wins). Note the dialect
-difference from the note side: notes keep their top-level
-`status: "version_conflict"` write outcome; the task-side conflict is an
-error envelope, matching every other task-tool failure.
+The typed-edge graph was semantically empty in the 2026-07 audit (17%
+coverage, two genuine relation types). Lithos can now ask an LLM to
+adjudicate typed edges between semantically-close notes.
 
-Two review hardenings make the token collision-proof (#420): every
-mutation of an existing task row — update (guarded or not), complete,
-cancel, reopen — now reads the prior stamp inside its write transaction
-and commits `max(now, prior + 1µs)` instead of the raw wall clock, so no
-mutation can reuse or restore a previously issued stamp even when the
-clock repeats or moves backward, and a CAS token is invalidated by ANY
-intervening write; the committed stamp is echoed in responses and
-events. And an idempotent startup migration normalizes legacy
-SQLite-format `updated_at` values (`YYYY-MM-DD HH:MM:SS` from the #415
-backfill) to the canonical serialized form, so tokens read from migrated
-rows byte-round-trip instead of spuriously conflicting.
+- **Config:** `lcma.llm` (`LlmConfig`) points at one generic
+  OpenAI-compatible chat-completions endpoint — Ollama, llama.cpp, vLLM
+  `/v1` shims locally, or a hosted API. **Enabled only when `base_url` is
+  set; unset is a strict no-op.** `api_key` is a `SecretStr` hardened
+  end-to-end: header-unsafe values are rejected with a value-free
+  `ConfigurationError`, and transport errors are sanitised so the key
+  can never echo into a log. Env: `LITHOS_LCMA__LLM__BASE_URL`,
+  `..__MODEL`, `..__API_KEY`, `..__MAX_OUTPUT_TOKENS` (default 4096),
+  `..__DAILY_TOKEN_BUDGET`, `..__MAX_CALLS_PER_DRAIN`,
+  `..__CONFIDENCE_FLOOR`, `..__NEIGHBOUR_K`, `..__MIN_SIMILARITY` /
+  `..__MAX_SIMILARITY`, `..__SNIPPET_CHARS`, `..__TIMEOUT_SECONDS`.
+- **Client:** `lithos/lcma/llm.py`, async httpx, no SDK; JSON-object
+  response format; every call recorded in a budget ledger (daily token
+  budget) and an inference ledger (idempotency per node + doc version).
+- **Worker:** the background enrich drain runs, per created/updated note,
+  policy gate → top-K semantic neighbours → pure pre-filter (similarity
+  band, same namespace, entity/tag overlap, already-inferred pairs
+  skipped) → one LLM call adjudicating all candidates → judgements at or
+  above the confidence floor written via `intake.assert_edge` as
+  `provenance_type="inferred"`, `weight=confidence`,
+  `evidence={rationale, model, confidence}`. Relation types:
+  `supports`, `contradicts`, `refines`, `is_example_of`, `depends_on`,
+  `analogy_to`. `contradicts` surfaces through the existing conflict
+  machinery and is never auto-applied.
+- **Cascade-proof:** inference writes stamp `origin=enrich`, so the
+  worker drops its own `edge.upserted` events; edge-triggered drains
+  never infer; edge writes do not bump the document version.
+- **Metrics:** `lcma_llm_calls{outcome}`, token spend, and
+  budget-exhaustion counters.
 
-New `add_tags`/`remove_tags` parameters edit the tag list as set operations
-(append without duplicates, drop removals, preserve order), applied
-read-modify-write under `BEGIN IMMEDIATE` — so incremental tag edits from
-stale reads compose instead of clobbering, which matters now that tags are
-a dispatch mechanism (`trigger:` prefixes). They are mutually exclusive
-with the wholesale `tags` replace and must not overlap each other.
+#### `lithos_retrieve` degraded-mode signal (task c36fbdb6, #396, #397)
 
-### Tasks expose `updated_at`, a last-modified stamp bumped by every row write (#415)
+Responses now always carry `degraded` (bool) and `failed_scouts` (the
+canonical names of scouts that ran and raised), so a caller can tell
+"one backend down, partial results" from "genuinely empty corpus".
+Healthy retrieves gain `degraded: false, failed_scouts: []`; no existing
+field changes. New alertable counter `lithos.lcma.scout.failures`,
+labelled by scout — the signal that was missing during the 2026-06
+ChromaDB outage that silently degraded semantic search for 33 minutes.
+Scouts are now registered in one place with shared gating.
 
-Task records now carry `updated_at`, set on create (`= created_at`) and bumped
-by every task-row mutation: any `lithos_task_update` (including metadata-only
-merges — even `metadata={}`, which changes no keys but still writes the row),
-complete/cancel (`= resolved_at`), and reopen. Claim operations
-(claim/renew/release) touch only the claims table and never bump the stamp, so
-lease heartbeats cannot masquerade as edits. The stamp is returned in
-`lithos_task_get`/`lithos_task_list`/`lithos_task_status` (and the ready/
-blocked/children pass-throughs), carried in the row-mutating event payloads
-(`task.created`/`updated`/`completed`/`cancelled`/`reopened` — not
-claimed/released), and echoed in the mutating tool responses so a writer can
-record the exact stamp its own write produced without a racy re-read.
-Consumers detecting "edited since X" compare stamps for equality. Existing
-databases are migrated in place: the column is added at `initialize()` time
-with a one-time backfill of `COALESCE(resolved_at, created_at)`.
+#### SSE replay-gap signal (task 87b45d1f, #400)
 
-### Short id prefixes accepted everywhere; mutating responses echo the resolved id + title (task 83257ced)
+`EventBus.get_buffered_since` returned an empty list for three
+indistinguishable cases — caught up, unknown id, evicted id — so a
+reconnecting client that had missed events believed it was in sync. It
+now returns `BufferedReplay(events, gapped)`, deciding continuity purely
+by presence of the id in the ring, and the `GET /events` endpoint emits
+`event: resync` (no `id:` line) when gapped. Presence-based detection is
+what makes a reconnect across a server restart correct. New search and
+graph conformance suites landed alongside.
+
+### Added — coordination and knowledge API
+
+#### Short id prefixes accepted everywhere; mutating responses echo the resolved id + title (task 83257ced)
 
 Every tool parameter that takes a task or note id now also accepts an
 **unambiguous short prefix** (min 6 chars, git-style) — the task lifecycle set,
@@ -136,6 +150,161 @@ errors, and anything else (forward references, free-form node ids and
 correlation keys) passes through unchanged: `lithos_retrieve.task_id`,
 `lithos_write.source_task`, `derived_from_ids`, finding `knowledge_id`, and
 asserted-edge endpoints/filters/`winner_id`.
+
+#### Tasks expose `updated_at`, a last-modified stamp bumped by every row write (#415)
+
+Task records now carry `updated_at`, set on create (`= created_at`) and bumped
+by every task-row mutation: any `lithos_task_update` (including metadata-only
+merges — even `metadata={}`, which changes no keys but still writes the row),
+complete/cancel (`= resolved_at`), and reopen. Claim operations
+(claim/renew/release) touch only the claims table and never bump the stamp, so
+lease heartbeats cannot masquerade as edits. The stamp is returned in
+`lithos_task_get`/`lithos_task_list`/`lithos_task_status` (and the ready/
+blocked/children pass-throughs), carried in the row-mutating event payloads
+(`task.created`/`updated`/`completed`/`cancelled`/`reopened` — not
+claimed/released), and echoed in the mutating tool responses so a writer can
+record the exact stamp its own write produced without a racy re-read.
+Consumers detecting "edited since X" compare stamps for equality. Existing
+databases are migrated in place: the column is added at `initialize()` time
+with a one-time backfill of `COALESCE(resolved_at, created_at)`.
+
+#### `lithos_task_update` gains compare-and-set and tag set operations (task 6dbc3b80)
+
+Two agents that each read a task, think, and write back can no longer
+silently destroy each other's work. `lithos_task_update` accepts an optional
+`expected_updated_at` token — the `updated_at` stamp from a prior read or
+update echo, compared byte-for-byte. On mismatch nothing is written, no
+event is emitted, and the tool returns the canonical error envelope
+`{status: "error", code: "version_conflict", message, current_updated_at}`
+so the caller can retry from the current stamp without re-reading. Without
+the token, behavior is unchanged (last-writer-wins). Note the dialect
+difference from the note side: notes keep their top-level
+`status: "version_conflict"` write outcome; the task-side conflict is an
+error envelope, matching every other task-tool failure.
+
+Two review hardenings make the token collision-proof (#420): every
+mutation of an existing task row — update (guarded or not), complete,
+cancel, reopen — now reads the prior stamp inside its write transaction
+and commits `max(now, prior + 1µs)` instead of the raw wall clock, so no
+mutation can reuse or restore a previously issued stamp even when the
+clock repeats or moves backward, and a CAS token is invalidated by ANY
+intervening write; the committed stamp is echoed in responses and
+events. And an idempotent startup migration normalizes legacy
+SQLite-format `updated_at` values (`YYYY-MM-DD HH:MM:SS` from the #415
+backfill) to the canonical serialized form, so tokens read from migrated
+rows byte-round-trip instead of spuriously conflicting.
+
+New `add_tags`/`remove_tags` parameters edit the tag list as set operations
+(append without duplicates, drop removals, preserve order), applied
+read-modify-write under `BEGIN IMMEDIATE` — so incremental tag edits from
+stale reads compose instead of clobbering, which matters now that tags are
+a dispatch mechanism (`trigger:` prefixes). They are mutually exclusive
+with the wholesale `tags` replace and must not overlap each other.
+
+#### Agent archive and name-collision warning (#423)
+
+The agent roster could only grow: prod held 59 agents for ~15 actors,
+most of them auto-registered by a single write and never seen again.
+
+- **`lithos_agent_archive(id, agent)`** retires an agent from the roster.
+  It keeps its history (tasks, claims, findings, access log still
+  attribute to it) and stays readable via `lithos_agent_info`, but drops
+  out of `lithos_agent_list` and the `agents` count in `lithos_stats`.
+  Idempotent — the transition is one conditional `UPDATE`, so concurrent
+  archives agree on a single stamp and a single event; self-archive
+  follows the same contract. Unknown id → `{status: "error", code:
+  "agent_not_found"}`. Emits `agent.archived` when newly archived.
+- **Any activity resurrects.** Every write by the archived id
+  (`ensure_agent_known`) and `lithos_agent_register` clear `archived_at`,
+  so "archived" means exactly "no activity since archiving". Note this
+  includes tool-name fallback ids such as `lithos_edge_upsert`, which an
+  un-attributed edge upsert will bring back — by design.
+- **`lithos_agent_list(include_archived=True)`** shows archived agents;
+  every row (and `lithos_agent_info`) now carries `archived_at`, `null`
+  while active. `lithos inspect agents --include-archived` matches.
+- **`lithos_agent_register` warns on a name collision** — a non-empty
+  `warnings` list names every other active agent with the same `name`
+  (case-insensitive, via an expression index on `lower(name)`).
+  Registration never blocks: distinct running instances legitimately
+  share a display name. The response gains `warnings: []` on success.
+- Startup migration adds `agents.archived_at` and the name index to an
+  existing coordination.db, idempotently.
+
+#### `lithos_read` returns the note's `path`
+
+`lithos_read` omitted the note's path — neither top-level nor in
+`metadata` — while `lithos_list`, `lithos_write` and `lithos_delete` all
+report it, so a client reading by id could not learn where a note lives
+(lithos-loom surfaced this as `path=""`). The response now carries
+`path` beside `id` and `title`: the file path relative to `knowledge/`,
+identical to what `lithos_list` returns, for reads by `id` and by `path`
+alike. Additive — no existing key changes.
+
+### Fixed
+
+- **Bare YAML dates in frontmatter broke indexing (#407, #411).** PyYAML
+  resolves an unquoted `created: 2026-07-30` to `datetime.date`. On 0.4.0
+  any note carrying one under a non-reserved key was silently dropped
+  from search (one reporter lost ~25% of a vault); after the corpus-index
+  extraction the exception escaped `rebuild()` and stopped the server
+  booting, and a bare date in `tags:` poisoned the whole Tantivy rebuild.
+  Both YAML ingestion points now normalise `date`/`datetime` values to
+  ISO-8601 strings, and the metadata bucket key is total (`default=str`),
+  so hand-edited frontmatter can no longer abort the startup scan.
+- **Docker: `LITHOS_LCMA__LLM__*` env vars are forwarded into the
+  container (#409, #410).** The compose `environment:` whitelist never
+  passed them, so LLM synthesis stayed silently disabled in
+  compose-managed deployments. The whole family is now passed through;
+  `LithosConfig` gained `env_ignore_empty=True` so blank pass-through
+  defaults are treated as unset rather than failing int/float parsing.
+- **`lcma.llm.max_output_tokens` default raised 1024 → 4096 (#410).**
+  Reasoning models spend completion budget on hidden reasoning before
+  emitting text; a production-shaped prompt consumed 979 of the 1024-token
+  cap and 20 of 23 staging calls failed. The cap is protective, not a
+  spend target, so the change costs nothing on non-reasoning models.
+- **Guardrail review follow-ups (#380)** and three guardrail-kit
+  adoptions (1.0.0, 1.3.2, 1.4.0 — #381, #382, #383).
+
+### Internal — 2026-07 architecture-cleanup roadmap
+
+No MCP behaviour change from any of these; each was drift-checked against
+the generated architecture docs.
+
+- **MCP tools extracted into `lithos.tools`** (#372, #373, #374): agents,
+  memory/edges, findings/stats, notes, read/search and task tools each
+  live in their own module; the monolithic `_register_tools` is gone.
+  Tests migrated onto the shared `tests.helpers.call_tool` seam (#375).
+- **Enrich, quarantine and supersede note writes route through Corpus
+  intake** (#384); **edge-write policy consolidated** with a
+  non-spoofable enrich loop-break (#385); **`derived_from` projection
+  consolidated into `ProvenanceProjection`** (#386).
+- **One composition root** for the component graph (#388); the Core-tier
+  reconcile peer retired, completing ADR-0001 (#389).
+- **Frontmatter codec** (`lithos.frontmatter_codec`, #390) and the
+  **derived corpus index** (`lithos.corpus_index`, #393) extracted out of
+  `KnowledgeManager`; provenance BFS given an owner and the scouts'
+  cached-meta view collapsed (#394).
+- **Shared `AsyncSqliteStore` base** for the edge and stats stores (#398);
+  task-feedback validate/apply moved onto `CognitiveMemory` (#399).
+- **Agent registry extracted from `coordination.py`** (#425): the `agents`
+  table DDL, the `Agent` dataclass and the four registry operations now
+  live in `lithos.agent_registry`; `CoordinationService` keeps thin
+  delegators with the original signatures. The SQLite datetime codec
+  moved to `lithos.sqlite_datetime` as public `parse_datetime` /
+  `format_datetime`. Takes `coordination.py` from 3005 lines to 2823,
+  clear of the 3050 stop-loss it was about to breach.
+- **Architecture guardrails extended** (#379): `docs/generated/` grows
+  from 2 artifacts to 21 — metrics with budgets and trends, the MCP tool
+  catalog, C4 container and per-component views — all generated by
+  `tests/guardrail/` and drift-checked in CI. Zero new runtime
+  dependencies.
+- **CI publishes only the agent-skill plugins touched by a push** (#414);
+  the lithos skill went through 0.3.0 → 0.4.1 across this release
+  (short-id backstop, `updated_at` change detection, agent-id lookup
+  convention, task graph and 0.4.0 envelopes, the read response shape).
+- **Dependency bumps** via Dependabot, including anyio 4.14.2.
+
+---
 
 ## [0.4.0] — 2026-07-06
 
