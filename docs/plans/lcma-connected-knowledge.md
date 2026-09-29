@@ -192,10 +192,18 @@ does not generate pages until its runner exists.
    baseline shares plus per-query kept/dropped results; needs no labels and
    is the day-one K0 measurement. (b) **Offline replay**, only once receipts
    capture the full candidate pool with per-scout scores (today they hold
-   final results and a count) and the held-out set carries relevance labels
-   (Dave labels the 47 queries' top results; agents report `used_ids`): then
-   nDCG on labelled/used items and exploration-use rate can compare scouts
-   and rerankers without re-running. A changed scout can surface candidates
+   final results and a count) and a labelled held-out set exists. The
+   committed 47 queries are not enough for a per-caller gate: no query is
+   Dave's, the largest caller groups hold 15, 13 and 10 queries, and 26 of
+   47 requested fewer than 10 results. So (b) first **extends the set**:
+   at least 20 of Dave's own questions (collected via the planning-coach
+   skill and Lens), each of the top three agents by retrieve volume topped
+   up to at least 20 queries from newer receipts, and every query re-run on
+   the staging copy at `limit=10` so results exist to depth 10 regardless
+   of the caller's original limit. Dave labels each query's top 10
+   (relevant / not / superseded) and agents report `used_ids`. Then nDCG@10
+   on labelled items and exploration-use rate can compare scouts and
+   rerankers without re-running. A changed scout can surface candidates
    the old receipts never saw, so (b) is not a substitute for (a).
 2. A synthetic-owner ground-truth set with validity intervals and volatility
    classes (Ground Truth First style), rendered into notes and findings;
@@ -250,12 +258,15 @@ measurement in the description.
 ## 6. Success criteria
 
 - Epic A (measurable with the prospective check): on the 47-query held-out
-  set the top-10 share is under 15% and the coactivation-only share under
-  10% (baseline 41.5% / 40.1% for non-influx callers).
-- Epic B (needs K7.1(b) candidate receipts and labels): `lithos_retrieve`
-  beats `lithos_search` on nDCG@10 over the labelled held-out set, measured
-  per caller for each agent with at least 20 labelled queries (Dave's own
-  questions and the top three agents by retrieve volume).
+  set (320 result slots) the top-10 share is under 15% and the
+  coactivation-only share under 10%. Pinned baseline for that set: 34.7% /
+  36.2% (`held_out_baseline` in the baseline file). The 30-day non-influx
+  receipt population is a secondary, non-gating reading: 41.5% / 40.1%.
+- Epic B (needs the K7.1(b) extended set, candidate receipts and labels):
+  `lithos_retrieve` beats `lithos_search` on nDCG@10 over the labelled set,
+  measured per caller for Dave and for each of the top three agents by
+  retrieve volume, each with at least 20 labelled queries and results to
+  depth 10. Pass = higher mean nDCG@10 for every one of those four callers.
 - Every note has been a focus of edge inference at least once; contradictions
   are visible by default and reviewed weekly.
 - `lithos_related` renders a typed, provenanced, titled neighbourhood that

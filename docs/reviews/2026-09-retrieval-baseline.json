@@ -38,6 +38,34 @@
    "vector_or_lexical_pct": 26.7
   }
  },
+ "held_out_baseline": {
+  "queries": 47,
+  "slots": 320,
+  "top10_share_pct": 34.7,
+  "coactivation_only_pct": 36.2,
+  "vector_or_lexical_pct": 44.4,
+  "queries_by_agent": {
+   "codex-agent-foundations": 15,
+   "ai-agents-briefing": 13,
+   "garuda": 10,
+   "hema-events-scout": 6,
+   "codex-retro-character": 1,
+   "garuda-hema-digest": 1,
+   "claude-robot-companion": 1
+  },
+  "queries_by_limit": {
+   "2": 1,
+   "3": 1,
+   "5": 15,
+   "7": 5,
+   "8": 4,
+   "10": 17,
+   "12": 1,
+   "20": 3
+  },
+  "queries_with_limit_below_10": 26,
+  "note": "Epic A gate population. Computed over held_out_queries[].results; differs from metrics.non_influx_30d (49 receipts incl. two non-held-out ones, and computed over the receipt table, not the resolved result list)."
+ },
  "targets": {
   "top10_share_pct": "<15",
   "coactivation_only_pct": "<10"
