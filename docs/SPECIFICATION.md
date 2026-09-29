@@ -1115,7 +1115,7 @@ Get knowledge base statistics.
 
 **Use case:** Allows agents to understand knowledge base scale before issuing broad queries.
 
-### 5.6 LCMA Operations (Phase 7 MVP 1)
+### 5.6 LCMA Operations (Phase 7, MVP 1–2)
 
 These tools are additive to the pre-LCMA surface — they do not replace `lithos_search`, `lithos_read`, or `lithos_related`. See `docs/plans/lcma-design.md` for the design rationale.
 
@@ -1778,11 +1778,11 @@ These are explicitly not part of the initial implementation but may be considere
 - Multi-node deployment
 - ~~Access control / namespaces~~ (LCMA MVP 1 introduces advisory `namespace` and `access_scope` frontmatter fields enforced inside `lithos_retrieve`'s scouts. Legacy `lithos_search`/`lithos_read`/`lithos_list` remain unrestricted — caller-context-aware enforcement on those tools is deferred. Not a security control.)
 - ~~Knowledge expiration / TTL~~ (Implemented in Phase 4 via `expires_at`, `ttl_hours`, `lithos_cache_lookup`, and `is_stale` in search results)
-- Automated knowledge quality scoring
-- Contradictory knowledge resolution
+- ~~Automated knowledge quality scoring~~ (Partially implemented: LCMA salience / usage score via `lithos_node_stats`, `lithos recalibrate-salience`)
+- ~~Contradictory knowledge resolution~~ (Implemented in LCMA MVP 2 via `contradicts` edges and `lithos_conflict_resolve`)
 - Integration with external knowledge sources
 - Full edit history / provenance log
-- Hierarchical multi-hop link results
+- ~~Hierarchical multi-hop link results~~ (Implemented via `lithos_search(mode="graph", graph_depth=1..3)` and `lithos_related(depth=...)`)
 - ~~Structured MCP error codes (`NOT_FOUND`, `CLAIM_CONFLICT`, `AMBIGUOUS_LINK`, etc.)~~ (Implemented via `{ status: "error", code, message }` envelopes; see §10.2 for the full list of error codes)
 - ~~Structured `source` provenance with `derived_from` links to source knowledge items~~ (Implemented in Phase 3 via `derived_from_ids`, exposed through `lithos_related`)
 - ~~`lithos_tags` prefix filtering~~ (Implemented via `prefix`)
@@ -1854,7 +1854,7 @@ These are explicitly not part of the initial implementation but may be considere
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_reopen`, `lithos_task_list`, `lithos_task_status`, `lithos_task_get`, `lithos_finding_post`, `lithos_finding_list` |
 | Task Graph | `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, `lithos_task_blocked`, `lithos_task_children`, `lithos_task_spawn` |
 | System | `lithos_stats` |
-| LCMA (Phase 7 MVP 1) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
+| LCMA (Phase 7, MVP 1–2) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
 | HTTP | `GET /health`, `GET /events`, `GET /audit` (not MCP tools; see §5.7 and §8.7) |
 
 **Total: 38 MCP tools + 3 HTTP endpoints** (`lithos_agent_archive` retires an agent from the roster without losing its history (#423); `lithos_note_update` adds a frontmatter-only note patch — tags/metadata/title/status without the body — at parity with `lithos_task_update` (#362); task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_reopen` completes the lifecycle (terminal → open, the remediation for stranded dependents) and `lithos_task_update` now accepts terminal tasks (#303); `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)

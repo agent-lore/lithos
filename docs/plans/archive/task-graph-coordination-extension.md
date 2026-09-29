@@ -1,6 +1,6 @@
 # Task Graph Coordination Extension
 
-Status: Proposal (revised after review of PR #339 — trimmed MVP edge types, removed dual-source migration compatibility, made `parent_child` purely structural, made gate resolution explicit, deduplicated the tool surface)
+Status: **Delivered — archived 2026-09-29.** Phases 1–3 shipped as PRs #342 (edges, ready/blocked), #343 (hierarchy, spawn, epics), #356 (gates) and #357 (`lithos_task_reopen`). Phase 4 (priority column, epic close rules, `lithos_task_prime`, further edge types) is unscheduled and tracked in `docs/plans/future-improvements.md`. Original header: Proposal (revised after review of PR #339 — trimmed MVP edge types, removed dual-source migration compatibility, made `parent_child` purely structural, made gate resolution explicit, deduplicated the tool surface)
 
 Audience: Lithos maintainers and agent-tooling implementers
 

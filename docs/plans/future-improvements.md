@@ -1,86 +1,73 @@
 # Future Improvements (Deferred)
 
-This document tracks known gaps, improvement ideas, and open issues that are not addressed by any active implementation plan. Items here are candidates for future plans or early-phase additions to existing plans.
+Known gaps and ideas not addressed by any active implementation plan.
+Candidates for a plan or a tracker task; not blockers for anything scheduled.
+Rewritten 2026-09-29 from the state review (`docs/reviews/2026-09-state-review.md`);
+items that shipped since the 2026-06 version (conflict resolution, quality
+signals, namespace fields, the task graph Phases 1–3) were removed.
 
-These are not blockers for the current phase roadmap. Each item notes why it is deferred and what a "ship earlier" path might look like.
+Anything with a consumer should become a `lithos-core` tracker task; this
+file is for ideas that do not yet have one.
 
----
+## 1. Task graph Phase 4 (unscheduled)
 
-## 1. Conflict Resolution Workflow (Pre-LCMA)
+Carried from `archive/task-graph-coordination-extension.md` (Phases 1–3
+delivered, PRs #342/#343/#356/#357):
 
-When two agents write contradictory knowledge about the same topic, there is no mechanism beyond "agents handle conflicts themselves" (`SPECIFICATION.md` section 1.2). LCMA MVP 2 (Phase 7) adds `contradicts` edges in `edges.db` with a full conflict state machine (`unreviewed | accepted_dual | superseded | refuted | merged`) and a `lithos_conflict_resolve` tool.
+- a first-class `priority` column (today an inheritable metadata key only)
+- epic close rules (no rule today; `SPECIFICATION.md` says so)
+- `lithos_task_prime` — a gated context brief on claim; see
+  `lcma-connected-knowledge.md` K5 for the current design
+- further edge types (`relates_to`, `duplicates`, …) only when a consumer asks
 
-**Ship-earlier option:** A simpler `conflict_flag: bool` field in `KnowledgeMetadata` frontmatter, settable via `lithos_write`, that `lithos_search`/`lithos_semantic` surface as a warning. This requires no new SQLite store. Defer to LCMA MVP 2 unless user demand warrants the simpler flag earlier.
+## 2. Task-tool ergonomics surfaced by real callers
 
----
+- `lithos_task_list` lacks `project` and `limit` while `task_ready` /
+  `task_blocked` accept both; callers guess and hit a FastMCP validation
+  error that no metric counts.
+- A bulk subtree read (`lithos_task_children(task_ids=[...])` or an epic
+  roll-up) so Lens stops fanning one call per epic per refresh (533k calls in
+  30 days, 83% of prod traffic); Lens should also refresh from SSE `task.*`
+  events rather than a timer.
+- `lithos_list` server-side ordering (`order_by=updated_desc`, task `e0e31654`).
 
-## 2. Knowledge Quality Signals (Pre-LCMA)
+## 3. Knowledge-write ergonomics
 
-There is no way to distinguish "this note is frequently retrieved and useful" from "this note was written and never retrieved." LCMA Phase 7 adds `stats.db` with `retrieval_count`, `salience`, coactivation counts, and spaced-repetition decay.
+- **Batch existence check.** 97% of influx `lithos_write` calls are
+  re-submissions of known URLs. A `lithos_cache_lookup(source_urls=[...])`
+  or `lithos_exists` batch call is the first real argument for anything in
+  `deferred/bulk-write-v3.md`; the full batch write stays deferred.
+- **Source-stable identifiers** (arxiv id, DOI) as a dedup key beside
+  `source_url` (GitHub #222).
+- **Bulk import / `validate --fix` for foreign vaults**: walk a directory,
+  validate frontmatter against `KnowledgeMetadata`, repair missing ids and
+  defaults, write conformant files, reindex. Natural home: the `admin`
+  group in `cli-admin-client-split.md`.
 
-**Ship-earlier option:** Add a `retrieval_count` integer field to `coordination.db` (one row per `doc_id`), incremented by `lithos_read` and search result returns. No new SQLite file needed; `CoordinationService` already manages that database. The simpler counter should be retired or migrated when LCMA `stats.db` ships.
+## 4. Attribution and observability
 
----
+- 70% of `lithos_read` calls are unattributed because `agent_id` is optional;
+  either require it on read/search/list or derive it from the session's
+  registered agent.
+- `otel_lithos_tool_errors_total` has never incremented, so no error-rate
+  series exists; FastMCP validation errors bypass the JSON logger and the
+  counter.
+- LLM call-duration histogram buckets stop at 10 s (mean is 16.5 s); add
+  buckets to 120 s.
+- `gen_ai.*` spans on LLM calls (the deferred Phase 3 of
+  `archive/otel-plan.md`, now that `lcma/llm.py` exists).
+- Docker `json-file` log driver has no `max-size` on prod/staging compose
+  (Lens has 10m×5).
 
-## 3. Namespace/Scope from Day One
+## 5. Integrity safeguards
 
-`access_scope` and `namespace` are LCMA MVP 1 fields (Phase 7 of the roadmap), but search pollution from mixed agent writes is a problem today. An agent writing scratch notes pollutes the shared search space for all other agents.
+- Chroma coverage drift alert (drift detection is Tantivy-only today) and a
+  scheduled reconcile safeguard — the re-scoped half of task `97cd00bb`.
+- ADR-0006 slices 2–3: consolidation and reinforcement edges still write to
+  `edge_store` directly rather than through intake; `lithos_conflict_resolve`
+  dual-writes edges and notes without the promised atomicity ADR. Single
+  process, no incident; do it when the write path is next touched.
 
-**Ship-earlier option:** Ship the `access_scope` field with its default value of `shared` as part of Phase 2 or Phase 3, with basic filtering in `lithos_search` and `lithos_semantic` by `namespace` prefix. This is compatible with the existing `path` parameter convention (agents already use subdirectories like `knowledge/agent/<id>/`). The LCMA scout namespace gating would then layer on top at MVP 1.
+## 6. Small runtime fixes
 
-**Risk:** Shipping an early `access_scope` filter may create behavioral expectations that diverge from the richer LCMA access model. Decision: revisit after Phase 3 exits.
-
-Note: `access_scope` is a retrieval scoping mechanism, not a security boundary. All agents operate in the same trust domain per `SPECIFICATION.md` section 1.2.
-
----
-
-## 4. Bulk Import for Existing Knowledge
-
-No plan addresses importing an existing Obsidian vault or markdown corpus into Lithos with frontmatter conformance checks. `lithos reindex` handles re-indexing existing conformant documents but does not validate or repair frontmatter.
-
-**Options:**
-
-- A new `lithos import <path>` CLI command that walks a directory, validates frontmatter fields against `KnowledgeMetadata` schema, optionally repairs missing required fields (assigning new UUIDs, setting defaults), and writes conformant files into the `knowledge/` directory before triggering reindex.
-- Extend `lithos validate --fix` to handle foreign vaults (repair missing frontmatter in-place).
-
-Natural fit for Phase 9 (`cli-extension-plan.md`). Not a prerequisite for any active plan.
-
----
-
-## 5. Small Runtime Fixes
-
-Small standalone defects should be fixed directly when discovered rather than queued behind roadmap phases.
-
-Recent example: the `inspect_doc` timestamp attribute mismatch in `cli.py` was corrected directly instead of being assigned to a later CLI phase.
-
----
-
-## 6. AgentRace Benchmark Validation
-
-**Source:** AgentRace coordination workload benchmark (observed in daily research digest, 2026-03-09)
-
-Lithos's multi-agent coordination features (task claiming with TTL, findings, agent registry, namespace isolation) map directly to the coordination workload that AgentRace benchmarks. Running Lithos against AgentRace would provide a concrete, externally-comparable validation of coordination performance.
-
-**Proposed action:** Add a `benchmarks/agentrace/` directory with a benchmark harness that exercises:
-- Task claim/release/complete throughput under concurrent agents
-- Deduplication correctness under parallel writes
-- Retrieval latency under coordination load
-
-**Deferred because:** AgentRace integration requires a benchmark harness that doesn't exist yet. Natural fit after LCMA MVP 1 ships (retrieval is the most interesting thing to benchmark). Not a prerequisite for any active plan.
-
----
-
-## 7. Task Graph Coordination Extension
-
-Lithos tasks are widely used with scheduling metadata conventions such as `metadata.depends_on`, `metadata.priority`, `metadata.parallelizable`, and `metadata.blocked_on`, but the coordination layer does not interpret them natively. This makes Lithos workable as a shared task registry, but weak as a ready-work scheduler.
-
-**Proposed path:** add a first-class task graph inside `coordination.db` with:
-
-- typed task edges (`blocks`, `parent_child`, `discovered_from`, `waits_on_gate`; further types deferred)
-- ready/blocked queries
-- gate tasks for external waiting states
-- task spawning and parent/child traversal
-
-See `docs/plans/task-graph-coordination-extension.md`.
-
-**Deferred because:** The current roadmap has no active phase dedicated to extending the coordination surface beyond claim/findings semantics. This should become its own implementation plan when issue-tracker/scheduler behavior becomes a priority.
+Standalone defects get fixed when found, not queued behind roadmap phases.

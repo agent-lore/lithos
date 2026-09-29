@@ -5,20 +5,26 @@ Design reference: `lcma-design.md`
 
 Dependencies: Phases 0 through 6.5 complete ✅
 
+> **Status 2026-09-29.** Prerequisites, MVP 1 and MVP 2 shipped in 2026-04/05 (PRs #126, #163,
+> #170) and are ticked below as a record. MVP 3: WS1 and WS2 slice 1 shipped (0.5.0); WS2
+> slice 2 and WS3–WS7 are not started. The 2026-09 state review
+> (`docs/reviews/2026-09-state-review.md` §6) found a retrieval-quality regression in the
+> shipped substrate and re-sequences the remaining work in `lcma-connected-knowledge.md`.
+
 Exit criteria (all MVPs):
 - LCMA features remain additive and consistent with canonical write contract
 - On-disk compatibility preserved throughout rollout
-- All existing 24 tools preserved with no renames or removals
+- All pre-LCMA tools preserved with no renames or removals (the surface is 38 tools as of 0.5.0)
 
 ---
 
 ## Prerequisites (before MVP 1 implementation)
 
-- [ ] Wrap `full_text_search()`, `semantic_search()`, and `hybrid_search()` calls in `asyncio.to_thread()` at call sites — sync search must not block the event loop when LCMA adds 7+ parallel scouts (see design doc §5.13)
-- [ ] Implement `merge_and_normalize()` with per-scout min-max normalization to `[0, 1]` — all `lithos_retrieve` scores must be normalized (see design doc §5.3.1); `lithos_search` scores are unchanged
-- [ ] Add `EDGE_UPSERTED = "edge.upserted"` event type to `events.py` — all state changes must flow through the event bus (see design doc §3.1 runtime architecture)
-- [ ] Extend `EventBus.subscribe()` to accept an optional `maxsize: int | None = None` parameter — if provided, use it for the subscriber queue instead of the default `self._queue_size`. This is required so `lithos-enrich` can pass `ENRICH_SUBSCRIBER_QUEUE_SIZE` at subscribe time in MVP 2.
-- [ ] Bump `lithos-enrich` subscriber queue size to ~10,000 by passing `ENRICH_SUBSCRIBER_QUEUE_SIZE` to the `EventBus.subscribe()` call in the enrich worker (depends on above item)
+- [x] Wrap `full_text_search()`, `semantic_search()`, and `hybrid_search()` calls in `asyncio.to_thread()` at call sites — sync search must not block the event loop when LCMA adds 7+ parallel scouts (see design doc §5.13)
+- [x] Implement `merge_and_normalize()` with per-scout min-max normalization to `[0, 1]` — all `lithos_retrieve` scores must be normalized (see design doc §5.3.1); `lithos_search` scores are unchanged
+- [x] Add `EDGE_UPSERTED = "edge.upserted"` event type to `events.py` — all state changes must flow through the event bus (see design doc §3.1 runtime architecture)
+- [x] Extend `EventBus.subscribe()` to accept an optional `maxsize: int | None = None` parameter — if provided, use it for the subscriber queue instead of the default `self._queue_size`. This is required so `lithos-enrich` can pass `ENRICH_SUBSCRIBER_QUEUE_SIZE` at subscribe time in MVP 2.
+- [x] Bump `lithos-enrich` subscriber queue size to ~10,000 by passing `ENRICH_SUBSCRIBER_QUEUE_SIZE` to the `EventBus.subscribe()` call in the enrich worker (depends on above item)
 
 ---
 
@@ -26,15 +32,15 @@ Exit criteria (all MVPs):
 
 ### New frontmatter fields (optional, backward-compatible defaults)
 
-- [ ] Add `schema_version` (int, default 1) — lazy default at read time, persisted on next `lithos_write`
-- [ ] Add `namespace` (str, derived from path if absent) — lazy default at read time, derived from path; **persist only if explicitly passed by caller** (not written back automatically on touch); writable via `lithos_write` for explicit overrides
-- [ ] Add `access_scope` (enum: `shared|task|agent_private`, default `shared`) — advisory visibility to reduce noise, not a security control; agents self-identify via `agent_id`; project-level scoping handled by `namespace`
-- [ ] Add `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
-- [ ] Add `entities` field (list of extracted entity names) — **deferred to MVP 2**: auto-extracted by `lithos-enrich`; not populated in MVP 1
-- [ ] Add `status` (enum: `active|archived|quarantined`, default `active`)
-- [ ] Add `summaries` nested object (`short`, `long`) (optional)
+- [x] Add `schema_version` (int, default 1) — lazy default at read time, persisted on next `lithos_write`
+- [x] Add `namespace` (str, derived from path if absent) — lazy default at read time, derived from path; **persist only if explicitly passed by caller** (not written back automatically on touch); writable via `lithos_write` for explicit overrides
+- [x] Add `access_scope` (enum: `shared|task|agent_private`, default `shared`) — advisory visibility to reduce noise, not a security control; agents self-identify via `agent_id`; project-level scoping handled by `namespace`
+- [x] Add `note_type` (enum: `observation|agent_finding|summary|concept|task_record|hypothesis`, default `observation`)
+- [x] Add `entities` field (list of extracted entity names) — **deferred to MVP 2**: auto-extracted by `lithos-enrich`; not populated in MVP 1
+- [x] Add `status` (enum: `active|archived|quarantined`, default `active`)
+- [x] Add `summaries` nested object (`short`, `long`) (optional)
   - MVP 1: agent-written only (via `lithos_write`); MVP 2: `lithos-enrich` may auto-generate for notes where `summaries` is empty and `note_type` is `concept`/`summary` — agent-written values take precedence
-- [ ] Extend `lithos_write` with optional LCMA params while preserving shared write contract and status envelope
+- [x] Extend `lithos_write` with optional LCMA params while preserving shared write contract and status envelope
 - [x] ~~Define preserve/set/clear semantics for each new `lithos_write` LCMA field before implementation~~ — **Resolved:** Preserve if already set; write default on first touch (write-back-on-touch). Exception: `namespace` — derive at read time only, persist only if explicitly passed by caller.
 
   | Field | On update, if omitted |
@@ -47,41 +53,41 @@ Exit criteria (all MVPs):
   | `namespace` | Derive at read time; persist only if explicitly passed |
   | `entities` | Leave absent in MVP 1; do not set. MVP 2: `lithos-enrich` auto-populates; agent-written values preserved (never overwritten by enrich). |
 
-- [ ] Implement lazy defaults + write-back-on-touch for LCMA fields (no migration runner in MVP 1)
+- [x] Implement lazy defaults + write-back-on-touch for LCMA fields (no migration runner in MVP 1)
 
 ### Storage
-- [ ] Create `data/.lithos/edges.db` with `edges` table and indexes
-- [ ] Create `data/.lithos/stats.db` with `node_stats`, `coactivation`, `enrich_queue`, and `working_memory` tables (`enrich_queue`: `id`, `trigger_type`, `node_id`, `task_id`, `triggered_at`, `processed_at`; index on `processed_at`; `working_memory`: `task_id`, `node_id`, `activation_count`, `first_seen_at`, `last_seen_at`, `last_receipt_id`; PK `(task_id, node_id)`; index on `task_id`)
-- [ ] Add `receipts` table to `stats.db` (schema: `id` TEXT PK, `ts`, `query`, `namespace_filter`, `agent_id`, `task_id`, `temperature`, `scouts_fired`, `candidates_considered`, `terrace_reached`, `final_nodes`, `conflicts_surfaced`; indexes on `ts`, `task_id`, `agent_id`)
-- [ ] Add `LithosConfig.lcma` configuration subtree (`LcmaConfig` schema in design doc §7.z): `enabled`, `enrich_drain_interval_minutes`, `rerank_weights`, `note_type_priors`, `temperature_default`, `temperature_edge_threshold`, `wm_eviction_days`, `llm` (nested `LlmConfig`, WS1)
+- [x] Create `data/.lithos/edges.db` with `edges` table and indexes
+- [x] Create `data/.lithos/stats.db` with `node_stats`, `coactivation`, `enrich_queue`, and `working_memory` tables (`enrich_queue`: `id`, `trigger_type`, `node_id`, `task_id`, `triggered_at`, `processed_at`; index on `processed_at`; `working_memory`: `task_id`, `node_id`, `activation_count`, `first_seen_at`, `last_seen_at`, `last_receipt_id`; PK `(task_id, node_id)`; index on `task_id`)
+- [x] Add `receipts` table to `stats.db` (schema: `id` TEXT PK, `ts`, `query`, `namespace_filter`, `agent_id`, `task_id`, `temperature`, `scouts_fired`, `candidates_considered`, `terrace_reached`, `final_nodes`, `conflicts_surfaced`; indexes on `ts`, `task_id`, `agent_id`)
+- [x] Add `LithosConfig.lcma` configuration subtree (`LcmaConfig` schema in design doc §7.z): `enabled`, `enrich_drain_interval_minutes`, `rerank_weights`, `note_type_priors`, `temperature_default`, `temperature_edge_threshold`, `wm_eviction_days`, `llm` (nested `LlmConfig`, WS1)
 
 ### Retrieval
-- [ ] Add `lithos_retrieve` tool orchestrating scouts internally
-- [ ] Implement vector scout (wraps existing `ChromaIndex.search()`)
-- [ ] Implement lexical scout (wraps existing `TantivyIndex.search()`)
-- [ ] Implement exact/alias/path scout (wraps existing `KnowledgeGraph` link resolution: `_alias_to_node`, slugified title, UUID prefix, path/filename matching)
-- [ ] Implement tags/recency scout (wraps existing `KnowledgeManager.list_all()`)
-- [ ] Implement provenance scout (walk `derived_from_ids` forward and reverse via existing provenance index; sequential, needs Phase A seeds)
-- [ ] Implement task-context scout (notes linked by same `task_id` via findings (`finding.knowledge_id`) and notes whose frontmatter `source` equals `task_id`; only activated when `task_id` provided). Aspect-based claim linkage is deferred to MVP 2+ — coordination.db has no aspect→note index, and the prior "every note authored by any claiming agent" approach flooded results with unrelated notes.
-- [ ] Implement freshness scout (stale-but-relevant notes via existing `expires_at`/`is_stale`; activates more strongly on update/refresh/recheck query signals)
-- [ ] Implement Terrace 1 fast re-rank with `note_type` priors (all neutral 0.5 in MVP 1), diversity (MMR), and basic salience
-- [ ] Define `note_type_prior()` lookup table: all types = 0.5 in MVP 1 (configurable via `LcmaConfig.note_type_priors`; differentiated priors deferred to MVP 2+)
-- [ ] All scouts apply `namespace_filter` and `access_scope` gating before returning candidates
-- [ ] MVP 1 explicitly keeps legacy tools (`lithos_read`, `lithos_search`, `lithos_list`) backward-compatible; caller-context-aware scope enforcement begins in `lithos_retrieve`
-- [ ] `scout_contradictions` is a no-op stub in MVP 1 (returns empty list); activated in MVP 2
-- [ ] `lithos_retrieve` accepts optional `surface_conflicts` boolean (default `False`) — when True, surfaces contradiction edges in results
-- [ ] `lithos_retrieve` response shape compatible with `lithos_search`: top-level `results` key, per-item `score` always a normalized float (matching hybrid-mode `SearchResult`); per-item fields `id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids` preserved; LCMA-only extras `reasons`, `scouts`, `salience` additive; envelope adds `temperature`, `terrace_reached`, `receipt_id`
-- [ ] `lithos_retrieve` upserts into `working_memory` per `(task_id, node_id)` when `task_id` is provided — increments `activation_count`, updates `last_seen_at`, sets `last_receipt_id` (task-shared WM only; per-agent WM deferred)
+- [x] Add `lithos_retrieve` tool orchestrating scouts internally
+- [x] Implement vector scout (wraps existing `ChromaIndex.search()`)
+- [x] Implement lexical scout (wraps existing `TantivyIndex.search()`)
+- [x] Implement exact/alias/path scout (wraps existing `KnowledgeGraph` link resolution: `_alias_to_node`, slugified title, UUID prefix, path/filename matching)
+- [x] Implement tags/recency scout (wraps existing `KnowledgeManager.list_all()`)
+- [x] Implement provenance scout (walk `derived_from_ids` forward and reverse via existing provenance index; sequential, needs Phase A seeds)
+- [x] Implement task-context scout (notes linked by same `task_id` via findings (`finding.knowledge_id`) and notes whose frontmatter `source` equals `task_id`; only activated when `task_id` provided). Aspect-based claim linkage is deferred to MVP 2+ — coordination.db has no aspect→note index, and the prior "every note authored by any claiming agent" approach flooded results with unrelated notes.
+- [x] Implement freshness scout (stale-but-relevant notes via existing `expires_at`/`is_stale`; activates more strongly on update/refresh/recheck query signals)
+- [x] Implement Terrace 1 fast re-rank with `note_type` priors (all neutral 0.5 in MVP 1), diversity (MMR), and basic salience
+- [x] Define `note_type_prior()` lookup table: all types = 0.5 in MVP 1 (configurable via `LcmaConfig.note_type_priors`; differentiated priors deferred to MVP 2+)
+- [x] All scouts apply `namespace_filter` and `access_scope` gating before returning candidates
+- [x] MVP 1 explicitly keeps legacy tools (`lithos_read`, `lithos_search`, `lithos_list`) backward-compatible; caller-context-aware scope enforcement begins in `lithos_retrieve`
+- [x] `scout_contradictions` is a no-op stub in MVP 1 (returns empty list); activated in MVP 2
+- [x] `lithos_retrieve` accepts optional `surface_conflicts` boolean (default `False`) — when True, surfaces contradiction edges in results
+- [x] `lithos_retrieve` response shape compatible with `lithos_search`: top-level `results` key, per-item `score` always a normalized float (matching hybrid-mode `SearchResult`); per-item fields `id`, `title`, `snippet`, `score`, `path`, `source_url`, `updated_at`, `is_stale`, `derived_from_ids` preserved; LCMA-only extras `reasons`, `scouts`, `salience` additive; envelope adds `temperature`, `terrace_reached`, `receipt_id`
+- [x] `lithos_retrieve` upserts into `working_memory` per `(task_id, node_id)` when `task_id` is provided — increments `activation_count`, updates `last_seen_at`, sets `last_receipt_id` (task-shared WM only; per-agent WM deferred)
 
 ### Learning
-- [ ] Basic positive reinforcement on retrieval (salience + spaced rep strength updates in `stats.db`)
-- [ ] Coactivation count updates in `stats.db`
-- [ ] Make internal `_reconcile_provenance_projection` work with `data/.lithos/edges.db` (remove `supported=False` guard, implement actual repair logic; reconcile stays internal, not an MCP tool)
+- [x] Basic positive reinforcement on retrieval (salience + spaced rep strength updates in `stats.db`)
+- [x] Coactivation count updates in `stats.db`
+- [x] Make internal `_reconcile_provenance_projection` work with `data/.lithos/edges.db` (remove `supported=False` guard, implement actual repair logic; reconcile stays internal, not an MCP tool)
 
 ### New tools
 
-- [ ] `lithos_edge_upsert` — create or update a typed edge in `edges.db`
-- [ ] `lithos_edge_list` — query edges by node, type, or namespace
+- [x] `lithos_edge_upsert` — create or update a typed edge in `edges.db`
+- [x] `lithos_edge_list` — query edges by node, type, or namespace
 
 **Exit criteria:**
 
@@ -94,43 +100,43 @@ Exit criteria (all MVPs):
 
 ## MVP 2 — Reinforcement & Namespacing
 
-- [ ] Finalize `lithos-enrich` pseudocode (§5.12 in design doc) before implementation begins
+- [x] Finalize `lithos-enrich` pseudocode (§5.12 in design doc) before implementation begins
 
 ### Background process
-- [ ] Introduce `lithos-enrich` as an in-process background worker with two triggering modes:
+- [x] Introduce `lithos-enrich` as an in-process background worker with two triggering modes:
   - **Incremental**: subscribe to the existing in-memory Lithos event bus (queue-based `subscribe()` API with event types `note.created`, `note.updated`, `note.deleted`, `task.completed`, `finding.posted`, `edge.upserted`); write to `enrich_queue`; periodic drain (e.g. every 5 min) processes pending entries, deduplicating node-level work by `node_id` and task-level work by `task_id` (see design doc §4.4)
   - **Full sweep**: daily scheduled run (configurable interval) across all nodes — recomputes decay, catches anything missed by incremental runs (concept cluster analysis deferred to MVP 3)
-- [ ] Treat the daily full sweep as authoritative repair for any missed best-effort incremental triggers
-- [ ] WM eviction in daily full sweep: evict entries where task is completed/cancelled or `last_seen_at` exceeds `wm_eviction_days` TTL (default: 7 days)
+- [x] Treat the daily full sweep as authoritative repair for any missed best-effort incremental triggers
+- [x] WM eviction in daily full sweep: evict entries where task is completed/cancelled or `last_seen_at` exceeds `wm_eviction_days` TTL (default: 7 days)
 
 ### Reinforcement
 
-- [ ] Negative reinforcement: penalize ignored nodes (salience decay in `stats.db` when chronically ignored)
-- [ ] Negative reinforcement: penalize misleading nodes with stronger salience decay + quarantine threshold
-- [ ] Weaken edges that pulled in bad-context nodes
+- [x] Negative reinforcement: penalize ignored nodes (salience decay in `stats.db` when chronically ignored)
+- [x] Negative reinforcement: penalize misleading nodes with stronger salience decay + quarantine threshold
+- [x] Weaken edges that pulled in bad-context nodes
 
 ### Contradiction workflow
 
-- [ ] Contradiction edges: `type="contradicts"` with `conflict_state` in `edges.db`
-- [ ] `lithos_conflict_resolve` tool (resolution states: `unreviewed|accepted_dual|superseded|refuted|merged`)
-- [ ] Contradiction surfacing in retrieval when `surface_conflicts=True` is passed to `lithos_retrieve`
+- [x] Contradiction edges: `type="contradicts"` with `conflict_state` in `edges.db`
+- [x] `lithos_conflict_resolve` tool (resolution states: `unreviewed|accepted_dual|superseded|refuted|merged`)
+- [x] Contradiction surfacing in retrieval when `surface_conflicts=True` is passed to `lithos_retrieve`
 
 ### New tools and extensions
 
-- [ ] `lithos_node_stats` — view salience and usage stats from `stats.db`
-- [ ] Extend `lithos_task_complete` with optional feedback params: `cited_nodes: list[str]`, `misleading_nodes: list[str]` — server calls `post_task_update()` on receipt
+- [x] `lithos_node_stats` — view salience and usage stats from `stats.db`
+- [x] Extend `lithos_task_complete` with optional feedback params: `cited_nodes: list[str]`, `misleading_nodes: list[str]` — server calls `post_task_update()` on receipt
 
 ### Other
 
-- [ ] Namespace + `access_scope` filtering applied in all scouts
-- [ ] Consolidation in `lithos-enrich` triggered via `enrich_queue` (`task.completed` entries from `lithos_task_complete` events; also runs during daily full sweep for all tasks since last run)
-- [ ] Graph scout querying both NetworkX wiki-link graph and `edges.db` typed edges
-- [ ] Coactivation/bridge scout: find nodes that frequently co-occur or connect separate clusters via `coactivation` table in `stats.db`
-- [ ] Source-url/domain scout: notes from the same normalized URL family or host via existing `_source_url_to_id` map; activated when query or seed nodes have `source_url` set
-- [ ] `lithos-enrich` auto-extracts `entities` from notes (deferred from MVP 1)
-- [ ] Schema migration registry (`data/.lithos/migrations/registry.json`) — deferred from MVP 1; needed only for semantic schema changes
-- [ ] Implement schema migration runner (idempotent, never removes existing fields)
-- [ ] Differentiated `note_type_priors` tuning based on MVP 1 learning data
+- [x] Namespace + `access_scope` filtering applied in all scouts
+- [x] Consolidation in `lithos-enrich` triggered via `enrich_queue` (`task.completed` entries from `lithos_task_complete` events; also runs during daily full sweep for all tasks since last run)
+- [x] Graph scout querying both NetworkX wiki-link graph and `edges.db` typed edges
+- [x] Coactivation/bridge scout: find nodes that frequently co-occur or connect separate clusters via `coactivation` table in `stats.db`
+- [x] Source-url/domain scout: notes from the same normalized URL family or host via existing `_source_url_to_id` map; activated when query or seed nodes have `source_url` set
+- [x] `lithos-enrich` auto-extracts `entities` from notes (deferred from MVP 1)
+- [x] Schema migration registry (`data/.lithos/migrations/registry.json`) — deferred from MVP 1; needed only for semantic schema changes
+- [x] Implement schema migration runner (idempotent, never removes existing fields)
+- [x] Differentiated `note_type_priors` tuning based on MVP 1 learning data
 
 **Exit criteria:**
 
@@ -153,8 +159,8 @@ Exit criteria (all MVPs):
 
 - [x] Salience recalibration — task `e7d8ef60` — DONE 2026-07-24 (PR #402 + operator backfill
       staging/prod; defaults calibration-confirmed; record: KB note `9f5e6737`)
-- [ ] Feedback capture — task `fc4b0669`
-- [ ] (operational) Semantic-index coverage reconcile — task `97cd00bb`
+- [ ] Feedback capture — task `fc4b0669` — superseded 2026-09: carried as K0.3 in `lcma-connected-knowledge.md` (skill + influx pass `receipt_id`/`cited_nodes`)
+- [x] (operational) Semantic-index coverage reconcile — task `97cd00bb` — backfill DONE 2026-07-22 (30% → 100% of docs embedded); the drift alert + scheduled reconcile half is re-scoped, see the state review §5.2
 
 **WS1 — LLM-synthesis backbone**
 

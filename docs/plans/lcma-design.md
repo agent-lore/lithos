@@ -946,6 +946,12 @@ Note: **low temperature does not automatically trigger LLM** — synthesis is re
 
 ## 5.5 Fast Re-rank (Terrace 1)
 
+> **Shipped formula differs (noted 2026-09-29).** `lcma/retrieve.py::_rerank_fast` computes
+> `final = norm_score × mean(rerank_weights of contributing scouts) + 0.1 × note_type_prior
+> + 0.1 × salience + 0.1 × usage_score`, then MMR (λ=0.7). The pseudocode below is the
+> MVP-2+ target and was never reconciled; the averaging of scout weights (agreement is not
+> rewarded) and the popularity loop it feeds are addressed in `lcma-connected-knowledge.md` K0.
+
 ```python
 def rerank_fast(q: QueryContext, pool: list[Candidate]) -> list[Candidate]:
     out = []
