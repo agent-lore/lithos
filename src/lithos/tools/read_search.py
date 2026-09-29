@@ -45,6 +45,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
     ) -> dict[str, Any]:
         """Read a knowledge file by ID or path.
 
+        Note: this tool does not apply LCMA ``namespace``/``access_scope``
+        gating or record retrieval for salience. Scope-aware retrieval is
+        ``lithos_retrieve``; ``access_scope`` is advisory, not a security
+        boundary (SPECIFICATION §11).
+
         Args:
             id: UUID of knowledge item (or unambiguous >= 6-char prefix)
             path: File path relative to knowledge/
@@ -125,6 +130,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         agent_id: str | None = None,
     ) -> dict[str, Any]:
         """Search across the knowledge base.
+
+        Note: this tool does not apply LCMA ``namespace``/``access_scope``
+        gating or record retrieval for salience. Scope-aware retrieval is
+        ``lithos_retrieve``; ``access_scope`` is advisory, not a security
+        boundary (SPECIFICATION §11).
 
         Supports four search modes:
         - ``hybrid`` (default): Merges Tantivy BM25 full-text and ChromaDB
@@ -389,6 +399,11 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         entities: list[str] | None = None,
     ) -> dict[str, Any]:
         """List knowledge documents with filters.
+
+        Note: this tool does not apply LCMA ``namespace``/``access_scope``
+        gating or record retrieval for salience. Scope-aware retrieval is
+        ``lithos_retrieve``; ``access_scope`` is advisory, not a security
+        boundary (SPECIFICATION §11).
 
         Args:
             path_prefix: Filter by path prefix

@@ -194,15 +194,17 @@ Every error uses the canonical envelope built by `lithos.envelopes`:
 Validation failures carry the reserved code `invalid_input`. Error envelopes
 never include `warnings`.
 
-Core codes:
+Core codes (the normative list is `SPECIFICATION.md` §10.2; this mirrors it):
 
-- `invalid_input`
-- `invalid_uuid`
-- `unsupported_feature`
-- `path_collision`
-- `stale_write_conflict`
-- `doc_not_found`
+- `invalid_input` (covers malformed ids — there is no separate `invalid_uuid`)
+- `ambiguous_id_prefix`
+- `note_not_found` (unknown `id` on `lithos_write`) / `doc_not_found`
+- `content_too_large`
 - `internal_error`
+
+`slug_collision` and `version_conflict` are write *outcomes* in the success
+envelope, not error codes. `path_collision`, `unsupported_feature` and
+`stale_write_conflict` were proposed here but never implemented.
 
 Notes:
 

@@ -1,5 +1,7 @@
 # Seam tightening: SearchEngine + indices reconcile
 
+> **Archived 2026-09-29 — delivered in full.** Phases 1–7 shipped; the "out of scope" graph/provenance reconcile folds and the deletion of `reconcile.py` landed in PR #389. Kept as the record of ADR-0002's implementation.
+
 Implementation plan for ADR 0002 (in full) and ADR 0001 indices slice. Graph and provenance reconcile folds are out of scope here — they land in later ADR-0001 phases.
 
 Each phase is a single coherent change leaving the codebase green against the AGENTS.md done criteria (`make test`, `make test-integration`, `make lint`, `make typecheck`, `make check`).

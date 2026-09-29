@@ -1,0 +1,4439 @@
+{
+ "measured_at": "2026-09-29",
+ "source": "read-only copy of prod stats.db + knowledge dir",
+ "metrics": {
+  "all_30d": {
+   "receipts": 1117,
+   "slots": 5629,
+   "top10_share_pct": 40.0,
+   "coactivation_only_pct": 31.6,
+   "vector_or_lexical_pct": 23.1
+  },
+  "influx_30d": {
+   "receipts": 1067,
+   "slots": 5325,
+   "top10_share_pct": 41.5,
+   "coactivation_only_pct": 31.1,
+   "vector_or_lexical_pct": 22.2
+  },
+  "non_influx_30d": {
+   "receipts": 49,
+   "slots": 294,
+   "top10_share_pct": 41.5,
+   "coactivation_only_pct": 40.1,
+   "vector_or_lexical_pct": 40.5
+  },
+  "non_influx_90d": {
+   "receipts": 54,
+   "slots": 358,
+   "top10_share_pct": 36.0,
+   "coactivation_only_pct": 36.6,
+   "vector_or_lexical_pct": 43.9
+  },
+  "all_time": {
+   "receipts": 4306,
+   "slots": 21550,
+   "top10_share_pct": 39.6,
+   "coactivation_only_pct": 15.9,
+   "vector_or_lexical_pct": 26.7
+  }
+ },
+ "held_out_baseline": {
+  "queries": 47,
+  "slots": 320,
+  "top10_share_pct": 34.7,
+  "coactivation_only_pct": 36.2,
+  "vector_or_lexical_pct": 44.4,
+  "queries_by_agent": {
+   "codex-agent-foundations": 15,
+   "ai-agents-briefing": 13,
+   "garuda": 10,
+   "hema-events-scout": 6,
+   "codex-retro-character": 1,
+   "garuda-hema-digest": 1,
+   "claude-robot-companion": 1
+  },
+  "queries_by_limit": {
+   "2": 1,
+   "3": 1,
+   "5": 15,
+   "7": 5,
+   "8": 4,
+   "10": 17,
+   "12": 1,
+   "20": 3
+  },
+  "queries_with_limit_below_10": 26,
+  "note": "Epic A gate population. Computed over held_out_queries[].results; differs from metrics.non_influx_30d (49 receipts incl. two non-held-out ones, and computed over the receipt table, not the resolved result list)."
+ },
+ "targets": {
+  "top10_share_pct": "<15",
+  "coactivation_only_pct": "<10"
+ },
+ "hub_nodes_30d": [
+  {
+   "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+   "slots": 263,
+   "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+   "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+   "salience": 1.0,
+   "retrieval_count": 725
+  },
+  {
+   "id": "a2cd6d5f-29b1-49fc-b5bc-5d947b238700",
+   "slots": 257,
+   "title": "Software 3.0 and the AI Engineer Landscape (talk notes & slides)",
+   "path": "articles/blog/2023/09/software-30-and-the-ai-engineer-landscape-talk-notes-slides.md",
+   "salience": 1.0,
+   "retrieval_count": 559
+  },
+  {
+   "id": "bd8d5e42-330e-409d-abdb-8540898811a1",
+   "slots": 253,
+   "title": "Custom stores, custom tools, and auto-review for the Cursor SDK",
+   "path": "articles/blog/2026/06/custom-stores-custom-tools-and-auto-review-for-the-cursor-sdk.md",
+   "salience": 1.0,
+   "retrieval_count": 656
+  },
+  {
+   "id": "c94ae7de-296f-483b-9a09-9b6e8632170e",
+   "slots": 222,
+   "title": "APC & TCP : Amiga Future 179 en preview, le DVD de l\u2019Amiga 38 et du WHDLoad",
+   "path": "articles/rss/2026/03/apc-tcp-amiga-future-179-en-preview-le-dvd-de-lamiga-38-et-du-whdload-pour-dr-dangerous-et-phantom-leap.md",
+   "salience": 1.0,
+   "retrieval_count": 1252
+  },
+  {
+   "id": "c6adde3b-60c4-41d9-bcd4-7ca11bb6f407",
+   "slots": 222,
+   "title": "Word processing: AmigaOS version of FinalWriter 7.3 announced for end of June",
+   "path": "articles/rss/2026/06/word-processing-amigaos-version-of-finalwriter-73-announced-for-end-of-june.md",
+   "salience": 1.0,
+   "retrieval_count": 1214
+  },
+  {
+   "id": "dc948ba0-7a15-451e-a9c1-83184cefbc3a",
+   "slots": 222,
+   "title": "From Flowers to Fibre \u2013 an interactive visitor exhibition telling the hidden",
+   "path": "articles/rss/2023/03/from-flowers-to-fibre-an-interactive-visitor-exhibition-telling-the-hidden-story-of-britains-telecommunications-journey-from-the-national-museum-of-computing-and-the-communications-museum-trust.md",
+   "salience": 1.0,
+   "retrieval_count": 1050
+  },
+  {
+   "id": "f63b2baa-e8cf-4712-9fb3-532c0d658a6c",
+   "slots": 209,
+   "title": "Amiberry 8.2.0 improves Amiga emulation on Raspberry Pi, ARM64, Android and",
+   "path": "articles/retro-computing-digest/2026/06/amiberry-820-improves-amiga-emulation-on-raspberry-pi-arm64-android-and-desktop-systems.md",
+   "salience": 1.0,
+   "retrieval_count": 879
+  },
+  {
+   "id": "a13a6f17-1bbd-4bce-9449-240056eb10e3",
+   "slots": 201,
+   "title": "Full automation of AI R&D probably yields a large speed up even without a software-only",
+   "path": "articles/rss/2026/05/full-automation-of-ai-rd-probably-yields-a-large-speed-up-even-without-a-software-only-singularity.md",
+   "salience": 1.0,
+   "retrieval_count": 729
+  },
+  {
+   "id": "6b709b52-73dd-4d90-af9d-3e2f5a5f8ad7",
+   "slots": 201,
+   "title": "Causal inference 4: Causal Diagrams, Markov Factorization, Structural Equation",
+   "path": "articles/blog/2021/06/causal-inference-4-causal-diagrams-markov-factorization-structural-equation-models.md",
+   "salience": 1.0,
+   "retrieval_count": 673
+  },
+  {
+   "id": "ab37db21-4cf2-46bc-a97a-674a051b0457",
+   "slots": 201,
+   "title": "Some Intuition on the Neural Tangent Kernel",
+   "path": "articles/blog/2020/11/some-intuition-on-the-neural-tangent-kernel.md",
+   "salience": 1.0,
+   "retrieval_count": 661
+  }
+ ],
+ "held_out_queries": [
+  {
+   "agent": "hema-events-scout",
+   "query": "HEMA events diary UK Europe",
+   "limit": 10,
+   "receipt_id": "rcpt_f066a6d74f41",
+   "ts": "2026-09-29 07:01:15",
+   "results": [
+    {
+     "id": "10140a77-3cdd-4f26-a2e1-75e704aa5bde",
+     "title": "HEMA events diary \u2014 UK & Europe",
+     "path": "user/diaries/hema-events-diary.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.938",
+      "lexical match score 85.046"
+     ]
+    },
+    {
+     "id": "dc948ba0-7a15-451e-a9c1-83184cefbc3a",
+     "title": "From Flowers to Fibre \u2013 an interactive visitor exhibition telling the hidden",
+     "path": "articles/rss/2023/03/from-flowers-to-fibre-an-interactive-visitor-exhibition-telling-the-hidden-story-of-britains-telecommunications-journey-from-the-national-museum-of-computing-and-the-communications-museum-trust.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 11 times with seeds"
+     ]
+    },
+    {
+     "id": "c94ae7de-296f-483b-9a09-9b6e8632170e",
+     "title": "APC & TCP : Amiga Future 179 en preview, le DVD de l\u2019Amiga 38 et du WHDLoad",
+     "path": "articles/rss/2026/03/apc-tcp-amiga-future-179-en-preview-le-dvd-de-lamiga-38-et-du-whdload-pour-dr-dangerous-et-phantom-leap.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 11 times with seeds"
+     ]
+    },
+    {
+     "id": "c6adde3b-60c4-41d9-bcd4-7ca11bb6f407",
+     "title": "Word processing: AmigaOS version of FinalWriter 7.3 announced for end of June",
+     "path": "articles/rss/2026/06/word-processing-amigaos-version-of-finalwriter-73-announced-for-end-of-june.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 11 times with seeds"
+     ]
+    },
+    {
+     "id": "f63b2baa-e8cf-4712-9fb3-532c0d658a6c",
+     "title": "Amiberry 8.2.0 improves Amiga emulation on Raspberry Pi, ARM64, Android and",
+     "path": "articles/retro-computing-digest/2026/06/amiberry-820-improves-amiga-emulation-on-raspberry-pi-arm64-android-and-desktop-systems.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 10 times with seeds"
+     ]
+    },
+    {
+     "id": "ce3cf9c1-d06c-4bc4-89cf-f698433d6a0c",
+     "title": "Gemini Robotics On-Device brings AI to local robotic devices",
+     "path": "articles/blog/2025/06/gemini-robotics-on-device-brings-ai-to-local-robotic-devices.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 9 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "30c5a71f-bfbd-4cf8-bf23-97ce7117e160",
+     "title": "Weekly Focus Plan \u2014 2026-W40",
+     "path": "user/planning/weekly/2026/2026-W40.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from e02780a4"
+     ]
+    },
+    {
+     "id": "52b7e4c4-9297-40f6-bf37-66aeda7efb21",
+     "title": "Our vision for building a universal AI assistant",
+     "path": "articles/blog/2025/05/our-vision-for-building-a-universal-ai-assistant.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "50da2690-8b3e-4da1-953c-2a0e6931e921",
+     "title": "Event: AmiWest 2026 in Sacramento, USA (24./25. October)",
+     "path": "articles/rss/2026/08/event-amiwest-2026-in-sacramento-usa-2425-october.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 5 times with seeds"
+     ]
+    },
+    {
+     "id": "eed976d1-89b6-42eb-b10f-e2595995ac99",
+     "title": "Advanced version of Gemini with Deep Think officially achieves gold-medal standard",
+     "path": "articles/blog/2025/10/advanced-version-of-gemini-with-deep-think-officially-achieves-gold-medal-standard-at-the-international-mathematical-olympiad.md",
+     "scouts": [
+      "scout_source_url"
+     ],
+     "reasons": [
+      "same source URL domain"
+     ]
+    }
+   ],
+   "coactivation_only": 5,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "recent AI agent security agentic coding multi-agent technical research",
+   "limit": 10,
+   "receipt_id": "rcpt_660dbdc5dab6",
+   "ts": "2026-09-29 02:01:20",
+   "results": [
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.778"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 30 times with seeds"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 34 times with seeds"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 30 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 21 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "af0109e0-ec79-46e1-bc8c-04626767d2a2",
+     "title": "Investing in multi-agent AI safety research",
+     "path": "articles/blog/2026/06/investing-in-multi-agent-ai-safety-research.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 50.821"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 26 times with seeds"
+     ]
+    },
+    {
+     "id": "1d5b1a56-2369-4dff-ba4e-da0341774975",
+     "title": "Just a rumour of a bug is enough to find a security exploit these days",
+     "path": "articles/blog/2026/08/just-a-rumour-of-a-bug-is-enough-to-find-a-security-exploit-these-days.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.745"
+     ]
+    },
+    {
+     "id": "a2cd6d5f-29b1-49fc-b5bc-5d947b238700",
+     "title": "Software 3.0 and the AI Engineer Landscape (talk notes & slides)",
+     "path": "articles/blog/2023/09/software-30-and-the-ai-engineer-landscape-talk-notes-slides.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 12 times with seeds"
+     ]
+    },
+    {
+     "id": "153f666c-9e8a-4a76-ad68-c14901db41d5",
+     "title": "Citizens Build, Agents Execute, Experts Govern",
+     "path": "articles/blog/2026/08/citizens-build-agents-execute-experts-govern.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from 8841bb23"
+     ]
+    }
+   ],
+   "coactivation_only": 5,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "hema-events-scout",
+   "query": "upcoming HEMA events UK Europe diary",
+   "limit": 10,
+   "receipt_id": "rcpt_63450e97dbb5",
+   "ts": "2026-09-28 07:01:09",
+   "results": [
+    {
+     "id": "10140a77-3cdd-4f26-a2e1-75e704aa5bde",
+     "title": "HEMA events diary \u2014 UK & Europe",
+     "path": "user/diaries/hema-events-diary.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.954",
+      "lexical match score 89.182",
+      "tag/path match, recency rank 1"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "Morrow goals beliefs evidence assistance",
+   "limit": 3,
+   "receipt_id": "rcpt_619721e3d389",
+   "ts": "2026-09-28 06:17:44",
+   "results": [
+    {
+     "id": "218aca78-22a0-4c60-84be-e1cf03febd5e",
+     "title": "Morrow \u2014 Project Context",
+     "path": "projects/morrow/morrow-project-context.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 45.186",
+      "tag/path match, recency rank 1"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "Morrow proactive assistance self-generated goals demonstration object search evaluation research plan",
+   "limit": 5,
+   "receipt_id": "rcpt_de94f4245680",
+   "ts": "2026-09-28 06:17:16",
+   "results": [
+    {
+     "id": "6f5bc9dd-3c71-4c62-b5cc-8324977bf01d",
+     "title": "Goal Reasoning: Foundations, Emerging Applications, and Prospects",
+     "path": "articles/morrow-literature/2026/09/goal-reasoning-foundations-emerging-applications-and-prospects.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.611",
+      "lexical match score 40.338"
+     ]
+    },
+    {
+     "id": "ce3cf9c1-d06c-4bc4-89cf-f698433d6a0c",
+     "title": "Gemini Robotics On-Device brings AI to local robotic devices",
+     "path": "articles/blog/2025/06/gemini-robotics-on-device-brings-ai-to-local-robotic-devices.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "bf9c9529-72d6-463b-99ae-e9ffbd8ad488",
+     "title": "The Future of Physical AI Isn\u2019t Smarter Robots, It\u2019s Smarter Interfaces",
+     "path": "articles/rss/2026/05/the-future-of-physical-ai-isnt-smarter-robots-its-smarter-interfaces.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "785acb93-dc71-43ee-a182-1e9868f13b04",
+     "title": "This DIY Bipedal Robot Used Pneumatic \u201cAir-Muscles\u201d Instead of Motors",
+     "path": "articles/rss/2026/05/this-diy-bipedal-robot-used-pneumatic-air-muscles-instead-of-motors.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 3,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "autonomous agents agentic coding multi-agent security recent briefing",
+   "limit": 5,
+   "receipt_id": "rcpt_53ef3b792da1",
+   "ts": "2026-09-28 02:01:26",
+   "results": [
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 46.690"
+     ]
+    },
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.716"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 31 times with seeds"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 26 times with seeds"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 26 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 3,
+   "vec_or_lex": 2
+  },
+  {
+   "agent": "hema-events-scout",
+   "query": "HEMA events diary UK continental Europe",
+   "limit": 10,
+   "receipt_id": "rcpt_70e52f71ebb2",
+   "ts": "2026-09-26 07:00:59",
+   "results": [
+    {
+     "id": "10140a77-3cdd-4f26-a2e1-75e704aa5bde",
+     "title": "HEMA events diary \u2014 UK & Europe",
+     "path": "user/diaries/hema-events-diary.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.912",
+      "lexical match score 94.671",
+      "tag/path match, recency rank 1"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "autonomous agents agentic coding security multi-agent systems Influx",
+   "limit": 8,
+   "receipt_id": "rcpt_b93e0022d315",
+   "ts": "2026-09-26 02:01:11",
+   "results": [
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.645"
+     ]
+    },
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 53.269"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 30 times with seeds"
+     ]
+    },
+    {
+     "id": "22987ecc-1041-4911-9684-47cc5728ba94",
+     "title": "Daily Research Digest - 2026-05-02",
+     "path": "digests/daily-research-digest-2026-05-02.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.645"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 22 times with seeds"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 26 times with seeds"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 23 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 18 times with seeds",
+      "same source URL domain"
+     ]
+    }
+   ],
+   "coactivation_only": 4,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "Morrow project context autonomous self-generated goals Kindred Code Robot Companion",
+   "limit": 5,
+   "receipt_id": "rcpt_956efe785b67",
+   "ts": "2026-09-25 12:03:54",
+   "results": [
+    {
+     "id": "2986875c-40bc-4e1e-8760-c68759e9419b",
+     "title": "Kindred Code \u2014 Project Context",
+     "path": "projects/kindred-code/kindred-code-project-context.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.616",
+      "lexical match score 65.532"
+     ]
+    },
+    {
+     "id": "24396d55-267c-44c4-a306-6faf9bd6ff8c",
+     "title": "NAO Off-Board Audio/Video Architecture \u2014 Full Proposal (v4/v5/v6)",
+     "path": "projects/robot-companion/nao-off-board-audio-video-architecture-full-proposal.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "related_to edge from 3ad45894"
+     ]
+    },
+    {
+     "id": "dfe23768-cd3f-4112-a347-9845ea151c23",
+     "title": "GitHub Watcher State",
+     "path": "projects/_lithos-loom-internal/github-watcher-state.md",
+     "scouts": [
+      "scout_tags_recency"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 1"
+     ]
+    },
+    {
+     "id": "2184dd09-dce0-4196-b788-124ff4ab4352",
+     "title": "Robot day 5 run sheet \u2014 preempt lane, uptime settle, prose-ask fix, two-tier",
+     "path": "projects/robot-companion/robot-day-5-runsheet.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "depends_on edge to 3ad45894"
+     ]
+    },
+    {
+     "id": "f09aa833-4289-4f39-976d-13a08e368d63",
+     "title": "Competitive Analysis: lore-oss (re-cinq) vs Lithos",
+     "path": "projects/lithos-core/competitive-lore-oss.md",
+     "scouts": [
+      "scout_source_url"
+     ],
+     "reasons": [
+      "same source URL domain"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "robot-companion brain memory perception cross-pollination review identity Kindred",
+   "limit": 5,
+   "receipt_id": "rcpt_7158654aa4a9",
+   "ts": "2026-09-25 11:52:06",
+   "results": [
+    {
+     "id": "aa4fba80-d6c7-46c9-9013-b279c42f3a0c",
+     "title": "Brain, memory & perception \u2014 cross-pollination review and M14/M15 idea bank",
+     "path": "projects/robot-companion/brain-memory-perception-cross-pollination-review-2026-07.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.661",
+      "lexical match score 84.204"
+     ]
+    },
+    {
+     "id": "3b9c8a78-6f42-4c3f-a6d6-2a2075c57c31",
+     "title": "kc-agent / kc-sim improvement proposals \u2014 from the robot-companion cross-pollination",
+     "path": "projects/kindred-code/kc-agent-kc-sim-improvement-proposals-2026-07.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.434",
+      "lexical match score 88.968"
+     ]
+    },
+    {
+     "id": "dfe23768-cd3f-4112-a347-9845ea151c23",
+     "title": "GitHub Watcher State",
+     "path": "projects/_lithos-loom-internal/github-watcher-state.md",
+     "scouts": [
+      "scout_tags_recency"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 1"
+     ]
+    },
+    {
+     "id": "98525698-bbf9-43ff-bd65-233c3420e3bc",
+     "title": "Night believability epic \u2014 design note (2026-07-19)",
+     "path": "projects/kindred-code/night-believability-epic-design-2026-07.md",
+     "scouts": [
+      "scout_provenance",
+      "scout_graph",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 45.327",
+      "derived from 3b9c8a78",
+      "derived_from edge to 3b9c8a78"
+     ]
+    },
+    {
+     "id": "2e20b7ab-3724-4075-9a96-c5e1e9078cc4",
+     "title": "NAO Cross-Compilation \u2014 Hardware, OS, and Toolchain Guide (v4/v5/v6)",
+     "path": "projects/nao-cross-compilation-toolchain/nao-v4v5-vs-v6-hardware-architecture-cross-compilation-toolchain-compatibility.md",
+     "scouts": [
+      "scout_source_url"
+     ],
+     "reasons": [
+      "same source URL domain"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "intrinsic motivation goal reasoning autonomous",
+   "limit": 5,
+   "receipt_id": "rcpt_2c286d8be43b",
+   "ts": "2026-09-25 11:37:02",
+   "results": [
+    {
+     "id": "5bfa485a-7daa-440a-8d80-8d743e9babc5",
+     "title": "A Taxonomy of Cognitive Capability Gaps in Generative and Agentic AI",
+     "path": "papers/arxiv/2026/08/a-taxonomy-of-cognitive-capability-gaps-in-generative-and-agentic-ai.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.634",
+      "lexical match score 20.271"
+     ]
+    },
+    {
+     "id": "ddb681cf-f41f-4602-a8c3-2224e938c589",
+     "title": "Exploring Extrinsic and Intrinsic Properties for Effective Reasoning with Code",
+     "path": "papers/arxiv/2026/06/exploring-extrinsic-and-intrinsic-properties-for-effective-reasoning-with-code-interpreter.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 27.605"
+     ]
+    },
+    {
+     "id": "8168d2a2-4e70-4217-9034-de58ad0f7fd3",
+     "title": "Co-Evolving Harnesses and Models: On-Policy Correction Helps Weaker Models",
+     "path": "papers/arxiv/2026/09/co-evolving-harnesses-and-models-on-policy-correction-helps-weaker-models-catch-up-where-imitation-fails.md",
+     "scouts": [
+      "scout_graph",
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "supports edge from 5bfa485a",
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "5aad67d1-9553-489c-a259-185fd381684b",
+     "title": "Autonomous Cyber Defense in Connected Vehicles: A Multi-Agent Approach to",
+     "path": "papers/arxiv/2026/08/autonomous-cyber-defense-in-connected-vehicles-a-multi-agent-approach-to-v2x-security.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "1878524a-a78c-4116-af4e-7e13f3489ec2",
+     "title": "The Rise of Verbal Reinforcement Learning",
+     "path": "papers/arxiv/2026/09/the-rise-of-verbal-reinforcement-learning.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.620"
+     ]
+    }
+   ],
+   "coactivation_only": 1,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "ProAct proactive robots assistance",
+   "limit": 5,
+   "receipt_id": "rcpt_655bff13e6c2",
+   "ts": "2026-09-25 11:37:01",
+   "results": [
+    {
+     "id": "8a8f50a6-6be7-4bc4-9ffc-752ca9ba3b61",
+     "title": "InsightToast: Proactive Information Retrieval & Glanceable Visualization in",
+     "path": "papers/arxiv/2026/08/insighttoast-proactive-information-retrieval-glanceable-visualization-in-the-side-channel-of-data-rich-meetings.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 20.091"
+     ]
+    },
+    {
+     "id": "d4022ea8-8ec1-4ac3-a82b-9c2c063a550d",
+     "title": "Show-Harness: Just a VLM Agent Can Play Robots",
+     "path": "papers/arxiv/2026/09/show-harness-just-a-vlm-agent-can-play-robots.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.574"
+     ]
+    },
+    {
+     "id": "aa8f8cad-8876-4c72-8b84-31299959e1ce",
+     "title": "From Failing to Passing: Evolving Natural Language Prompt Optimization Rules",
+     "path": "papers/arxiv/2026/07/from-failing-to-passing-evolving-natural-language-prompt-optimization-rules-for-llm-code-generation.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    },
+    {
+     "id": "c350f1cc-d1f6-447b-a850-6a56d542fd55",
+     "title": "Generative Compilation: On-the-Fly Compiler Feedback as AI Generates Code",
+     "path": "papers/arxiv/2026/07/generative-compilation-on-the-fly-compiler-feedback-as-ai-generates-code.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    },
+    {
+     "id": "da181521-8fa6-4a15-a3ac-09ae5ccc995e",
+     "title": "Beyond Failure Recovery: An Engagement-Aware Human-in-the-loop Framework for",
+     "path": "papers/arxiv/2026/06/beyond-failure-recovery-an-engagement-aware-human-in-the-loop-framework-for-robotic-systems.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 18.221"
+     ]
+    }
+   ],
+   "coactivation_only": 2,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "LongMemEval LoCoMo memory",
+   "limit": 5,
+   "receipt_id": "rcpt_99bfdb80a14b",
+   "ts": "2026-09-25 11:37:01",
+   "results": [
+    {
+     "id": "74cec6a7-b530-499d-85f3-f07b0b9a22ad",
+     "title": "Are We Ready For An Agent-Native Memory System?",
+     "path": "papers/arxiv/2026/06/are-we-ready-for-an-agent-native-memory-system.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.569",
+      "lexical match score 39.028"
+     ]
+    },
+    {
+     "id": "74e1de55-29c6-4d43-a753-a01fed0bfefa",
+     "title": "Beyond the Current Observation: Evaluating Multimodal Large Language Models",
+     "path": "papers/arxiv/2026/06/beyond-the-current-observation-evaluating-multimodal-large-language-models-in-controllable-non-markov-games.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.581"
+     ]
+    },
+    {
+     "id": "da4d247f-2764-468a-a740-7f41f7faaa07",
+     "title": "DolphinBench: Mapping the Pareto Frontier of Agent Memory",
+     "path": "papers/arxiv/2026/09/dolphinbench-mapping-the-pareto-frontier-of-agent-memory.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 34.883"
+     ]
+    },
+    {
+     "id": "b5431a89-8c14-4e87-8484-67061e8bd450",
+     "title": "Cognitive Extensions for Dual-Process Language Agents: Memory and Self-Reflection",
+     "path": "papers/arxiv/2026/09/cognitive-extensions-for-dual-process-language-agents-memory-and-self-reflection-in-interactive-environments.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from 74cec6a7"
+     ]
+    },
+    {
+     "id": "aa8f8cad-8876-4c72-8b84-31299959e1ce",
+     "title": "From Failing to Passing: Evolving Natural Language Prompt Optimization Rules",
+     "path": "papers/arxiv/2026/07/from-failing-to-passing-evolving-natural-language-prompt-optimization-rules-for-llm-code-generation.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 1,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "Generative Agents Park memory reflection planning",
+   "limit": 5,
+   "receipt_id": "rcpt_82722f274577",
+   "ts": "2026-09-25 11:37:01",
+   "results": [
+    {
+     "id": "b5431a89-8c14-4e87-8484-67061e8bd450",
+     "title": "Cognitive Extensions for Dual-Process Language Agents: Memory and Self-Reflection",
+     "path": "papers/arxiv/2026/09/cognitive-extensions-for-dual-process-language-agents-memory-and-self-reflection-in-interactive-environments.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.597",
+      "lexical match score 32.168"
+     ]
+    },
+    {
+     "id": "4ff2b51c-bf5e-4949-93cd-23cb9946cccc",
+     "title": "Doc-to-Atom: Learning to Compile and Compose Memory Atoms",
+     "path": "papers/arxiv/2026/06/doc-to-atom-learning-to-compile-and-compose-memory-atoms.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.658"
+     ]
+    },
+    {
+     "id": "c350f1cc-d1f6-447b-a850-6a56d542fd55",
+     "title": "Generative Compilation: On-the-Fly Compiler Feedback as AI Generates Code",
+     "path": "papers/arxiv/2026/07/generative-compilation-on-the-fly-compiler-feedback-as-ai-generates-code.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    },
+    {
+     "id": "74cec6a7-b530-499d-85f3-f07b0b9a22ad",
+     "title": "Are We Ready For An Agent-Native Memory System?",
+     "path": "papers/arxiv/2026/06/are-we-ready-for-an-agent-native-memory-system.md",
+     "scouts": [
+      "scout_graph",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 22.645",
+      "supports edge to b5431a89"
+     ]
+    },
+    {
+     "id": "aa8f8cad-8876-4c72-8b84-31299959e1ce",
+     "title": "From Failing to Passing: Evolving Natural Language Prompt Optimization Rules",
+     "path": "papers/arxiv/2026/07/from-failing-to-passing-evolving-natural-language-prompt-optimization-rules-for-llm-code-generation.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 2,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "CoALA cognitive architectures language agents",
+   "limit": 5,
+   "receipt_id": "rcpt_e61949d7aca4",
+   "ts": "2026-09-25 11:37:01",
+   "results": [
+    {
+     "id": "3b2cd0df-6a50-4575-96b7-feb9a96b050f",
+     "title": "Always-OnAgents:A Survey of Persistent Memory, State, and Governance in LLMAgents",
+     "path": "papers/arxiv/2026/06/always-onagentsa-survey-of-persistent-memory-state-and-governance-in-llmagents.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.730"
+     ]
+    },
+    {
+     "id": "b607b8f2-f188-436c-8e52-c3eb70e7b998",
+     "title": "Language-Based Digital Twins for Elderly Cognitive Assistance",
+     "path": "papers/arxiv/2026/06/language-based-digital-twins-for-elderly-cognitive-assistance.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 32.712"
+     ]
+    },
+    {
+     "id": "8168d2a2-4e70-4217-9034-de58ad0f7fd3",
+     "title": "Co-Evolving Harnesses and Models: On-Policy Correction Helps Weaker Models",
+     "path": "papers/arxiv/2026/09/co-evolving-harnesses-and-models-on-policy-correction-helps-weaker-models-catch-up-where-imitation-fails.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from 5bfa485a"
+     ]
+    },
+    {
+     "id": "5bfa485a-7daa-440a-8d80-8d743e9babc5",
+     "title": "A Taxonomy of Cognitive Capability Gaps in Generative and Agentic AI",
+     "path": "papers/arxiv/2026/08/a-taxonomy-of-cognitive-capability-gaps-in-generative-and-agentic-ai.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.640",
+      "lexical match score 31.474"
+     ]
+    },
+    {
+     "id": "929ec765-96f6-41cb-9007-75167e8bbca3",
+     "title": "Beyond Episodic Evaluation: Memory Architectural Bottlenecks in Sequential",
+     "path": "papers/arxiv/2026/07/beyond-episodic-evaluation-memory-architectural-bottlenecks-in-sequential-embodied-question-answering.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 1,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "AgentSociety Project Sid simulation",
+   "limit": 5,
+   "receipt_id": "rcpt_d261742d8081",
+   "ts": "2026-09-25 11:37:01",
+   "results": [
+    {
+     "id": "420990f5-03cc-4ed6-8775-7b530cda3ea6",
+     "title": "SwarmWorld: Stigmergic technological evolution in societies of language-model",
+     "path": "papers/arxiv/2026/08/swarmworld-stigmergic-technological-evolution-in-societies-of-language-model-agents.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 13.640"
+     ]
+    },
+    {
+     "id": "41cbaa0e-04f7-4f8e-904d-8c95ef6d7591",
+     "title": "Verifiable Social Reasoning for LLM Assistants",
+     "path": "papers/arxiv/2026/09/verifiable-social-reasoning-for-llm-assistants.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.539"
+     ]
+    },
+    {
+     "id": "0c4da1a6-43a6-4315-8eb1-b200a8ae45c2",
+     "title": "A-JIT: Agentic Just-In-Time Software Construction",
+     "path": "papers/arxiv/2026/09/a-jit-agentic-just-in-time-software-construction.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from a321518d"
+     ]
+    },
+    {
+     "id": "c350f1cc-d1f6-447b-a850-6a56d542fd55",
+     "title": "Generative Compilation: On-the-Fly Compiler Feedback as AI Generates Code",
+     "path": "papers/arxiv/2026/07/generative-compilation-on-the-fly-compiler-feedback-as-ai-generates-code.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    },
+    {
+     "id": "aa8f8cad-8876-4c72-8b84-31299959e1ce",
+     "title": "From Failing to Passing: Evolving Natural Language Prompt Optimization Rules",
+     "path": "papers/arxiv/2026/07/from-failing-to-passing-evolving-natural-language-prompt-optimization-rules-for-llm-code-generation.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 2,
+   "vec_or_lex": 2
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "Self-generated goals autonomous agents goal reasoning intrinsic motivation BDI cognitive architecture",
+   "limit": 7,
+   "receipt_id": "rcpt_32ba93a4e127",
+   "ts": "2026-09-25 11:36:48",
+   "results": [
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "5bfa485a-7daa-440a-8d80-8d743e9babc5",
+     "title": "A Taxonomy of Cognitive Capability Gaps in Generative and Agentic AI",
+     "path": "papers/arxiv/2026/08/a-taxonomy-of-cognitive-capability-gaps-in-generative-and-agentic-ai.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.697",
+      "lexical match score 54.588"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 4 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "8168d2a2-4e70-4217-9034-de58ad0f7fd3",
+     "title": "Co-Evolving Harnesses and Models: On-Policy Correction Helps Weaker Models",
+     "path": "papers/arxiv/2026/09/co-evolving-harnesses-and-models-on-policy-correction-helps-weaker-models-catch-up-where-imitation-fails.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from 5bfa485a"
+     ]
+    },
+    {
+     "id": "e02dc107-d2ad-4889-b0e0-dbe86fefd08b",
+     "title": "Features that current AIs don't have that future AIs will have",
+     "path": "articles/rss/2026/08/features-that-current-ais-dont-have-that-future-ais-will-have.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from 5bfa485a"
+     ]
+    }
+   ],
+   "coactivation_only": 3,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "Embodied agents grounding planning affordances feedback SayCan Inner Monologue",
+   "limit": 7,
+   "receipt_id": "rcpt_3192fd69b1c0",
+   "ts": "2026-09-25 11:36:48",
+   "results": [
+    {
+     "id": "bf9c9529-72d6-463b-99ae-e9ffbd8ad488",
+     "title": "The Future of Physical AI Isn\u2019t Smarter Robots, It\u2019s Smarter Interfaces",
+     "path": "articles/rss/2026/05/the-future-of-physical-ai-isnt-smarter-robots-its-smarter-interfaces.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 7 times with seeds"
+     ]
+    },
+    {
+     "id": "3ed7cdbb-ec19-4d38-8ba9-6e7728c2881c",
+     "title": "Zero-Shot Long-Horizon Dexterous Manipulation via Multi-View 3D-Grounded VLM",
+     "path": "papers/arxiv/2026/06/zero-shot-long-horizon-dexterous-manipulation-via-multi-view-3d-grounded-vlm-reasoning.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 38.582"
+     ]
+    },
+    {
+     "id": "ce3cf9c1-d06c-4bc4-89cf-f698433d6a0c",
+     "title": "Gemini Robotics On-Device brings AI to local robotic devices",
+     "path": "articles/blog/2025/06/gemini-robotics-on-device-brings-ai-to-local-robotic-devices.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "785acb93-dc71-43ee-a182-1e9868f13b04",
+     "title": "This DIY Bipedal Robot Used Pneumatic \u201cAir-Muscles\u201d Instead of Motors",
+     "path": "articles/rss/2026/05/this-diy-bipedal-robot-used-pneumatic-air-muscles-instead-of-motors.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 7 times with seeds"
+     ]
+    },
+    {
+     "id": "1878524a-a78c-4116-af4e-7e13f3489ec2",
+     "title": "The Rise of Verbal Reinforcement Learning",
+     "path": "papers/arxiv/2026/09/the-rise-of-verbal-reinforcement-learning.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.699",
+      "lexical match score 31.992"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_source_url"
+     ],
+     "reasons": [
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "a2cd6d5f-29b1-49fc-b5bc-5d947b238700",
+     "title": "Software 3.0 and the AI Engineer Landscape (talk notes & slides)",
+     "path": "articles/blog/2023/09/software-30-and-the-ai-engineer-landscape-talk-notes-slides.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 4,
+   "vec_or_lex": 2
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "Long term agent memory episodic semantic temporal knowledge consolidation forgetting evaluation",
+   "limit": 7,
+   "receipt_id": "rcpt_4567214472ab",
+   "ts": "2026-09-25 11:36:48",
+   "results": [
+    {
+     "id": "3b2cd0df-6a50-4575-96b7-feb9a96b050f",
+     "title": "Always-OnAgents:A Survey of Persistent Memory, State, and Governance in LLMAgents",
+     "path": "papers/arxiv/2026/06/always-onagentsa-survey-of-persistent-memory-state-and-governance-in-llmagents.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.685",
+      "lexical match score 44.710"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 9 times with seeds"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 9 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 7 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 9 times with seeds"
+     ]
+    },
+    {
+     "id": "929ec765-96f6-41cb-9007-75167e8bbca3",
+     "title": "Beyond Episodic Evaluation: Memory Architectural Bottlenecks in Sequential",
+     "path": "papers/arxiv/2026/07/beyond-episodic-evaluation-memory-architectural-bottlenecks-in-sequential-embodied-question-answering.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.650",
+      "lexical match score 56.357"
+     ]
+    },
+    {
+     "id": "bf9c9529-72d6-463b-99ae-e9ffbd8ad488",
+     "title": "The Future of Physical AI Isn\u2019t Smarter Robots, It\u2019s Smarter Interfaces",
+     "path": "articles/rss/2026/05/the-future-of-physical-ai-isnt-smarter-robots-its-smarter-interfaces.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 4 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 4,
+   "vec_or_lex": 2
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "Proactive social robots assistance human needs intention recognition person identity long term interaction",
+   "limit": 7,
+   "receipt_id": "rcpt_0e25f08f47c9",
+   "ts": "2026-09-25 11:36:48",
+   "results": [
+    {
+     "id": "6faf95bd-6891-4fe6-a431-0a7c5ace978a",
+     "title": "What Happened When We Set Up a Robotics Lab in a Mall",
+     "path": "articles/rss/2026/04/what-happened-when-we-set-up-a-robotics-lab-in-a-mall.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.562"
+     ]
+    },
+    {
+     "id": "bf9c9529-72d6-463b-99ae-e9ffbd8ad488",
+     "title": "The Future of Physical AI Isn\u2019t Smarter Robots, It\u2019s Smarter Interfaces",
+     "path": "articles/rss/2026/05/the-future-of-physical-ai-isnt-smarter-robots-its-smarter-interfaces.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 27 times with seeds"
+     ]
+    },
+    {
+     "id": "46b1d53f-2b56-40c3-a2c1-8039eddb674a",
+     "title": "Learning Robot Visual Navigation in Crowds via Intention-Aware Scene Representations",
+     "path": "papers/arxiv/2026/06/learning-robot-visual-navigation-in-crowds-via-intention-aware-scene-representations.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 60.309"
+     ]
+    },
+    {
+     "id": "785acb93-dc71-43ee-a182-1e9868f13b04",
+     "title": "This DIY Bipedal Robot Used Pneumatic \u201cAir-Muscles\u201d Instead of Motors",
+     "path": "articles/rss/2026/05/this-diy-bipedal-robot-used-pneumatic-air-muscles-instead-of-motors.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 28 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_source_url"
+     ],
+     "reasons": [
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "ce3cf9c1-d06c-4bc4-89cf-f698433d6a0c",
+     "title": "Gemini Robotics On-Device brings AI to local robotic devices",
+     "path": "articles/blog/2025/06/gemini-robotics-on-device-brings-ai-to-local-robotic-devices.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 5 times with seeds"
+     ]
+    },
+    {
+     "id": "cc91a1a7-527e-4d74-8339-2dec40d3d546",
+     "title": "iRobot Founder Wants to Put a Robotic Familiar Into Your Home",
+     "path": "articles/rss/2026/05/irobot-founder-wants-to-put-a-robotic-familiar-into-your-home.md",
+     "scouts": [
+      "scout_graph",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.546",
+      "is_example_of edge to 4af91ca7"
+     ]
+    }
+   ],
+   "coactivation_only": 3,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "codex-agent-foundations",
+   "query": "Generative agents social simulation thousands agents cognitive level of detail Project Sid AgentSociety",
+   "limit": 7,
+   "receipt_id": "rcpt_98dcf4d1e719",
+   "ts": "2026-09-25 11:36:47",
+   "results": [
+    {
+     "id": "420990f5-03cc-4ed6-8775-7b530cda3ea6",
+     "title": "SwarmWorld: Stigmergic technological evolution in societies of language-model",
+     "path": "papers/arxiv/2026/08/swarmworld-stigmergic-technological-evolution-in-societies-of-language-model-agents.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.700",
+      "lexical match score 36.710"
+     ]
+    },
+    {
+     "id": "46fd967a-108e-4791-81be-6a0fe735999f",
+     "title": "Cognition: The Devin is in the Details",
+     "path": "articles/blog/2025/09/cognition-the-devin-is-in-the-details.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 44.466"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_source_url"
+     ],
+     "reasons": [
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "c30be44a-9b44-4f4c-bd91-0327ae683e9b",
+     "title": "LLM Powered Autonomous Agents",
+     "path": "articles/blog/2023/06/llm-powered-autonomous-agents.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.675"
+     ]
+    },
+    {
+     "id": "3ab7cb1e-9093-4214-8fb7-c76b084a366f",
+     "title": "Simulation: the new Scaling Law \u2014 Joon Sung Park, Simile AI",
+     "path": "articles/blog/2026/08/simulation-the-new-scaling-law-joon-sung-park-simile-ai.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.652",
+      "lexical match score 43.175"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 4 times with seeds"
+     ]
+    },
+    {
+     "id": "8168d2a2-4e70-4217-9034-de58ad0f7fd3",
+     "title": "Co-Evolving Harnesses and Models: On-Policy Correction Helps Weaker Models",
+     "path": "papers/arxiv/2026/09/co-evolving-harnesses-and-models-on-policy-correction-helps-weaker-models-catch-up-where-imitation-fails.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from 5bfa485a"
+     ]
+    }
+   ],
+   "coactivation_only": 1,
+   "vec_or_lex": 4
+  },
+  {
+   "agent": "hema-events-scout",
+   "query": "Historical European Martial Arts events UK Europe upcoming",
+   "limit": 10,
+   "receipt_id": "rcpt_5d49ac6481eb",
+   "ts": "2026-09-25 07:00:57",
+   "results": [
+    {
+     "id": "10140a77-3cdd-4f26-a2e1-75e704aa5bde",
+     "title": "HEMA events diary \u2014 UK & Europe",
+     "path": "user/diaries/hema-events-diary.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.525",
+      "lexical match score 49.857",
+      "tag/path match, recency rank 1"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "AI agents Influx briefing autonomous agent coding security recent",
+   "limit": 5,
+   "receipt_id": "rcpt_3f8cbb32b5f9",
+   "ts": "2026-09-25 02:01:29",
+   "results": [
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.729"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 15 times with seeds"
+     ]
+    },
+    {
+     "id": "41b9be6b-b779-4b02-a229-7dad30c7d023",
+     "title": "AI Agents News Brief \u2014 June 19, 2026",
+     "path": "articles/ai-agents-briefing/2026/06/ai-agents-news-brief-june-19-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 44.461"
+     ]
+    },
+    {
+     "id": "1d5b1a56-2369-4dff-ba4e-da0341774975",
+     "title": "Just a rumour of a bug is enough to find a security exploit these days",
+     "path": "articles/blog/2026/08/just-a-rumour-of-a-bug-is-enough-to-find-a-security-exploit-these-days.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.722"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 12 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 2,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "autonomous agents agentic coding multi-agent security Influx",
+   "limit": 5,
+   "receipt_id": "rcpt_b27cec11a4ba",
+   "ts": "2026-09-24 02:01:18",
+   "results": [
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 46.769"
+     ]
+    },
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.654"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 23 times with seeds"
+     ]
+    },
+    {
+     "id": "22987ecc-1041-4911-9684-47cc5728ba94",
+     "title": "Daily Research Digest - 2026-05-02",
+     "path": "digests/daily-research-digest-2026-05-02.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.658"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 21 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 2,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "hema-events-scout",
+   "query": "HEMA events diary UK continental Europe upcoming events",
+   "limit": 10,
+   "receipt_id": "rcpt_943e92f140c4",
+   "ts": "2026-09-23 07:00:54",
+   "results": [
+    {
+     "id": "10140a77-3cdd-4f26-a2e1-75e704aa5bde",
+     "title": "HEMA events diary \u2014 UK & Europe",
+     "path": "user/diaries/hema-events-diary.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.948",
+      "lexical match score 108.670"
+     ]
+    },
+    {
+     "id": "dc948ba0-7a15-451e-a9c1-83184cefbc3a",
+     "title": "From Flowers to Fibre \u2013 an interactive visitor exhibition telling the hidden",
+     "path": "articles/rss/2023/03/from-flowers-to-fibre-an-interactive-visitor-exhibition-telling-the-hidden-story-of-britains-telecommunications-journey-from-the-national-museum-of-computing-and-the-communications-museum-trust.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 10 times with seeds"
+     ]
+    },
+    {
+     "id": "c94ae7de-296f-483b-9a09-9b6e8632170e",
+     "title": "APC & TCP : Amiga Future 179 en preview, le DVD de l\u2019Amiga 38 et du WHDLoad",
+     "path": "articles/rss/2026/03/apc-tcp-amiga-future-179-en-preview-le-dvd-de-lamiga-38-et-du-whdload-pour-dr-dangerous-et-phantom-leap.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 10 times with seeds"
+     ]
+    },
+    {
+     "id": "c6adde3b-60c4-41d9-bcd4-7ca11bb6f407",
+     "title": "Word processing: AmigaOS version of FinalWriter 7.3 announced for end of June",
+     "path": "articles/rss/2026/06/word-processing-amigaos-version-of-finalwriter-73-announced-for-end-of-june.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 10 times with seeds"
+     ]
+    },
+    {
+     "id": "f63b2baa-e8cf-4712-9fb3-532c0d658a6c",
+     "title": "Amiberry 8.2.0 improves Amiga emulation on Raspberry Pi, ARM64, Android and",
+     "path": "articles/retro-computing-digest/2026/06/amiberry-820-improves-amiga-emulation-on-raspberry-pi-arm64-android-and-desktop-systems.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 9 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_source_url"
+     ],
+     "reasons": [
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "ce3cf9c1-d06c-4bc4-89cf-f698433d6a0c",
+     "title": "Gemini Robotics On-Device brings AI to local robotic devices",
+     "path": "articles/blog/2025/06/gemini-robotics-on-device-brings-ai-to-local-robotic-devices.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 4 times with seeds"
+     ]
+    },
+    {
+     "id": "d16c9b1e-b2ac-424c-b824-68e685b694c9",
+     "title": "Daily Plan \u2014 2026-09-15",
+     "path": "user/planning/daily/2026/2026-09-15.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from 99ee16c7"
+     ]
+    },
+    {
+     "id": "81b5952d-45f8-46c3-8d35-8d9472e1d748",
+     "title": "Termine \u2022 Saku 2026",
+     "path": "articles/rss/2026/08/termine-saku-2026.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from ea8d68a2"
+     ]
+    },
+    {
+     "id": "0307a032-68e2-4716-b56d-101a60b391c4",
+     "title": "SpikeDecoder: Realizing the GPT Architecture with Spiking Neural Networks",
+     "path": "papers/arxiv/2026/06/spikedecoder-realizing-the-gpt-architecture-with-spiking-neural-networks.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "is_example_of edge to f3910674"
+     ]
+    }
+   ],
+   "coactivation_only": 5,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "codex-retro-character",
+   "query": "retro-sci-fi-character 3D head facial rig Blender Makehuman",
+   "limit": 2,
+   "receipt_id": "rcpt_cbb70d65a934",
+   "ts": "2026-09-23 05:57:52",
+   "results": [
+    {
+     "id": "2f148923-800f-4d2a-bd52-97885a8a0d6d",
+     "title": "Retro Sci-Fi Character \u2014 Project Context",
+     "path": "projects/retro-sci-fi-character/retro-sci-fi-character-project-context.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.562",
+      "lexical match score 95.805",
+      "tag/path match, recency rank 1"
+     ]
+    },
+    {
+     "id": "d16e9d44-1703-415b-be2d-2574da2870cf",
+     "title": "Recipe: consistent AI character via SDXL identity LoRA (ComfyUI + kohya)",
+     "path": "guides/sdxl-character-identity-lora-recipe.md",
+     "scouts": [
+      "scout_provenance",
+      "scout_graph"
+     ],
+     "reasons": [
+      "source of 2f148923",
+      "derived_from edge from 2f148923"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "AI agent security agentic coding multi-agent technical research",
+   "limit": 10,
+   "receipt_id": "rcpt_ab72dd6a974a",
+   "ts": "2026-09-23 02:01:21",
+   "results": [
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.788"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 19 times with seeds"
+     ]
+    },
+    {
+     "id": "af0109e0-ec79-46e1-bc8c-04626767d2a2",
+     "title": "Investing in multi-agent AI safety research",
+     "path": "articles/blog/2026/06/investing-in-multi-agent-ai-safety-research.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 48.620"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 21 times with seeds"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 23 times with seeds"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 21 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 15 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 43.635"
+     ]
+    },
+    {
+     "id": "153f666c-9e8a-4a76-ad68-c14901db41d5",
+     "title": "Citizens Build, Agents Execute, Experts Govern",
+     "path": "articles/blog/2026/08/citizens-build-agents-execute-experts-govern.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from 8841bb23"
+     ]
+    },
+    {
+     "id": "a2cd6d5f-29b1-49fc-b5bc-5d947b238700",
+     "title": "Software 3.0 and the AI Engineer Landscape (talk notes & slides)",
+     "path": "articles/blog/2023/09/software-30-and-the-ai-engineer-landscape-talk-notes-slides.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 8 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 5,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "new agent security coding reliability multi-agent technical material September 15 2026",
+   "limit": 10,
+   "receipt_id": "rcpt_1bc7b8e3542f",
+   "ts": "2026-09-22 02:01:22",
+   "results": [
+    {
+     "id": "8527b11a-c061-48ae-b365-be8f4598ee7a",
+     "title": "AI Agents Gone Wrong: What Real-World Failures Reveal About Coding Agent Risk",
+     "path": "articles/ai-agents-briefing/2026/06/ai-agents-gone-wrong-what-real-world-failures-reveal-about-coding-agent-risk.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.680"
+     ]
+    },
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.634",
+      "lexical match score 38.541"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 210 times with seeds"
+     ]
+    },
+    {
+     "id": "bd8d5e42-330e-409d-abdb-8540898811a1",
+     "title": "Custom stores, custom tools, and auto-review for the Cursor SDK",
+     "path": "articles/blog/2026/06/custom-stores-custom-tools-and-auto-review-for-the-cursor-sdk.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 201 times with seeds"
+     ]
+    },
+    {
+     "id": "a2cd6d5f-29b1-49fc-b5bc-5d947b238700",
+     "title": "Software 3.0 and the AI Engineer Landscape (talk notes & slides)",
+     "path": "articles/blog/2023/09/software-30-and-the-ai-engineer-landscape-talk-notes-slides.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 202 times with seeds"
+     ]
+    },
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 36.249"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 8 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "6955ab90-b913-433e-9457-03cb4f2c5c98",
+     "title": "Daily Log \u2014 2026-07-15 (Tuesday)",
+     "path": "user/daily/2026/2026-07-15.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.662"
+     ]
+    },
+    {
+     "id": "3badbe3c-69fa-4db2-b748-9bc0df47f7b2",
+     "title": "All Smoke, No Alarm: Oracle Signals in Agent-Authored Test Code",
+     "path": "papers/arxiv/2026/06/all-smoke-no-alarm-oracle-signals-in-agent-authored-test-code.md",
+     "scouts": [
+      "scout_graph",
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "supports edge to 6f1deb54",
+      "coactivated 13 times with seeds"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 16 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 4,
+   "vec_or_lex": 4
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "recent autonomous agent security agentic coding multi-agent research",
+   "limit": 8,
+   "receipt_id": "rcpt_4bb7c3abeb55",
+   "ts": "2026-09-21 02:01:21",
+   "results": [
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 46.792"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 19 times with seeds"
+     ]
+    },
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.697"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 19 times with seeds"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 19 times with seeds"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 12 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 11 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "af0109e0-ec79-46e1-bc8c-04626767d2a2",
+     "title": "Investing in multi-agent AI safety research",
+     "path": "articles/blog/2026/06/investing-in-multi-agent-ai-safety-research.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 45.333"
+     ]
+    }
+   ],
+   "coactivation_only": 4,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "garuda-hema-digest",
+   "query": "HEMA events diary UK Europe confirmed events next 90 days",
+   "limit": 10,
+   "receipt_id": "rcpt_bf93a9351fb5",
+   "ts": "2026-09-20 17:01:29",
+   "results": [
+    {
+     "id": "10140a77-3cdd-4f26-a2e1-75e704aa5bde",
+     "title": "HEMA events diary \u2014 UK & Europe",
+     "path": "user/diaries/hema-events-diary.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.914",
+      "lexical match score 105.382",
+      "tag/path match, recency rank 1"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "AI agents autonomous agents agentic coding security briefing influx",
+   "limit": 10,
+   "receipt_id": "rcpt_5949074e7a36",
+   "ts": "2026-09-20 02:01:06",
+   "results": [
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.712"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 7 times with seeds"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 7 times with seeds"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 7 times with seeds"
+     ]
+    },
+    {
+     "id": "1d5b1a56-2369-4dff-ba4e-da0341774975",
+     "title": "Just a rumour of a bug is enough to find a security exploit these days",
+     "path": "articles/blog/2026/08/just-a-rumour-of-a-bug-is-enough-to-find-a-security-exploit-these-days.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.712"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 7 times with seeds"
+     ]
+    },
+    {
+     "id": "3badbe3c-69fa-4db2-b748-9bc0df47f7b2",
+     "title": "All Smoke, No Alarm: Oracle Signals in Agent-Authored Test Code",
+     "path": "papers/arxiv/2026/06/all-smoke-no-alarm-oracle-signals-in-agent-authored-test-code.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge to 6f1deb54"
+     ]
+    },
+    {
+     "id": "41b9be6b-b779-4b02-a229-7dad30c7d023",
+     "title": "AI Agents News Brief \u2014 June 19, 2026",
+     "path": "articles/ai-agents-briefing/2026/06/ai-agents-news-brief-june-19-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 50.533"
+     ]
+    },
+    {
+     "id": "a2cd6d5f-29b1-49fc-b5bc-5d947b238700",
+     "title": "Software 3.0 and the AI Engineer Landscape (talk notes & slides)",
+     "path": "articles/blog/2023/09/software-30-and-the-ai-engineer-landscape-talk-notes-slides.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 5,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "garuda",
+   "query": "HEMA upcoming event diary Rebellion tournament UK Europe",
+   "limit": 10,
+   "receipt_id": "rcpt_aca997ccaafa",
+   "ts": "2026-09-19 15:03:09",
+   "results": [
+    {
+     "id": "10140a77-3cdd-4f26-a2e1-75e704aa5bde",
+     "title": "HEMA events diary \u2014 UK & Europe",
+     "path": "user/diaries/hema-events-diary.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.812",
+      "lexical match score 114.051"
+     ]
+    },
+    {
+     "id": "dc948ba0-7a15-451e-a9c1-83184cefbc3a",
+     "title": "From Flowers to Fibre \u2013 an interactive visitor exhibition telling the hidden",
+     "path": "articles/rss/2023/03/from-flowers-to-fibre-an-interactive-visitor-exhibition-telling-the-hidden-story-of-britains-telecommunications-journey-from-the-national-museum-of-computing-and-the-communications-museum-trust.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "c94ae7de-296f-483b-9a09-9b6e8632170e",
+     "title": "APC & TCP : Amiga Future 179 en preview, le DVD de l\u2019Amiga 38 et du WHDLoad",
+     "path": "articles/rss/2026/03/apc-tcp-amiga-future-179-en-preview-le-dvd-de-lamiga-38-et-du-whdload-pour-dr-dangerous-et-phantom-leap.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "c6adde3b-60c4-41d9-bcd4-7ca11bb6f407",
+     "title": "Word processing: AmigaOS version of FinalWriter 7.3 announced for end of June",
+     "path": "articles/rss/2026/06/word-processing-amigaos-version-of-finalwriter-73-announced-for-end-of-june.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "ce3cf9c1-d06c-4bc4-89cf-f698433d6a0c",
+     "title": "Gemini Robotics On-Device brings AI to local robotic devices",
+     "path": "articles/blog/2025/06/gemini-robotics-on-device-brings-ai-to-local-robotic-devices.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "f63b2baa-e8cf-4712-9fb3-532c0d658a6c",
+     "title": "Amiberry 8.2.0 improves Amiga emulation on Raspberry Pi, ARM64, Android and",
+     "path": "articles/retro-computing-digest/2026/06/amiberry-820-improves-amiga-emulation-on-raspberry-pi-arm64-android-and-desktop-systems.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "4c228afd-94df-4677-9779-9cb72159d8d3",
+     "title": "Weekly Focus Plan \u2014 2026-W37",
+     "path": "user/planning/weekly/2026/2026-W37.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "depends_on edge to a71b71cb"
+     ]
+    },
+    {
+     "id": "388cecfb-7fbe-4bc7-a8c5-a053161aeb8c",
+     "title": "Retro Computer Festival, Cambridge UK, 14th / 15th November",
+     "path": "articles/rss/2026/09/retro-computer-festival-cambridge-uk-14th-15th-november.md",
+     "scouts": [
+      "scout_graph",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 22.910",
+      "analogy_to edge from 14d5a927"
+     ]
+    },
+    {
+     "id": "6b62d71b-ffe4-4162-9238-ac8af7b6ac45",
+     "title": "Daily Log \u2014 2026-09-07 (Monday)",
+     "path": "user/daily/2026/2026-09-07.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge from 3ba9af58"
+     ]
+    },
+    {
+     "id": "52b7e4c4-9297-40f6-bf37-66aeda7efb21",
+     "title": "Our vision for building a universal AI assistant",
+     "path": "articles/blog/2025/05/our-vision-for-building-a-universal-ai-assistant.md",
+     "scouts": [
+      "scout_source_url"
+     ],
+     "reasons": [
+      "same source URL domain"
+     ]
+    }
+   ],
+   "coactivation_only": 4,
+   "vec_or_lex": 2
+  },
+  {
+   "agent": "hema-events-scout",
+   "query": "HEMA events diary HEMA UK continental Europe",
+   "limit": 10,
+   "receipt_id": "rcpt_26b96641f5d2",
+   "ts": "2026-09-19 12:03:59",
+   "results": [
+    {
+     "id": "10140a77-3cdd-4f26-a2e1-75e704aa5bde",
+     "title": "HEMA events diary \u2014 UK & Europe",
+     "path": "user/diaries/hema-events-diary.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.910",
+      "lexical match score 111.118",
+      "tag/path match, recency rank 1"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "AI agents autonomous agentic coding multi-agent security recent Influx",
+   "limit": 8,
+   "receipt_id": "rcpt_3ed26abccae0",
+   "ts": "2026-09-18 02:01:00",
+   "results": [
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 49.264"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 8 times with seeds"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 8 times with seeds"
+     ]
+    },
+    {
+     "id": "6f1deb54-a021-4e36-933f-490d22787faa",
+     "title": "A Study of the Reliability of Agentic AI-Generated Programs",
+     "path": "papers/arxiv/2026/09/a-study-of-the-reliability-of-agentic-ai-generated-programs.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.683"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 8 times with seeds"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "52b3f24f-7eeb-4179-b4bf-879f1b3b4eb7",
+     "title": "arXiv 2505.02077: Open Challenges in Multi-Agent Security \u2014 Towards Secure",
+     "path": "research/arxiv-250502077-open-challenges-in-multi-agent-security-towards-secure-systems-of-interacting-ai-agents.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.693"
+     ]
+    }
+   ],
+   "coactivation_only": 4,
+   "vec_or_lex": 3
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "autonomous agents agentic coding security multi-agent collaboration",
+   "limit": 5,
+   "receipt_id": "rcpt_ca98daa50ccc",
+   "ts": "2026-09-17 02:01:18",
+   "results": [
+    {
+     "id": "e451ca36-1088-43f4-a9d4-d12ce503d3ae",
+     "title": "GitHub's plan for Agents \u2014 Kyle Daigle, GitHub",
+     "path": "articles/blog/2026/06/githubs-plan-for-agents-kyle-daigle-github.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.672"
+     ]
+    },
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 46.709"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 20 times with seeds"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 18 times with seeds"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 10 times with seeds",
+      "same source URL domain"
+     ]
+    }
+   ],
+   "coactivation_only": 2,
+   "vec_or_lex": 2
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "recent autonomous agents agent security agentic coding multi-agent collaboration technical research",
+   "limit": 10,
+   "receipt_id": "rcpt_0a102c4c3ed3",
+   "ts": "2026-09-16 02:01:01",
+   "results": [
+    {
+     "id": "e451ca36-1088-43f4-a9d4-d12ce503d3ae",
+     "title": "GitHub's plan for Agents \u2014 Kyle Daigle, GitHub",
+     "path": "articles/blog/2026/06/githubs-plan-for-agents-kyle-daigle-github.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.716"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 23 times with seeds"
+     ]
+    },
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 53.705"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 20 times with seeds"
+     ]
+    },
+    {
+     "id": "193c0d6a-cbd7-44ab-8ecd-a3685e9e326d",
+     "title": "Agent-driven development in Copilot Applied Science",
+     "path": "articles/blog/2026/03/agent-driven-development-in-copilot-applied-science.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.706"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_source_url"
+     ],
+     "reasons": [
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 13 times with seeds"
+     ]
+    },
+    {
+     "id": "b1e3d21d-54ea-40b8-84a5-6d938f7ece9c",
+     "title": "Empirical Study of Multi-Agent Collaboration for Automated Research: Coordination",
+     "path": "research/empirical-study-of-multi-agent-collaboration-for-automated-research-coordination-frameworks-compared-arxiv-260329632.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 54.769"
+     ]
+    },
+    {
+     "id": "cf29bbcc-a119-43f4-88f7-d3207c7f53e3",
+     "title": "R1+Sonnet set SOTA on aider\u2019s polyglot benchmark",
+     "path": "articles/blog/2025/01/r1sonnet-set-sota-on-aiders-polyglot-benchmark.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 4 times with seeds"
+     ]
+    },
+    {
+     "id": "af0109e0-ec79-46e1-bc8c-04626767d2a2",
+     "title": "Investing in multi-agent AI safety research",
+     "path": "articles/blog/2026/06/investing-in-multi-agent-ai-safety-research.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 57.065"
+     ]
+    }
+   ],
+   "coactivation_only": 4,
+   "vec_or_lex": 5
+  },
+  {
+   "agent": "garuda",
+   "query": "September 2026 roadmap: committed Loom Lens Robot Companion milestones and weekly shape",
+   "limit": 10,
+   "receipt_id": "rcpt_7f875765186b",
+   "ts": "2026-09-14 05:11:02",
+   "results": [
+    {
+     "id": "1e8c51c3-8c94-4564-aadd-aafb7a66c60f",
+     "title": "Roadmap 2026-09 \u2014 the month plan",
+     "path": "plans/2026-09-roadmap.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.712",
+      "lexical match score 64.520"
+     ]
+    },
+    {
+     "id": "a71b71cb-e2f8-4cb2-893c-eb0f03f7c98d",
+     "title": "Weekly Focus Plan \u2014 2026-W36",
+     "path": "user/planning/weekly/2026/2026-W36.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.626",
+      "lexical match score 82.084"
+     ]
+    },
+    {
+     "id": "0dbf4241-febc-447a-950e-db10d350d3b3",
+     "title": "Daily Log \u2014 2026-08-16 (Sunday)",
+     "path": "user/daily/2026-08-16.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.697"
+     ]
+    },
+    {
+     "id": "f6709ea5-652b-4371-97ef-22d4d852b647",
+     "title": "Convention: weekday wake time and discretionary morning slots",
+     "path": "user/planning/conventions/convention-weekday-wake-time-and-discretionary-morning-slots.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "fa7e5b43-2ec1-4734-a6d5-45803418abb1",
+     "title": "Recurring commitment: Monday personal lesson 7am",
+     "path": "user/planning/conventions/recurring-commitment-monday-personal-lesson-7am.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "73389d9c-71c8-4953-adf6-365a6e17e5fa",
+     "title": "Roadmap 2026-08 \u2014 month-end review (closed with Dave, 2026-08-31)",
+     "path": "plans/2026-08-review.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 71.502"
+     ]
+    },
+    {
+     "id": "566cbfbc-d069-4821-9174-8410bc06098d",
+     "title": "Dave planning context",
+     "path": "user/dave-planning-help.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 5 times with seeds"
+     ]
+    },
+    {
+     "id": "c99af1d1-2aa2-41f4-b2bf-7c56cfea16a7",
+     "title": "2026-07-28 Tuesday plan",
+     "path": "user/planning/daily/2026/2026-07-28.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "698e9f8f-49be-43af-a392-106e679f0da8",
+     "title": "Week 2026-W37 Review",
+     "path": "user/planning/weekly/2026/2026-W37-review.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.682",
+      "lexical match score 72.127"
+     ]
+    },
+    {
+     "id": "d39cafc2-286e-4c70-a94f-f9840a24974b",
+     "title": "Daily plan 2026-08-03 (Monday)",
+     "path": "user/planning/daily/2026/2026-08-03.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 6 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 5,
+   "vec_or_lex": 5
+  },
+  {
+   "agent": "garuda",
+   "query": "September 2026 roadmap loom lens robot companion weekly shape",
+   "limit": 10,
+   "receipt_id": "rcpt_777ba21e5c9d",
+   "ts": "2026-09-14 04:53:20",
+   "results": [
+    {
+     "id": "1e8c51c3-8c94-4564-aadd-aafb7a66c60f",
+     "title": "Roadmap 2026-09 \u2014 the month plan",
+     "path": "plans/2026-09-roadmap.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.692",
+      "lexical match score 61.422"
+     ]
+    },
+    {
+     "id": "0dbf4241-febc-447a-950e-db10d350d3b3",
+     "title": "Daily Log \u2014 2026-08-16 (Sunday)",
+     "path": "user/daily/2026-08-16.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.693"
+     ]
+    },
+    {
+     "id": "a71b71cb-e2f8-4cb2-893c-eb0f03f7c98d",
+     "title": "Weekly Focus Plan \u2014 2026-W36",
+     "path": "user/planning/weekly/2026/2026-W36.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.621",
+      "lexical match score 78.509"
+     ]
+    },
+    {
+     "id": "f6709ea5-652b-4371-97ef-22d4d852b647",
+     "title": "Convention: weekday wake time and discretionary morning slots",
+     "path": "user/planning/conventions/convention-weekday-wake-time-and-discretionary-morning-slots.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "fa7e5b43-2ec1-4734-a6d5-45803418abb1",
+     "title": "Recurring commitment: Monday personal lesson 7am",
+     "path": "user/planning/conventions/recurring-commitment-monday-personal-lesson-7am.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "c99af1d1-2aa2-41f4-b2bf-7c56cfea16a7",
+     "title": "2026-07-28 Tuesday plan",
+     "path": "user/planning/daily/2026/2026-07-28.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "73389d9c-71c8-4953-adf6-365a6e17e5fa",
+     "title": "Roadmap 2026-08 \u2014 month-end review (closed with Dave, 2026-08-31)",
+     "path": "plans/2026-08-review.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 63.712"
+     ]
+    },
+    {
+     "id": "d39cafc2-286e-4c70-a94f-f9840a24974b",
+     "title": "Daily plan 2026-08-03 (Monday)",
+     "path": "user/planning/daily/2026/2026-08-03.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "566cbfbc-d069-4821-9174-8410bc06098d",
+     "title": "Dave planning context",
+     "path": "user/dave-planning-help.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    },
+    {
+     "id": "054529eb-7da0-4981-b285-41d1f1a27a20",
+     "title": "Roadmap 2026-08 \u2014 month plan (decided with Dave, 2026-08-04)",
+     "path": "plans/2026-08-roadmap.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "depends_on edge from 73389d9c"
+     ]
+    }
+   ],
+   "coactivation_only": 5,
+   "vec_or_lex": 4
+  },
+  {
+   "agent": "ai-agents-briefing",
+   "query": "autonomous agents agentic coding multi-agent agent security daily briefing",
+   "limit": 5,
+   "receipt_id": "rcpt_45ab27cde1c8",
+   "ts": "2026-09-14 02:00:42",
+   "results": [
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "6d7c9502-2abd-428e-9cba-0d155ce095fa",
+     "title": "TRiSM for Agentic AI: Trust, Risk, and Security Management for Autonomous",
+     "path": "research/trism-for-agentic-ai-trust-risk-and-security-management-for-autonomous-multi-agent-systems-sciencedirect-2026.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 53.482"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "22987ecc-1041-4911-9684-47cc5728ba94",
+     "title": "Daily Research Digest - 2026-05-02",
+     "path": "digests/daily-research-digest-2026-05-02.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.697"
+     ]
+    }
+   ],
+   "coactivation_only": 3,
+   "vec_or_lex": 2
+  },
+  {
+   "agent": "garuda",
+   "query": "W37 weekly goals planning",
+   "limit": 10,
+   "receipt_id": "rcpt_4ae4164f7850",
+   "ts": "2026-09-13 20:57:32",
+   "results": [
+    {
+     "id": "4c228afd-94df-4677-9779-9cb72159d8d3",
+     "title": "Weekly Focus Plan \u2014 2026-W37",
+     "path": "user/planning/weekly/2026/2026-W37.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.560",
+      "lexical match score 50.759"
+     ]
+    },
+    {
+     "id": "b4029f22-f1c4-422f-a770-83f1788c7184",
+     "title": "Daily plan \u2014 2026-08-17",
+     "path": "user/planning/daily/2026/2026-08-17.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.683"
+     ]
+    },
+    {
+     "id": "f6709ea5-652b-4371-97ef-22d4d852b647",
+     "title": "Convention: weekday wake time and discretionary morning slots",
+     "path": "user/planning/conventions/convention-weekday-wake-time-and-discretionary-morning-slots.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "fa7e5b43-2ec1-4734-a6d5-45803418abb1",
+     "title": "Recurring commitment: Monday personal lesson 7am",
+     "path": "user/planning/conventions/recurring-commitment-monday-personal-lesson-7am.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "566cbfbc-d069-4821-9174-8410bc06098d",
+     "title": "Dave planning context",
+     "path": "user/dave-planning-help.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.611"
+     ]
+    },
+    {
+     "id": "b5ec603d-c0b7-4fa1-9999-acca31746562",
+     "title": "Daily Log \u2014 2026-09-10 (Thursday)",
+     "path": "user/daily/2026-09-10.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 31.831"
+     ]
+    },
+    {
+     "id": "c99af1d1-2aa2-41f4-b2bf-7c56cfea16a7",
+     "title": "2026-07-28 Tuesday plan",
+     "path": "user/planning/daily/2026/2026-07-28.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 4 times with seeds"
+     ]
+    },
+    {
+     "id": "f39b9c0d-970f-416d-86d4-fbee73501bc8",
+     "title": "Daily Plan \u2014 2026-09-10",
+     "path": "user/planning/daily/2026/2026-09-10.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge to 280bb7bc"
+     ]
+    },
+    {
+     "id": "a00cd6f1-5628-44b0-ba06-bffd5e88d654",
+     "title": "Week 2026-W32 plan",
+     "path": "user/planning/weekly/2026/2026-W32.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.603"
+     ]
+    },
+    {
+     "id": "d39cafc2-286e-4c70-a94f-f9840a24974b",
+     "title": "Daily plan 2026-08-03 (Monday)",
+     "path": "user/planning/daily/2026/2026-08-03.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 4 times with seeds"
+     ]
+    }
+   ],
+   "coactivation_only": 4,
+   "vec_or_lex": 5
+  },
+  {
+   "agent": "garuda",
+   "query": "book sync task Loom Rellbion sword lesson September 2026",
+   "limit": 8,
+   "receipt_id": "rcpt_04a2076f07b7",
+   "ts": "2026-09-09 06:17:46",
+   "results": [
+    {
+     "id": "fc15215e-21ba-45d8-a641-1c98a349dab7",
+     "title": "2026-08-12 daily plan",
+     "path": "user/planning/daily/2026/2026-08-12.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.535",
+      "lexical match score 30.356"
+     ]
+    },
+    {
+     "id": "4c228afd-94df-4677-9779-9cb72159d8d3",
+     "title": "Weekly Focus Plan \u2014 2026-W37",
+     "path": "user/planning/weekly/2026/2026-W37.md",
+     "scouts": [
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.438",
+      "lexical match score 46.824"
+     ]
+    },
+    {
+     "id": "f6709ea5-652b-4371-97ef-22d4d852b647",
+     "title": "Convention: weekday wake time and discretionary morning slots",
+     "path": "user/planning/conventions/convention-weekday-wake-time-and-discretionary-morning-slots.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 5",
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "fa7e5b43-2ec1-4734-a6d5-45803418abb1",
+     "title": "Recurring commitment: Monday personal lesson 7am",
+     "path": "user/planning/conventions/recurring-commitment-monday-personal-lesson-7am.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 21.855",
+      "tag/path match, recency rank 6"
+     ]
+    },
+    {
+     "id": "c99af1d1-2aa2-41f4-b2bf-7c56cfea16a7",
+     "title": "2026-07-28 Tuesday plan",
+     "path": "user/planning/daily/2026/2026-07-28.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 7 times with seeds"
+     ]
+    },
+    {
+     "id": "c356c4a8-5ace-4cb9-ae70-87bd7ceb3685",
+     "title": "Week 2026-W33 plan",
+     "path": "user/planning/weekly/2026/2026-W33.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge to a71b71cb",
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "d39cafc2-286e-4c70-a94f-f9840a24974b",
+     "title": "Daily plan 2026-08-03 (Monday)",
+     "path": "user/planning/daily/2026/2026-08-03.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_vector",
+      "scout_coactivation",
+      "scout_graph"
+     ],
+     "reasons": [
+      "semantic similarity 0.407",
+      "tag/path match, recency rank 7",
+      "supports edge to fc15215e",
+      "coactivated 7 times with seeds"
+     ]
+    },
+    {
+     "id": "6b4c9e0b-010c-4309-856b-50a4f3647094",
+     "title": "Daily plan \u2014 2026-08-13",
+     "path": "user/planning/daily/2026/2026-08-13.md",
+     "scouts": [
+      "scout_vector",
+      "scout_graph"
+     ],
+     "reasons": [
+      "semantic similarity 0.405",
+      "refines edge to fc15215e"
+     ]
+    }
+   ],
+   "coactivation_only": 1,
+   "vec_or_lex": 5
+  },
+  {
+   "agent": "garuda",
+   "query": "September roadmap W36 Loom escalation T2 PRD robot day 3",
+   "limit": 20,
+   "receipt_id": "rcpt_d889cad774b0",
+   "ts": "2026-09-07 04:40:43",
+   "results": [
+    {
+     "id": "1e8c51c3-8c94-4564-aadd-aafb7a66c60f",
+     "title": "Roadmap 2026-09 \u2014 the month plan",
+     "path": "plans/2026-09-roadmap.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_vector",
+      "scout_lexical"
+     ],
+     "reasons": [
+      "semantic similarity 0.652",
+      "lexical match score 74.485",
+      "tag/path match, recency rank 1"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  },
+  {
+   "agent": "garuda",
+   "query": "W34 week 2026-08-17 Loom lens33 lens34 Robot Companion historic template reset holiday Saturday",
+   "limit": 20,
+   "receipt_id": "rcpt_8d42fd1e8abc",
+   "ts": "2026-08-17 20:26:09",
+   "results": [
+    {
+     "id": "c356c4a8-5ace-4cb9-ae70-87bd7ceb3685",
+     "title": "Week 2026-W33 plan",
+     "path": "user/planning/weekly/2026/2026-W33.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.564",
+      "lexical match score 92.009",
+      "tag/path match, recency rank 1"
+     ]
+    },
+    {
+     "id": "f6709ea5-652b-4371-97ef-22d4d852b647",
+     "title": "Convention: weekday wake time and discretionary morning slots",
+     "path": "user/planning/conventions/convention-weekday-wake-time-and-discretionary-morning-slots.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 12",
+      "coactivated 8 times with seeds"
+     ]
+    },
+    {
+     "id": "fa7e5b43-2ec1-4734-a6d5-45803418abb1",
+     "title": "Recurring commitment: Monday personal lesson 7am",
+     "path": "user/planning/conventions/recurring-commitment-monday-personal-lesson-7am.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 14",
+      "coactivated 8 times with seeds"
+     ]
+    },
+    {
+     "id": "d39cafc2-286e-4c70-a94f-f9840a24974b",
+     "title": "Daily plan 2026-08-03 (Monday)",
+     "path": "user/planning/daily/2026/2026-08-03.md",
+     "scouts": [
+      "scout_graph",
+      "scout_tags_recency",
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 15",
+      "supports edge to fc15215e",
+      "coactivated 11 times with seeds"
+     ]
+    },
+    {
+     "id": "e10ccf0e-7284-4955-9ed4-ec250e602df9",
+     "title": "Daily Plan \u2014 2026-07-12",
+     "path": "user/planning/daily/2026/2026-07-12.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.583"
+     ]
+    },
+    {
+     "id": "b4029f22-f1c4-422f-a770-83f1788c7184",
+     "title": "Daily plan \u2014 2026-08-17",
+     "path": "user/planning/daily/2026/2026-08-17.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.663",
+      "lexical match score 106.858",
+      "tag/path match, recency rank 2"
+     ]
+    },
+    {
+     "id": "78840494-20c4-4ff5-bb6b-cbef37e1af86",
+     "title": "Weekly Plan \u2014 2026-W28",
+     "path": "user/planning/weekly/2026/2026-W28.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.581",
+      "lexical match score 38.756"
+     ]
+    },
+    {
+     "id": "6aa07f14-6fe5-4bff-b8d8-2c628b8acd93",
+     "title": "Week 2026-W31 plan",
+     "path": "user/planning/weekly/2026/2026-W31.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.601",
+      "lexical match score 33.191",
+      "tag/path match, recency rank 16"
+     ]
+    },
+    {
+     "id": "fc15215e-21ba-45d8-a641-1c98a349dab7",
+     "title": "2026-08-12 daily plan",
+     "path": "user/planning/daily/2026/2026-08-12.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.597",
+      "lexical match score 17.887",
+      "tag/path match, recency rank 6"
+     ]
+    },
+    {
+     "id": "d166d982-ef31-4ced-a3f8-7a1d87c10688",
+     "title": "Tuesday evening plan \u2014 2026-08-11",
+     "path": "user/planning/daily/2026/2026-08-11.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.474",
+      "lexical match score 37.355",
+      "tag/path match, recency rank 7"
+     ]
+    },
+    {
+     "id": "195eca8e-e107-4e30-bb03-6ef70e167bda",
+     "title": "Weekly Plan \u2014 2026-W27",
+     "path": "user/planning/weekly/2026/2026-W27.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.522",
+      "lexical match score 37.492"
+     ]
+    },
+    {
+     "id": "850566be-28ca-46ae-bf3c-2693fd9aa5b1",
+     "title": "Daily plan \u2014 2026-08-16",
+     "path": "user/planning/daily/2026/2026-08-16.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.544",
+      "lexical match score 38.740",
+      "tag/path match, recency rank 3"
+     ]
+    },
+    {
+     "id": "c99af1d1-2aa2-41f4-b2bf-7c56cfea16a7",
+     "title": "2026-07-28 Tuesday plan",
+     "path": "user/planning/daily/2026/2026-07-28.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.491",
+      "lexical match score 17.820",
+      "tag/path match, recency rank 18"
+     ]
+    },
+    {
+     "id": "cff3436b-61aa-41d8-ae65-b08a1ee8d8a6",
+     "title": "Daily Plan \u2014 2026-07-06",
+     "path": "user/planning/daily/2026/2026-07-06.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.582"
+     ]
+    },
+    {
+     "id": "acb42d9d-c049-4f87-91b1-1d1e82192cde",
+     "title": "Daily Plan \u2014 2026-07-05",
+     "path": "user/planning/daily/2026/2026-07-05.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.567",
+      "lexical match score 26.698"
+     ]
+    },
+    {
+     "id": "6fd28129-d84f-4676-8417-b3b2fdcd4def",
+     "title": "Daily Plan \u2014 2026-07-25",
+     "path": "user/planning/daily/2026/2026-07-25.md",
+     "scouts": [
+      "scout_graph",
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "contradicts edge to 7f94ed69",
+      "coactivated 8 times with seeds"
+     ]
+    },
+    {
+     "id": "7f94ed69-8145-42fb-aedd-19fc0c14293b",
+     "title": "Daily Plan \u2014 2026-08-15",
+     "path": "user/planning/daily/2026/2026-08-15.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.498",
+      "lexical match score 46.105",
+      "tag/path match, recency rank 4"
+     ]
+    },
+    {
+     "id": "a00cd6f1-5628-44b0-ba06-bffd5e88d654",
+     "title": "Week 2026-W32 plan",
+     "path": "user/planning/weekly/2026/2026-W32.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.499",
+      "lexical match score 43.876",
+      "tag/path match, recency rank 8"
+     ]
+    },
+    {
+     "id": "9059aca9-54b8-4067-93c1-89d62dacb8dc",
+     "title": "2026-07-22 daily plan",
+     "path": "user/planning/daily/2026/2026-07-22.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.530"
+     ]
+    },
+    {
+     "id": "e4e913b5-c4e9-420e-b7ee-da371bf515ab",
+     "title": "Daily Plan \u2014 2026-07-11",
+     "path": "user/planning/daily/2026/2026-07-11.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.507",
+      "lexical match score 25.966"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 16
+  },
+  {
+   "agent": "garuda",
+   "query": "Week 2026-W33 Loom Robot Companion review hardening Robot Day 2 outcomes and decisions",
+   "limit": 12,
+   "receipt_id": "rcpt_09a92615199f",
+   "ts": "2026-08-17 18:54:54",
+   "results": [
+    {
+     "id": "c356c4a8-5ace-4cb9-ae70-87bd7ceb3685",
+     "title": "Week 2026-W33 plan",
+     "path": "user/planning/weekly/2026/2026-W33.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.786",
+      "lexical match score 99.552",
+      "tag/path match, recency rank 3"
+     ]
+    },
+    {
+     "id": "d39cafc2-286e-4c70-a94f-f9840a24974b",
+     "title": "Daily plan 2026-08-03 (Monday)",
+     "path": "user/planning/daily/2026/2026-08-03.md",
+     "scouts": [
+      "scout_graph",
+      "scout_tags_recency",
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 11",
+      "supports edge to fc15215e",
+      "coactivated 1 times with seeds"
+     ]
+    },
+    {
+     "id": "f6709ea5-652b-4371-97ef-22d4d852b647",
+     "title": "Convention: weekday wake time and discretionary morning slots",
+     "path": "user/planning/conventions/convention-weekday-wake-time-and-discretionary-morning-slots.md",
+     "scouts": [
+      "scout_tags_recency"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 8"
+     ]
+    },
+    {
+     "id": "c99af1d1-2aa2-41f4-b2bf-7c56cfea16a7",
+     "title": "2026-07-28 Tuesday plan",
+     "path": "user/planning/daily/2026/2026-07-28.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 1 times with seeds"
+     ]
+    },
+    {
+     "id": "fa7e5b43-2ec1-4734-a6d5-45803418abb1",
+     "title": "Recurring commitment: Monday personal lesson 7am",
+     "path": "user/planning/conventions/recurring-commitment-monday-personal-lesson-7am.md",
+     "scouts": [
+      "scout_tags_recency"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 10"
+     ]
+    },
+    {
+     "id": "fc15215e-21ba-45d8-a641-1c98a349dab7",
+     "title": "2026-08-12 daily plan",
+     "path": "user/planning/daily/2026/2026-08-12.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency"
+     ],
+     "reasons": [
+      "lexical match score 45.734",
+      "tag/path match, recency rank 1"
+     ]
+    },
+    {
+     "id": "6aa07f14-6fe5-4bff-b8d8-2c628b8acd93",
+     "title": "Week 2026-W31 plan",
+     "path": "user/planning/weekly/2026/2026-W31.md",
+     "scouts": [
+      "scout_tags_recency",
+      "scout_vector",
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "semantic similarity 0.571",
+      "tag/path match, recency rank 12",
+      "coactivated 1 times with seeds"
+     ]
+    },
+    {
+     "id": "6fd28129-d84f-4676-8417-b3b2fdcd4def",
+     "title": "Daily Plan \u2014 2026-07-25",
+     "path": "user/planning/daily/2026/2026-07-25.md",
+     "scouts": [
+      "scout_graph",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.551",
+      "contradicts edge to 7f94ed69"
+     ]
+    },
+    {
+     "id": "d166d982-ef31-4ced-a3f8-7a1d87c10688",
+     "title": "Tuesday evening plan \u2014 2026-08-11",
+     "path": "user/planning/daily/2026/2026-08-11.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_tags_recency",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.606",
+      "lexical match score 63.281",
+      "tag/path match, recency rank 2"
+     ]
+    },
+    {
+     "id": "850566be-28ca-46ae-bf3c-2693fd9aa5b1",
+     "title": "Daily plan \u2014 2026-08-16",
+     "path": "user/planning/daily/2026/2026-08-16.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.681",
+      "lexical match score 72.624"
+     ]
+    },
+    {
+     "id": "195eca8e-e107-4e30-bb03-6ef70e167bda",
+     "title": "Weekly Plan \u2014 2026-W27",
+     "path": "user/planning/weekly/2026/2026-W27.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 58.044"
+     ]
+    },
+    {
+     "id": "7f94ed69-8145-42fb-aedd-19fc0c14293b",
+     "title": "Daily Plan \u2014 2026-08-15",
+     "path": "user/planning/daily/2026/2026-08-15.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 68.535"
+     ]
+    }
+   ],
+   "coactivation_only": 1,
+   "vec_or_lex": 8
+  },
+  {
+   "agent": "garuda",
+   "query": "RH-6 benchmark tiering RH-1 persona surgery RH-2 thorough profile",
+   "limit": 20,
+   "receipt_id": "rcpt_88ddfdf8e7db",
+   "ts": "2026-08-11 21:09:32",
+   "results": [
+    {
+     "id": "785acb93-dc71-43ee-a182-1e9868f13b04",
+     "title": "This DIY Bipedal Robot Used Pneumatic \u201cAir-Muscles\u201d Instead of Motors",
+     "path": "articles/rss/2026/05/this-diy-bipedal-robot-used-pneumatic-air-muscles-instead-of-motors.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 7 times with seeds"
+     ]
+    },
+    {
+     "id": "ef6a48e4-87b6-4375-b15c-5a172d857b3c",
+     "title": "Daily Log \u2014 2026-08-10 (Monday)",
+     "path": "user/daily/2026-08-10.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.604",
+      "lexical match score 92.386"
+     ]
+    },
+    {
+     "id": "734959aa-bc9d-4cd6-b67e-284947629e17",
+     "title": "AgentMaster: A Multi-Agent Conversational Framework Using A2A and MCP Protocols",
+     "path": "articles/ai-agents-briefing/2026/06/agentmaster-a-multi-agent-conversational-framework-using-a2a-and-mcp-protocols-for-multimodal-information-retrieval-and-analysis.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "ab37db21-4cf2-46bc-a97a-674a051b0457",
+     "title": "Some Intuition on the Neural Tangent Kernel",
+     "path": "articles/blog/2020/11/some-intuition-on-the-neural-tangent-kernel.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "a13a6f17-1bbd-4bce-9449-240056eb10e3",
+     "title": "Full automation of AI R&D probably yields a large speed up even without a software-only",
+     "path": "articles/rss/2026/05/full-automation-of-ai-rd-probably-yields-a-large-speed-up-even-without-a-software-only-singularity.md",
+     "scouts": [
+      "scout_coactivation",
+      "scout_source_url"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds",
+      "same source URL domain"
+     ]
+    },
+    {
+     "id": "bf9c9529-72d6-463b-99ae-e9ffbd8ad488",
+     "title": "The Future of Physical AI Isn\u2019t Smarter Robots, It\u2019s Smarter Interfaces",
+     "path": "articles/rss/2026/05/the-future-of-physical-ai-isnt-smarter-robots-its-smarter-interfaces.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 6 times with seeds"
+     ]
+    },
+    {
+     "id": "6b709b52-73dd-4d90-af9d-3e2f5a5f8ad7",
+     "title": "Causal inference 4: Causal Diagrams, Markov Factorization, Structural Equation",
+     "path": "articles/blog/2021/06/causal-inference-4-causal-diagrams-markov-factorization-structural-equation-models.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "5046c596-4ab3-478c-9787-e2cc71141580",
+     "title": "Integrate Qdrant and Neo4j to Enhance Your RAG Pipeline",
+     "path": "articles/blog/2025/01/integrate-qdrant-and-neo4j-to-enhance-your-rag-pipeline.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 4 times with seeds"
+     ]
+    },
+    {
+     "id": "a08baa79-1ab9-497e-b589-46c451eb4da8",
+     "title": "Text Analysis for Hybrid Search: Tokenization, Stopwords & Accent Folding",
+     "path": "articles/blog/2026/05/text-analysis-for-hybrid-search-tokenization-stopwords-accent-folding.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 4 times with seeds"
+     ]
+    },
+    {
+     "id": "fb3d4b51-37fa-498f-abb9-63599864b96e",
+     "title": "Hackers Simply Asked Meta AI to Give Them Access to High-Profile Instagram",
+     "path": "articles/blog/2026/06/hackers-simply-asked-meta-ai-to-give-them-access-to-high-profile-instagram-accounts-it-worked.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "faf8d684-1786-4f3f-b008-83d0cab8b640",
+     "title": "Reality: The Final Eval \u2014 Lukas Petersson and Axel Backlund of Andon Labs",
+     "path": "articles/blog/2026/06/reality-the-final-eval-lukas-petersson-and-axel-backlund-of-andon-labs.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "cc513939-5548-473c-a6d6-88d232e3e577",
+     "title": "Stealing Reasoning Traces from Proprietary LLM APIs",
+     "path": "papers/arxiv/2026/08/stealing-reasoning-traces-from-proprietary-llm-apis.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.514"
+     ]
+    },
+    {
+     "id": "054529eb-7da0-4981-b285-41d1f1a27a20",
+     "title": "Roadmap 2026-08 \u2014 month plan (decided with Dave, 2026-08-04)",
+     "path": "plans/2026-08-roadmap.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.482",
+      "lexical match score 56.175"
+     ]
+    },
+    {
+     "id": "ce3cf9c1-d06c-4bc4-89cf-f698433d6a0c",
+     "title": "Gemini Robotics On-Device brings AI to local robotic devices",
+     "path": "articles/blog/2025/06/gemini-robotics-on-device-brings-ai-to-local-robotic-devices.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "c356c4a8-5ace-4cb9-ae70-87bd7ceb3685",
+     "title": "Week 2026-W33 plan",
+     "path": "user/planning/weekly/2026/2026-W33.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.540",
+      "lexical match score 75.426"
+     ]
+    },
+    {
+     "id": "db0458fc-db13-4fc8-a549-1d5bf01e6781",
+     "title": "The Age of Async Agents \u2014 Cognition's Walden Yan & OpenInspect's Cole Murray",
+     "path": "articles/blog/2026/05/the-age-of-async-agents-cognitions-walden-yan-openinspects-cole-murray.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "6800c9fa-d405-40d5-839e-2aa2f73fc246",
+     "title": "DeepMind Treats Its AI Agents as Insider Threats \u2014 AI Control Roadmap Analysis",
+     "path": "articles/ai-agents-briefing/2026/06/deepmind-treats-its-ai-agents-as-insider-threats-ai-control-roadmap-analysis-waxell.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 2 times with seeds"
+     ]
+    },
+    {
+     "id": "98525698-bbf9-43ff-bd65-233c3420e3bc",
+     "title": "Night believability epic \u2014 design note (2026-07-19)",
+     "path": "projects/kindred-code/night-believability-epic-design-2026-07.md",
+     "scouts": [
+      "scout_graph",
+      "scout_provenance"
+     ],
+     "reasons": [
+      "derived from 3b9c8a78",
+      "derived_from edge to 3b9c8a78"
+     ]
+    },
+    {
+     "id": "6455bb43-857e-4ec2-bde3-521c9112bb52",
+     "title": "\u200bBoston Dynamics and Google DeepMind Teach Spot to Reason\u200b",
+     "path": "articles/rss/2026/04/boston-dynamics-and-google-deepmind-teach-spot-to-reason.md",
+     "scouts": [
+      "scout_coactivation"
+     ],
+     "reasons": [
+      "coactivated 3 times with seeds"
+     ]
+    },
+    {
+     "id": "15e28a08-b621-4688-88af-c34af35e314e",
+     "title": "Prompt injection: types, real-world CVEs, and enterprise defenses",
+     "path": "articles/ai-agents-briefing/2026/06/prompt-injection-types-real-world-cves-and-enterprise-defenses.md",
+     "scouts": [
+      "scout_graph"
+     ],
+     "reasons": [
+      "supports edge to cc513939"
+     ]
+    }
+   ],
+   "coactivation_only": 12,
+   "vec_or_lex": 4
+  },
+  {
+   "agent": "garuda",
+   "query": "W32 weekly review 2026-08-03 2026-08-09 roadmap finance bass backup Influx",
+   "limit": 10,
+   "receipt_id": "rcpt_4e4659b001d2",
+   "ts": "2026-08-09 20:40:52",
+   "results": [
+    {
+     "id": "e85c24c9-bd98-4a5e-9563-4fdd57524566",
+     "title": "2026-08-08 Daily Plan",
+     "path": "user/planning/daily/2026/2026-08-08.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.581",
+      "lexical match score 45.556"
+     ]
+    },
+    {
+     "id": "17754b25-6aed-40eb-a13c-3204514d9daf",
+     "title": "Daily Log \u2014 2026-08-03 (Sunday)",
+     "path": "user/daily/2026/2026-08-03.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.538",
+      "lexical match score 79.242"
+     ]
+    },
+    {
+     "id": "a00cd6f1-5628-44b0-ba06-bffd5e88d654",
+     "title": "Week 2026-W32 plan",
+     "path": "user/planning/weekly/2026/2026-W32.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.515",
+      "lexical match score 78.590"
+     ]
+    },
+    {
+     "id": "5b334bbe-24b4-4e34-b7a7-c831f9d34af0",
+     "title": "Daily Log \u2014 2026-07-30 (Thursday)",
+     "path": "user/daily/2026-07-30.md",
+     "scouts": [
+      "scout_graph",
+      "scout_provenance"
+     ],
+     "reasons": [
+      "derived from be5422fb",
+      "derived_from edge to be5422fb"
+     ]
+    },
+    {
+     "id": "054529eb-7da0-4981-b285-41d1f1a27a20",
+     "title": "Roadmap 2026-08 \u2014 month plan (decided with Dave, 2026-08-04)",
+     "path": "plans/2026-08-roadmap.md",
+     "scouts": [
+      "scout_lexical"
+     ],
+     "reasons": [
+      "lexical match score 36.082"
+     ]
+    },
+    {
+     "id": "c99af1d1-2aa2-41f4-b2bf-7c56cfea16a7",
+     "title": "2026-07-28 Tuesday plan",
+     "path": "user/planning/daily/2026/2026-07-28.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.537"
+     ]
+    },
+    {
+     "id": "6aa07f14-6fe5-4bff-b8d8-2c628b8acd93",
+     "title": "Week 2026-W31 plan",
+     "path": "user/planning/weekly/2026/2026-W31.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.563",
+      "lexical match score 55.390"
+     ]
+    },
+    {
+     "id": "d39cafc2-286e-4c70-a94f-f9840a24974b",
+     "title": "Daily plan 2026-08-03 (Monday)",
+     "path": "user/planning/daily/2026/2026-08-03.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.513",
+      "lexical match score 58.269"
+     ]
+    },
+    {
+     "id": "f04df461-6492-4083-a2e2-1aed29a03dae",
+     "title": "Daily Log \u2014 2026-07-28 (Monday)",
+     "path": "user/daily/2026-07-28.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.498"
+     ]
+    },
+    {
+     "id": "be5422fb-3e66-4db9-8716-93cd1b69839b",
+     "title": "Daily Log \u2014 2026-07-29 (Tuesday)",
+     "path": "user/daily/2026-07-29.md",
+     "scouts": [
+      "scout_vector"
+     ],
+     "reasons": [
+      "semantic similarity 0.497"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 9
+  },
+  {
+   "agent": "claude-robot-companion",
+   "query": "per-robot persona long-term memory companion design",
+   "limit": 5,
+   "receipt_id": "rcpt_5496dce5c12c",
+   "ts": "2026-07-10 12:58:36",
+   "results": [
+    {
+     "id": "3ad45894-4b50-442c-9f1a-94904634d1ce",
+     "title": "Robot Companion Project Context",
+     "path": "projects/robot-companion/robot-companion-project-context.md",
+     "scouts": [
+      "scout_lexical",
+      "scout_vector",
+      "scout_tags_recency"
+     ],
+     "reasons": [
+      "semantic similarity 0.643",
+      "lexical match score 47.509",
+      "tag/path match, recency rank 1"
+     ]
+    },
+    {
+     "id": "24396d55-267c-44c4-a306-6faf9bd6ff8c",
+     "title": "NAO Off-Board Audio/Video Architecture \u2014 Full Proposal (v4/v5/v6)",
+     "path": "projects/robot-companion/nao-off-board-audio-video-architecture-full-proposal.md",
+     "scouts": [
+      "scout_tags_recency"
+     ],
+     "reasons": [
+      "tag/path match, recency rank 2"
+     ]
+    }
+   ],
+   "coactivation_only": 0,
+   "vec_or_lex": 1
+  }
+ ],
+ "note": "Narrative: KB note b4754360-3bca-47e7-a5cc-c3d83a6b9d91 (analysis/lcma-retrieval-baseline-2026-09.md). 0 result ids do not resolve to a file on disk (deleted or moved since the receipt)."
+}

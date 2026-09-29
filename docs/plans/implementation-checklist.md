@@ -34,7 +34,7 @@ No phase assignment. Revisit if a concrete consumer appears. Plans: `event-webho
 
 ### Phase 7 — LCMA Rollout
 
-See **`lcma-checklist.md`** for full MVP 1/2/3 breakdown.
+MVP 1/2 and MVP-3 WS1/WS2-slice-1 delivered; the record is `archive/lcma-checklist.md`. Remaining LCMA work is planned in **`lcma-connected-knowledge.md`** (phase 4).
 
 Dependencies: Phases 0 through 6.5 complete ✅
 
@@ -42,25 +42,20 @@ Dependencies: Phases 0 through 6.5 complete ✅
 
 ## 🔲 Pending
 
-### Phase 8 — API Ergonomics Cleanup
+### Phase 8 — API Ergonomics Cleanup — ✅ Done (option 2, PR #193)
 
-- [ ] Replace the flat `lithos_write` option surface with grouped request objects (`provenance`, `freshness`, `lcma`) at the MCP boundary
-- [ ] Preserve the canonical on-disk semantics and outcome envelope from `unified-write-contract.md`
-- [ ] Add compatibility notes in `docs/SPECIFICATION.md` for the cleaned-up pre-1.0 interface
-- [ ] Extend single-write and batch conformance coverage to grouped input objects
-
-Dependencies: Phase 7 MVP 1 complete
-
-Exit criteria:
-- Single and batch write APIs are materially easier to use without changing manager-layer semantics
-- Grouped request objects have conformance tests proving parity with canonical field semantics
+Resolved by documentation grouping rather than grouped request objects: the
+`lithos_write` docstring and `SPECIFICATION.md` present the flat options in
+named sections (`provenance`, `freshness`, `lcma`). See the "API Ergonomics
+Follow-up" section of `unified-write-contract.md`. Grouped input objects and
+their conformance tests were not built and are not planned.
 
 ---
 
 ### Phase 9 — CLI Extension (Deferred Integration)
 
-- [ ] Revisit `cli-extension-plan.md` after the write and retrieval surfaces stabilize
-- [ ] Prioritize CLI phases 1-3 first (JSON output, read/list, CRUD), then graph/coordination/polish
+- [ ] Implement `cli-admin-client-split.md` (supersedes the deleted `cli-extension-plan.md`, PR #218): `lithos admin …` / `lithos client …` groups, `--output json`, exit codes
+- [ ] Prioritize JSON output and read/list first, then CRUD, then graph/coordination/polish
 
 Dependencies: Phases 0 through 8 complete
 
