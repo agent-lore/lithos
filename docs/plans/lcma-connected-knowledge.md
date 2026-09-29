@@ -56,7 +56,14 @@ revisit; and there is no measurement of whether memory helps.
 - **Owner-visible outputs are Markdown notes** in the vault, so they work with
   Obsidian, the planning-coach agent and Lens without new UI.
 - **Every workstream ships with its measurement.** Receipts are the
-  instrumentation; each K-item names the number it moves.
+  instrumentation; each K-item names the number it moves. The pre-change
+  baseline is `docs/reviews/2026-09-retrieval-baseline.json` (numbers, the
+  ten hub notes, and a 47-query held-out set from the human-facing callers)
+  with its narrative in the knowledge base
+  (`analysis/lcma-retrieval-baseline-2026-09.md`, id `b4754360`).
+- **Keep everything.** Intake is never aged out or pruned for being unread
+  (Dave, 2026-09-29); storage is assumed sufficient and is out of scope here.
+  Lint and digest may *flag* never-read material; they do not archive it.
 
 ## 3. Workstreams
 
@@ -112,12 +119,19 @@ Lens K2 builds against it.
 
 ### K3 — Compiled pages (WS4 reframed)
 
-- **Entity pages.** For every NER entity that N ≥ k notes mention, the enrich
+- **Entity pages.** For every NER entity that N ≥ k notes mention (after an
+  entity-quality filter: the extractor emits fragments such as "Les", "Deux",
+  "un autre" on non-English intake, so the threshold alone is not enough), the enrich
   worker writes or rewrites `entities/<slug>.md` (`note_type: entity`): a
   narrative profile compiled from the mentioning notes and their edges, with
   dates, numbers and ids kept verbatim, wiki-links to every source, and a
-  `compiled_from` provenance list. Human edits are preserved by section
-  (a marked "compiled" block is the only thing rewritten).
+  `compiled_from` provenance list.
+  **Open question (Dave, 2026-09-29): where compiled text lives.** Rewriting
+  a marked block inside a note that a human may also edit conflicts with the
+  whole-note write contract and needs discussion before K3 is filed; the
+  alternatives are a machine-owned page per entity with `compiled_from`
+  links (human notes untouched), or compiled text held only in frontmatter /
+  a sidecar. To be settled in an ADR before K3's tasks exist.
 - **Concept pages.** HDBSCAN over embeddings (thresholds already measured in
   `lcma-design.md` WS4), validated by coactivation and entity overlap;
   stable clusters get `concepts/<slug>.md` with a summary and member links.
@@ -133,7 +147,8 @@ Lens K2 builds against it.
   unresolved `contradicts` edges with both sides, orphans (degree 0), claims
   past `valid_to`, entities above the page threshold with no page, stale
   notes, and gaps phrased as questions an agent can pick up as tasks.
-- **Daily digest note** under `user/planning/digests/`: what agents changed,
+- **Daily digest note** under `user/planning/digests/<year>/` (the planning-note
+  convention the planning-coach agent already reads): what agents changed,
   claims superseded, contradictions opened, and 3–5 resurfaced notes chosen
   by recall probability (salience reinterpreted as p(recall) with a
   Readwise-style half-life) that connect to active projects. The
@@ -177,13 +192,26 @@ memory managers; decay on declarative notes; embedding-space versioning
 (still dropped); LLM calls on the retrieve hot path; auto-overwriting human
 notes; vendor benchmark scores as targets.
 
-## 5. Sequence
+## 5. Sequence and epics
 
-`K0` → `K1` → { `K2`, `K4`-lite (digest) } → `K3` → { `K5`, `K6` }; `K7.1`
-lands with K0, `K7.2–5` before K3 is judged. K0.1 and K0.2 are October
-candidates; K1 and the digest close October if attention allows; K2/K3 are
-Q4. Each workstream becomes a task with its measurement in the description,
-under one epic, gated by task edges as the 2026-07 plan did.
+Two epics (agreed 2026-09-29), gated by structure rather than prose:
+
+1. **Epic A — retrieval honest and visible (October-sized):** K0.1–K0.4, K1,
+   read attribution on `lithos_read`/`search`/`list` (K4 and K7 need to know
+   who acted), the conformance suite routed through a validating MCP client
+   (so envelope changes in K1 are actually tested), K7.1 receipt replay
+   against the baseline set, and a dated **checkpoint task** that records
+   the top-10 share and coactivation-only share after K0 ships and decides
+   whether Epic B proceeds.
+2. **Epic B — connected knowledge (Q4):** K2, K3, K4, K5, K6, K7.2–5, blocked
+   by the checkpoint. Its first children are the ADR on compiled-text
+   ownership (K3 open question) and the influx note-typing task (78% of the
+   corpus is `note_type: summary`, so K2's decay-by-kind cannot differentiate
+   until intake classifies). Digest-lite (K4's daily note without LLM
+   summarisation) may be pulled forward into October if attention allows.
+
+Within Epic A: `K0` → `K1`; K7.1 lands with K0.1. Each task carries its
+measurement in the description.
 
 ## 6. Success criteria
 
