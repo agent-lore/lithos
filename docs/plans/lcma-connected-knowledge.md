@@ -126,12 +126,13 @@ Lens K2 builds against it.
   narrative profile compiled from the mentioning notes and their edges, with
   dates, numbers and ids kept verbatim, wiki-links to every source, and a
   `compiled_from` provenance list.
-  **Open question (Dave, 2026-09-29): where compiled text lives.** Rewriting
-  a marked block inside a note that a human may also edit conflicts with the
-  whole-note write contract and needs discussion before K3 is filed; the
-  alternatives are a machine-owned page per entity with `compiled_from`
-  links (human notes untouched), or compiled text held only in frontmatter /
-  a sidecar. To be settled in an ADR before K3's tasks exist.
+  **Decided (Dave, 2026-09-29): machine-owned pages, adopted on edit.**
+  Entity and concept pages are separate notes authored by `lithos-enrich`
+  and regenerated whole through the normal write path; human notes are never
+  rewritten. If a human edits a page, its version no longer matches the
+  worker's last write, the worker stops regenerating it, and lint reports it
+  as adopted. Human commentary lives in the owner's own notes linking to the
+  page. To be recorded as ADR-0009 as Epic B's first child.
 - **Concept pages.** HDBSCAN over embeddings (thresholds already measured in
   `lcma-design.md` WS4), validated by coactivation and entity overlap;
   stable clusters get `concepts/<slug>.md` with a summary and member links.
@@ -202,12 +203,14 @@ Two epics (agreed 2026-09-29), gated by structure rather than prose:
    (so envelope changes in K1 are actually tested), K7.1 receipt replay
    against the baseline set, and a dated **checkpoint task** that records
    the top-10 share and coactivation-only share after K0 ships and decides
-   whether Epic B proceeds.
+   whether Epic B proceeds. **Built by Claude Code sessions** (Dave,
+   2026-09-29), not dispatched through loom, so tasks carry no
+   `trigger:` tags and need no lithos-core sandbox image.
 2. **Epic B — connected knowledge (Q4):** K2, K3, K4, K5, K6, K7.2–5, blocked
-   by the checkpoint. Its first children are the ADR on compiled-text
-   ownership (K3 open question) and the influx note-typing task (78% of the
-   corpus is `note_type: summary`, so K2's decay-by-kind cannot differentiate
-   until intake classifies). Digest-lite (K4's daily note without LLM
+   by the checkpoint. Its first children are ADR-0009 (machine-owned compiled
+   pages, decided above) and the influx note-typing task, filed in the influx
+   project (78% of the corpus is `note_type: summary`, so K2's decay-by-kind
+   cannot differentiate until intake classifies; confirmed 2026-09-29). Digest-lite (K4's daily note without LLM
    summarisation) may be pulled forward into October if attention allows.
 
 Within Epic A: `K0` → `K1`; K7.1 lands with K0.1. Each task carries its
