@@ -110,9 +110,14 @@ Lens K2 builds against it.
 - **Validity and supersession on edges and claims.** `valid_from`,
   `valid_to`, `superseded_by` on `edges.db` rows (nullable, no migration of
   meaning); an optional `claims:` frontmatter list of `(subject, relation,
-  object, since)` for notes that state facts; when a new claim or an inferred
-  `contradicts` edge collides on `(subject, relation)`, the older one is
-  retired deterministically (no LLM) and kept retrievable via `as_of=` on
+  object, since)` for notes that state facts. Supersession is deterministic
+  and never inferred: an older claim is retired only when a *dated* claim on
+  the same `(subject, relation)` arrives from an authoritative channel
+  (owner-written, or the same source updating itself), or when
+  `lithos_conflict_resolve` records `superseded`. An inferred `contradicts`
+  edge opens a conflict (`conflict_state=unreviewed`) and changes nothing
+  else — both claims stay valid until resolved, as `lcma-design.md` §5.9
+  already requires. Retired claims stay retrievable via `as_of=` on
   `lithos_related`. This is the real answer to GitHub #129 and most of #49.
 - Measure: stale-fact rate on a synthetic evolving-facts set (K7) 0 vs the
   15–40% plain RAG shows.
@@ -179,9 +184,17 @@ K7 measures whether memory helps a caller. Model, prompt and cost evaluation
 of the LLM artefacts themselves is the separate `llm-eval-suite.md` PRD; K3
 does not generate pages until its runner exists.
 
-1. Receipt replay: add `used_ids` to receipts and replay offline to compare
-   scout / rerank / temperature configurations (nDCG on used items,
-   exploration-use rate). Day-one measurement for K0.
+1. Two measurements, not one. (a) **Prospective re-run**: execute the 47
+   held-out queries (`docs/reviews/2026-09-retrieval-baseline.json`) against
+   a staging copy with the candidate configuration and recompute the two
+   baseline shares plus per-query kept/dropped results; needs no labels and
+   is the day-one K0 measurement. (b) **Offline replay**, only once receipts
+   capture the full candidate pool with per-scout scores (today they hold
+   final results and a count) and the held-out set carries relevance labels
+   (Dave labels the 47 queries' top results; agents report `used_ids`): then
+   nDCG on labelled/used items and exploration-use rate can compare scouts
+   and rerankers without re-running. A changed scout can surface candidates
+   the old receipts never saw, so (b) is not a substitute for (a).
 2. A synthetic-owner ground-truth set with validity intervals and volatility
    classes (Ground Truth First style), rendered into notes and findings;
    questions instantiated mechanically; run at simulated 3- and 9-week tenure.
@@ -191,6 +204,15 @@ does not generate pages until its runner exists.
 5. Judge hygiene: adversarial wrong-but-topical answers; prompts in-repo.
 
 ## 4. Not doing
+
+Re-scoped or dropped from MVP-3, stated explicitly (review comment on PR
+#431): the **exploration scout** (WS3) is dropped — K0.4 widens Phase-B
+seeding on vague queries instead, and MMR/Thompson-style exploration returns
+only if K7's exploration-use rate shows the neighbourhood is too narrow; the
+**analogy scout** (WS5) is re-scoped from a retrieval scout to K5's priming
+input (frames extracted from task outcomes feed the brief, not the result
+list); **fitting `rerank_weights` from implicit signals** (WS6) is deferred
+until K7.1(b) has labels — K0.1 is a hand-tuned repair, not metamemory.
 
 GraphRAG community summaries; entity triples as primary storage; RL-trained
 memory managers; decay on declarative notes; embedding-space versioning

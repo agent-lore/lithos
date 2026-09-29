@@ -53,14 +53,17 @@ hosted eval service; benchmarking against public leaderboards.
 
 ### E1 — Replayable inputs (prerequisite, smallest slice)
 
-The engine persists what the model saw. Add to the inference path a
-content-addressed record of each call: focus note id and content hash, the
-ordered candidate ids with the snippet hashes and similarity scores, the
-prompt template version, and the raw completion. Stored beside the existing
-ledger in `stats.db` (a `llm_call_log` table, or files under
-`$LITHOS_DATA_DIR/.lithos/llm-calls/`), retained for a configurable window
-(default 30 days), exportable as fixtures. Without this, golden sets can only
-be built from notes as they are *now*, not as they were when judged.
+The engine persists what the model saw, verbatim. Each call records the
+**exact prompt messages sent** (system + user, after snippet truncation) and
+the raw completion, plus the metadata needed to index them: focus note id
+and content hash, ordered candidate ids with similarity scores, prompt
+template version, model, token usage and latency. Snippets are stored as
+immutable content-addressed blobs (`$LITHOS_DATA_DIR/.lithos/llm-calls/
+blobs/<sha256>`) referenced from an `llm_call_log` table in `stats.db`, so a
+later note edit cannot change what a past call saw and identical snippets
+are stored once. Retained for a configurable window (default 30 days),
+exportable as fixtures. Hashes alone are not enough: once a note changes
+they cannot reconstruct the input (review comment on PR #431).
 
 ### E2 — Golden sets
 
@@ -135,9 +138,8 @@ manual or scheduled, never in the PR gate.
 
 ## 4. Open questions
 
-- Whether E1 records raw completions (replay-perfect, larger) or only parsed
-  judgements plus the prompt inputs (smaller, cannot re-parse). Draft says
-  raw, with the 30-day window.
+- E1's retention window and blob-store size at ~45 calls/day (the 30-day
+  default is a guess; measure after the first week).
 - Whether the confidence floor (0.6) should be tuned per model from E3's
   calibration table rather than fixed.
 - Who labels the later artefact types when they are prose (compiled pages,

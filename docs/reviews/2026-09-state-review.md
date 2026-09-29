@@ -237,14 +237,16 @@ and checked against `src/lithos` and merged PRs.
 
 | Issue | Options |
 |---|---|
-| #207 no scope enforcement on `search`/`read`/`list` | **Docstring caveat on the three tools and close.** Multi-agent isolation is not a real requirement in this deployment; `access_scope` is advisory by design |
-| #129 `as_of` filter on `lithos_search` | **Close wontfix as filed.** No consumer in six months; `updated_at <= X` is a weak proxy without history. The real need (temporal validity of *claims*) is addressed differently in §6 |
-| #49 document versioning / history | **Document "put the vault under git" as the supported history and close.** CAS (`expected_version`) already removes the silent-overwrite premise. Reopen as a PRD only if an audit use case appears |
-| #333 path-style wiki-link targets as entities | **Close wontfix** — the issue records the 2026-06 "accept for now" decision; it is a parked decision, not work |
+| #207 no scope enforcement on `search`/`read`/`list` | **Docstring caveat on the three tools and close.** Multi-agent isolation is not a real requirement in this deployment; `access_scope` is advisory by design. *Closed 2026-09-29; the caveat is added to the three docstrings in this PR* |
+| #129 `as_of` filter on `lithos_search` | **Close wontfix as filed.** No consumer in six months; `updated_at <= X` is a weak proxy without history. The real need (temporal validity of *claims*) is addressed differently in §6. *Closed 2026-09-29* |
+| #49 document versioning / history | **Document "put the vault under git" as the supported history and close.** CAS (`expected_version`) already removes the silent-overwrite premise. Reopen as a PRD only if an audit use case appears. *Closed 2026-09-29; the git-history paragraph is added to `SPECIFICATION.md` §11 in this PR* |
+| #333 path-style wiki-link targets as entities | **Close wontfix** — the issue records the 2026-06 "accept for now" decision; it is a parked decision, not work. *Closed 2026-09-29* |
 
 ## 5. Task-graph projects
 
-294 open tasks across 22 projects in the tracker; `lithos-core` has 30 and
+Snapshot as of 2026-09-29 12:00 UTC, before the closures in §7 were applied
+the same afternoon (after them: `lithos-core` 14 open, `lithos-ecosystem` 0).
+294 open tasks across 22 projects in the tracker; `lithos-core` had 30 and
 `lithos-ecosystem` 3. Sixteen `lithos-core` tasks are loom mirrors of the
 GitHub issues above (each carries `metadata.github_issue_number`; their
 dispositions follow §4). The rest were verified against the code.
@@ -269,7 +271,7 @@ dispositions follow §4). The rest were verified against the code.
 | `6383a81b` `task_blocked` takes no `task_id` | M / S | Lens task-detail page still carries the "list store-wide and scan" workaround that returns a wrong empty answer |
 | `87866e06` `append_description` | M / S | designed in the task; scaffolding from #419 in place |
 | `e0e31654` `lithos_list` server-side ordering | L / S | cheap: `updated_at` is already in the corpus index cache |
-| `97cd00bb` Chroma semantic coverage gap | re-scope to M / M | acute half done (backfill 2026-07-22, 30% → 100%); drift detection is still Tantivy-only and there is no scheduled reconcile, so a repeat would be invisible. Retitle "Chroma coverage drift alert + scheduled reconcile safeguard", drop [HIGH] |
+| `97cd00bb` Chroma semantic coverage gap | re-scope to M / M | acute half done (backfill 2026-07-22, 30% → 100%); drift detection is still Tantivy-only and there is no scheduled reconcile, so a repeat would be invisible. Retitle "Chroma coverage drift alert + scheduled reconcile safeguard", drop [HIGH]. *Retitled 2026-09-29* |
 
 ### 5.3 Not worth doing (cancel, with reason)
 
@@ -390,6 +392,10 @@ The direction, its workstreams and an October slice are written up as
 ## 7. Next steps
 
 ### 7.1 Already done: close or cancel
+
+*Applied 2026-09-29 (Dave's instruction, same day): the ten issues below are
+closed, the tracker tasks completed or cancelled, and the ten loom mirrors
+closed directly. §7.3's issue and task items were applied at the same time.*
 
 - GitHub: close #420, #378, #200, #308 (fixed); #136, #285 (superseded).
 - Tracker: complete `6dbc3b80`, `69c75e57` with the outcomes in §5.1; close the

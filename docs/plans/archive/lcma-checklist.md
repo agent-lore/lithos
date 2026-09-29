@@ -14,10 +14,11 @@ Dependencies: Phases 0 through 6.5 complete ✅
 > |---|---|
 > | Feedback capture (`fc4b0669`, cancelled) | K0.3 — skill + influx pass `receipt_id`/`cited_nodes`; `contradicts` surfaced by default |
 > | WS2 slice 2 — sweep backfill + re-inference policy (#421) | K0.2 |
-> | WS3 — coherence / temperature / exploration | K0.4 (temperature), K7 (exploration measured via receipts) |
+> | WS3 — coherence / temperature | K0.4 (embedding-dispersion temperature widening Phase-B seeding) |
+> | WS3 — exploration scout | **dropped** (see `lcma-connected-knowledge.md` §4); revisit only if K7's exploration-use rate says the neighbourhood is too narrow |
 > | WS4 — concept nodes (HDBSCAN + gateway + damping) | K3 — compiled entity and concept pages |
-> | WS5 — analogy scout from task-outcome frames | K5 — gated priming |
-> | WS6 — metamemory (fit `rerank_weights` from implicit signals) | K0.1 (rerank fix) + K7.1 (receipt replay) |
+> | WS5 — analogy scout from task-outcome frames | **re-scoped**: frames become K5's priming input, not a retrieval scout |
+> | WS6 — metamemory (fit `rerank_weights` from implicit signals) | **deferred** until K7.1(b) has labels; K0.1 is a hand-tuned rerank repair |
 > | WS7 — Lens read-shape (`lithos_related`, `lithos_edge_list`, `lithos_receipts`) | K1 |
 > | Exit criteria | superseded by `lcma-connected-knowledge.md` §6 |
 
