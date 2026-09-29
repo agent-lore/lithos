@@ -167,6 +167,12 @@ The honest framing for October: **the coordination product is real and
 load-bearing; the knowledge product is an unread inbox with a good retrieval
 engine nobody is pointed at.** Section 6 is about changing that.
 
+*Dave's reading (2026-09-29):* the influx notes are unread because he has been
+waiting on Lens to have a usable knowledge browser before navigating them, not
+because the intake is unwanted. That makes the read-shape work (K1, the input
+to Lens K2) the item that unlocks the corpus for its owner, and it is why the
+phase-4 direction was endorsed the same day.
+
 ## 3. Planning documents
 
 Audit of `docs/plans/*.md`, `docs/plans/deferred/`, `SPECIFICATION.md` §11,
@@ -183,6 +189,7 @@ checked against `src/lithos` and merged PRs.
 | `plans/unified-write-contract.md` | listed error codes `invalid_uuid`, `unsupported_feature`, `path_collision`, `stale_write_conflict` that were never implemented; missed `ambiguous_id_prefix`, `note_not_found`, `content_too_large` | core-code list now mirrors `SPECIFICATION.md` §10.2 |
 | `SPECIFICATION.md` §11 | still listed contradiction resolution, quality scoring and multi-hop links as future although `lithos_conflict_resolve`, `lithos_node_stats` and `graph_depth` ship; §5.6 labelled "MVP 1" while listing MVP-2 tools | struck with pointers; retitled |
 | `plans/future-improvements.md` | 4 of 7 items shipped (conflict resolution, quality signals, namespace fields, task graph); cited the deleted CLI plan | rewritten — see the file |
+| `plans/lcma-checklist.md` | MVP 1/2 and WS1/WS2-slice-1 shipped but never ticked; every remaining MVP-3 item is carried by the phase-4 plan | ticked, then moved to `plans/archive/` with a WS → K mapping banner (Dave's call, 2026-09-29) |
 
 ### 3.2 Dispositions recommended, not applied
 
@@ -191,7 +198,7 @@ checked against `src/lithos` and merged PRs.
 | `plans/cli-admin-client-split.md` | not started; the only CLI direction on record | keep; refresh its command table (`recalibrate-salience`, `extract-entities` exist; `inspect`/`audit` are undocumented in `docs/cli.md`) when the work is scheduled |
 | `plans/final-architecture-guardrails.md` | in force; still mentions `batch.db`, a pre-projection phasing rule and webhook/batch conformance rows for plans that are deferred | light edit when next touched |
 | `plans/target-search-schema.md` | live registry, slightly behind code: `entities` field (extractor v4) unregistered, `created_at` listed but not indexed | small fix when the schema next changes |
-| `plans/lcma-design.md`, `plans/lcma-checklist.md` | see §6 | updated in this PR |
+| `plans/lcma-design.md` | see §6 | §5.5 annotated with the shipped rerank formula in this PR |
 | `plans/deferred/bulk-write-v3.md`, `event-webhooks-plan.md`, `event-guaranteed-delivery-plan.md` | no consumer has asked in 5–7 months; all cite `server.py` closures that no longer exist | keep parked; the influx duplicate rate (§2.1) is the first real argument for a cheap `has_source_url` / bulk-exists check, not for bulk write |
 | `docs/mcp-roadmap-alignment.md` | last updated 2026-03-12; names tools that never existed (`lithos_task_abandon`, `lithos_findings`); omits the task graph, short ids, `/audit`, SSE `resync` | rewrite as a short positioning page or delete; nothing links to it |
 | `docs/cli.md` | omits `inspect` and `audit` | one-hour doc fix |

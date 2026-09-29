@@ -5,11 +5,21 @@ Design reference: `lcma-design.md`
 
 Dependencies: Phases 0 through 6.5 complete ✅
 
-> **Status 2026-09-29.** Prerequisites, MVP 1 and MVP 2 shipped in 2026-04/05 (PRs #126, #163,
-> #170) and are ticked below as a record. MVP 3: WS1 and WS2 slice 1 shipped (0.5.0); WS2
-> slice 2 and WS3–WS7 are not started. The 2026-09 state review
-> (`docs/reviews/2026-09-state-review.md` §6) found a retrieval-quality regression in the
-> shipped substrate and re-sequences the remaining work in `lcma-connected-knowledge.md`.
+> **Archived 2026-09-29.** Prerequisites, MVP 1 and MVP 2 shipped in 2026-04/05 (PRs #126,
+> #163, #170); MVP 3's WS1 and WS2 slice 1 shipped in 0.5.0 (PRs #402, #405, #406, #409,
+> #410). Every remaining MVP-3 item is carried by `../lcma-connected-knowledge.md`, which is
+> the live plan from here:
+>
+> | This checklist | Carried as |
+> |---|---|
+> | Feedback capture (`fc4b0669`, cancelled) | K0.3 — skill + influx pass `receipt_id`/`cited_nodes`; `contradicts` surfaced by default |
+> | WS2 slice 2 — sweep backfill + re-inference policy (#421) | K0.2 |
+> | WS3 — coherence / temperature / exploration | K0.4 (temperature), K7 (exploration measured via receipts) |
+> | WS4 — concept nodes (HDBSCAN + gateway + damping) | K3 — compiled entity and concept pages |
+> | WS5 — analogy scout from task-outcome frames | K5 — gated priming |
+> | WS6 — metamemory (fit `rerank_weights` from implicit signals) | K0.1 (rerank fix) + K7.1 (receipt replay) |
+> | WS7 — Lens read-shape (`lithos_related`, `lithos_edge_list`, `lithos_receipts`) | K1 |
+> | Exit criteria | superseded by `lcma-connected-knowledge.md` §6 |
 
 Exit criteria (all MVPs):
 - LCMA features remain additive and consistent with canonical write contract

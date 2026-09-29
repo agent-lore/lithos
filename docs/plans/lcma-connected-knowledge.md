@@ -1,10 +1,17 @@
 # LCMA phase 4 — connected knowledge
 
-Status: **direction, drafted 2026-09-29** from the state review
-(`docs/reviews/2026-09-state-review.md` §6) and the literature brief
-(`docs/reviews/2026-09-agent-memory-literature.md`). Not yet an epic. Dave
-reacts first; then the K-workstreams below become tracker tasks under a new
-epic and `lcma-design.md` §6 gets a "MVP 4" pointer.
+Status: **direction endorsed by Dave 2026-09-29**, drafted the same day from the
+state review (`docs/reviews/2026-09-state-review.md` §6) and the literature
+brief (`docs/reviews/2026-09-agent-memory-literature.md`). This is the live
+LCMA plan: `archive/lcma-checklist.md` maps every unfinished MVP-3 item onto
+a K-workstream below. Next step: file the K-workstreams as tracker tasks under
+one epic, each with its measurement in the description, and add an "MVP 4"
+pointer to `lcma-design.md` §6.
+
+Context that shaped the priority order: the influx corpus is unread because
+its owner has been waiting on Lens for a knowledge browser, so K1 (the
+read-shape Lens K2 needs) is the item that turns intake into something he can
+navigate, and K0 is what makes the neighbourhoods it renders trustworthy.
 
 Supersedes the *sequencing* of MVP-3 WS3–WS6 in `lcma-design.md` (the
 workstreams themselves stay valid and are folded in below); does not change

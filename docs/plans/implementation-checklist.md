@@ -34,7 +34,7 @@ No phase assignment. Revisit if a concrete consumer appears. Plans: `event-webho
 
 ### Phase 7 — LCMA Rollout
 
-See **`lcma-checklist.md`** for full MVP 1/2/3 breakdown.
+MVP 1/2 and MVP-3 WS1/WS2-slice-1 delivered; the record is `archive/lcma-checklist.md`. Remaining LCMA work is planned in **`lcma-connected-knowledge.md`** (phase 4).
 
 Dependencies: Phases 0 through 6.5 complete ✅
 
