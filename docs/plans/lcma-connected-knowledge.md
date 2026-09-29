@@ -175,6 +175,10 @@ memory kinds (`user`, `feedback`, `project`, `reference`) become recognised
 
 ### K7 — Evaluation harness
 
+K7 measures whether memory helps a caller. Model, prompt and cost evaluation
+of the LLM artefacts themselves is the separate `llm-eval-suite.md` PRD; K3
+does not generate pages until its runner exists.
+
 1. Receipt replay: add `used_ids` to receipts and replay offline to compare
    scout / rerank / temperature configurations (nDCG on used items,
    exploration-use rate). Day-one measurement for K0.

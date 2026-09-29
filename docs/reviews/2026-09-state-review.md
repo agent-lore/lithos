@@ -444,6 +444,7 @@ Ordered by value to the owner; sizes are S (<1 day), M (days), L (a week+).
 | 70% of `lithos_read` calls are unattributed | §2.1 | task, S: make `agent_id` required on read/search/list, or derive it from the session's registered agent |
 | `tool_errors_total` never increments; FastMCP validation errors bypass the JSON logger | §1.2 | task, S |
 | No `gen_ai.*` spans on LLM calls (otel-plan Phase 3) | §3.2 | fold into K0/K7 |
+| No way to validate a model, prompt or budget change, or to measure a cheaper model, for the LLM artefacts Lithos now depends on | §6.1, WS1 rollout record | `docs/plans/llm-eval-suite.md` (this PR, Dave's ask 2026-09-29) → its own epic |
 | `docs/cli.md` omits `inspect`/`audit`; `mcp-roadmap-alignment.md` stale | §3.2 | doc tasks, S |
 | Staging vault debris (`*.md` directory, `.chroma.corrupt-*`) | §1.2 | ops, minutes |
 
