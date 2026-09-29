@@ -1774,7 +1774,7 @@ These are explicitly not part of the initial implementation but may be considere
 
 - Web UI for browsing knowledge
 - Agent Zero memory sync/bridge
-- Knowledge versioning (beyond git). The supported history mechanism is keeping the knowledge directory under git: notes are plain files, every `lithos_write` is a whole-file change, and `expected_version` on `lithos_write`/`lithos_note_update` prevents silent overwrites (`version_conflict`). Commit the vault on a schedule (or after agent sessions) to get diff, blame and restore; Lithos itself keeps no per-note history (decision recorded 2026-09-29, GitHub #49).
+- Knowledge versioning (beyond git). The supported history mechanism is keeping the knowledge directory under git: notes are plain files, every `lithos_write` is a whole-file change, and `expected_version` on `lithos_write`/`lithos_note_update`, when supplied, prevents silent overwrites (`version_conflict`; the guard is optional). Commit the vault on a schedule (or after agent sessions) to get diff, blame and restore; Lithos itself keeps no per-note history (decision recorded 2026-09-29, GitHub #49).
 - Multi-node deployment
 - ~~Access control / namespaces~~ (LCMA MVP 1 introduces advisory `namespace` and `access_scope` frontmatter fields enforced inside `lithos_retrieve`'s scouts. Legacy `lithos_search`/`lithos_read`/`lithos_list` remain unrestricted — caller-context-aware enforcement on those tools is deferred. Not a security control.)
 - ~~Knowledge expiration / TTL~~ (Implemented in Phase 4 via `expires_at`, `ttl_hours`, `lithos_cache_lookup`, and `is_stale` in search results)

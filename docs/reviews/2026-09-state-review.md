@@ -473,4 +473,3 @@ without opening an architecture front:
 Everything in `lcma-connected-knowledge.md` beyond K0/K1/K4-lite is Q4
 material and should be pulled forward only by friction from real use, as the
 August rule says.
-

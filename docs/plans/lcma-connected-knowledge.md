@@ -3,18 +3,20 @@
 Status: **direction endorsed by Dave 2026-09-29**, drafted the same day from the
 state review (`docs/reviews/2026-09-state-review.md` §6) and the literature
 brief (`docs/reviews/2026-09-agent-memory-literature.md`). This is the live
-LCMA plan: `archive/lcma-checklist.md` maps every unfinished MVP-3 item onto
-a K-workstream below. Next step: file the K-workstreams as tracker tasks under
-one epic, each with its measurement in the description, and add an "MVP 4"
-pointer to `lcma-design.md` §6.
+LCMA plan: `archive/lcma-checklist.md` maps each unfinished MVP-3 item onto
+a K-workstream below, or marks it dropped or re-scoped (see §4). Next step:
+file the K-workstreams as tracker tasks under one epic, each with its
+measurement in the description, and add an "MVP 4" pointer to
+`lcma-design.md` §6.
 
 Context that shaped the priority order: the influx corpus is unread because
 its owner has been waiting on Lens for a knowledge browser, so K1 (the
 read-shape Lens K2 needs) is the item that turns intake into something he can
 navigate, and K0 is what makes the neighbourhoods it renders trustworthy.
 
-Supersedes the *sequencing* of MVP-3 WS3–WS6 in `lcma-design.md` (the
-workstreams themselves stay valid and are folded in below); does not change
+Supersedes MVP-3 WS3–WS6 in `lcma-design.md`: their sequencing is replaced
+by the K-workstreams below, and §4 names the parts that are dropped or
+re-scoped (exploration scout, analogy scout, weight fitting); does not change
 the on-disk contract, the write contract, or the privacy-first / optional-LLM
 decisions of 2026-07.
 
@@ -226,26 +228,34 @@ Two epics (agreed 2026-09-29), gated by structure rather than prose:
 1. **Epic A — retrieval honest and visible (October-sized):** K0.1–K0.4, K1,
    read attribution on `lithos_read`/`search`/`list` (K4 and K7 need to know
    who acted), the conformance suite routed through a validating MCP client
-   (so envelope changes in K1 are actually tested), K7.1 receipt replay
-   against the baseline set, and a dated **checkpoint task** that records
-   the top-10 share and coactivation-only share after K0 ships and decides
-   whether Epic B proceeds. **Built by Claude Code sessions** (Dave,
-   2026-09-29), not dispatched through loom, so tasks carry no
-   `trigger:` tags and need no lithos-core sandbox image.
-2. **Epic B — connected knowledge (Q4):** K2, K3, K4, K5, K6, K7.2–5, blocked
+   (so envelope changes in K1 are actually tested), the K7.1(a)
+   prospective concentration check (re-run the 47 held-out queries on a
+   staging copy; no relevance labels needed), and a dated **checkpoint
+   task** that records the top-10 share and coactivation-only share after
+   K0 ships and decides whether Epic B proceeds. The labelled quality
+   comparison (K7.1(b)) is Epic B work, not an Epic A deliverable.
+   **Built by Claude Code sessions** (Dave, 2026-09-29), not dispatched
+   through loom, so tasks carry no `trigger:` tags and need no lithos-core
+   sandbox image.
+2. **Epic B — connected knowledge (Q4):** K2, K3, K4, K5, K6, K7.1(b), K7.2–5, blocked
    by the checkpoint. Its first children are ADR-0009 (machine-owned compiled
    pages, decided above) and the influx note-typing task, filed in the influx
    project (78% of the corpus is `note_type: summary`, so K2's decay-by-kind
    cannot differentiate until intake classifies; confirmed 2026-09-29). Digest-lite (K4's daily note without LLM
    summarisation) may be pulled forward into October if attention allows.
 
-Within Epic A: `K0` → `K1`; K7.1 lands with K0.1. Each task carries its
+Within Epic A: `K0` → `K1`; K7.1(a) lands with K0.1. Each task carries its
 measurement in the description.
 
 ## 6. Success criteria
 
-- `lithos_retrieve` beats `lithos_search` on the receipt-replay metric for
-  every caller, and the top-10 share is under 15%.
+- Epic A (measurable with the prospective check): on the 47-query held-out
+  set the top-10 share is under 15% and the coactivation-only share under
+  10% (baseline 41.5% / 40.1% for non-influx callers).
+- Epic B (needs K7.1(b) candidate receipts and labels): `lithos_retrieve`
+  beats `lithos_search` on nDCG@10 over the labelled held-out set, measured
+  per caller for each agent with at least 20 labelled queries (Dave's own
+  questions and the top three agents by retrieve volume).
 - Every note has been a focus of edge inference at least once; contradictions
   are visible by default and reviewed weekly.
 - `lithos_related` renders a typed, provenanced, titled neighbourhood that
