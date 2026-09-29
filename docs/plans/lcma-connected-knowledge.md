@@ -4,10 +4,11 @@ Status: **direction endorsed by Dave 2026-09-29**, drafted the same day from the
 state review (`docs/reviews/2026-09-state-review.md` §6) and the literature
 brief (`docs/reviews/2026-09-agent-memory-literature.md`). This is the live
 LCMA plan: `archive/lcma-checklist.md` maps each unfinished MVP-3 item onto
-a K-workstream below, or marks it dropped or re-scoped (see §4). Next step:
-file the K-workstreams as tracker tasks under one epic, each with its
-measurement in the description, and add an "MVP 4" pointer to
-`lcma-design.md` §6.
+a K-workstream below, or marks it dropped or re-scoped (see §4). Filed in
+the `lithos-core` tracker on 2026-09-29 as Epic A `1173ae32` (§5, October),
+Epic B `a91ef652` (§5, Q4, blocked by Epic A's checkpoint `e07120d1`) and
+the eval-suite epic `ee397e6c` (`llm-eval-suite.md`); each task carries its
+measurement in the description. `lcma-design.md` §6 "MVP 4" points here.
 
 Context that shaped the priority order: the influx corpus is unread because
 its owner has been waiting on Lens for a knowledge browser, so K1 (the

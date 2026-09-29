@@ -1674,6 +1674,21 @@ kept as **separate gated tasks**, not folded; **Lens is a first-class consumer**
 `lithos_related` neighbourhood is the browse surface); coverage reconcile handled **operationally**,
 not as a design workstream.
 
+## MVP 4 — Connected knowledge (2026-09)
+
+MVP 3 closed on 2026-09-29: WS1, WS2 slice 1 and the substrate fixes shipped;
+the unfinished workstreams were carried into, re-scoped or dropped by
+`lcma-connected-knowledge.md` (see its §4 for the drops: exploration scout,
+analogy scout as a retrieval scout, rerank-weight fitting). That document is
+the live plan. It is tracked as three epics in `lithos-core`: Epic A
+"retrieval honest and visible" (`1173ae32`, October 2026: K0, K1, read
+attribution, conformance suite, the prospective held-out check and a dated
+checkpoint), Epic B "connected knowledge" (`a91ef652`, Q4, blocked by the
+checkpoint: K2–K6, K7), and the LLM eval suite (`ee397e6c`,
+`llm-eval-suite.md`). The pre-change baseline is
+`docs/reviews/2026-09-retrieval-baseline.json`; the archived MVP-3 checklist
+with its mapping is `archive/lcma-checklist.md`.
+
 ---
 
 # 7) Implementation Notes for Lithos Specifically
