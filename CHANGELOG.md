@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+The tool surface grows from 38 to 39 (`lithos_task_edge_delete`).
+
+### Added — coordination API
+
+#### `lithos_task_edge_delete`: task edges can now be removed (task bd66d57c)
+
+Task edges could be created and listed but never removed, so every
+mis-drawn `blocks`, `parent_child` or `waits_on_gate` edge was permanent —
+and the `parent_exists` error told callers to "remove the existing
+parent_child edge before re-parenting", which was impossible.
+`lithos_task_edge_delete(from_task_id, to_task_id, type, agent)` is the
+inverse of upsert: a hard delete keyed on the `(from, to, type)` unique
+index, echoing the resolved endpoint ids + titles and the `type` removed,
+or `edge_not_found` / `invalid_edge_type` as an error envelope. Readiness
+and hierarchy are computed live, so dropping a blocking or gate edge can
+make the dependent ready immediately — the sanctioned way to release a
+waiter from an unwanted gate without falsely completing it — and dropping
+a `parent_child` edge lets the child be re-parented. The `parent_exists`
+message now names the tool. The agent skill (`task-graph.md`) documents
+the new tool; plugin 0.4.1 → 0.4.2.
+
 ## [0.5.0] — 2026-09-26
 
 Seven weeks of work on `main` since 0.4.0: the LCMA phase-3 groundwork

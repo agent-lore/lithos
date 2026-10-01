@@ -808,6 +808,74 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
     @mcp.tool()
     @tool_metrics()
     @tool_span(map_coordination_error=True)
+    async def lithos_task_edge_delete(
+        from_task_id: str,
+        to_task_id: str,
+        type: str,
+        agent: str,
+    ) -> dict[str, Any]:
+        """Remove a typed relation between two tasks.
+
+        The inverse of ``lithos_task_edge_upsert``: deletes exactly the edge
+        identified by ``(from_task_id, to_task_id, type)``. Consequences by
+        type — ``blocks`` / ``waits_on_gate``: the target may become ready
+        immediately; this is the sanctioned way to release a waiter from a
+        gate that is no longer wanted, instead of completing the gate (which
+        records a false outcome) or cancelling it (which strands the waiter).
+        ``parent_child``: the child is detached (no longer returned by
+        ``lithos_task_children``) and may be re-parented with a new upsert.
+        ``discovered_from``: provenance only, nothing else changes.
+
+        Args:
+            from_task_id: Source task (blocker / parent / source); full id or
+                unambiguous >= 6-char prefix.
+            to_task_id: Target task (blocked / child / discovered); full id or
+                unambiguous >= 6-char prefix.
+            type: Edge type of the edge to remove.
+            agent: Agent removing the edge.
+
+        Returns:
+            ``{"success": true}`` with the resolved endpoint ids + titles and
+            the ``type`` removed, or an error envelope (``invalid_edge_type``,
+            ``edge_not_found`` when no such edge exists — including when a
+            full-length endpoint id does not exist; ``task_not_found`` /
+            ``invalid_input`` / ``ambiguous_id_prefix`` only from short-prefix
+            resolution).
+        """
+        from_task_id, from_title = await server.coordination.resolve_task_id(
+            from_task_id, field="from_task_id"
+        )
+        to_task_id, to_title = await server.coordination.resolve_task_id(
+            to_task_id, field="to_task_id"
+        )
+        logger.info(
+            "lithos_task_edge_delete from=%s to=%s type=%s agent=%s",
+            from_task_id,
+            to_task_id,
+            type,
+            agent,
+        )
+        span = get_current_span()
+        span.set_attribute("lithos.agent", agent)
+        span.set_attribute("lithos.edge_type", type)
+        await server.coordination.delete_task_edge(
+            from_task_id=from_task_id,
+            to_task_id=to_task_id,
+            edge_type=type,
+            agent=agent,
+        )
+        return {
+            "success": True,
+            "from_task_id": from_task_id,
+            "from_title": from_title,
+            "to_task_id": to_task_id,
+            "to_title": to_title,
+            "type": type,
+        }
+
+    @mcp.tool()
+    @tool_metrics()
+    @tool_span(map_coordination_error=True)
     async def lithos_task_edge_list(
         task_id: str,
         direction: str = "both",

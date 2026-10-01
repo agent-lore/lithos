@@ -163,6 +163,7 @@ Returns `{success: true, unblocked: [...]}` — `unblocked` lists tasks this com
 - `lithos_task_ready()` / `lithos_task_blocked()` — the workable frontier, and why the rest is stuck (see `task-graph.md`)
 - `lithos_task_children(task_id="...", recursive=True)` — subtasks via hierarchy edges
 - `lithos_task_edge_list(task_id="...")` — dependency/hierarchy edges on a task
+- `lithos_task_edge_delete(from_task_id="...", to_task_id="...", type="...", agent="...")` — remove one edge (see `task-graph.md`)
 
 ---
 

@@ -96,6 +96,29 @@ class TestTaskPrefixAcceptance:
             "to_title": "Blocked",
         }
 
+    async def test_edge_delete_resolves_both_prefixes_and_echoes(self, server: LithosServer):
+        from_id = await _create_task(server, "Blocker")
+        to_id = await _create_task(server, "Blocked")
+        await server.coordination.upsert_task_edge(from_id, to_id, "blocks", "a")
+        result = await call_tool(
+            server,
+            "lithos_task_edge_delete",
+            {
+                "from_task_id": from_id[:8],
+                "to_task_id": to_id[:8],
+                "type": "blocks",
+                "agent": "a",
+            },
+        )
+        assert result == {
+            "success": True,
+            "from_task_id": from_id,
+            "from_title": "Blocker",
+            "to_task_id": to_id,
+            "to_title": "Blocked",
+            "type": "blocks",
+        }
+
     async def test_spawn_resolves_source_prefix(self, server: LithosServer):
         source_id = await _create_task(server, "Source")
         result = await call_tool(

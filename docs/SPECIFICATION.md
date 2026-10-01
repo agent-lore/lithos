@@ -992,6 +992,19 @@ List edges touching a task.
 
 **Returns:** `{ edges: [{ from_task_id, to_task_id, type, direction, metadata, created_by, created_at }] }`. `direction` is relative to `task_id`.
 
+#### `lithos_task_edge_delete`
+Remove a typed relation between two tasks — the inverse of `lithos_task_edge_upsert`.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `from_task_id` | string | Yes | Source task of the edge to remove |
+| `to_task_id` | string | Yes | Target task of the edge to remove |
+| `type` | string | Yes | Edge type — `(from_task_id, to_task_id, type)` identifies exactly one edge |
+| `agent` | string | Yes | Agent removing the edge |
+
+**Returns:** `{ success: true, from_task_id, from_title, to_task_id, to_title, type }` (both endpoints resolved to full ids), or `{ status: "error", code, message }` (codes: `invalid_edge_type`; `edge_not_found` when no such edge exists, including when a full-length endpoint id is unknown; `task_not_found` / `ambiguous_id_prefix` only from short-prefix resolution). A hard delete keyed on the unique index (a point lookup, never a scan); the removal is recorded in the server log and the `coordination_ops` metric, not as a tombstone row. No validation beyond existence applies — removing an edge can never create a cycle, a second parent, or a non-gate blocker. Because readiness, blockers and hierarchy are all computed at query time, the effect is immediate: removing a `blocks` or `waits_on_gate` edge may make `to_task` ready at once (the sanctioned way to release a waiter from an unwanted gate — completing the gate records a false outcome and cancelling it strands the waiter as `blocker_unsatisfiable`); removing a `parent_child` edge detaches the child so it can be re-parented; removing `discovered_from` only drops provenance.
+
 #### `lithos_task_ready`
 Return open tasks whose blocking predecessors are all satisfied (the feasible frontier).
 
@@ -1015,7 +1028,7 @@ Return open tasks that are not ready, each with structured blocker reasons.
 
 #### Hierarchy & Spawn (Phase 2)
 
-Hierarchy uses the `parent_child` edge (purely structural — never blocks the child); `epic` is a roll-up container task type (creatable from Phase 2, excluded from `ready`). Hierarchy is a **forest**: a task has at most one parent — a `parent_child` edge to a child that already has a different parent is rejected with `parent_exists` (re-parenting requires removing the existing edge first). It is also kept acyclic: an edge that would make a task its own ancestor is rejected with `cycle` (the same bounded-traversal check `blocks` edges use). There are **no epic close rules yet** (an epic may still complete with open children — deferred to Phase 4).
+Hierarchy uses the `parent_child` edge (purely structural — never blocks the child); `epic` is a roll-up container task type (creatable from Phase 2, excluded from `ready`). Hierarchy is a **forest**: a task has at most one parent — a `parent_child` edge to a child that already has a different parent is rejected with `parent_exists` (re-parent by removing the existing edge with `lithos_task_edge_delete` first). It is also kept acyclic: an edge that would make a task its own ancestor is rejected with `cycle` (the same bounded-traversal check `blocks` edges use). There are **no epic close rules yet** (an epic may still complete with open children — deferred to Phase 4).
 
 #### `lithos_task_children`
 Return the child tasks of a parent/epic.
@@ -1694,7 +1707,7 @@ lithos --data-dir ./data audit --doc <id> --since 2026-01-01T00:00:00
 Tools indicate routine domain failures through return values, and unexpected backend failures may still surface as MCP-level exceptions.
 
 - **Structured status envelopes**: `lithos_write` returns `{ status: "error", code, message, ... }` for invalid input and contract-level failures
-- **Structured error envelopes on many tools**: `lithos_delete`, `lithos_task_create`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_update`, `lithos_task_cancel`, `lithos_task_get`, `lithos_task_edge_upsert`, `lithos_search`, `lithos_list`, and `lithos_cache_lookup` use `{ status: "error", code, message }` for routine domain failures
+- **Structured error envelopes on many tools**: `lithos_delete`, `lithos_task_create`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_update`, `lithos_task_cancel`, `lithos_task_get`, `lithos_task_edge_upsert`, `lithos_task_edge_delete`, `lithos_search`, `lithos_list`, and `lithos_cache_lookup` use `{ status: "error", code, message }` for routine domain failures
 - **Nullable results**: `lithos_agent_info` returns `null` when the agent is not found
 - **Exceptions**: Unexpected file/index/backend errors may still propagate at the MCP layer
 
@@ -1852,12 +1865,12 @@ These are explicitly not part of the initial implementation but may be considere
 | Graph | `lithos_tags`, `lithos_related` |
 | Agent | `lithos_agent_register`, `lithos_agent_archive`, `lithos_agent_info`, `lithos_agent_list` |
 | Coordination | `lithos_task_create`, `lithos_task_update`, `lithos_task_claim`, `lithos_task_renew`, `lithos_task_release`, `lithos_task_complete`, `lithos_task_cancel`, `lithos_task_reopen`, `lithos_task_list`, `lithos_task_status`, `lithos_task_get`, `lithos_finding_post`, `lithos_finding_list` |
-| Task Graph | `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, `lithos_task_blocked`, `lithos_task_children`, `lithos_task_spawn` |
+| Task Graph | `lithos_task_edge_upsert`, `lithos_task_edge_delete`, `lithos_task_edge_list`, `lithos_task_ready`, `lithos_task_blocked`, `lithos_task_children`, `lithos_task_spawn` |
 | System | `lithos_stats` |
 | LCMA (Phase 7, MVP 1–2) | `lithos_retrieve`, `lithos_edge_upsert`, `lithos_edge_list`, `lithos_conflict_resolve`, `lithos_node_stats` |
 | HTTP | `GET /health`, `GET /events`, `GET /audit` (not MCP tools; see §5.7 and §8.7) |
 
-**Total: 38 MCP tools + 3 HTTP endpoints** (`lithos_agent_archive` retires an agent from the roster without losing its history (#423); `lithos_note_update` adds a frontmatter-only note patch — tags/metadata/title/status without the body — at parity with `lithos_task_update` (#362); task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_reopen` completes the lifecycle (terminal → open, the remediation for stranded dependents) and `lithos_task_update` now accepts terminal tasks (#303); `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
+**Total: 39 MCP tools + 3 HTTP endpoints** (`lithos_task_edge_delete` makes task edges removable — the inverse of upsert, and what the `parent_exists` remedy presumed existed (task bd66d57c); `lithos_agent_archive` retires an agent from the roster without losing its history (#423); `lithos_note_update` adds a frontmatter-only note patch — tags/metadata/title/status without the body — at parity with `lithos_task_update` (#362); task graph Phase 1 added `lithos_task_edge_upsert`, `lithos_task_edge_list`, `lithos_task_ready`, and `lithos_task_blocked`; Phase 2 added `lithos_task_children` and `lithos_task_spawn` plus `parent_task_id`/`epic` on create; Phase 3 added the `gate` task type and `waits_on_gate` edge with no new tools — gates are created via `lithos_task_create` and resolved via `lithos_task_complete`; `lithos_task_reopen` completes the lifecycle (terminal → open, the remediation for stranded dependents) and `lithos_task_update` now accepts terminal tasks (#303); `lithos_task_get` is in the coordination surface; LCMA gained `lithos_conflict_resolve` and `lithos_node_stats` to surface contradiction resolution and per-node retrieval stats; the SSE delivery surface at `/events` and the read-access audit log at `/audit` are now first-class HTTP endpoints alongside `/health`)
 
 ---
 

@@ -3,7 +3,7 @@
 
 # MCP tool catalog
 
-38 tools exposed by the server, grouped by source module. "Touches" lists the core components each handler reaches (via `server.<attr>`). Generated from the code — see `docs/architecture.toml` `[tool_catalog]`.
+39 tools exposed by the server, grouped by source module. "Touches" lists the core components each handler reaches (via `server.<attr>`). Generated from the code — see `docs/architecture.toml` `[tool_catalog]`.
 
 ## Agents
 `lithos.tools.agents`
@@ -103,6 +103,7 @@ lithos_tags(prefix: str | None = None)
 | `lithos_task_claim` | Claim an aspect of a task. | Coordination, Events |
 | `lithos_task_complete` | Mark a task as completed. | CognitiveMemory, Coordination, Events |
 | `lithos_task_create` | Create a new coordination task. | Coordination, Events |
+| `lithos_task_edge_delete` | Remove a typed relation between two tasks. | Coordination |
 | `lithos_task_edge_list` | List edges touching a task. | Coordination |
 | `lithos_task_edge_upsert` | Create or update a typed relation between two tasks. | Coordination |
 | `lithos_task_get` | Get the full record of a single task by ID. | Coordination |
@@ -122,6 +123,7 @@ lithos_task_children(task_id: str, recursive: bool = False, include_closed: bool
 lithos_task_claim(task_id: str, aspect: str, agent: str, ttl_minutes: int = 60)
 lithos_task_complete(task_id: str, agent: str, outcome: str | None = None, cited_nodes: list[str] | None = None, misleading_nodes: list[str] | None = None, receipt_id: str | None = None)
 lithos_task_create(title: str, agent: str, description: str | None = None, tags: list[str] | None = None, metadata: dict[str, Any] | None = None, task_type: str = 'task', depends_on: list[str] | None = None, parent_task_id: str | None = None)
+lithos_task_edge_delete(from_task_id: str, to_task_id: str, type: str, agent: str)
 lithos_task_edge_list(task_id: str, direction: str = 'both', types: list[str] | None = None)
 lithos_task_edge_upsert(from_task_id: str, to_task_id: str, type: str, agent: str, metadata: dict[str, Any] | None = None)
 lithos_task_get(task_id: str)

@@ -2121,7 +2121,7 @@ class CoordinationService:
                         "parent_exists",
                         f"task {to_task_id} already has a parent ({next(iter(other_parents))}); a "
                         "task may have at most one parent. Remove the existing parent_child edge "
-                        "before re-parenting.",
+                        "(lithos_task_edge_delete) before re-parenting.",
                     )
                 # Adding parent(from)->child(to) is a cycle if the parent is
                 # already a descendant of the child (reverse=False = down the
@@ -2150,6 +2150,45 @@ class CoordinationService:
 
         logger.info(
             "Task edge upserted: from=%s to=%s type=%s agent=%s",
+            from_task_id,
+            to_task_id,
+            edge_type,
+            agent,
+        )
+        return True
+
+    @traced("lithos.coordination.delete_task_edge")
+    async def delete_task_edge(
+        self, from_task_id: str, to_task_id: str, edge_type: str, agent: str
+    ) -> bool:
+        """Remove the ``edge_type`` edge ``from_task_id -> to_task_id``.
+
+        A point delete on the ``(from, to, type)`` unique key — no cycle,
+        parent or gate checks apply (removing an edge cannot violate them),
+        and readiness/hierarchy are computed live so nothing else changes.
+
+        Raises:
+            CoordinationError: ``invalid_edge_type`` or ``edge_not_found``.
+        """
+        if edge_type not in ACCEPTED_EDGE_TYPES:
+            raise CoordinationError(
+                "invalid_edge_type",
+                f"edge type '{edge_type}' is not accepted (accepted: {sorted(ACCEPTED_EDGE_TYPES)}).",
+            )
+        lithos_metrics.coordination_ops.add(1, {"op": "delete_task_edge"})
+        await self.ensure_agent_known(agent)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM task_edges WHERE from_task_id = ? AND to_task_id = ? AND type = ?",
+                (from_task_id, to_task_id, edge_type),
+            )
+            if cursor.rowcount == 0:
+                raise CoordinationError(
+                    "edge_not_found", f"no {edge_type} edge from {from_task_id} to {to_task_id}."
+                )
+            await db.commit()
+        logger.info(
+            "Task edge deleted: from=%s to=%s type=%s agent=%s",
             from_task_id,
             to_task_id,
             edge_type,

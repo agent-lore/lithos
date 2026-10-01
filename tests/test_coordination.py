@@ -393,6 +393,7 @@ class TestAgentArchive:
             "release_claim",
             "post_finding",
             "upsert_task_edge",
+            "delete_task_edge",
             "spawn_task",
         ],
     )
@@ -436,6 +437,9 @@ class TestAgentArchive:
             await svc.post_finding(task_id, actor, "found")
         elif op == "upsert_task_edge":
             await svc.upsert_task_edge(other_id, task_id, "blocks", actor)
+        elif op == "delete_task_edge":
+            await svc.upsert_task_edge(other_id, task_id, "blocks", "fixture-agent")
+            await svc.delete_task_edge(other_id, task_id, "blocks", actor)
         elif op == "spawn_task":
             await svc.spawn_task(task_id, "Spawned", actor)
 
