@@ -57,6 +57,7 @@ EXPECTED_TOOLS = [
     "lithos_task_claim",
     "lithos_task_complete",
     "lithos_task_create",
+    "lithos_task_edge_delete",
     "lithos_task_edge_list",
     "lithos_task_edge_upsert",
     "lithos_task_get",
@@ -115,6 +116,17 @@ VALIDATION_CASES: list[tuple[str, dict[str, Any], str]] = [
         "lithos_note_update",
         {"id": "00000000-0000-0000-0000-000000000000", "agent": "a"},
         "invalid_input",
+    ),
+    # task-graph family: a delete of an edge that does not exist
+    (
+        "lithos_task_edge_delete",
+        {
+            "from_task_id": "00000000-0000-0000-0000-000000000000",
+            "to_task_id": "00000000-0000-0000-0000-000000000001",
+            "type": "blocks",
+            "agent": "a",
+        },
+        "edge_not_found",
     ),
     # metadata_match validation (previously the legacy invalid_input dialect)
     ("lithos_list", {"metadata_match": {"k": ["not-a-scalar"]}}, "invalid_input"),

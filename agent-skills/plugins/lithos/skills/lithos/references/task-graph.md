@@ -46,8 +46,22 @@ Rules:
 - **Never put `depends_on` or `blocked_on` in task metadata** — rejected with `invalid_metadata_key`. Dependencies are first-class edges, not metadata
 - Referenced tasks must already exist (`task_not_found`); self-edges are rejected (`self_edge`)
 - Blocking and hierarchy edges are cycle-checked on write — an edge that would close a cycle is rejected with `cycle`
-- A task can have at most one parent (`parent_exists`)
+- A task can have at most one parent (`parent_exists`) — re-parent by deleting the existing edge first
 - `waits_on_gate` requires the `from` task to be a gate (`not_a_gate`)
+
+Removing an edge (the inverse of upsert; `(from, to, type)` names exactly one edge):
+
+```
+lithos_task_edge_delete(
+    from_task_id="<prerequisite>",
+    to_task_id="<dependent>",
+    type="blocks",
+    agent="<id>"
+)
+```
+
+- Takes effect immediately: dropping a `blocks` or `waits_on_gate` edge can make the dependent ready; dropping `parent_child` detaches the child so it can be re-parented
+- `edge_not_found` if no edge of that type exists in that direction — check `lithos_task_edge_list` for the exact `from`/`to`/`type`
 
 ---
 
@@ -75,7 +89,7 @@ Each blocked task carries a `blockers` list:
 | `task` | Predecessor still open | Work/complete the predecessor first |
 | `gate` | Gate not yet resolved | Resolve the gate (complete the gate task, or wait for a timer) |
 | `blocker_unsatisfiable` | Predecessor or gate was **cancelled** — permanently blocked | `lithos_task_reopen` the cancelled blocker, or re-route the edges |
-| `cycle` | Dependency chain forms a cycle | Remove an edge to break the cycle |
+| `cycle` | Dependency chain forms a cycle | `lithos_task_edge_delete` one edge to break the cycle |
 
 Ripple effects: `lithos_task_complete` returns `unblocked` (task IDs this completion made ready); `lithos_task_reopen` returns `reblocked` (dependents that lost readiness).
 
@@ -134,6 +148,7 @@ lithos_task_edge_upsert(
 - A gate resolves when its task is **completed** — or automatically for an open `timer` gate whose `ready_at` has passed
 - A **cancelled** gate leaves waiters permanently blocked (`blocker_unsatisfiable`)
 - Gates are excluded from ready — resolve them, don't work them
+- To release a waiter from a gate that is no longer wanted, `lithos_task_edge_delete` the `waits_on_gate` edge — don't complete the gate (records a false outcome) or cancel it (strands the waiter)
 
 ---
 

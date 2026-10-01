@@ -186,6 +186,7 @@ Run both task queries and union results — no single query covers all agents' c
 - **Don't use `lithos_search` when quality matters** — it doesn't enforce access scopes or track salience. Use `lithos_retrieve` for actual work
 - **Don't set only tags OR only metadata on tasks** — set both. Loom queries by `metadata.project`; Agent Zero queries by tag
 - **Don't put `depends_on` or `blocked_on` in task metadata** — rejected with `invalid_metadata_key`. Dependencies are first-class: use the `depends_on` parameter on `lithos_task_create`, or `lithos_task_edge_upsert`
+- **Don't complete or cancel a gate just to release its waiter** — completing records a false outcome and cancelling strands the waiter. Remove the `waits_on_gate` edge with `lithos_task_edge_delete` instead
 - **`metadata` reserved keys** — free-form note metadata keys must not collide with reserved frontmatter fields (`id`, `title`, `tags`, `status`, `note_type`, ...) or they return `invalid_input`. Full list in `references/error-handling.md`
 - **Shell escaping** — if using a CLI wrapper, content with backticks or JSON breaks arg parsing. Write to a temp file instead
 - **Optimistic concurrency** — use `expected_version` on updates when concurrent edits are possible. On conflict, re-read and retry

@@ -413,6 +413,28 @@ class TestEpicAndHierarchy:
         incoming = await coordination_service.list_task_edges(child, direction="incoming")
         assert [e["from_task_id"] for e in incoming] == [p1]
 
+    async def test_reparent_after_deleting_parent_edge(
+        self, coordination_service: CoordinationService
+    ):
+        # The parent_exists message tells callers to remove the existing edge
+        # first — the delete must make that possible (task bd66d57c).
+        p1 = await _mk(coordination_service, "P1")
+        p2 = await _mk(coordination_service, "P2")
+        child = await _mk(coordination_service, "Child", parent_task_id=p1)
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.upsert_task_edge(p2, child, "parent_child", "a")
+        assert exc.value.code == "parent_exists"
+        assert "lithos_task_edge_delete" in exc.value.message
+
+        assert await coordination_service.delete_task_edge(p1, child, "parent_child", "a") is True
+        assert await coordination_service.list_task_edges(child, direction="incoming") == []
+        assert child not in _ids(await coordination_service.list_children(p1))
+
+        await coordination_service.upsert_task_edge(p2, child, "parent_child", "a")
+        incoming = await coordination_service.list_task_edges(child, direction="incoming")
+        assert [e["from_task_id"] for e in incoming] == [p2]
+        assert child in _ids(await coordination_service.list_children(p2))
+
     async def test_reparent_same_parent_is_idempotent(
         self, coordination_service: CoordinationService
     ):
@@ -910,6 +932,135 @@ class TestBackfillMigration:
         assert a_row["blockers"][0]["kind"] == "cycle"
 
 
+# ==================== Edges: delete ====================
+
+
+class TestTaskEdgeDelete:
+    async def test_delete_edge_roundtrip(self, coordination_service: CoordinationService):
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B")
+        await coordination_service.upsert_task_edge(a, b, "blocks", "a", metadata={"v": 1})
+
+        assert await coordination_service.delete_task_edge(a, b, "blocks", "a") is True
+        assert await coordination_service.list_task_edges(a) == []
+        assert await coordination_service.list_task_edges(b) == []
+
+    async def test_delete_blocks_edge_makes_dependent_ready(
+        self, coordination_service: CoordinationService
+    ):
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B")
+        await coordination_service.upsert_task_edge(a, b, "blocks", "a")
+        assert b not in _ids(await coordination_service.list_ready())
+
+        await coordination_service.delete_task_edge(a, b, "blocks", "a")
+        assert b in _ids(await coordination_service.list_ready())
+        assert b not in _ids(await coordination_service.list_blocked())
+
+    async def test_delete_waits_on_gate_releases_waiter_without_resolving_gate(
+        self, coordination_service: CoordinationService
+    ):
+        # The sanctioned way to drop an unwanted gate: the waiter is released
+        # while the gate itself stays open (no false completion, no cancel
+        # that would strand the waiter as blocker_unsatisfiable).
+        gate = await _gate(coordination_service, "human")
+        task = await _mk(coordination_service, "Task")
+        await coordination_service.upsert_task_edge(gate, task, "waits_on_gate", "a")
+        assert task not in _ids(await coordination_service.list_ready())
+
+        await coordination_service.delete_task_edge(gate, task, "waits_on_gate", "a")
+        assert task in _ids(await coordination_service.list_ready())
+        gate_row = await coordination_service.get_task(gate)
+        assert gate_row is not None and gate_row.status == "open"
+
+    async def test_delete_only_removes_the_named_type(
+        self, coordination_service: CoordinationService
+    ):
+        # (from, to, type) is the key: a blocks edge survives a parent_child
+        # delete on the same pair, which reports edge_not_found.
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B")
+        await coordination_service.upsert_task_edge(a, b, "blocks", "a")
+        await coordination_service.upsert_task_edge(a, b, "discovered_from", "a")
+
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.delete_task_edge(a, b, "parent_child", "a")
+        assert exc.value.code == "edge_not_found"
+        await coordination_service.delete_task_edge(a, b, "discovered_from", "a")
+        remaining = await coordination_service.list_task_edges(a, direction="outgoing")
+        assert [e["type"] for e in remaining] == ["blocks"]
+
+    async def test_delete_is_directional(self, coordination_service: CoordinationService):
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B")
+        await coordination_service.upsert_task_edge(a, b, "blocks", "a")
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.delete_task_edge(b, a, "blocks", "a")
+        assert exc.value.code == "edge_not_found"
+        assert len(await coordination_service.list_task_edges(a)) == 1
+
+    async def test_delete_missing_edge_raises_edge_not_found(
+        self, coordination_service: CoordinationService
+    ):
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B")
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.delete_task_edge(a, b, "blocks", "a")
+        assert exc.value.code == "edge_not_found"
+
+    async def test_delete_invalid_edge_type(self, coordination_service: CoordinationService):
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B")
+        with pytest.raises(CoordinationError) as exc:
+            await coordination_service.delete_task_edge(a, b, "relates_to", "a")
+        assert exc.value.code == "invalid_edge_type"
+
+    async def test_delete_clears_cancelled_blocker(self, coordination_service: CoordinationService):
+        # A cancelled predecessor leaves the dependent blocker_unsatisfiable;
+        # dropping the edge is the re-route remedy the blocker message offers.
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B")
+        await coordination_service.upsert_task_edge(a, b, "blocks", "a")
+        await coordination_service.cancel_task(a, "a")
+        blocked = await coordination_service.list_blocked()
+        b_row = next(t for t in blocked if t["id"] == b)
+        assert b_row["blockers"][0]["kind"] == "blocker_unsatisfiable"
+
+        await coordination_service.delete_task_edge(a, b, "blocks", "a")
+        assert b in _ids(await coordination_service.list_ready())
+
+    async def test_delete_breaks_backfilled_cycle(self, coordination_service: CoordinationService):
+        # Cycles can only exist via the legacy backfill (write-time rejection
+        # otherwise); deleting one member edge is how an agent breaks them.
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B")
+        await coordination_service.upsert_task_edge(a, b, "blocks", "a")
+        async with aiosqlite.connect(coordination_service.db_path) as db:
+            await db.execute(
+                "INSERT INTO task_edges (from_task_id, to_task_id, type, created_by) "
+                "VALUES (?, ?, 'blocks', 'legacy')",
+                (b, a),
+            )
+            await db.commit()
+        blocked = await coordination_service.list_blocked()
+        assert {t["blockers"][0]["kind"] for t in blocked if t["id"] in (a, b)} == {"cycle"}
+
+        await coordination_service.delete_task_edge(b, a, "blocks", "a")
+        ready = _ids(await coordination_service.list_ready())
+        assert a in ready and b not in ready
+        blocked = await coordination_service.list_blocked()
+        assert next(t for t in blocked if t["id"] == b)["blockers"][0]["kind"] == "task"
+
+    async def test_deleted_edge_can_be_recreated(self, coordination_service: CoordinationService):
+        a = await _mk(coordination_service, "A")
+        b = await _mk(coordination_service, "B")
+        await coordination_service.upsert_task_edge(a, b, "blocks", "a")
+        await coordination_service.delete_task_edge(a, b, "blocks", "a")
+        await coordination_service.upsert_task_edge(a, b, "blocks", "a", metadata={"again": True})
+        edges = await coordination_service.list_task_edges(a, direction="outgoing")
+        assert len(edges) == 1 and edges[0]["metadata"] == {"again": True}
+
+
 # ==================== Server-level tool envelopes ====================
 
 
@@ -960,6 +1111,57 @@ class TestServerTaskGraphTools:
         )
         assert res["status"] == "error"
         assert res["code"] == "cycle"
+
+    async def test_edge_delete_tool_echoes_ids_and_envelope(self, server: LithosServer):
+        a = await server.coordination.create_task(title="A", agent="a")
+        b = await server.coordination.create_task(title="B", agent="a")
+        await _call(
+            server,
+            "lithos_task_edge_upsert",
+            from_task_id=a,
+            to_task_id=b,
+            type="blocks",
+            agent="a",
+        )
+        assert b not in {t["id"] for t in (await _call(server, "lithos_task_ready"))["tasks"]}
+
+        res = await _call(
+            server,
+            "lithos_task_edge_delete",
+            from_task_id=a[:8],
+            to_task_id=b[:8],
+            type="blocks",
+            agent="a",
+        )
+        assert res == {
+            "success": True,
+            "from_task_id": a,
+            "from_title": "A",
+            "to_task_id": b,
+            "to_title": "B",
+            "type": "blocks",
+        }
+        assert b in {t["id"] for t in (await _call(server, "lithos_task_ready"))["tasks"]}
+
+        res = await _call(
+            server,
+            "lithos_task_edge_delete",
+            from_task_id=a,
+            to_task_id=b,
+            type="blocks",
+            agent="a",
+        )
+        assert res["status"] == "error"
+        assert res["code"] == "edge_not_found"
+
+    async def test_edge_delete_tool_invalid_type_envelope(self, server: LithosServer):
+        a = await server.coordination.create_task(title="A", agent="a")
+        b = await server.coordination.create_task(title="B", agent="a")
+        res = await _call(
+            server, "lithos_task_edge_delete", from_task_id=a, to_task_id=b, type="bogus", agent="a"
+        )
+        assert res["status"] == "error"
+        assert res["code"] == "invalid_edge_type"
 
     async def test_complete_returns_unblocked(self, server: LithosServer):
         a = await server.coordination.create_task(title="A", agent="a")
