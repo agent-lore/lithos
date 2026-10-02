@@ -832,7 +832,6 @@ async def scout_contradictions(
             to_id = str(edge["to_id"])
             counterpart_id = to_id if from_id == node_id else from_id
 
-            # Verify counterpart exists
             if not knowledge.has_document(counterpart_id):
                 continue
 

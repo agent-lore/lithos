@@ -141,13 +141,12 @@ def serve(
         logger.info("MCP server starting: transport=%s", transport)
 
         if transport == "stdio":
-            # Run with stdio transport
             await server.mcp.run_stdio_async(show_banner=False)
         else:
             # Run the HTTP transport, which exposes both /mcp (StreamableHTTP)
             # and /sse (legacy SSE) on the same port (#304).
             # Uvicorn loggers propagate to the root logger, which already has the
-            # JSON handler installed by setup_logging() below.
+            # JSON handler installed by setup_logging() in the ``cli`` group callback.
             click.echo(f"Listening on http://{host}:{port} (/mcp StreamableHTTP, /sse legacy)")
             await server.serve_http(
                 host=host,
@@ -333,15 +332,12 @@ def validate(ctx: click.Context, fix: bool) -> None:
             try:
                 doc, _ = await knowledge.read(path=str(relative_path))
 
-                # Check for missing ID
                 if not doc.id:
                     issues.append((str(relative_path), "missing_id", "No UUID in frontmatter"))
 
-                # Check for missing title
                 if not doc.title:
                     issues.append((str(relative_path), "missing_title", "No title in frontmatter"))
 
-                # Check for missing author
                 if not doc.metadata.author:
                     issues.append(
                         (str(relative_path), "missing_author", "No author in frontmatter")
@@ -353,21 +349,17 @@ def validate(ctx: click.Context, fix: bool) -> None:
             except Exception as e:
                 issues.append((str(relative_path), "parse_error", str(e)))
 
-        # Check for broken links
         broken_links = graph.get_broken_links()
         for _source_id, source_title, target in broken_links:
             issues.append((source_title, "broken_link", f"Link to '{target}' not found"))
 
-        # Check for ambiguous links
         ambiguous = graph.get_ambiguous_links()
         for filename, paths in ambiguous:
             issues.append((filename, "ambiguous", f"Multiple files match: {', '.join(paths)}"))
 
-        # Report issues
         if issues:
             click.echo("Issues found:\n")
 
-            # Group by type
             by_type: dict[str, list[tuple[str, str]]] = {}
             for file, issue_type, message in issues:
                 if issue_type not in by_type:
@@ -434,10 +426,8 @@ def stats(ctx: click.Context) -> None:
 
     async def show_stats() -> None:
         search = await SearchEngine.create(config)
-        # Initialize coordination DB
         await coordination.initialize()
 
-        # Load graph cache
         graph.load_cache()
 
         # Get counts
@@ -686,9 +676,6 @@ def extract_entities_cmd(ctx: click.Context, dry_run: bool, force: bool) -> None
                 f"entities on touched docs: {before_count} -> {after_count}"
                 f" (mean {before_count / updated:.1f} -> {after_count / updated:.1f} per doc)"
             )
-        # The "now run `lithos reconcile`" advice that used to print here is
-        # gone: routing through the intake re-indexes the derived views inline,
-        # so there is no drift left to repair.
 
     asyncio.run(run())
 

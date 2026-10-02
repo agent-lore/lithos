@@ -142,11 +142,9 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.is_update", id is not None)
 
-        # Validate ttl_hours / expires_at mutual exclusion
         if ttl_hours is not None and expires_at is not None:
             return invalid_input_envelope("Provide either ttl_hours or expires_at, not both.")
 
-        # Validate ttl_hours
         if ttl_hours is not None and (
             not isinstance(ttl_hours, (int, float))
             or math.isnan(ttl_hours)
@@ -170,7 +168,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 f"Invalid status: {status!r}. Must be one of {sorted(VALID_STATUSES)}"
             )
 
-        # Validate summaries shape
         if summaries is not None:
             if not isinstance(summaries, dict):
                 return invalid_input_envelope(
@@ -204,7 +201,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         if access_scope == "task" and id is None and not source_task:
             return invalid_input_envelope("access_scope='task' requires source_task")
 
-        # Emit freshness span attributes
         if ttl_hours is not None:
             span.set_attribute("freshness.ttl_hours", ttl_hours)
         elif expires_at is not None and expires_at != "":

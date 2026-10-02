@@ -485,12 +485,10 @@ class CoordinationService:
 
     @property
     def config(self) -> LithosConfig:
-        """Get configuration."""
         return self._config or get_config()
 
     @property
     def db_path(self) -> Path:
-        """Get database path."""
         if self._db_path:
             return self._db_path
         return self.config.storage.coordination_db_path
@@ -1780,12 +1778,6 @@ class CoordinationService:
     ) -> tuple[bool, datetime | None]:
         """Claim an aspect of a task.
 
-        Args:
-            task_id: Task ID
-            aspect: Aspect being claimed
-            agent: Agent making the claim
-            ttl_minutes: Claim duration in minutes
-
         Returns:
             Tuple of (success, expires_at)
         """
@@ -2846,7 +2838,6 @@ class CoordinationService:
             row = await cursor.fetchone()
             agents = row[0] if row else 0
 
-            # Count active tasks
             cursor = await db.execute("SELECT COUNT(*) FROM tasks WHERE status = 'open'")
             row = await cursor.fetchone()
             active_tasks = row[0] if row else 0

@@ -133,8 +133,8 @@ class SearchConfig(BaseModel):
 class CoordinationConfig(BaseModel):
     """Coordination configuration."""
 
-    claim_default_ttl_minutes: int = 60  # minutes
-    claim_max_ttl_minutes: int = 480  # minutes
+    claim_default_ttl_minutes: int = 60
+    claim_max_ttl_minutes: int = 480
 
 
 class TelemetryConfig(BaseModel):
@@ -333,7 +333,7 @@ class LcmaConfig(BaseModel):
     salience_misleading_penalty: float = Field(default=0.05, ge=0.0)
     salience_ignored_penalty: float = Field(default=0.02, ge=0.0)
 
-    # --- Rerank composite weights (previously hardcoded 0.1 coefficients) ------
+    # --- Rerank composite weights ----------------------------------------------
     # Added to the scout-weighted base score; these are outside the rerank_weights
     # bucket (which must sum to 1.0) and need not normalise.
     rerank_salience_weight: float = Field(default=0.1, ge=0.0)
@@ -357,7 +357,6 @@ class LcmaConfig(BaseModel):
     @classmethod
     def _fill_and_renormalize_rerank_weights(cls, value: dict[str, float]) -> dict[str, float]:
         valid_keys = set(_DEFAULT_RERANK_WEIGHTS.keys())
-        # Reject unknown keys
         unknown = set(value.keys()) - valid_keys
         if unknown:
             raise ValueError(
@@ -383,7 +382,6 @@ class LcmaConfig(BaseModel):
     @field_validator("note_type_priors", mode="after")
     @classmethod
     def _fill_and_validate_note_type_priors(cls, value: dict[str, float]) -> dict[str, float]:
-        # Reject unknown keys
         unknown = set(value.keys()) - _LCMA_NOTE_TYPES
         if unknown:
             raise ValueError(

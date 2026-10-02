@@ -564,7 +564,7 @@ async def _run_retrieve_impl(
 
         # Contradictions — a conflict producer (not a candidate scout), fired only
         # when surface_conflicts is set. Recorded in executed_scouts so it shows up
-        # in the scouts_fired audit trail (it was previously never recorded).
+        # in the scouts_fired audit trail.
         if surface_conflicts:
             try:
                 conflicts_found = await scout_contradictions(
@@ -625,7 +625,6 @@ async def _run_retrieve_impl(
             },
         )
 
-        # Apply limit
         final_candidates = reranked[:limit]
         final_node_ids = [c.node_id for c in final_candidates]
         # Build receipt-shaped final_nodes: id + reasons + scouts so the
@@ -752,10 +751,8 @@ async def _run_retrieve_impl(
             try:
                 dom_ns = _dominant_namespace(final_node_ids, knowledge)
 
-                # Batch-increment node_stats for all final nodes
                 await stats_store.increment_node_stats_batch(final_node_ids)
 
-                # Batch-increment coactivation for all unordered pairs
                 pairs = list(itertools.combinations(final_node_ids, 2))
                 await stats_store.increment_coactivation_batch(pairs, namespace=dom_ns)
                 logger.debug(

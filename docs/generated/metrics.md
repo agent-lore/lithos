@@ -14,7 +14,7 @@ lower a budget after improving the code to lock in the gain.
 | `component_cycles` | 0 | 0 | 0 |
 | `cross_component_edges` | 74 | 74 | 0 |
 | `cross_module_private_refs` | 31 | 42 | 11 |
-| `max_module_lines` | 2875 | 2900 | 25 |
+| `max_module_lines` | 2866 | 2900 | 34 |
 | `module_cycles` | 1 | 1 | 0 |
 | `modules_over_800_lines` | 12 | 12 | 0 |
 | `tests_private_imports` | 89 | 89 | 0 |
@@ -34,28 +34,28 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| Codec | 1 | 808 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
-| CognitiveMemory | 1 | 1158 | 953 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
-| Config | 1 | 546 | 378 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
-| Coordination | 3 | 3235 | 2729 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
-| Entrypoints | 13 | 6345 | 5122 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 15 |
+| Codec | 1 | 806 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
+| CognitiveMemory | 1 | 1156 | 953 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
+| Config | 1 | 544 | 378 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
+| Coordination | 3 | 3217 | 2717 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
+| Entrypoints | 13 | 6319 | 5121 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 15 |
 | Errors | 2 | 276 | 205 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 351 | 282 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
-| Graph | 2 | 1384 | 1126 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
+| Graph | 2 | 1307 | 1086 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | IdResolution | 1 | 82 | 64 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
 | Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
-| Knowledge | 3 | 2141 | 1720 | 5 | 8 | 0.62 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
-| LCMA | 12 | 5553 | 4479 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 18 |
-| Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
+| Knowledge | 3 | 2133 | 1720 | 5 | 8 | 0.62 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
+| LCMA | 12 | 5548 | 4479 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 18 |
+| Logging | 1 | 164 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
-| Search | 1 | 1943 | 1576 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 5 |
+| Search | 1 | 1936 | 1574 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 5 |
 | SqliteStore | 1 | 279 | 226 | 2 | 1 | 0.33 | 10 (`lithos.async_sqlite_store.AsyncSqliteStore._session`) | 0 |
-| Telemetry | 1 | 1312 | 1021 | 9 | 1 | 0.10 | 19 (`lithos.telemetry.setup_telemetry`) | 1 |
+| Telemetry | 1 | 1311 | 1021 | 9 | 1 | 0.10 | 19 (`lithos.telemetry.setup_telemetry`) | 1 |
 
 ## Size
 
-- Modules: **47**, lines: **26732**, SLOC: **21538**
-- Largest module: `lithos.coordination` (2875 lines)
+- Modules: **47**, lines: **26582**, SLOC: **21483**
+- Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
   - `lithos.cognitive_memory`
@@ -153,4 +153,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.88** (50282 test lines / 26732 source lines)
+- Test-to-source line ratio: **1.89** (50282 test lines / 26582 source lines)

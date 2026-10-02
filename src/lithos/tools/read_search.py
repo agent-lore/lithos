@@ -274,8 +274,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         logger.info("lithos_search mode=%s results=%d", mode, len(results_payload))
 
         # Audit log every returned document in a single batch write — fire-and-forget.
-        # Using log_access_batch avoids N concurrent SQLite connections (previously
-        # one asyncio.create_task per result document).
+        # Using log_access_batch avoids N concurrent SQLite connections.
         audit_agent = agent_id or "unknown"
         asyncio.create_task(  # noqa: RUF006
             server.coordination.log_access_batch(

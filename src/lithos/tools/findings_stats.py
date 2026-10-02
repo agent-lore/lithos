@@ -168,14 +168,12 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         # Index drift: knowledge corpus vs Tantivy index
         index_drift_detected = tantivy_doc_count is not None and tantivy_doc_count != total_docs
 
-        # Get coordination stats
         coord_stats = await server.coordination.get_stats()
 
         # Update cached fields for synchronous OTEL gauge callbacks
         server._cached_active_claims = coord_stats.get("open_claims", 0)
         server._cached_agent_count = coord_stats.get("agents", 0)
 
-        # Get tag count
         tags = await server.knowledge.get_all_tags()
 
         # Unresolved wiki-links: nodes in the graph that have no
