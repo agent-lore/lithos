@@ -808,10 +808,12 @@ collection.count()
         """
         if self._model is None:
             raise RuntimeError("embedding model not loaded")
-        # ``get_sentence_embedding_dimension`` is an O(1) attribute read on
-        # the loaded model — exercises that the model is structurally
-        # usable without doing any tensor work.
-        if self._model.get_sentence_embedding_dimension() is None:
+        # ``get_embedding_dimension`` is an O(1) attribute read on the loaded
+        # model — exercises that the model is structurally usable without
+        # doing any tensor work. (Renamed from ``get_sentence_embedding_dimension``
+        # in sentence-transformers 5.4; the old name logs a FutureWarning on
+        # every health probe and will be removed.)
+        if self._model.get_embedding_dimension() is None:
             raise RuntimeError("embedding model has no sentence-embedding dimension")
 
     @property

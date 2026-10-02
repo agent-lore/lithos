@@ -461,8 +461,8 @@
         "classes": 12,
         "functions": 63,
         "largest_module": "lithos.search",
-        "largest_module_lines": 1941,
-        "lines": 1941,
+        "largest_module_lines": 1943,
+        "lines": 1943,
         "modules": 1,
         "public_symbols": 15,
         "sloc": 1576
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 26730,
+    "total_lines": 26732,
     "total_modules": 47,
     "total_sloc": 21538
   },
   "tests": {
     "ratio": 1.88,
-    "src_lines": 26730,
+    "src_lines": 26732,
     "test_lines": 50282
   }
 }

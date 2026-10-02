@@ -48,13 +48,13 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | LCMA | 12 | 5553 | 4479 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 18 |
 | Logging | 1 | 166 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
-| Search | 1 | 1941 | 1576 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 5 |
+| Search | 1 | 1943 | 1576 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 5 |
 | SqliteStore | 1 | 279 | 226 | 2 | 1 | 0.33 | 10 (`lithos.async_sqlite_store.AsyncSqliteStore._session`) | 0 |
 | Telemetry | 1 | 1312 | 1021 | 9 | 1 | 0.10 | 19 (`lithos.telemetry.setup_telemetry`) | 1 |
 
 ## Size
 
-- Modules: **47**, lines: **26730**, SLOC: **21538**
+- Modules: **47**, lines: **26732**, SLOC: **21538**
 - Largest module: `lithos.coordination` (2875 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -153,4 +153,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.88** (50282 test lines / 26730 source lines)
+- Test-to-source line ratio: **1.88** (50282 test lines / 26732 source lines)
