@@ -66,7 +66,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         if not namespace:
             return error_envelope("invalid_input", "namespace is required")
 
-        # Validate evidence type
         if evidence is not None and not isinstance(evidence, (dict, list)):
             return error_envelope(
                 "invalid_input",

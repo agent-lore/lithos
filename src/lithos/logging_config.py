@@ -86,11 +86,9 @@ class LithosJsonFormatter(_JsonFormatter):
         # Remove asctime if present (we replaced it above)
         log_data.pop("asctime", None)
 
-        # Rename levelname → level
         if "levelname" in log_data:
             log_data["level"] = log_data.pop("levelname")
 
-        # Rename name → logger
         if "name" in log_data:
             log_data["logger"] = log_data.pop("name")
 

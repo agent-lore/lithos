@@ -405,7 +405,6 @@ class TantivyIndex:
 
     @property
     def schema(self) -> tantivy.Schema:
-        """Get schema."""
         if self._schema is None:
             self._schema = self._build_schema()
         return self._schema
@@ -433,10 +432,8 @@ class TantivyIndex:
         with self._write_lock:
             writer = self._acquire_writer()
 
-            # Delete existing document with same ID
             writer.delete_documents("id", doc.id)
 
-            # Add new document
             writer.add_document(
                 tantivy.Document(
                     id=doc.id,
@@ -886,7 +883,6 @@ collection.count()
             for i in range(len(chunks))
         ]
 
-        # Add to collection
         self.collection.add(
             ids=ids,
             embeddings=embeddings,
@@ -931,10 +927,8 @@ collection.count()
         Returns:
             List of semantic results (deduplicated by document)
         """
-        # Generate query embedding
         query_embedding = self.model.encode([query], show_progress_bar=False).tolist()[0]
 
-        # Build where filter
         # where_filter not used - ChromaDB filtering done post-query
         if tags:
             # ChromaDB doesn't support complex tag filtering well,
@@ -944,7 +938,7 @@ collection.count()
         # Query ChromaDB - get more results than needed for deduplication
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=limit * 3,  # Get extra for deduplication
+            n_results=limit * 3,
             include=["documents", "metadatas", "distances"],
         )
 
@@ -1104,7 +1098,6 @@ class SearchEngine:
 
     @property
     def config(self) -> LithosConfig:
-        """Get configuration."""
         return self._config or get_config()
 
     @property

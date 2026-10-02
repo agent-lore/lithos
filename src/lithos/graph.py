@@ -133,7 +133,6 @@ class KnowledgeGraph:
 
     @property
     def config(self) -> LithosConfig:
-        """Get configuration."""
         return self._config or get_config()
 
     @property
@@ -244,11 +243,7 @@ class KnowledgeGraph:
 
     @traced("lithos.graph.add_document")
     def add_document(self, doc: KnowledgeDocument) -> None:
-        """Add or update a document in the graph.
-
-        Args:
-            doc: Document to add
-        """
+        """Add or update a document in the graph."""
         node_id = doc.id
         is_update = node_id in self.graph
         logger.debug(
@@ -259,7 +254,6 @@ class KnowledgeGraph:
             len(doc.links),
         )
 
-        # Remove existing node if present (to update)
         if node_id in self.graph:
             # Preserve incoming edges before removal (outgoing are rebuilt from doc.links)
             incoming_edges = [
@@ -272,7 +266,6 @@ class KnowledgeGraph:
         else:
             incoming_edges = []
 
-        # Add node with attributes
         self.graph.add_node(
             node_id,
             title=doc.title,
@@ -280,28 +273,23 @@ class KnowledgeGraph:
             aliases=doc.metadata.aliases,
         )
 
-        # Update lookup tables
         self._id_to_node[doc.id] = node_id
         self._path_to_node[str(doc.path)] = node_id
 
-        # Filename lookup (without extension)
         filename = doc.path.stem
         if filename not in self._filename_to_nodes:
             self._filename_to_nodes[filename] = []
         if node_id not in self._filename_to_nodes[filename]:
             self._filename_to_nodes[filename].append(node_id)
 
-        # Alias lookups
         for alias in doc.metadata.aliases:
             self._alias_to_node[alias.lower()] = node_id
 
-        # Add edges for wiki-links
         for link in doc.links:
             target_node = self.resolve_link(link.target)
             if target_node:
                 self.graph.add_edge(node_id, target_node, link_text=link.target)
             else:
-                # Store unresolved link as edge to placeholder
                 placeholder = f"__unresolved__{link.target}"
                 if placeholder not in self.graph:
                     self.graph.add_node(placeholder, unresolved=True, link_text=link.target)
@@ -312,7 +300,6 @@ class KnowledgeGraph:
             if pred in self.graph:
                 self.graph.add_edge(pred, node_id, **edge_data)
 
-        # Resolve any previously unresolved links that now point to this document
         self._resolve_pending_links(doc)
 
         # Mark dirty and consider a debounced flush (#203).
@@ -321,19 +308,16 @@ class KnowledgeGraph:
 
     def _remove_node_lookups(self, node_id: str) -> None:
         """Remove a node from lookup tables."""
-        # Remove from id lookup
         for doc_id, nid in list(self._id_to_node.items()):
             if nid == node_id:
                 del self._id_to_node[doc_id]
                 break
 
-        # Remove from path lookup
         for path, nid in list(self._path_to_node.items()):
             if nid == node_id:
                 del self._path_to_node[path]
                 break
 
-        # Remove from filename lookup
         for filename, nodes in list(self._filename_to_nodes.items()):
             if node_id in nodes:
                 nodes.remove(node_id)
@@ -341,7 +325,6 @@ class KnowledgeGraph:
                     del self._filename_to_nodes[filename]
                 break
 
-        # Remove from alias lookup
         for alias, nid in list(self._alias_to_node.items()):
             if nid == node_id:
                 del self._alias_to_node[alias]
@@ -352,7 +335,6 @@ class KnowledgeGraph:
         Args:
             doc: The newly added document
         """
-        # Possible targets that could match this document
         # TODO: slug formula doesn't strip punctuation — pre-existing behaviour
         title_slug = doc.title.lower().replace(" ", "-")
         # Fires on every document add; intentional for DEBUG-level tracing
@@ -360,15 +342,13 @@ class KnowledgeGraph:
             "computing slug for pending-link resolution: title=%r slug=%r", doc.title, title_slug
         )
         possible_targets = [
-            doc.path.stem,  # filename without extension
-            str(doc.path),  # full path
-            doc.id,  # document ID
-            title_slug,  # slugified title
+            doc.path.stem,
+            str(doc.path),
+            doc.id,
+            title_slug,
         ]
-        # Add aliases
         possible_targets.extend([a.lower() for a in doc.metadata.aliases])
 
-        # Find matching unresolved placeholders
         placeholders_to_resolve = []
         for node in list(self.graph.nodes()):
             if node.startswith("__unresolved__"):
@@ -379,9 +359,7 @@ class KnowledgeGraph:
                 ] or link_text.lower().replace(" ", "-") in [t.lower() for t in possible_targets]:
                     placeholders_to_resolve.append((node, link_text))
 
-        # Resolve each placeholder
         for placeholder, _link_text in placeholders_to_resolve:
-            # Get all edges pointing to this placeholder
             predecessors = list(self.graph.predecessors(placeholder))
 
             # Redirect edges to the real node
@@ -390,15 +368,10 @@ class KnowledgeGraph:
                 self.graph.remove_edge(pred, placeholder)
                 self.graph.add_edge(pred, doc.id, **edge_data)
 
-            # Remove the placeholder node
             self.graph.remove_node(placeholder)
 
     def remove_document(self, doc_id: str) -> None:
-        """Remove a document from the graph.
-
-        Args:
-            doc_id: Document ID to remove
-        """
+        """Remove a document from the graph."""
         node_id = self._id_to_node.get(doc_id)
         if node_id and node_id in self.graph:
             self._remove_node_lookups(node_id)
@@ -416,7 +389,7 @@ class KnowledgeGraph:
 
         Resolution precedence:
         1. Exact path: [[folder/note]] -> folder/note.md
-        2. Filename: [[note]] -> */note.md (error if ambiguous)
+        2. Filename: [[note]] -> */note.md (None if ambiguous)
         3. UUID: [[uuid]] -> file with that id
         4. Alias: [[alias]] -> file with that alias
 
@@ -440,7 +413,7 @@ class KnowledgeGraph:
             return resolved
 
         # 2. Filename match
-        filename = target.split("/")[-1]  # Get last component
+        filename = target.split("/")[-1]
         if filename.endswith(".md"):
             filename = filename[:-3]
         if filename in self._filename_to_nodes:
@@ -479,14 +452,9 @@ class KnowledgeGraph:
         """Get links for a document.
 
         Args:
-            doc_id: Document ID
-            direction: Link direction to retrieve
             depth: Traversal depth (1-3)
-
-        Returns:
-            LinkInfo with outgoing and incoming links
         """
-        depth = max(1, min(3, depth))  # Clamp to 1-3
+        depth = max(1, min(3, depth))
         node_id = self._id_to_node.get(doc_id)
 
         if not node_id or node_id not in self.graph:
@@ -511,12 +479,10 @@ class KnowledgeGraph:
     ) -> list[LinkedDocument]:
         """Get all reachable nodes within depth.
 
-        Creates a root OTEL span for multi-hop BFS traversals (depth > 1) to
-        aid trace-based latency debugging.
+        Runs inside a ``lithos.graph.bfs_traversal`` OTEL span to aid
+        trace-based latency debugging.
 
         Args:
-            start_node: Starting node ID
-            depth: Maximum traversal depth
             forward: True for outgoing, False for incoming
 
         Returns:
@@ -547,7 +513,6 @@ class KnowledgeGraph:
                                 visited.add(neighbor)
                                 next_level.add(neighbor)
 
-                                # Skip unresolved placeholder nodes
                                 if neighbor.startswith("__unresolved__"):
                                     continue
 
@@ -636,33 +601,15 @@ class KnowledgeGraph:
         return self.graph.number_of_edges()
 
     def has_node(self, node_id: str) -> bool:
-        """Check if a node exists in the graph.
-
-        Args:
-            node_id: Node/document ID to check
-
-        Returns:
-            True if node exists, False otherwise
-        """
+        """Check if a node exists in the graph."""
         return node_id in self.graph
 
     def has_edge(self, source_id: str, target_id: str) -> bool:
-        """Check if an edge exists between two nodes.
-
-        Args:
-            source_id: Source node ID
-            target_id: Target node ID
-
-        Returns:
-            True if edge exists, False otherwise
-        """
+        """Check if an edge exists between two nodes."""
         return self.graph.has_edge(source_id, target_id)
 
     def get_outgoing_links(self, doc_id: str) -> list[dict]:
         """Get outgoing links from a document.
-
-        Args:
-            doc_id: Document ID
 
         Returns:
             List of linked document dicts with 'id' and 'title' keys
@@ -673,9 +620,6 @@ class KnowledgeGraph:
     def get_incoming_links(self, doc_id: str) -> list[dict]:
         """Get incoming links to a document.
 
-        Args:
-            doc_id: Document ID
-
         Returns:
             List of linked document dicts with 'id' and 'title' keys
         """
@@ -685,14 +629,10 @@ class KnowledgeGraph:
     def get_neighbors(self, doc_id: str) -> list[dict]:
         """Get all neighbors (both incoming and outgoing) of a document.
 
-        Args:
-            doc_id: Document ID
-
         Returns:
             List of linked document dicts (deduplicated)
         """
         link_info = self.get_links(doc_id, direction="both", depth=1)
-        # Deduplicate by ID
         seen: set[str] = set()
         result: list[dict] = []
         for doc in link_info.outgoing + link_info.incoming:
@@ -703,10 +643,6 @@ class KnowledgeGraph:
 
     def find_path(self, source_id: str, target_id: str) -> list[str] | None:
         """Find shortest path between two documents.
-
-        Args:
-            source_id: Source document ID
-            target_id: Target document ID
 
         Returns:
             List of node IDs in path, or None if no path exists
@@ -729,11 +665,9 @@ class KnowledgeGraph:
         orphans: list[str] = []
 
         for node in self.graph.nodes():
-            # Skip unresolved placeholder nodes
             if node.startswith("__unresolved__"):
                 continue
 
-            # Check if node has any edges (in or out)
             in_degree = self.graph.in_degree(node)
             out_degree = self.graph.out_degree(node)
 
@@ -743,11 +677,7 @@ class KnowledgeGraph:
         return orphans
 
     def get_stats(self) -> dict:
-        """Get graph statistics.
-
-        Returns:
-            Dictionary with graph statistics
-        """
+        """Get graph statistics."""
         real_nodes = [n for n in self.graph.nodes() if not n.startswith("__unresolved__")]
         unresolved_nodes = [n for n in self.graph.nodes() if n.startswith("__unresolved__")]
 
@@ -761,9 +691,6 @@ class KnowledgeGraph:
 
     def get_most_linked(self, limit: int = 10) -> list[dict]:
         """Get documents with most incoming links.
-
-        Args:
-            limit: Maximum number of results
 
         Returns:
             List of dicts with 'id', 'title', and 'incoming_count' keys, sorted by link count descending
@@ -784,7 +711,6 @@ class KnowledgeGraph:
                 }
             )
 
-        # Sort by incoming count descending
         results.sort(key=lambda x: x["incoming_count"], reverse=True)
         return results[:limit]
 
@@ -805,9 +731,6 @@ class KnowledgeGraph:
 
     def get_node_data(self, node_id: str) -> dict:
         """Return attribute data for a node.
-
-        Args:
-            node_id: The node/document ID.
 
         Returns:
             Dict of node attributes, or empty dict if node doesn't exist.

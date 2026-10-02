@@ -223,7 +223,7 @@ def setup_telemetry(config: LithosConfig, *, _test_span_exporter: Any = None) ->
         metrics.set_meter_provider(_meter_provider)
 
     # --- Logs ---
-    # Step 2: full OTEL log export when an endpoint is configured.
+    # Full OTEL log export when an endpoint is configured.
     logs_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
     if not logs_endpoint and endpoint:
         logs_endpoint = _signal_endpoint(endpoint, "logs")
@@ -253,7 +253,7 @@ def setup_telemetry(config: LithosConfig, *, _test_span_exporter: Any = None) ->
     # consistent state from the moment it becomes active.
     _initialized = True
 
-    # Step 1 (always active when tracing is on): inject trace_id + span_id into
+    # Always active when tracing is on: inject trace_id + span_id into
     # every Python log record via a lightweight logging.Filter.  This enables
     # trace-log correlation in any log aggregator (Loki, Datadog, Elastic, etc.)
     # with zero additional dependencies.
@@ -291,7 +291,6 @@ def shutdown_telemetry() -> None:
         _log_provider.shutdown()
         _log_provider = None
 
-    # Remove trace-context filter from root logger
     if _trace_context_filter is not None:
         logging.getLogger().removeFilter(_trace_context_filter)
         _trace_context_filter = None

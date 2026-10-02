@@ -505,7 +505,6 @@ class EnrichWorker:
         # Determine days since last use
         last_used_raw = stats.get("last_used_at")
         if not isinstance(last_used_raw, str) or not last_used_raw:
-            # Fallback to last_retrieved_at
             last_used_raw = stats.get("last_retrieved_at")
         if not isinstance(last_used_raw, str) or not last_used_raw:
             return False  # No usage data — skip decay

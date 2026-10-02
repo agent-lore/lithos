@@ -507,7 +507,6 @@ def truncate_content(content: str, max_length: int) -> tuple[str, bool]:
 
 def slugify(text: str) -> str:
     """Convert text to URL-safe slug."""
-    # Convert to lowercase
     slug = text.lower()
     # Replace spaces and underscores with hyphens
     slug = re.sub(r"[\s_]+", "-", slug)
@@ -515,7 +514,6 @@ def slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9-]", "", slug)
     # Collapse multiple hyphens
     slug = re.sub(r"-+", "-", slug)
-    # Strip leading/trailing hyphens
     slug = slug.strip("-")
     result = slug or "untitled"
     logger.debug("slugify: title=%r slug=%r", text, result)

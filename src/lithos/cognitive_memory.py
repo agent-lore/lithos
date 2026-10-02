@@ -940,7 +940,6 @@ class CognitiveMemory:
                 candidates_evaluated += 1
                 meta = doc.metadata
 
-                # Skip if below confidence threshold
                 if meta.confidence < min_confidence:
                     continue
 
@@ -950,7 +949,6 @@ class CognitiveMemory:
                         first_stale_id = doc_id
                     continue
 
-                # Check max_age_hours
                 if max_age_hours is not None:
                     updated = normalize_datetime(meta.updated_at)
                     cutoff = now - timedelta(hours=max_age_hours)

@@ -142,7 +142,6 @@ class LithosServer:
 
     @property
     def config(self) -> LithosConfig:
-        """Get configuration."""
         return self._config
 
     def build_http_app(self) -> Starlette:
@@ -579,13 +578,10 @@ class LithosServer:
                 # in sync without requiring an explicit lithos_stats call.
                 self._start_coordination_stats_refresh()
 
-                # Register active claims gauge observer
                 register_active_claims_observer(lambda: self._cached_active_claims)
 
-                # Register SSE active clients gauge observer
                 register_sse_active_clients_observer(self._sse_active_count)
 
-                # Register resource-level OTEL gauges
                 register_resource_gauges(
                     get_document_count=lambda: self.knowledge.document_count,
                     get_stale_document_count=lambda: self.knowledge.stale_document_count,
@@ -618,7 +614,6 @@ class LithosServer:
                 ):
                     await self._rebuild_indices()
                 else:
-                    # Try to load cached graph
                     if not self.graph.load_cache():
                         await self._rebuild_indices()
 

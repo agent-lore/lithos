@@ -489,7 +489,6 @@ class KnowledgeManager:
                     file_path = Path(path) / f"{slug}.md"
             file_path, full_path = self._resolve_safe_path(file_path)
 
-            # Parse wiki-links
             links = parse_wiki_links(content)
 
             doc = KnowledgeDocument(
@@ -731,10 +730,8 @@ class KnowledgeManager:
                     if existing_owner is not None and existing_owner != id:
                         raise SlugCollisionError(new_slug, existing_owner)
 
-            # Handle source_url update
             if not isinstance(source_url, _UnsetType):
                 if source_url is None:
-                    # Clear source_url
                     if old_source_url:
                         try:
                             old_norm = normalize_url(old_source_url)
@@ -743,7 +740,6 @@ class KnowledgeManager:
                             pass
                     doc.metadata.source_url = None
                 else:
-                    # Set/change source_url
                     try:
                         new_norm = normalize_url(source_url)
                     except ValueError as e:
@@ -806,7 +802,6 @@ class KnowledgeManager:
                     doc.metadata.derived_from_ids = normalized
                     warnings = self._index.replace_provenance(id, normalized)
 
-            # Handle expires_at update
             if not isinstance(expires_at, _UnsetType):
                 doc.metadata.expires_at = expires_at
 
@@ -814,7 +809,6 @@ class KnowledgeManager:
             if not isinstance(source, _UnsetType):
                 doc.metadata.source = source
 
-            # Handle supersedes update
             if not isinstance(supersedes, _UnsetType):
                 doc.metadata.supersedes = supersedes
 
@@ -866,7 +860,6 @@ class KnowledgeManager:
             if not isinstance(confidence, _UnsetType):
                 doc.metadata.confidence = confidence
 
-            # Update metadata
             doc.metadata.updated_at = datetime.now(UTC)
             if agent not in doc.metadata.contributors and agent != doc.metadata.author:
                 doc.metadata.contributors.append(agent)
@@ -885,7 +878,6 @@ class KnowledgeManager:
             if new_slug != old_slug:
                 self._index.reroute_slug(old_slug, new_slug, id)
 
-            # Update _id_to_title if title changed
             if title is not None:
                 self._index.set_title(id, title)
 

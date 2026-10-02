@@ -142,12 +142,6 @@ class AgentRegistry:
     ) -> tuple[bool, bool]:
         """Register or update an agent.
 
-        Args:
-            agent_id: Agent identifier
-            name: Human-friendly name
-            agent_type: Agent type
-            metadata: Additional metadata
-
         Returns:
             Tuple of (success, created)
         """
@@ -155,7 +149,6 @@ class AgentRegistry:
         metadata_json = json.dumps(metadata) if metadata else None
 
         async with aiosqlite.connect(self.db_path) as db:
-            # Check if exists
             cursor = await db.execute(
                 "SELECT id FROM agents WHERE id = ?",
                 (agent_id,),
@@ -163,7 +156,6 @@ class AgentRegistry:
             exists = await cursor.fetchone() is not None
 
             if exists:
-                # Update existing
                 await db.execute(
                     """
                     UPDATE agents
@@ -177,7 +169,6 @@ class AgentRegistry:
                     (name, agent_type, metadata_json, now, agent_id),
                 )
             else:
-                # Insert new
                 await db.execute(
                     """
                     INSERT INTO agents (id, name, type, metadata, first_seen_at, last_seen_at)
