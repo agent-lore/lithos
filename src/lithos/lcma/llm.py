@@ -89,7 +89,7 @@ class LlmClient:
             raise ValueError("LlmClient requires lcma.llm.base_url to be set")
         self._config = config
         self._api_key = config.api_key.get_secret_value() if config.api_key else None
-        headers = {}
+        headers = {"HTTP-Referer": config.app_url, "X-OpenRouter-Title": config.app_title}
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key}"
         self._client = httpx.AsyncClient(

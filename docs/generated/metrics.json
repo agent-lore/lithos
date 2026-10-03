@@ -130,7 +130,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 815
+    "total_functions": 816
   },
   "domain": {
     "associations": 26,
@@ -339,13 +339,13 @@
       },
       "Config": {
         "classes": 10,
-        "functions": 23,
+        "functions": 24,
         "largest_module": "lithos.config",
-        "largest_module_lines": 544,
-        "lines": 544,
+        "largest_module_lines": 565,
+        "lines": 565,
         "modules": 1,
         "public_symbols": 13,
-        "sloc": 378
+        "sloc": 394
       },
       "Coordination": {
         "classes": 9,
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 26582,
+    "total_lines": 26603,
     "total_modules": 47,
-    "total_sloc": 21483
+    "total_sloc": 21499
   },
   "tests": {
     "ratio": 1.89,
-    "src_lines": 26582,
-    "test_lines": 50282
+    "src_lines": 26603,
+    "test_lines": 50334
   }
 }
