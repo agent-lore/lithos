@@ -78,6 +78,29 @@ async def test_bearer_header_sent_when_api_key_set() -> None:
     assert seen["auth"] == "Bearer sk-secret"
 
 
+async def test_openrouter_attribution_headers_sent() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["referer"] = request.headers.get("http-referer")
+        seen["title"] = request.headers.get("x-openrouter-title")
+        return httpx.Response(200, json=_ok_response())
+
+    client = _client_with(
+        handler,
+        app_url="https://github.com/agent-lore/lithos/staging",
+        app_title="lithos-staging",
+    )
+    try:
+        await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert seen == {
+        "referer": "https://github.com/agent-lore/lithos/staging",
+        "title": "lithos-staging",
+    }
+
+
 async def test_usage_tokens_extracted() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

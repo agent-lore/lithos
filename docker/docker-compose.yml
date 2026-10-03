@@ -35,6 +35,8 @@ services:
       - LITHOS_LCMA__LLM__MIN_SIMILARITY=${LITHOS_LCMA__LLM__MIN_SIMILARITY:-}
       - LITHOS_LCMA__LLM__MAX_SIMILARITY=${LITHOS_LCMA__LLM__MAX_SIMILARITY:-}
       - LITHOS_LCMA__LLM__SNIPPET_CHARS=${LITHOS_LCMA__LLM__SNIPPET_CHARS:-}
+      - LITHOS_LCMA__LLM__APP_URL=${LITHOS_LCMA__LLM__APP_URL:-}
+      - LITHOS_LCMA__LLM__APP_TITLE=${LITHOS_LCMA__LLM__APP_TITLE:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
       interval: 10s

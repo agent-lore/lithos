@@ -23,6 +23,20 @@ a `parent_child` edge lets the child be re-parented. The `parent_exists`
 message now names the tool. The agent skill (`task-graph.md`) documents
 the new tool; plugin 0.4.1 → 0.4.2.
 
+### Added — LLM synthesis
+
+#### OpenRouter app attribution
+
+The synthesis client now sends `HTTP-Referer` and `X-OpenRouter-Title`, so
+OpenRouter reports Lithos spend under its own app instead of "unknown".
+Both come from `lcma.llm.app_url` (default
+`https://github.com/agent-lore/lithos`) and `lcma.llm.app_title` (default
+`lithos`), settable per deployment as `LITHOS_LCMA__LLM__APP_URL` /
+`LITHOS_LCMA__LLM__APP_TITLE` (passed through by `docker-compose.yml`).
+OpenRouter identifies an app by its referer URL, so give each environment
+its own `app_url` to see prod and staging spend separately. Other
+OpenAI-compatible endpoints ignore both headers.
+
 ## [0.5.0] — 2026-09-26
 
 Seven weeks of work on `main` since 0.4.0: the LCMA phase-3 groundwork

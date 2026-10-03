@@ -219,6 +219,12 @@ class LlmConfig(BaseModel):
     min_similarity: float = Field(default=0.35, ge=0.0, le=1.0)
     max_similarity: float = Field(default=0.92, ge=0.0, le=1.0)
     snippet_chars: int = Field(default=700, gt=0)
+    # OpenRouter app attribution, sent as HTTP-Referer / X-OpenRouter-Title.
+    # OpenRouter keys an app on the referer URL, so each deployment needs its
+    # own app_url (not just its own title) for its spend to be reported
+    # separately. Other endpoints ignore both headers.
+    app_url: str = "https://github.com/agent-lore/lithos"
+    app_title: str = "lithos"
 
     @property
     def enabled(self) -> bool:
@@ -282,6 +288,21 @@ class LlmConfig(BaseModel):
         if info.data.get("base_url") is not None and not value.strip():
             raise ValueError("lcma.llm.model is required when lcma.llm.base_url is set")
         return value
+
+    @field_validator("app_url", "app_title", mode="after")
+    @classmethod
+    def _check_attribution_header_safe(cls, value: str, info: ValidationInfo) -> str:
+        stripped = value.strip()
+        if not (stripped and stripped.isascii() and stripped.isprintable()):
+            raise ValueError(
+                f"lcma.llm.{info.field_name} must be non-empty printable ASCII "
+                "(it is sent as an HTTP header)"
+            )
+        if info.field_name == "app_url" and not stripped.lower().startswith(
+            ("http://", "https://")
+        ):
+            raise ValueError("lcma.llm.app_url must be an http:// or https:// URL")
+        return stripped
 
     @field_validator("max_similarity", mode="after")
     @classmethod

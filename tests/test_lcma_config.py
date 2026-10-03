@@ -117,6 +117,35 @@ class TestLlmConfig:
         assert cfg.lcma.llm.daily_token_budget == 1000
         assert cfg.lcma.llm.enabled
 
+    def test_app_attribution_defaults(self) -> None:
+        cfg = LlmConfig()
+        assert cfg.app_url == "https://github.com/agent-lore/lithos"
+        assert cfg.app_title == "lithos"
+
+    def test_app_attribution_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(
+            "LITHOS_LCMA__LLM__APP_URL", "https://github.com/agent-lore/lithos/staging"
+        )
+        monkeypatch.setenv("LITHOS_LCMA__LLM__APP_TITLE", "lithos-staging")
+        cfg = LithosConfig()
+        assert cfg.lcma.llm.app_url == "https://github.com/agent-lore/lithos/staging"
+        assert cfg.lcma.llm.app_title == "lithos-staging"
+
+    def test_app_attribution_whitespace_stripped(self) -> None:
+        cfg = LlmConfig(app_url=" https://example.com/app\n", app_title=" lithos dev ")
+        assert cfg.app_url == "https://example.com/app"
+        assert cfg.app_title == "lithos dev"
+
+    @pytest.mark.parametrize("url", ["", "example.com", "ftp://example.com"])
+    def test_app_url_must_be_http(self, url: str) -> None:
+        with pytest.raises(ValidationError, match="app_url"):
+            LlmConfig(app_url=url)
+
+    @pytest.mark.parametrize("title", ["", "   ", "lithos\r\nX-Injected: 1", "lithos-é"])
+    def test_app_title_must_be_header_safe(self, title: str) -> None:
+        with pytest.raises(ValidationError, match="app_title"):
+            LlmConfig(app_title=title)
+
 
 class TestLcmaConfigRerankWeights:
     """rerank_weights 10-scout defaults and backward-compatible fill/renormalize."""
