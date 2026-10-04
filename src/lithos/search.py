@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Literal
 
 import chromadb
 import networkx as nx
+import numpy as np
 import tantivy
 from sentence_transformers import SentenceTransformer
 
@@ -35,14 +36,25 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# A search scope is passed to Chroma as a ``doc_id $in`` filter so the nearest
-# chunks are drawn from the scope itself (5002185d). The local store binds each
-# id as one SQLite variable: on chromadb 1.4.1 the largest working list is 32,762
-# ids (SQLite's 32,766 limit less Chroma's own parameters), and latency was 52 ms
-# at 5.8k ids and 142 ms at 20k on 120k chunks. Larger scopes — only possible on
-# a corpus over this size — widen an unfiltered pool until enough scoped notes
-# surface, since doc share says nothing about chunk share.
+# Semantic search inside a doc-id scope (5002185d) picks the cheapest strategy.
+# A ``where``-filtered Chroma query is slow on a persistent store: measured with
+# text queries on 100k chunks (chromadb 1.4.1), ~140 ms for a 70-chunk scope
+# (filtered HNSW explores far to find so few allowed chunks), ~60 ms at best
+# around 6k chunks, and ~140 ms again at 45k (binding the id list). So:
+# - a scope of at most SCOPE_DIRECT_MAX_DOCS docs has its chunks listed (~10 ms
+#   at 5 docs, ~30 ms at 200); if they number at most SCOPE_DIRECT_MAX_CHUNKS
+#   they are ranked exactly in-process from their stored embeddings (~11 ms at
+#   70 chunks; Chroma's ``get`` costs ~20-40 us per chunk);
+# - otherwise an unfiltered pool is widened (~2 ms at 9 chunks, ~20 ms at 480),
+#   which serves a scope over ~4% of the corpus in a few rounds;
+# - failing that, a scope of at most SCOPE_PREFILTER_MAX_IDS ids is pre-filtered.
+#   Each id is one SQLite variable, and the largest working list is 32,762 ids
+#   (SQLite's 32,766 limit less Chroma's own parameters). A larger scope, only
+#   possible on a corpus over this size, keeps widening.
+SCOPE_DIRECT_MAX_DOCS = 200
+SCOPE_DIRECT_MAX_CHUNKS = 2_000
 SCOPE_PREFILTER_MAX_IDS = 30_000
+_SCOPE_UNFILTERED_POOL_MAX = 500
 _SCOPE_WIDEN_FACTOR = 4
 
 _TANTIVY_RESERVED_CHAR_RE = re.compile(r'([+\-!(){}\[\]^"~*?:\\/|&\'])')
@@ -680,6 +692,25 @@ def generate_snippet(content: str, query: str, context_chars: int = 150) -> str:
     return snippet
 
 
+def _query_rows(
+    results: chromadb.QueryResult,
+) -> Iterable[tuple[Mapping[str, object], str, float]]:
+    """``(metadata, chunk text, distance)`` rows of a single-embedding Chroma query."""
+    if not results["ids"] or not results["ids"][0]:
+        return []
+    metadatas = results["metadatas"][0] if results["metadatas"] else None
+    documents = results["documents"][0] if results["documents"] else None
+    distances = results["distances"][0] if results["distances"] else None
+    return [
+        (
+            metadatas[i] if metadatas else {},
+            documents[i] if documents else "",
+            distances[i] if distances else 1.0,
+        )
+        for i in range(len(results["ids"][0]))
+    ]
+
+
 class ChromaIndex:
     """ChromaDB semantic search index."""
 
@@ -858,6 +889,11 @@ collection.count()
         """Generate unique ID for a chunk."""
         return f"{doc_id}__chunk_{chunk_index}"
 
+    @staticmethod
+    def _chunk_doc_id(chunk_id: str) -> str:
+        """Inverse of :meth:`_chunk_id`: the doc id a chunk belongs to."""
+        return chunk_id.rpartition("__chunk_")[0]
+
     def add_document(
         self,
         doc: IndexableDocument,
@@ -947,11 +983,10 @@ collection.count()
             tags: Filter by tags
             author: Filter by author (exact match)
             path_prefix: Filter by path prefix
-            within_ids: Rank only these doc ids. Up to
-                :data:`SCOPE_PREFILTER_MAX_IDS` they filter the nearest-neighbour
-                query itself; a larger scope widens an unfiltered pool until
-                ``limit`` scoped notes surface or the collection is exhausted.
-                An empty collection returns no results.
+            within_ids: Rank only these doc ids, exactly as if the collection
+                held nothing else; the strategy is chosen by scope size (see
+                :data:`SCOPE_DIRECT_MAX_DOCS`). An empty scope returns no
+                results.
 
         Returns:
             List of semantic results (deduplicated by document)
@@ -961,37 +996,101 @@ collection.count()
             return []
 
         query_embedding = self.model.encode([query], show_progress_bar=False).tolist()[0]
+        filters = (limit, threshold, tags, author, path_prefix, scope)
+
+        if scope is not None and len(scope) <= SCOPE_DIRECT_MAX_DOCS:
+            where: chromadb.Where = {"doc_id": {"$in": sorted(scope)}}
+            chunk_ids = self.collection.get(where=where, include=[])["ids"]
+            if len(chunk_ids) <= SCOPE_DIRECT_MAX_CHUNKS:
+                rows = self._rank_chunks(
+                    query_embedding, chunk_ids, limit, cut=not (tags or author or path_prefix)
+                )
+                return self._collect(rows, *filters)
+
         # Over-fetch chunks: several can belong to one document.
         pool = limit * 3
-        where: chromadb.Where | None = None
-        if scope is not None and len(scope) <= SCOPE_PREFILTER_MAX_IDS:
-            where = {"doc_id": {"$in": sorted(scope)}}
-        widen = scope is not None and where is None
-
         while True:
-            query_kwargs: dict = {
-                "query_embeddings": [query_embedding],
-                "n_results": pool,
-                "include": ["documents", "metadatas", "distances"],
-            }
-            if where is not None:
-                query_kwargs["where"] = where
-            results = self.collection.query(**query_kwargs)
-            semantic_results = self._collect(
-                results, limit, threshold, tags, author, path_prefix, scope
-            )
-            if not widen or len(semantic_results) >= limit:
+            results = self._query(query_embedding, pool)
+            semantic_results = self._collect(_query_rows(results), *filters)
+            if scope is None or len(semantic_results) >= limit:
                 return semantic_results
             distances = results["distances"][0] if results["distances"] else []
-            # Stop once the collection is exhausted or the pool's tail is below
-            # the threshold: chunks further out cannot qualify.
-            if len(distances) < pool or (distances and 1.0 - distances[-1] < threshold):
+            if len(distances) < pool:  # the pool already holds the whole collection
                 return semantic_results
+            # HNSW is approximate, so a tail below the threshold does not prove
+            # no scoped chunk qualifies; only the scoped query can settle it.
+            tail_below = bool(distances) and 1.0 - distances[-1] < threshold
             pool *= _SCOPE_WIDEN_FACTOR
+            if len(scope) <= SCOPE_PREFILTER_MAX_IDS:
+                if tail_below or pool > _SCOPE_UNFILTERED_POOL_MAX:
+                    where = {"doc_id": {"$in": sorted(scope)}}
+                    results = self._query(query_embedding, limit * 3, where)
+                    return self._collect(_query_rows(results), *filters)
+            elif tail_below:
+                return semantic_results
+
+    def _query(
+        self, embedding: list[float], n_results: int, where: chromadb.Where | None = None
+    ) -> chromadb.QueryResult:
+        query_kwargs: dict = {
+            "query_embeddings": [embedding],
+            "n_results": n_results,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where is not None:
+            query_kwargs["where"] = where
+        return self.collection.query(**query_kwargs)
+
+    def _rank_chunks(
+        self,
+        embedding: list[float],
+        chunk_ids: list[str],
+        limit: int,
+        *,
+        cut: bool,
+    ) -> list[tuple[Mapping[str, object], str, float]]:
+        """Exact cosine ranking of ``chunk_ids``: each doc's best chunk, nearest first.
+
+        ``cut`` keeps only the top ``limit`` docs; pass False when metadata filters
+        applied afterwards can still drop some.
+        """
+        if not chunk_ids:
+            return []
+        stored = self.collection.get(ids=chunk_ids, include=["embeddings"])
+        vectors = np.asarray(stored["embeddings"], dtype=np.float32)
+        query_vector = np.asarray(embedding, dtype=np.float32)
+        norms = np.linalg.norm(vectors, axis=1) * np.linalg.norm(query_vector)
+        similarities = (vectors @ query_vector) / np.maximum(norms, 1e-12)
+
+        best: dict[str, tuple[float, str]] = {}
+        for chunk_id, similarity in zip(stored["ids"], similarities.tolist(), strict=True):
+            doc_id = self._chunk_doc_id(chunk_id)
+            if similarity > best.get(doc_id, (-2.0, ""))[0]:
+                best[doc_id] = (similarity, chunk_id)
+        ranked = sorted(best.values(), reverse=True)
+        if cut:
+            ranked = ranked[:limit]
+        if not ranked:
+            return []
+
+        detail = self.collection.get(
+            ids=[chunk_id for _, chunk_id in ranked], include=["metadatas", "documents"]
+        )
+        rows = {
+            chunk_id: (metadata, document)
+            for chunk_id, metadata, document in zip(
+                detail["ids"], detail["metadatas"] or [], detail["documents"] or [], strict=True
+            )
+        }
+        return [
+            (rows[chunk_id][0], rows[chunk_id][1], 1.0 - similarity)
+            for similarity, chunk_id in ranked
+            if chunk_id in rows
+        ]
 
     def _collect(
         self,
-        results: chromadb.QueryResult,
+        rows: Iterable[tuple[Mapping[str, object], str, float]],
         limit: int,
         threshold: float,
         tags: list[str] | None,
@@ -999,16 +1098,12 @@ collection.count()
         path_prefix: str | None,
         scope: set[str] | None,
     ) -> list[SemanticResult]:
-        """Turn one Chroma query result into per-document hits passing every filter."""
-        # Process results and deduplicate by document
+        """Turn ``(metadata, chunk text, distance)`` rows, nearest first, into
+        per-document hits passing every filter."""
         seen_docs: set[str] = set()
         semantic_results: list[SemanticResult] = []
 
-        if not results["ids"] or not results["ids"][0]:
-            return []
-
-        for i, _chunk_id in enumerate(results["ids"][0]):
-            metadata = results["metadatas"][0][i] if results["metadatas"] else {}
+        for metadata, document, distance in rows:
             doc_id = str(metadata.get("doc_id", ""))
 
             # Skip if already seen this document
@@ -1019,7 +1114,6 @@ collection.count()
                 continue
 
             # Calculate similarity from distance (cosine distance to similarity)
-            distance = results["distances"][0][i] if results["distances"] else 1.0
             similarity = 1.0 - distance
 
             # Apply threshold
@@ -1046,7 +1140,7 @@ collection.count()
                 SemanticResult(
                     id=doc_id,
                     title=str(metadata.get("title", "")),
-                    snippet=results["documents"][0][i] if results["documents"] else "",
+                    snippet=document or "",
                     similarity=similarity,
                     path=str(metadata.get("path", "")),
                     source_url=str(metadata.get("source_url", "")),

@@ -35,11 +35,16 @@ elsewhere, so a scoped search for 3 results usually returned none. In
 `fulltext`/`semantic`/`hybrid` modes those filters now resolve to one doc-id
 scope from the in-memory corpus index (new namespace and sorted path
 indexes, sub-linear) and the backends rank inside it: Tantivy with a
-constant-score id filter (BM25 scores unchanged), Chroma with a
+constant-score id filter (BM25 scores unchanged), and Chroma by the cheapest
+strategy for the scope's size. A `where`-filtered Chroma query costs ~140 ms
+on a tiny scope of a 100k-chunk persistent store, so a scope of up to 200 docs
+and 2,000 chunks is ranked exactly in-process from its stored embeddings
+(~20 ms for a robot's 57 chunks). A larger scope first widens an unfiltered
+pool, which serves broad scopes in a few milliseconds, and then falls back to a
 `doc_id $in` filter for scopes up to 30,000 docs (below the ~32.7k SQLite
-bound-variable limit of the local store). A larger scope — only possible on a
-bigger corpus — widens an unfiltered pool until enough scoped notes surface or
-the collection is exhausted. An empty scope returns no results without
+bound-variable limit of the local store); a scope beyond that, only possible
+on a bigger corpus, keeps widening until enough scoped notes surface or the
+collection is exhausted. An empty scope returns no results without
 querying. `path_prefix` keeps its plain string-prefix
 semantics. Graph mode is unchanged. `SearchEngine.full_text_search` /
 `semantic_search` / `hybrid_search` gain a `within_ids` argument and

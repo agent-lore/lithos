@@ -72,7 +72,7 @@
         "max_function": "lithos.provenance.ProvenanceProjection._apply_reconcile"
       },
       "Search": {
-        "functions_over_10": 6,
+        "functions_over_10": 7,
         "max_complexity": 33,
         "max_function": "lithos.search.SearchEngine.graph_search"
       },
@@ -87,7 +87,7 @@
         "max_function": "lithos.telemetry.setup_telemetry"
       }
     },
-    "functions_over_10": 65,
+    "functions_over_10": 66,
     "top_functions": [
       {
         "complexity": 70,
@@ -130,7 +130,7 @@
         "qualname": "lithos.cognitive_memory.CognitiveMemory.cache_lookup"
       }
     ],
-    "total_functions": 825
+    "total_functions": 829
   },
   "domain": {
     "associations": 26,
@@ -459,13 +459,13 @@
       },
       "Search": {
         "classes": 12,
-        "functions": 64,
+        "functions": 68,
         "largest_module": "lithos.search",
-        "largest_module_lines": 2008,
-        "lines": 2008,
+        "largest_module_lines": 2102,
+        "lines": 2102,
         "modules": 1,
         "public_symbols": 15,
-        "sloc": 1638
+        "sloc": 1717
       },
       "SqliteStore": {
         "classes": 1,
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 26779,
+    "total_lines": 26873,
     "total_modules": 47,
-    "total_sloc": 21653
+    "total_sloc": 21732
   },
   "tests": {
     "ratio": 1.89,
-    "src_lines": 26779,
-    "test_lines": 50711
+    "src_lines": 26873,
+    "test_lines": 50866
   }
 }
