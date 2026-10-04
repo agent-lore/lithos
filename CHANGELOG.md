@@ -2,7 +2,35 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-04
+
+A week of work on `main` since 0.5.0:
+- Scoped search and retrieve now rank inside the requested scope (task
+  5002185d), so a small area such as a robot's memory notes is no longer
+  crowded out, at low latency.
+- Task edges can be deleted.
+- OpenRouter attributes Lithos spend to its own app.
+- The embedding health probe no longer logs a deprecation warning on every
+  call.
+
 The tool surface grows from 38 to 39 (`lithos_task_edge_delete`).
+
+### Behaviour changes — read before upgrading
+
+Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
+
+- **Scoped searches return different, better results.** `lithos_search` in
+  `fulltext`/`semantic`/`hybrid` mode now returns in-scope matches when
+  `path_prefix`, `tags`, `author` or `entities` is given. So does
+  `lithos_retrieve`'s vector/lexical scouts with `namespace_filter`,
+  `tags` or `path_prefix`. These matches used to be crowded out. Callers
+  that over-fetched to work around this (a large `limit` or `threshold=0`)
+  can drop the workaround.
+- **Dependency floors.** `sentence-transformers>=5.4.0` (was 2.2.0) and
+  `numpy>=1.22.5` are now declared. numpy was already installed via
+  chromadb.
+- **No migrations.** The new scope indexes are built in memory at startup,
+  so rolling back to 0.5.0 is safe.
 
 ### Added — coordination API
 
@@ -72,6 +100,24 @@ Both come from `lcma.llm.app_url` (default
 OpenRouter identifies an app by its referer URL, so give each environment
 its own `app_url` to see prod and staging spend separately. Other
 OpenAI-compatible endpoints ignore both headers.
+
+### Fixed
+
+- **Embedding health probe** (#438): sentence-transformers 5.4 renamed
+  `get_sentence_embedding_dimension` to `get_embedding_dimension`. The old
+  name logged a `FutureWarning` on every `/health` call (~12 lines/min on
+  prod), so the probe now calls the new name, which raises the floor to
+  `>=5.4.0`.
+
+### Internal
+
+- Dependencies: sentence-transformers 5.2.2 → 5.6.0 (#433); pyjwt 2.13.0 →
+  2.15.0 (#434), urllib3 2.7.0 → 2.8.0 (#435) and oauthlib 3.3.1 → 4.0.0
+  (#437), all indirect. Lithos code does not use oauthlib; it arrives via
+  `requests-oauthlib`.
+- Comment cleanup across `src/lithos` (#439): restating comments cut and
+  three inaccurate ones corrected. No code changes.
+- Docs: the 2026-09 state review and LCMA phase-4 direction (#431, #432).
 
 ## [0.5.0] — 2026-09-26
 
