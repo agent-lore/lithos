@@ -6,7 +6,6 @@ import asyncio
 import collections
 import gc
 import logging
-import math
 import os
 import re
 import shutil
@@ -36,13 +35,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Scopes up to this many docs are passed to Chroma as a ``doc_id $in`` filter,
-# so the nearest chunks are drawn from the scope itself (5002185d). Larger
-# scopes are a big share of the corpus, where a filter list costs more than it
-# saves (measured ~185 ms at 8k ids on 100k chunks) and crowding is no risk; they
-# use an over-fetch scaled to the scope's share instead, up to the pool cap.
-SCOPE_PREFILTER_MAX_IDS = 1000
-_SCOPE_FALLBACK_MAX_POOL = 2000
+# A search scope is passed to Chroma as a ``doc_id $in`` filter so the nearest
+# chunks are drawn from the scope itself (5002185d). The local store binds each
+# id as one SQLite variable: on chromadb 1.4.1 the largest working list is 32,762
+# ids (SQLite's 32,766 limit less Chroma's own parameters), and latency was 52 ms
+# at 5.8k ids and 142 ms at 20k on 120k chunks. Larger scopes — only possible on
+# a corpus over this size — widen an unfiltered pool until enough scoped notes
+# surface, since doc share says nothing about chunk share.
+SCOPE_PREFILTER_MAX_IDS = 30_000
+_SCOPE_WIDEN_FACTOR = 4
 
 _TANTIVY_RESERVED_CHAR_RE = re.compile(r'([+\-!(){}\[\]^"~*?:\\/|&\'])')
 
@@ -936,7 +937,6 @@ collection.count()
         author: str | None = None,
         path_prefix: str | None = None,
         within_ids: Collection[str] | None = None,
-        scope_share: float = 1.0,
     ) -> list[SemanticResult]:
         """Semantic search.
 
@@ -947,12 +947,11 @@ collection.count()
             tags: Filter by tags
             author: Filter by author (exact match)
             path_prefix: Filter by path prefix
-            within_ids: Restrict results to these doc ids. Up to
+            within_ids: Rank only these doc ids. Up to
                 :data:`SCOPE_PREFILTER_MAX_IDS` they filter the nearest-neighbour
-                query itself; beyond that the pool grows by ``1 / scope_share``
-                and hits are post-filtered. An empty collection returns no results.
-            scope_share: Fraction of the corpus inside ``within_ids`` (0-1],
-                used only to size the over-cap pool.
+                query itself; a larger scope widens an unfiltered pool until
+                ``limit`` scoped notes surface or the collection is exhausted.
+                An empty collection returns no results.
 
         Returns:
             List of semantic results (deduplicated by document)
@@ -962,26 +961,45 @@ collection.count()
             return []
 
         query_embedding = self.model.encode([query], show_progress_bar=False).tolist()[0]
-
         # Over-fetch chunks: several can belong to one document.
         pool = limit * 3
         where: chromadb.Where | None = None
-        if scope is not None:
-            if len(scope) <= SCOPE_PREFILTER_MAX_IDS:
-                where = {"doc_id": {"$in": sorted(scope)}}
-            else:
-                share = min(max(scope_share, 1e-9), 1.0)
-                pool = min(max(pool, math.ceil(pool / share)), _SCOPE_FALLBACK_MAX_POOL)
+        if scope is not None and len(scope) <= SCOPE_PREFILTER_MAX_IDS:
+            where = {"doc_id": {"$in": sorted(scope)}}
+        widen = scope is not None and where is None
 
-        query_kwargs: dict = {
-            "query_embeddings": [query_embedding],
-            "n_results": pool,
-            "include": ["documents", "metadatas", "distances"],
-        }
-        if where is not None:
-            query_kwargs["where"] = where
-        results = self.collection.query(**query_kwargs)
+        while True:
+            query_kwargs: dict = {
+                "query_embeddings": [query_embedding],
+                "n_results": pool,
+                "include": ["documents", "metadatas", "distances"],
+            }
+            if where is not None:
+                query_kwargs["where"] = where
+            results = self.collection.query(**query_kwargs)
+            semantic_results = self._collect(
+                results, limit, threshold, tags, author, path_prefix, scope
+            )
+            if not widen or len(semantic_results) >= limit:
+                return semantic_results
+            distances = results["distances"][0] if results["distances"] else []
+            # Stop once the collection is exhausted or the pool's tail is below
+            # the threshold: chunks further out cannot qualify.
+            if len(distances) < pool or (distances and 1.0 - distances[-1] < threshold):
+                return semantic_results
+            pool *= _SCOPE_WIDEN_FACTOR
 
+    def _collect(
+        self,
+        results: chromadb.QueryResult,
+        limit: int,
+        threshold: float,
+        tags: list[str] | None,
+        author: str | None,
+        path_prefix: str | None,
+        scope: set[str] | None,
+    ) -> list[SemanticResult]:
+        """Turn one Chroma query result into per-document hits passing every filter."""
         # Process results and deduplicate by document
         seen_docs: set[str] = set()
         semantic_results: list[SemanticResult] = []
@@ -1331,12 +1349,6 @@ class SearchEngine:
             )
 
     @traced("lithos.search.fulltext")
-    def _scope_share(self, within_ids: Collection[str] | None) -> float:
-        """Fraction of indexed docs inside a scope too large to pre-filter."""
-        if within_ids is None or len(within_ids) <= SCOPE_PREFILTER_MAX_IDS:
-            return 1.0
-        return len(within_ids) / max(self._tantivy.count_docs(), len(within_ids))
-
     def full_text_search(
         self,
         query: str,
@@ -1451,7 +1463,6 @@ class SearchEngine:
                 author=author,
                 path_prefix=path_prefix,
                 within_ids=within_ids,
-                scope_share=self._scope_share(within_ids),
             )
             logger.debug(
                 "semantic_search: query_len=%d limit=%d threshold=%.2f result_count=%d",
@@ -1537,7 +1548,6 @@ class SearchEngine:
                         author=author,
                         path_prefix=path_prefix,
                         within_ids=within_ids,
-                        scope_share=self._scope_share(within_ids),
                     )
                 except Exception as exc:
                     logger.warning("Hybrid search: semantic backend failed: %s", exc)

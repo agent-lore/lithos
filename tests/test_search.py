@@ -1499,6 +1499,11 @@ class _RecordingCollection:
         return getattr(self._inner, name)
 
 
+def test_search_methods_keep_their_tracing_spans() -> None:
+    for name in ("full_text_search", "semantic_search", "hybrid_search"):
+        assert hasattr(getattr(SearchEngine, name), "__wrapped__"), name
+
+
 class TestScopedSearch:
     """``within_ids`` ranks inside the scope instead of post-filtering a global pool (5002185d).
 
@@ -1592,17 +1597,59 @@ class TestScopedSearch:
         assert engine.hybrid_search("sky", threshold=0.0, within_ids=set()) == []
         assert recorder.queries == []
 
-    async def test_scope_over_the_cap_falls_back_to_a_proportional_pool(
+    async def test_large_scope_is_still_prefiltered(
         self, crowded, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         engine, scoped = crowded
-        monkeypatch.setattr("lithos.search.SCOPE_PREFILTER_MAX_IDS", 1)
+        everything = scoped | {r.id for r in engine.full_text_search("sky", limit=100)}
         recorder = self._record(engine, monkeypatch)
-        results = engine.semantic_search(
+        engine.semantic_search("the sky is blue", limit=1, threshold=0.0, within_ids=everything)
+        (call,) = recorder.queries
+        assert call["where"] == {"doc_id": {"$in": sorted(everything)}}
+
+    async def test_over_cap_scope_widens_until_short_scoped_notes_surface(
+        self,
+        knowledge_manager: KnowledgeManager,
+        search_engine: SearchEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Doc share != chunk share: long out-of-scope notes own almost every chunk.
+
+        Two one-chunk scoped notes among ten ~10-chunk distractors are 1/6 of the
+        docs but ~2% of the chunks, so a pool sized by doc share holds only
+        distractor chunks. Widening must keep going until a scoped note appears.
+        """
+        paragraph = "The sky is blue. A clear blue sky over the hills, sky observation. " * 6
+        for i in range(10):
+            doc = (
+                await knowledge_manager.create(
+                    title=f"Long sky log {i}",
+                    content="\n\n".join(f"{paragraph} Entry {i}.{j}." for j in range(10)),
+                    agent="agent",
+                    path="notes",
+                )
+            ).document
+            search_engine.index(KnowledgeManager.to_indexable(doc))
+        scoped: set[str] = set()
+        for title in ("Gardening", "Tea"):
+            doc = (
+                await knowledge_manager.create(
+                    title=title,
+                    content=f"Dave enjoys {title.lower()}.",
+                    agent="agent",
+                    path="agents/robot-r",
+                )
+            ).document
+            search_engine.index(KnowledgeManager.to_indexable(doc))
+            scoped.add(doc.id)
+        monkeypatch.setattr("lithos.search.SCOPE_PREFILTER_MAX_IDS", 1)
+        recorder = self._record(search_engine, monkeypatch)
+
+        results = search_engine.semantic_search(
             "the sky is blue", limit=1, threshold=0.0, within_ids=scoped
         )
-        (call,) = recorder.queries
-        assert "where" not in call
-        # 2 of 32 docs in scope -> pool scaled by 16 instead of the fixed 3x.
-        assert call["n_results"] == 48
-        assert {r.id for r in results} <= scoped
+
+        assert [r.id for r in results] and results[0].id in scoped
+        assert all("where" not in call for call in recorder.queries)
+        pools = [call["n_results"] for call in recorder.queries]
+        assert len(pools) > 1 and pools == sorted(pools)

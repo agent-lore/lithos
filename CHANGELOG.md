@@ -36,9 +36,11 @@ elsewhere, so a scoped search for 3 results usually returned none. In
 scope from the in-memory corpus index (new namespace and sorted path
 indexes, sub-linear) and the backends rank inside it: Tantivy with a
 constant-score id filter (BM25 scores unchanged), Chroma with a
-`doc_id $in` filter for scopes up to 1,000 docs, or an over-fetch scaled to
-the scope's share of the corpus beyond that. An empty scope returns no
-results without querying. `path_prefix` keeps its plain string-prefix
+`doc_id $in` filter for scopes up to 30,000 docs (below the ~32.7k SQLite
+bound-variable limit of the local store). A larger scope — only possible on a
+bigger corpus — widens an unfiltered pool until enough scoped notes surface or
+the collection is exhausted. An empty scope returns no results without
+querying. `path_prefix` keeps its plain string-prefix
 semantics. Graph mode is unchanged. `SearchEngine.full_text_search` /
 `semantic_search` / `hybrid_search` gain a `within_ids` argument and
 `KnowledgeManager` a `scope_ids()` resolver.
