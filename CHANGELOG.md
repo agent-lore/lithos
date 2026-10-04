@@ -45,6 +45,15 @@ semantics. Graph mode is unchanged. `SearchEngine.full_text_search` /
 `semantic_search` / `hybrid_search` gain a `within_ids` argument and
 `KnowledgeManager` a `scope_ids()` resolver.
 
+#### Scoped `lithos_retrieve` ranks inside the scope (task 5002185d, part 2)
+
+`lithos_retrieve`'s vector and lexical scouts had the same crowding problem:
+they fetched `limit×3` hits from the whole index and only then applied
+`namespace_filter` / `tags` / `path_prefix`, so a namespace of a few notes
+rarely surfaced. Both scouts now resolve those filters to a doc-id scope
+(`KnowledgeManager.scope_ids`) and rank inside it via `within_ids`. The
+status and access-scope gate is unchanged.
+
 ### Added — LLM synthesis
 
 #### OpenRouter app attribution

@@ -3185,6 +3185,18 @@ class TestScopedSearchTool:
         assert [r["id"] for r in res["results"]] == [target]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "scope", [{"namespace_filter": ["agents/robot-r"]}, {"path_prefix": "agents/robot-r/"}]
+    )
+    async def test_retrieve_finds_the_few_scoped_notes(
+        self, server: LithosServer, scope: dict
+    ) -> None:
+        target = await self._crowded(server)
+        tool = await server.mcp.get_tool("lithos_retrieve")
+        res = await tool.fn(query="sky", limit=1, tags=["memory"], **scope)
+        assert [r["id"] for r in res["results"]] == [target]
+
+    @pytest.mark.asyncio
     async def test_scope_matching_nothing_returns_no_results(self, server: LithosServer) -> None:
         await self._crowded(server)
         res = await self._search(server, query="sky", path_prefix="agents/robot-z/")

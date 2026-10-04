@@ -130,7 +130,7 @@
         "qualname": "lithos.cognitive_memory.CognitiveMemory.cache_lookup"
       }
     ],
-    "total_functions": 824
+    "total_functions": 825
   },
   "domain": {
     "associations": 26,
@@ -429,13 +429,13 @@
       },
       "LCMA": {
         "classes": 13,
-        "functions": 158,
+        "functions": 159,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1253,
-        "lines": 5548,
+        "lines": 5560,
         "modules": 12,
         "public_symbols": 36,
-        "sloc": 4479
+        "sloc": 4488
       },
       "Logging": {
         "classes": 1,
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 26767,
+    "total_lines": 26779,
     "total_modules": 47,
-    "total_sloc": 21644
+    "total_sloc": 21653
   },
   "tests": {
     "ratio": 1.89,
-    "src_lines": 26767,
-    "test_lines": 50657
+    "src_lines": 26779,
+    "test_lines": 50711
   }
 }

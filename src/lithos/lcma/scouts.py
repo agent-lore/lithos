@@ -161,6 +161,20 @@ def _gate(
     return not (check_path and not _passes_path_prefix(meta.path if meta else None, path_prefix))
 
 
+def _filter_scope(
+    knowledge: KnowledgeManager,
+    namespace_filter: list[str] | None,
+    tags: list[str] | None,
+    path_prefix: str | None,
+) -> set[str] | None:
+    """Doc ids passing the namespace/tags/path filters, for the search backends.
+
+    The backends rank inside this set, so a small scope is not crowded out of a
+    whole-corpus pool (5002185d); ``_gate`` still applies status/access scope.
+    """
+    return knowledge.scope_ids(namespaces=namespace_filter, tags=tags, path_prefix=path_prefix)
+
+
 # ---------------------------------------------------------------------------
 # Scout implementations
 # ---------------------------------------------------------------------------
@@ -178,13 +192,12 @@ async def scout_vector(
     tags: list[str] | None = None,
     path_prefix: str | None = None,
 ) -> list[Candidate]:
-    """ChromaDB semantic search via asyncio.to_thread."""
+    """ChromaDB semantic search via asyncio.to_thread, ranked inside the filter scope."""
     results = await asyncio.to_thread(
         search.semantic_search,
         query=query,
-        limit=limit * 3,  # over-fetch to allow for gating
-        tags=tags,
-        path_prefix=path_prefix,
+        limit=limit * 3,  # over-fetch to allow for status/access-scope gating
+        within_ids=_filter_scope(knowledge, namespace_filter, tags, path_prefix),
     )
     candidates: list[Candidate] = []
     for r in results:
@@ -228,14 +241,13 @@ async def scout_lexical(
     tags: list[str] | None = None,
     path_prefix: str | None = None,
 ) -> list[Candidate]:
-    """Tantivy full-text search via asyncio.to_thread."""
+    """Tantivy full-text search via asyncio.to_thread, ranked inside the filter scope."""
     results = await asyncio.to_thread(
         search.full_text_search,
         query=query,
         limit=limit * 3,
-        tags=tags,
-        path_prefix=path_prefix,
         query_mode="literal",
+        within_ids=_filter_scope(knowledge, namespace_filter, tags, path_prefix),
     )
     candidates: list[Candidate] = []
     for r in results:
