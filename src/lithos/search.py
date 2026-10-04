@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +34,16 @@ if TYPE_CHECKING:
     from lithos.graph import KnowledgeGraph
 
 logger = logging.getLogger(__name__)
+
+# A search scope is passed to Chroma as a ``doc_id $in`` filter so the nearest
+# chunks are drawn from the scope itself (5002185d). The local store binds each
+# id as one SQLite variable: on chromadb 1.4.1 the largest working list is 32,762
+# ids (SQLite's 32,766 limit less Chroma's own parameters), and latency was 52 ms
+# at 5.8k ids and 142 ms at 20k on 120k chunks. Larger scopes — only possible on
+# a corpus over this size — widen an unfiltered pool until enough scoped notes
+# surface, since doc share says nothing about chunk share.
+SCOPE_PREFILTER_MAX_IDS = 30_000
+_SCOPE_WIDEN_FACTOR = 4
 
 _TANTIVY_RESERVED_CHAR_RE = re.compile(r'([+\-!(){}\[\]^"~*?:\\/|&\'])')
 
@@ -500,6 +510,7 @@ class TantivyIndex:
         author: str | None = None,
         path_prefix: str | None = None,
         query_mode: Literal["syntax", "literal"] = "syntax",
+        within_ids: Collection[str] | None = None,
     ) -> list[SearchResult]:
         """Search the index.
 
@@ -511,10 +522,15 @@ class TantivyIndex:
             path_prefix: Filter by path prefix
             query_mode: ``syntax`` for raw Tantivy syntax, ``literal`` for
                 natural-language text that must be parser-safe
+            within_ids: Restrict matching to these doc ids inside the query
+                itself; BM25 scores are unchanged. An empty collection
+                returns no results.
 
         Returns:
             List of search results
         """
+        if within_ids is not None and not within_ids:
+            return []
         self.index.reload()
         searcher = self.index.searcher()
 
@@ -532,6 +548,13 @@ class TantivyIndex:
 
         try:
             parsed_query = self.index.parse_query(full_query, ["title", "content", "entities"])
+            if within_ids is not None:
+                scope = tantivy.Query.const_score_query(
+                    tantivy.Query.term_set_query(self.schema, "id", list(within_ids)), 0.0
+                )
+                parsed_query = tantivy.Query.boolean_query(
+                    [(tantivy.Occur.Must, parsed_query), (tantivy.Occur.Must, scope)]
+                )
             results = searcher.search(parsed_query, effective_limit).hits
         except Exception as exc:
             logger.warning("Tantivy query parse/search failed: %s | query=%r", exc, full_query)
@@ -913,6 +936,7 @@ collection.count()
         tags: list[str] | None = None,
         author: str | None = None,
         path_prefix: str | None = None,
+        within_ids: Collection[str] | None = None,
     ) -> list[SemanticResult]:
         """Semantic search.
 
@@ -923,25 +947,59 @@ collection.count()
             tags: Filter by tags
             author: Filter by author (exact match)
             path_prefix: Filter by path prefix
+            within_ids: Rank only these doc ids. Up to
+                :data:`SCOPE_PREFILTER_MAX_IDS` they filter the nearest-neighbour
+                query itself; a larger scope widens an unfiltered pool until
+                ``limit`` scoped notes surface or the collection is exhausted.
+                An empty collection returns no results.
 
         Returns:
             List of semantic results (deduplicated by document)
         """
+        scope: set[str] | None = None if within_ids is None else set(within_ids)
+        if scope is not None and not scope:
+            return []
+
         query_embedding = self.model.encode([query], show_progress_bar=False).tolist()[0]
+        # Over-fetch chunks: several can belong to one document.
+        pool = limit * 3
+        where: chromadb.Where | None = None
+        if scope is not None and len(scope) <= SCOPE_PREFILTER_MAX_IDS:
+            where = {"doc_id": {"$in": sorted(scope)}}
+        widen = scope is not None and where is None
 
-        # where_filter not used - ChromaDB filtering done post-query
-        if tags:
-            # ChromaDB doesn't support complex tag filtering well,
-            # so we'll filter post-query
-            pass
+        while True:
+            query_kwargs: dict = {
+                "query_embeddings": [query_embedding],
+                "n_results": pool,
+                "include": ["documents", "metadatas", "distances"],
+            }
+            if where is not None:
+                query_kwargs["where"] = where
+            results = self.collection.query(**query_kwargs)
+            semantic_results = self._collect(
+                results, limit, threshold, tags, author, path_prefix, scope
+            )
+            if not widen or len(semantic_results) >= limit:
+                return semantic_results
+            distances = results["distances"][0] if results["distances"] else []
+            # Stop once the collection is exhausted or the pool's tail is below
+            # the threshold: chunks further out cannot qualify.
+            if len(distances) < pool or (distances and 1.0 - distances[-1] < threshold):
+                return semantic_results
+            pool *= _SCOPE_WIDEN_FACTOR
 
-        # Query ChromaDB - get more results than needed for deduplication
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=limit * 3,
-            include=["documents", "metadatas", "distances"],
-        )
-
+    def _collect(
+        self,
+        results: chromadb.QueryResult,
+        limit: int,
+        threshold: float,
+        tags: list[str] | None,
+        author: str | None,
+        path_prefix: str | None,
+        scope: set[str] | None,
+    ) -> list[SemanticResult]:
+        """Turn one Chroma query result into per-document hits passing every filter."""
         # Process results and deduplicate by document
         seen_docs: set[str] = set()
         semantic_results: list[SemanticResult] = []
@@ -955,6 +1013,9 @@ collection.count()
 
             # Skip if already seen this document
             if doc_id in seen_docs:
+                continue
+
+            if scope is not None and doc_id not in scope:
                 continue
 
             # Calculate similarity from distance (cosine distance to similarity)
@@ -1296,12 +1357,15 @@ class SearchEngine:
         author: str | None = None,
         path_prefix: str | None = None,
         query_mode: Literal["syntax", "literal"] = "syntax",
+        within_ids: Collection[str] | None = None,
     ) -> list[SearchResult]:
         """Full-text search using Tantivy.
 
         ``query_mode="syntax"`` preserves the historical explicit Tantivy
         query syntax contract. ``query_mode="literal"`` hardens natural-
         language callers by escaping parser metacharacters before execution.
+        ``within_ids`` restricts matching to those doc ids (see
+        :meth:`TantivyIndex.search`).
 
         Raises:
             SearchBackendError: If the Tantivy backend raises an exception.
@@ -1318,6 +1382,7 @@ class SearchEngine:
                 author=author,
                 path_prefix=path_prefix,
                 query_mode=query_mode,
+                within_ids=within_ids,
             )
             logger.debug(
                 "full_text_search: query_len=%d limit=%d query_mode=%s result_count=%d",
@@ -1356,6 +1421,7 @@ class SearchEngine:
         tags: list[str] | None = None,
         author: str | None = None,
         path_prefix: str | None = None,
+        within_ids: Collection[str] | None = None,
     ) -> list[SemanticResult]:
         """Semantic search using ChromaDB.
 
@@ -1366,6 +1432,8 @@ class SearchEngine:
             tags: Filter by tags (AND)
             author: Filter by author
             path_prefix: Filter by path prefix
+            within_ids: Restrict ranking to these doc ids (see
+                :meth:`ChromaIndex.search`)
 
         Raises:
             SearchBackendError: If the ChromaDB backend raises an exception.
@@ -1394,6 +1462,7 @@ class SearchEngine:
                 tags=tags,
                 author=author,
                 path_prefix=path_prefix,
+                within_ids=within_ids,
             )
             logger.debug(
                 "semantic_search: query_len=%d limit=%d threshold=%.2f result_count=%d",
@@ -1432,12 +1501,13 @@ class SearchEngine:
         tags: list[str] | None = None,
         author: str | None = None,
         path_prefix: str | None = None,
+        within_ids: Collection[str] | None = None,
     ) -> list[SearchResult]:
         """Hybrid search combining full-text (Tantivy) and semantic (ChromaDB) via RRF.
 
         Calls both backends, extracts ranked doc ID lists, merges them with
         Reciprocal Rank Fusion (k=60), and returns SearchResult objects sorted
-        by RRF score descending.
+        by RRF score descending. ``within_ids`` scopes both backends.
 
         Raises:
             SearchBackendError: If every backend fails.  A single-backend failure
@@ -1459,6 +1529,7 @@ class SearchEngine:
                     author=author,
                     path_prefix=path_prefix,
                     query_mode="literal",
+                    within_ids=within_ids,
                 )
             except Exception as exc:
                 logger.warning("Hybrid search: full-text backend failed: %s", exc)
@@ -1476,6 +1547,7 @@ class SearchEngine:
                         tags=tags,
                         author=author,
                         path_prefix=path_prefix,
+                        within_ids=within_ids,
                     )
                 except Exception as exc:
                     logger.warning("Hybrid search: semantic backend failed: %s", exc)

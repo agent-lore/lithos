@@ -423,3 +423,100 @@ def test_match_id_prefix_after_rebuild_reflects_only_the_scan():
 
     assert idx.match_id_prefix("dddd", 5) == []
     assert idx.match_id_prefix("eeee", 5) == ["eeee-1"]
+
+
+# ---------------------------------------------------------------------------
+# Scope resolution — the in-memory scope that search/retrieve push into the backends
+# ---------------------------------------------------------------------------
+
+
+def _scope(idx: CorpusIndex, **filters: object) -> set[str] | None:
+    """Resolve a search scope the way ``KnowledgeManager.scope_ids`` does."""
+    return idx.candidate_ids(
+        tags=filters.pop("tags", None),  # type: ignore[arg-type]
+        author=None,
+        metadata_match=None,
+        exclude_status=None,
+        **filters,  # type: ignore[arg-type]
+    )
+
+
+def _scoped_corpus() -> CorpusIndex:
+    idx = CorpusIndex()
+    _add(idx, "a1", title="A1", path="agents/robot-a/one.md", tags=["memory"])
+    _add(idx, "a2", title="A2", path="agents/robot-a/two.md")
+    _add(idx, "b1", title="B1", path="agents/robot-b/one.md", tags=["memory"])
+    _add(idx, "x1", title="X1", path="agentsx/one.md", tags=["memory"])
+    _add(idx, "r1", title="R1", path="root.md")
+    return idx
+
+
+def test_scope_ids_none_without_scoping_filters():
+    assert _scope(_scoped_corpus()) is None
+    assert _scope(_scoped_corpus(), path_prefix="") is None
+
+
+def test_scope_ids_path_prefix_is_a_plain_string_prefix():
+    idx = _scoped_corpus()
+    assert _scope(idx, path_prefix="agents/robot-a/") == {"a1", "a2"}
+    # Not directory-aligned: matches both robots, but never "agentsx/".
+    assert _scope(idx, path_prefix="agents/robot-") == {"a1", "a2", "b1"}
+    assert _scope(idx, path_prefix="agents/") == {"a1", "a2", "b1"}
+    assert _scope(idx, path_prefix="nowhere/") == set()
+
+
+def test_scope_ids_namespaces_use_explicit_frontmatter_namespace():
+    idx = _scoped_corpus()
+    _add(idx, "e1", title="E1", path="inbox/e1.md", namespace="agents/robot-a")
+    assert _scope(idx, namespaces=["agents/robot-a"]) == {"a1", "a2", "e1"}
+    assert _scope(idx, namespaces=["agents/robot-a", "default"]) == {"a1", "a2", "e1", "r1"}
+    # An empty list admits nothing, matching the retrieve gate.
+    assert _scope(idx, namespaces=[]) == set()
+
+
+def test_scope_ids_intersects_every_filter():
+    idx = _scoped_corpus()
+    assert _scope(idx, path_prefix="agents/", tags=["memory"]) == {"a1", "b1"}
+    assert _scope(idx, namespaces=["agents/robot-a"], tags=["memory"]) == {"a1"}
+    assert _scope(idx, path_prefix="agents/robot-b/", namespaces=["agents/robot-a"]) == set()
+
+
+def test_scope_ids_follow_rename_and_removal():
+    idx = _scoped_corpus()
+    moved = _meta(idx, title="A2", path="agents/robot-b/two.md")
+    idx.reindex_document("a2", moved)
+    assert _scope(idx, path_prefix="agents/robot-a/") == {"a1"}
+    assert _scope(idx, path_prefix="agents/robot-b/") == {"b1", "a2"}
+    assert _scope(idx, namespaces=["agents/robot-b"]) == {"b1", "a2"}
+
+    idx.remove_document("b1")
+    assert _scope(idx, path_prefix="agents/robot-b/") == {"a2"}
+    assert _scope(idx, namespaces=["agents/robot-b"]) == {"a2"}
+
+
+def test_scope_ids_after_rebuild_reflect_only_the_scan():
+    idx = _scoped_corpus()
+    idx.rebuild(
+        [
+            ScannedNote("z2", "Z2", {"title": "Z2"}, Path("agents/robot-a/z2.md")),
+            ScannedNote("z1", "Z1", {"title": "Z1"}, Path("agents/robot-a/z1.md")),
+            ScannedNote("y1", "Y1", {"title": "Y1"}, Path("other/y1.md")),
+        ]
+    )
+    assert _scope(idx, path_prefix="agents/robot-a/") == {"z1", "z2"}
+    assert _scope(idx, namespaces=["agents/robot-a"]) == {"z1", "z2"}
+    assert _scope(idx, path_prefix="agents/robot-b/") == set()
+
+
+def test_scope_ids_never_scan_the_metadata_cache(monkeypatch):
+    class _NoScan(dict):
+        def _refuse(self, *args, **kwargs):
+            raise AssertionError("scope resolution must use indexes, not a cache scan")
+
+        __iter__ = items = values = keys = _refuse
+
+    idx = _scoped_corpus()
+    monkeypatch.setattr(idx, "_meta_cache", _NoScan(idx._meta_cache))
+    assert _scope(idx, path_prefix="agents/", namespaces=["agents/robot-a"], tags=["memory"]) == {
+        "a1"
+    }

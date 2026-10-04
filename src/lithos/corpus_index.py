@@ -1,8 +1,9 @@
 """The in-memory projection over the Corpus: KnowledgeManager's query accelerator.
 
 The Corpus is the source of truth; this is the derived view that makes it
-queryable without a disk read. It owns the per-document metadata cache, the five
+queryable without a disk read. It owns the per-document metadata cache, the
 inverted indexes that turn equality filters into set intersections (#306/#316),
+the namespace and sorted path indexes that resolve a search scope (5002185d),
 the path/slug/source-url maps, and the in-memory provenance graph
 (``derived_from`` forward + reverse). All of it is rebuilt from the Corpus on
 construction and maintained incrementally on every write.
@@ -43,7 +44,7 @@ from lithos.frontmatter_codec import (
     normalize_yaml_dates,
     slugify,
 )
-from lithos.id_resolution import PrefixIndex
+from lithos.id_resolution import PathPrefixIndex, PrefixIndex
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +214,9 @@ class CorpusIndex:
         self._tag_index: dict[str, set[str]] = {}
         self._entities_index: dict[str, set[str]] = {}
         self._metadata_index: dict[str, dict[str, set[str]]] = {}
+        # Search-scope indexes resolved by KnowledgeManager.scope_ids (5002185d).
+        self._path_index = PathPrefixIndex()
+        self._namespace_index: dict[str, set[str]] = {}
         self._meta_seq: int = 0
         self.duplicate_url_count: int = 0
 
@@ -233,6 +237,8 @@ class CorpusIndex:
             self._tag_index.setdefault(tag, set()).add(doc_id)
         for entity in cached.entities:
             self._entities_index.setdefault(entity, set()).add(doc_id)
+        self._path_index.add(str(cached.path), doc_id)
+        self._namespace_index.setdefault(cached.namespace, set()).add(doc_id)
         for key, value in cached.extra.items():
             buckets = self._metadata_index.setdefault(key, {})
             # A list value is matched element-wise (contains); a scalar by value.
@@ -258,6 +264,8 @@ class CorpusIndex:
             _discard(self._tag_index, tag)
         for entity in cached.entities:
             _discard(self._entities_index, entity)
+        self._path_index.discard(str(cached.path), doc_id)
+        _discard(self._namespace_index, cached.namespace)
         for key, value in cached.extra.items():
             buckets = self._metadata_index.get(key)
             if buckets is None:
@@ -276,15 +284,23 @@ class CorpusIndex:
         metadata_match: dict | None,
         exclude_status: list[str] | None,
         entities: list[str] | None = None,
+        namespaces: list[str] | None = None,
+        path_prefix: str | None = None,
     ) -> set[str] | None:
         """Resolve equality filters to a candidate id set via the inverted index.
 
-        Returns ``None`` when no equality/AND filter is supplied, signalling the
-        caller to use the existing full-scan path (correct for unfiltered /
-        prefix-only / since-only / exclude-only queries). Otherwise returns the
-        (possibly empty) intersected candidate set — never iterating all docs.
+        Returns ``None`` when no filter is supplied (the caller's full-scan path).
+        Otherwise the (possibly empty) intersected set — never iterating all docs.
+        ``namespaces`` matches any listed (``[]`` matches nothing); ``path_prefix``
+        is a plain string prefix of the relative path (5002185d search scopes).
         """
         seed_sets: list[set[str]] = []
+        if namespaces is not None:
+            seed_sets.append(
+                set().union(*(self._namespace_index.get(n, set()) for n in namespaces))
+            )
+        if path_prefix:
+            seed_sets.append(self._path_index.match(path_prefix))
         if author:
             seed_sets.append(self._author_index.get(author, set()))
         if tags:
@@ -556,6 +572,8 @@ class CorpusIndex:
         self._tag_index.clear()
         self._entities_index.clear()
         self._metadata_index.clear()
+        self._path_index.clear()
+        self._namespace_index.clear()
         self._meta_seq = 0
         self.duplicate_url_count = 0
 
