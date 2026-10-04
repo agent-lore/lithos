@@ -290,6 +290,48 @@ class TestScoutVector:
         assert len(candidates) == 1
 
 
+class TestVectorLexicalScopePushdown:
+    """scout_vector/scout_lexical rank inside the filter scope (5002185d)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("scout", "backend"),
+        [("vector", "semantic_search"), ("lexical", "full_text_search")],
+    )
+    async def test_filters_are_pushed_into_the_backend_as_a_scope(
+        self, seeded_km: KnowledgeManager, seeded_search: SearchEngine, scout: str, backend: str
+    ) -> None:
+        from unittest.mock import patch
+
+        fn = scout_vector if scout == "vector" else scout_lexical
+        expected = seeded_km.scope_ids(namespaces=["projects"], path_prefix="projects/")
+        assert expected
+        with patch.object(seeded_search, backend, return_value=[]) as mocked:
+            await fn(
+                "q",
+                seeded_search,
+                seeded_km,
+                namespace_filter=["projects"],
+                path_prefix="projects/",
+            )
+        assert mocked.call_args.kwargs["within_ids"] == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("scout", "backend"),
+        [("vector", "semantic_search"), ("lexical", "full_text_search")],
+    )
+    async def test_unfiltered_scouts_stay_unscoped(
+        self, seeded_km: KnowledgeManager, seeded_search: SearchEngine, scout: str, backend: str
+    ) -> None:
+        from unittest.mock import patch
+
+        fn = scout_vector if scout == "vector" else scout_lexical
+        with patch.object(seeded_search, backend, return_value=[]) as mocked:
+            await fn("q", seeded_search, seeded_km)
+        assert mocked.call_args.kwargs["within_ids"] is None
+
+
 # ---------------------------------------------------------------------------
 # scout_lexical
 # ---------------------------------------------------------------------------

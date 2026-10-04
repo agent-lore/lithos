@@ -62,8 +62,8 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 - def `usage_score` — Return a bounded ``[0, 1]`` popularity signal from live usage counters.
 
 ### `lithos.lcma.scouts`
-- def `scout_vector` — ChromaDB semantic search via asyncio.to_thread.
-- def `scout_lexical` — Tantivy full-text search via asyncio.to_thread.
+- def `scout_vector` — ChromaDB semantic search via asyncio.to_thread, ranked inside the filter scope.
+- def `scout_lexical` — Tantivy full-text search via asyncio.to_thread, ranked inside the filter scope.
 - def `scout_exact_alias` — Resolve query via wiki-link resolution, UUID-prefix, and slug matching.
 - def `scout_tags_recency` — Tag + path_prefix filter sorted by recency. Returns [] when both are absent.
 - def `scout_freshness` — Boost notes with expires_at/is_stale, keyword-triggered.
