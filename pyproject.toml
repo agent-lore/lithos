@@ -33,6 +33,7 @@ dependencies = [
     "python-json-logger>=3.0",
     "spacy>=3.8",
     "httpx>=0.27",  # LCMA WS1 LLM synthesis client (already transitive via fastmcp/chromadb)
+    "numpy>=1.22.5",  # in-process ranking of small search scopes (already transitive via chromadb)
 ]
 
 [project.optional-dependencies]

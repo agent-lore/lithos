@@ -1562,9 +1562,76 @@ class TestScopedSearch:
             "the sky is blue", limit=1, threshold=0.0, within_ids=scoped
         )
         assert [r.id for r in results] and results[0].id in scoped
-        (call,) = recorder.queries
-        assert call["where"] == {"doc_id": {"$in": sorted(scoped)}}
-        assert call["n_results"] == 3
+        assert recorder.queries == []  # a small scope is ranked in-process
+
+    async def test_direct_ranking_matches_chroma_similarities(
+        self, crowded, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine, scoped = crowded
+        everything = scoped | {r.id for r in engine.full_text_search("sky", limit=100)}
+        direct = engine.semantic_search("blue sky", limit=5, threshold=0.0, within_ids=everything)
+        monkeypatch.setattr("lithos.search.SCOPE_DIRECT_MAX_CHUNKS", 0)
+        recorder = self._record(engine, monkeypatch)
+        queried = engine.semantic_search("blue sky", limit=5, threshold=0.0, within_ids=everything)
+        assert recorder.queries
+        assert [r.id for r in direct] == [r.id for r in queried]
+        for d, f in zip(direct, queried, strict=True):
+            assert d.similarity == pytest.approx(f.similarity, abs=1e-5)
+            assert d.snippet == f.snippet
+
+    async def test_direct_ranking_scores_each_doc_by_its_best_chunk(
+        self,
+        knowledge_manager: KnowledgeManager,
+        search_engine: SearchEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        filler = "Quarterly invoices, ledgers and tax filings for the accounts team. " * 8
+        scoped: set[str] = set()
+        for i, (best, position) in enumerate([("blue sky", 3), ("green tea", 0), ("blue sky", 0)]):
+            sections = [f"{filler} Section {i}.{j}." for j in range(4)]
+            sections[position] = f"Observing the {best} today. " * 6
+            doc = (
+                await knowledge_manager.create(
+                    title=f"Log {i}", content="\n\n".join(sections), agent="a", path="logs"
+                )
+            ).document
+            assert search_engine.index(KnowledgeManager.to_indexable(doc)) > 1
+            scoped.add(doc.id)
+
+        direct = search_engine.semantic_search(
+            "the blue sky", limit=3, threshold=0.0, within_ids=scoped
+        )
+        monkeypatch.setattr("lithos.search.SCOPE_DIRECT_MAX_CHUNKS", 0)
+        monkeypatch.setattr("lithos.search._SCOPE_UNFILTERED_POOL_MAX", 0)
+        filtered = search_engine.semantic_search(
+            "the blue sky", limit=3, threshold=0.0, within_ids=scoped
+        )
+
+        assert [r.id for r in direct] == [r.id for r in filtered]
+        assert "blue sky" in direct[0].snippet
+        for d, f in zip(direct, filtered, strict=True):
+            assert d.similarity == pytest.approx(f.similarity, abs=1e-5)
+            assert d.snippet == f.snippet
+
+    async def test_direct_ranking_applies_metadata_filters_before_the_limit(
+        self, crowded, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine, scoped = crowded
+        everything = scoped | {r.id for r in engine.full_text_search("sky", limit=100)}
+        recorder = self._record(engine, monkeypatch)
+        results = engine.semantic_search(
+            "the sky is blue",
+            limit=1,
+            threshold=0.0,
+            path_prefix="agents/robot-r",
+            within_ids=everything,
+        )
+        assert [r.id for r in results] and results[0].id in scoped
+        assert recorder.queries == []
+
+    async def test_direct_ranking_honours_the_threshold(self, crowded) -> None:
+        engine, scoped = crowded
+        assert engine.semantic_search("the sky is blue", threshold=0.99, within_ids=scoped) == []
 
     async def test_fulltext_within_ids_ranks_inside_the_scope(self, crowded) -> None:
         engine, scoped = crowded
@@ -1597,15 +1664,62 @@ class TestScopedSearch:
         assert engine.hybrid_search("sky", threshold=0.0, within_ids=set()) == []
         assert recorder.queries == []
 
-    async def test_large_scope_is_still_prefiltered(
+    async def test_scope_over_the_chunk_cap_skips_direct_ranking(
+        self,
+        knowledge_manager: KnowledgeManager,
+        search_engine: SearchEngine,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        paragraph = "The sky is blue. A clear blue sky over the hills, sky observation. " * 6
+        doc = (
+            await knowledge_manager.create(
+                title="Long sky log",
+                content="\n\n".join(f"{paragraph} Entry {j}." for j in range(5)),
+                agent="agent",
+                path="notes",
+            )
+        ).document
+        assert search_engine.index(KnowledgeManager.to_indexable(doc)) > 1
+        monkeypatch.setattr("lithos.search.SCOPE_DIRECT_MAX_CHUNKS", 1)
+        recorder = self._record(search_engine, monkeypatch)
+
+        results = search_engine.semantic_search(
+            "blue sky", limit=1, threshold=0.0, within_ids={doc.id}
+        )
+
+        assert [r.id for r in results] == [doc.id]
+        assert recorder.queries  # one doc, but more chunks than the cap
+
+    async def test_broad_scope_is_served_by_an_unfiltered_query(
         self, crowded, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         engine, scoped = crowded
         everything = scoped | {r.id for r in engine.full_text_search("sky", limit=100)}
+        monkeypatch.setattr("lithos.search.SCOPE_DIRECT_MAX_DOCS", 0)
         recorder = self._record(engine, monkeypatch)
-        engine.semantic_search("the sky is blue", limit=1, threshold=0.0, within_ids=everything)
+        results = engine.semantic_search(
+            "the sky is blue", limit=1, threshold=0.0, within_ids=everything
+        )
+        assert results
         (call,) = recorder.queries
-        assert call["where"] == {"doc_id": {"$in": sorted(everything)}}
+        assert "where" not in call
+        assert call["n_results"] == 3
+
+    async def test_narrow_scope_falls_back_to_the_prefilter(
+        self, crowded, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine, scoped = crowded
+        monkeypatch.setattr("lithos.search.SCOPE_DIRECT_MAX_DOCS", 0)
+        monkeypatch.setattr("lithos.search._SCOPE_UNFILTERED_POOL_MAX", 4)
+        recorder = self._record(engine, monkeypatch)
+        results = engine.semantic_search(
+            "the sky is blue", limit=1, threshold=0.0, within_ids=scoped
+        )
+        assert [r.id for r in results] and results[0].id in scoped
+        unfiltered, prefiltered = recorder.queries
+        assert "where" not in unfiltered and unfiltered["n_results"] == 3
+        assert prefiltered["where"] == {"doc_id": {"$in": sorted(scoped)}}
+        assert prefiltered["n_results"] == 3
 
     async def test_over_cap_scope_widens_until_short_scoped_notes_surface(
         self,
@@ -1642,6 +1756,8 @@ class TestScopedSearch:
             ).document
             search_engine.index(KnowledgeManager.to_indexable(doc))
             scoped.add(doc.id)
+        monkeypatch.setattr("lithos.search.SCOPE_DIRECT_MAX_DOCS", 0)
+        monkeypatch.setattr("lithos.search._SCOPE_UNFILTERED_POOL_MAX", 0)
         monkeypatch.setattr("lithos.search.SCOPE_PREFILTER_MAX_IDS", 1)
         recorder = self._record(search_engine, monkeypatch)
 
