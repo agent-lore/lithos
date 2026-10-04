@@ -1015,15 +1015,19 @@ collection.count()
             if scope is None or len(semantic_results) >= limit:
                 return semantic_results
             distances = results["distances"][0] if results["distances"] else []
-            # Stop once the collection is exhausted or the pool's tail is below
-            # the threshold: chunks further out cannot qualify.
-            if len(distances) < pool or (distances and 1.0 - distances[-1] < threshold):
+            if len(distances) < pool:  # the pool already holds the whole collection
                 return semantic_results
+            # HNSW is approximate, so a tail below the threshold does not prove
+            # no scoped chunk qualifies; only the scoped query can settle it.
+            tail_below = bool(distances) and 1.0 - distances[-1] < threshold
             pool *= _SCOPE_WIDEN_FACTOR
-            if pool > _SCOPE_UNFILTERED_POOL_MAX and len(scope) <= SCOPE_PREFILTER_MAX_IDS:
-                where = {"doc_id": {"$in": sorted(scope)}}
-                results = self._query(query_embedding, limit * 3, where)
-                return self._collect(_query_rows(results), *filters)
+            if len(scope) <= SCOPE_PREFILTER_MAX_IDS:
+                if tail_below or pool > _SCOPE_UNFILTERED_POOL_MAX:
+                    where = {"doc_id": {"$in": sorted(scope)}}
+                    results = self._query(query_embedding, limit * 3, where)
+                    return self._collect(_query_rows(results), *filters)
+            elif tail_below:
+                return semantic_results
 
     def _query(
         self, embedding: list[float], n_results: int, where: chromadb.Where | None = None

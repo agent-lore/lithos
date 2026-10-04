@@ -461,11 +461,11 @@
         "classes": 12,
         "functions": 68,
         "largest_module": "lithos.search",
-        "largest_module_lines": 2098,
-        "lines": 2098,
+        "largest_module_lines": 2102,
+        "lines": 2102,
         "modules": 1,
         "public_symbols": 15,
-        "sloc": 1713
+        "sloc": 1717
       },
       "SqliteStore": {
         "classes": 1,
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 26869,
+    "total_lines": 26873,
     "total_modules": 47,
-    "total_sloc": 21728
+    "total_sloc": 21732
   },
   "tests": {
     "ratio": 1.89,
-    "src_lines": 26869,
-    "test_lines": 50827
+    "src_lines": 26873,
+    "test_lines": 50866
   }
 }

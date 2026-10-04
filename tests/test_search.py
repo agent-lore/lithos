@@ -1499,6 +1499,26 @@ class _RecordingCollection:
         return getattr(self._inner, name)
 
 
+class _AnnMissCollection(_RecordingCollection):
+    """Unfiltered queries drop ``hidden`` docs' chunks, as an approximate (HNSW) miss would."""
+
+    def __init__(self, inner: object, hidden: set[str]) -> None:
+        super().__init__(inner)
+        self._hidden = hidden
+
+    def query(self, **kwargs):
+        if "where" in kwargs:
+            return super().query(**kwargs)
+        self.queries.append(kwargs)
+        n = kwargs["n_results"]
+        raw = self._inner.query(**{**kwargs, "n_results": n + 100})  # type: ignore[attr-defined]
+        keep = [i for i, m in enumerate(raw["metadatas"][0]) if m["doc_id"] not in self._hidden][:n]
+        return {
+            key: [[raw[key][0][i] for i in keep]] if raw.get(key) else raw.get(key)
+            for key in ("ids", "metadatas", "documents", "distances")
+        }
+
+
 def test_search_methods_keep_their_tracing_spans() -> None:
     for name in ("full_text_search", "semantic_search", "hybrid_search"):
         assert hasattr(getattr(SearchEngine, name), "__wrapped__"), name
@@ -1720,6 +1740,25 @@ class TestScopedSearch:
         assert "where" not in unfiltered and unfiltered["n_results"] == 3
         assert prefiltered["where"] == {"doc_id": {"$in": sorted(scoped)}}
         assert prefiltered["n_results"] == 3
+
+    async def test_tail_below_threshold_still_checks_the_scope(
+        self, crowded, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unfiltered pool whose tail is below the threshold proves nothing:
+        HNSW can miss a scoped chunk that qualifies, so the scoped query decides."""
+        engine, scoped = crowded
+        monkeypatch.setattr("lithos.search.SCOPE_DIRECT_MAX_DOCS", 0)
+        recorder = _AnnMissCollection(engine._chroma.collection, hidden=scoped)
+        monkeypatch.setattr(engine._chroma, "_collection", recorder)
+
+        results = engine.semantic_search(
+            "Dave drinks green tea every morning", limit=1, threshold=0.5, within_ids=scoped
+        )
+
+        assert [r.id for r in results] and results[0].id in scoped
+        unfiltered, prefiltered = recorder.queries
+        assert "where" not in unfiltered
+        assert prefiltered["where"] == {"doc_id": {"$in": sorted(scoped)}}
 
     async def test_over_cap_scope_widens_until_short_scoped_notes_surface(
         self,
