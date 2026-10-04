@@ -119,18 +119,18 @@
       },
       {
         "complexity": 26,
+        "qualname": "lithos.search.TantivyIndex.search"
+      },
+      {
+        "complexity": 26,
         "qualname": "lithos.tools.notes.register.lithos_note_update"
       },
       {
         "complexity": 25,
         "qualname": "lithos.cognitive_memory.CognitiveMemory.cache_lookup"
-      },
-      {
-        "complexity": 23,
-        "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 816
+    "total_functions": 824
   },
   "domain": {
     "associations": 26,
@@ -362,10 +362,10 @@
         "functions": 143,
         "largest_module": "lithos.tools.tasks",
         "largest_module_lines": 1209,
-        "lines": 6319,
+        "lines": 6324,
         "modules": 13,
         "public_symbols": 32,
-        "sloc": 5121
+        "sloc": 5127
       },
       "Errors": {
         "classes": 12,
@@ -398,14 +398,14 @@
         "sloc": 1086
       },
       "IdResolution": {
-        "classes": 1,
-        "functions": 7,
+        "classes": 2,
+        "functions": 13,
         "largest_module": "lithos.id_resolution",
-        "largest_module_lines": 82,
-        "lines": 82,
+        "largest_module_lines": 127,
+        "lines": 127,
         "modules": 1,
-        "public_symbols": 2,
-        "sloc": 64
+        "public_symbols": 3,
+        "sloc": 100
       },
       "Intake": {
         "classes": 8,
@@ -419,13 +419,13 @@
       },
       "Knowledge": {
         "classes": 9,
-        "functions": 90,
+        "functions": 91,
         "largest_module": "lithos.knowledge",
-        "largest_module_lines": 1321,
-        "lines": 2133,
+        "largest_module_lines": 1345,
+        "lines": 2175,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1720
+        "sloc": 1759
       },
       "LCMA": {
         "classes": 13,
@@ -459,13 +459,13 @@
       },
       "Search": {
         "classes": 12,
-        "functions": 63,
+        "functions": 64,
         "largest_module": "lithos.search",
-        "largest_module_lines": 1936,
-        "lines": 1936,
+        "largest_module_lines": 1998,
+        "lines": 1998,
         "modules": 1,
         "public_symbols": 15,
-        "sloc": 1574
+        "sloc": 1630
       },
       "SqliteStore": {
         "classes": 1,
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 26603,
+    "total_lines": 26757,
     "total_modules": 47,
-    "total_sloc": 21499
+    "total_sloc": 21636
   },
   "tests": {
     "ratio": 1.89,
-    "src_lines": 26603,
-    "test_lines": 50334
+    "src_lines": 26757,
+    "test_lines": 50610
   }
 }

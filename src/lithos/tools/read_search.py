@@ -156,7 +156,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                   (default: "hybrid")
             tags: Filter by tags (AND) — fulltext/semantic/hybrid only
             author: Filter by author (fulltext/semantic/hybrid only)
-            path_prefix: Filter by path prefix (fulltext/semantic/hybrid only)
+            path_prefix: Filter by path prefix (fulltext/semantic/hybrid only).
+                         In those modes tags/author/path_prefix/entities
+                         scope the ranking itself, so a small area is not
+                         crowded out by better matches elsewhere.
             threshold: Minimum similarity 0-1 for semantic/hybrid (default: 0.5)
             seed_ids: Starting document IDs for graph mode.  If omitted,
                       seeds are discovered via hybrid search.
@@ -188,15 +191,23 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 f"Unknown search mode {mode!r}. Valid values: hybrid, fulltext, semantic, graph.",
             )
 
-        # Entities are not a per-backend filter: resolve the candidate
-        # set once from the knowledge inverted index (#316) and
-        # post-filter every mode's hits. Over-fetch to compensate,
-        # mirroring the engine's own post-filter heuristic.
-        entity_candidates = server.knowledge.entities_candidate_ids(entities)
-        if entity_candidates is not None and not entity_candidates:
-            # No document carries every requested entity — skip the
-            # backend search entirely.
-            return {"results": []}
+        # Ranked modes resolve every filter to one doc-id scope from the
+        # in-memory indexes and rank inside it (5002185d): post-filtering a
+        # whole-corpus pool crowds out a small area. Graph mode ignores
+        # tags/author/path_prefix, so only its entities post-filter remains
+        # (#316), over-fetching to compensate.
+        scope: set[str] | None = None
+        entity_candidates: set[str] | None = None
+        if mode == "graph":
+            entity_candidates = server.knowledge.entities_candidate_ids(entities)
+            if entity_candidates is not None and not entity_candidates:
+                return {"results": []}
+        else:
+            scope = server.knowledge.scope_ids(
+                path_prefix=path_prefix, tags=tags, author=author, entities=entities
+            )
+            if scope is not None and not scope:
+                return {"results": []}
         fetch_limit = limit * 5 if entity_candidates is not None else limit
 
         def _build_result(r: Any, score_attr: str = "score") -> dict[str, Any]:
@@ -224,9 +235,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 server.search.full_text_search,
                 query=query,
                 limit=fetch_limit,
-                tags=tags,
-                author=author,
-                path_prefix=path_prefix,
+                within_ids=scope,
             )
             results_payload = [_build_result(r) for r in ft_results]
         elif mode == "semantic":
@@ -235,9 +244,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 query=query,
                 limit=fetch_limit,
                 threshold=threshold,
-                tags=tags,
-                author=author,
-                path_prefix=path_prefix,
+                within_ids=scope,
             )
             results_payload = [_build_result(r, score_attr="similarity") for r in sem_results]
         elif mode == "graph":
@@ -261,9 +268,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 query=query,
                 limit=fetch_limit,
                 threshold=threshold,
-                tags=tags,
-                author=author,
-                path_prefix=path_prefix,
+                within_ids=scope,
             )
             results_payload = [_build_result(r) for r in hybrid_results]
 

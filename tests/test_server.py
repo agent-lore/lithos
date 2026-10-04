@@ -3136,6 +3136,61 @@ class TestEntitiesFilterTool:
         assert res["results"] == []
 
 
+class TestScopedSearchTool:
+    """lithos_search ranks inside path/tag/author scopes instead of post-filtering (5002185d)."""
+
+    async def _search(self, server: LithosServer, **kwargs) -> dict:
+        return await (await server.mcp.get_tool("lithos_search")).fn(**kwargs)
+
+    async def _index(self, server: LithosServer, **create_kwargs) -> str:
+        doc = (await server.knowledge.create(agent="agent", **create_kwargs)).document
+        server.search.index(server.knowledge.to_indexable(doc))
+        return doc.id
+
+    async def _crowded(self, server: LithosServer) -> str:
+        for i in range(30):
+            await self._index(
+                server,
+                title=f"Sky colour note {i}",
+                content=f"The sky is blue. A clear blue sky, sky observation number {i}.",
+                path="notes",
+                tags=["memory"],
+            )
+        await self._index(
+            server, title="Tea", content="Dave drinks green tea.", path="agents/robot-r"
+        )
+        return await self._index(
+            server,
+            title="Gardening",
+            content="Dave enjoys gardening under the sky on weekends.",
+            path="agents/robot-r",
+            tags=["memory"],
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["semantic", "fulltext", "hybrid"])
+    async def test_path_prefix_finds_the_few_scoped_notes(
+        self, server: LithosServer, mode: str
+    ) -> None:
+        target = await self._crowded(server)
+        res = await self._search(
+            server,
+            query="sky",
+            mode=mode,
+            limit=1,
+            threshold=0.0,
+            path_prefix="agents/robot-r/",
+            tags=["memory"],
+        )
+        assert [r["id"] for r in res["results"]] == [target]
+
+    @pytest.mark.asyncio
+    async def test_scope_matching_nothing_returns_no_results(self, server: LithosServer) -> None:
+        await self._crowded(server)
+        res = await self._search(server, query="sky", path_prefix="agents/robot-z/")
+        assert res["results"] == []
+
+
 class TestTaskMetadataTool:
     """Tests for metadata field in lithos_task_create, lithos_task_update, lithos_task_list, lithos_task_status (#215)."""
 

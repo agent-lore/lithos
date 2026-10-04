@@ -23,6 +23,26 @@ a `parent_child` edge lets the child be re-parented. The `parent_exists`
 message now names the tool. The agent skill (`task-graph.md`) documents
 the new tool; plugin 0.4.1 → 0.4.2.
 
+### Fixed — search
+
+#### Scoped `lithos_search` ranks inside the scope (task 5002185d, part 1)
+
+`lithos_search` used to fetch a small pool from the whole index (semantic
+`limit×3` chunks, full-text `limit×5`) and only then drop hits outside the
+requested `path_prefix`/`tags`/`author`/`entities`. A small area — a robot's
+few memory notes among 100k chunks — was crowded out by better matches
+elsewhere, so a scoped search for 3 results usually returned none. In
+`fulltext`/`semantic`/`hybrid` modes those filters now resolve to one doc-id
+scope from the in-memory corpus index (new namespace and sorted path
+indexes, sub-linear) and the backends rank inside it: Tantivy with a
+constant-score id filter (BM25 scores unchanged), Chroma with a
+`doc_id $in` filter for scopes up to 1,000 docs, or an over-fetch scaled to
+the scope's share of the corpus beyond that. An empty scope returns no
+results without querying. `path_prefix` keeps its plain string-prefix
+semantics. Graph mode is unchanged. `SearchEngine.full_text_search` /
+`semantic_search` / `hybrid_search` gain a `within_ids` argument and
+`KnowledgeManager` a `scope_ids()` resolver.
+
 ### Added — LLM synthesis
 
 #### OpenRouter app attribution

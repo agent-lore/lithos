@@ -1064,6 +1064,30 @@ class KnowledgeManager:
         """
         return self._index.entities_candidate_ids(entities)
 
+    def scope_ids(
+        self,
+        *,
+        path_prefix: str | None = None,
+        namespaces: list[str] | None = None,
+        tags: list[str] | None = None,
+        author: str | None = None,
+        entities: list[str] | None = None,
+    ) -> set[str] | None:
+        """Doc ids inside a search scope, or ``None`` when no filter scopes it.
+
+        Resolved from the in-memory indexes (sub-linear); search and retrieve
+        pass the set into the backends so ranking happens within the scope.
+        """
+        return self._index.candidate_ids(
+            tags=tags,
+            author=author,
+            metadata_match=None,
+            exclude_status=None,
+            entities=entities,
+            namespaces=namespaces,
+            path_prefix=path_prefix,
+        )
+
     async def get_all_tags(self) -> dict[str, int]:
         """Get all tags with document counts (from in-memory cache)."""
         return self._index.all_tags()

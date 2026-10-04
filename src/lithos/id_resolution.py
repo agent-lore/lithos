@@ -9,7 +9,8 @@ loud ambiguity) live with the resolvers in ``coordination`` and ``knowledge``.
 
 Everything here is sub-linear by construction: the SQL bound turns a prefix
 into an index range scan, and :meth:`PrefixIndex.match` is a bisect plus at
-most ``limit`` steps.
+most ``limit`` steps. :class:`PathPrefixIndex` applies the same sorted-bisect
+shape to note paths, resolving a search scope's ``path_prefix`` (5002185d).
 """
 
 from __future__ import annotations
@@ -80,3 +81,47 @@ class PrefixIndex:
             matches.append(self._ids[i])
             i += 1
         return matches
+
+
+class PathPrefixIndex:
+    """Sorted ``(path, doc_id)`` pairs answering path-prefix queries in O(log n + k).
+
+    Keeps ``str.startswith`` semantics exactly, so a prefix need not end at a
+    directory boundary. Writes append and mark the list unsorted; the next read
+    sorts it (Timsort is linear on a nearly-sorted list), so a startup rescan
+    costs one O(n log n) sort rather than an insort per note.
+    """
+
+    def __init__(self) -> None:
+        self._entries: list[tuple[str, str]] = []
+        self._sorted = True
+
+    def _ensure_sorted(self) -> None:
+        if not self._sorted:
+            self._entries.sort()
+            self._sorted = True
+
+    def add(self, path: str, doc_id: str) -> None:
+        if self._entries and (path, doc_id) < self._entries[-1]:
+            self._sorted = False
+        self._entries.append((path, doc_id))
+
+    def discard(self, path: str, doc_id: str) -> None:
+        self._ensure_sorted()
+        i = bisect_left(self._entries, (path, doc_id))
+        if i < len(self._entries) and self._entries[i] == (path, doc_id):
+            del self._entries[i]
+
+    def clear(self) -> None:
+        self._entries.clear()
+        self._sorted = True
+
+    def match(self, prefix: str) -> set[str]:
+        """Doc ids whose path starts with ``prefix``."""
+        self._ensure_sorted()
+        i = bisect_left(self._entries, (prefix,))
+        found: set[str] = set()
+        while i < len(self._entries) and self._entries[i][0].startswith(prefix):
+            found.add(self._entries[i][1])
+            i += 1
+        return found

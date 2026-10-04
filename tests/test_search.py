@@ -1482,3 +1482,127 @@ class TestHybridSearch:
 
         assert ft_search_spy.call_args is not None
         assert ft_search_spy.call_args.kwargs["query_mode"] == "literal"
+
+
+class _RecordingCollection:
+    """Delegates to a real Chroma collection, recording each ``query`` call's kwargs."""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+        self.queries: list[dict] = []
+
+    def query(self, **kwargs):
+        self.queries.append(kwargs)
+        return self._inner.query(**kwargs)  # type: ignore[attr-defined]
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+
+class TestScopedSearch:
+    """``within_ids`` ranks inside the scope instead of post-filtering a global pool (5002185d).
+
+    The corpus is built so a whole-corpus pool is all distractors: many notes
+    outside the scope match the query far better than the few inside it.
+    """
+
+    DISTRACTORS = 30
+
+    @pytest.fixture
+    async def crowded(
+        self, knowledge_manager: KnowledgeManager, search_engine: SearchEngine
+    ) -> tuple[SearchEngine, set[str]]:
+        for i in range(self.DISTRACTORS):
+            doc = (
+                await knowledge_manager.create(
+                    title=f"Sky colour note {i}",
+                    content=f"The sky is blue. A clear blue sky, sky observation number {i}.",
+                    agent="agent",
+                    path="notes",
+                )
+            ).document
+            search_engine.index(KnowledgeManager.to_indexable(doc))
+        scoped: set[str] = set()
+        for title, content in [
+            ("Gardening", "Dave enjoys gardening under the sky on weekends."),
+            ("Tea", "Dave drinks green tea every morning."),
+        ]:
+            doc = (
+                await knowledge_manager.create(
+                    title=title, content=content, agent="agent", path="agents/robot-r"
+                )
+            ).document
+            search_engine.index(KnowledgeManager.to_indexable(doc))
+            scoped.add(doc.id)
+        return search_engine, scoped
+
+    @staticmethod
+    def _record(engine: SearchEngine, monkeypatch: pytest.MonkeyPatch) -> _RecordingCollection:
+        recorder = _RecordingCollection(engine._chroma.collection)
+        monkeypatch.setattr(engine._chroma, "_collection", recorder)
+        return recorder
+
+    async def test_semantic_unscoped_pool_is_crowded_out(self, crowded) -> None:
+        engine, scoped = crowded
+        results = engine.semantic_search("the sky is blue", limit=1, threshold=0.0)
+        assert results
+        assert not {r.id for r in results} & scoped
+
+    async def test_semantic_within_ids_ranks_inside_the_scope(
+        self, crowded, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine, scoped = crowded
+        recorder = self._record(engine, monkeypatch)
+        results = engine.semantic_search(
+            "the sky is blue", limit=1, threshold=0.0, within_ids=scoped
+        )
+        assert [r.id for r in results] and results[0].id in scoped
+        (call,) = recorder.queries
+        assert call["where"] == {"doc_id": {"$in": sorted(scoped)}}
+        assert call["n_results"] == 3
+
+    async def test_fulltext_within_ids_ranks_inside_the_scope(self, crowded) -> None:
+        engine, scoped = crowded
+        unscoped = engine.full_text_search("sky", limit=1)
+        assert unscoped and unscoped[0].id not in scoped
+        results = engine.full_text_search("sky", limit=1, within_ids=scoped)
+        assert [r.id for r in results] and results[0].id in scoped
+
+    async def test_fulltext_scoping_leaves_bm25_scores_unchanged(self, crowded) -> None:
+        engine, scoped = crowded
+        everything = {r.id: r.score for r in engine.full_text_search("sky", limit=100)}
+        results = engine.full_text_search("sky", limit=5, within_ids=scoped)
+        assert results
+        for r in results:
+            assert r.score == pytest.approx(everything[r.id])
+
+    async def test_hybrid_within_ids_ranks_inside_the_scope(self, crowded) -> None:
+        engine, scoped = crowded
+        results = engine.hybrid_search("the sky is blue", limit=2, threshold=0.0, within_ids=scoped)
+        assert results
+        assert {r.id for r in results} <= scoped
+
+    async def test_empty_scope_returns_nothing_without_querying(
+        self, crowded, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine, _ = crowded
+        recorder = self._record(engine, monkeypatch)
+        assert engine.semantic_search("sky", threshold=0.0, within_ids=set()) == []
+        assert engine.full_text_search("sky", within_ids=set()) == []
+        assert engine.hybrid_search("sky", threshold=0.0, within_ids=set()) == []
+        assert recorder.queries == []
+
+    async def test_scope_over_the_cap_falls_back_to_a_proportional_pool(
+        self, crowded, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        engine, scoped = crowded
+        monkeypatch.setattr("lithos.search.SCOPE_PREFILTER_MAX_IDS", 1)
+        recorder = self._record(engine, monkeypatch)
+        results = engine.semantic_search(
+            "the sky is blue", limit=1, threshold=0.0, within_ids=scoped
+        )
+        (call,) = recorder.queries
+        assert "where" not in call
+        # 2 of 32 docs in scope -> pool scaled by 16 instead of the fixed 3x.
+        assert call["n_results"] == 48
+        assert {r.id for r in results} <= scoped

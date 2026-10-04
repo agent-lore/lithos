@@ -11,13 +11,14 @@ Short id-prefix machinery: the sorted prefix index and range-bound helper shared
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.id_resolution` | XS | 1 | 1 |
+| `lithos.id_resolution` | S | 2 | 1 |
 
 ## Public API
 
 ### `lithos.id_resolution`
 - def `prefix_upper_bound` — Smallest string greater than every string starting with ``prefix``.
 - class `PrefixIndex` — Sorted id list answering prefix queries in O(log n + limit).
+- class `PathPrefixIndex` — Sorted ``(path, doc_id)`` pairs answering path-prefix queries in O(log n + k).
 
 ## Dependencies
 
