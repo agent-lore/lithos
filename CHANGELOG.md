@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+### Behaviour changes — read before upgrading
+
+Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
+
+- **`lithos_cache_lookup` with `source_url` no longer falls back to semantic
+  search.** A URL miss is now a clean miss. Pass `semantic_fallback=True` to
+  also accept a semantically close note.
+- **`lithos_cache_lookup` by `query` needs real similarity.** Candidates must
+  score at least `min_similarity` (cosine, default 0.7), so a lookup whose
+  nearest note is unrelated is now a clean miss instead of a hit.
+- **Two new response keys.** `match` (`"source_url"` / `"semantic"` / `null`)
+  and `score` appear on every non-error `lithos_cache_lookup` response.
+
+### Fixed — cognitive memory
+
+#### `lithos_cache_lookup` reports how it matched and stops returning unrelated notes (task d0392561)
+
+On a `source_url` miss, `cache_lookup` fell back to `semantic_search` with
+threshold 0.0 and filtered only by confidence and freshness. The nearest
+note of any kind therefore came back as `hit: true`, and Influx writes
+every note at confidence 1.0. The response also did not say whether the
+hit was the URL or a neighbour. On 2026-10-07 the first Influx backfill of
+the `morrow` profile wrote 0 of 54 notes for this reason: a Frontiers
+robotics paper "hit" a Yale HRI paper, and a post on robot curiosity "hit"
+a Mars Curiosity rover note. Agents following the skill's
+`lithos_cache_lookup(query=...)` "does this exist?" check got a false yes
+every time, and the stale pattern could steer them into overwriting an
+unrelated note.
+
+What changed:
+- A `source_url` lookup is now an identity check against the URL index only
+  (`semantic_fallback` opts back in).
+- The semantic path keeps only candidates at or above `min_similarity`. The
+  default of 0.7 comes from MiniLM cosine on the live corpus: a note queried
+  by its own title scores 0.82–0.89, related-but-different papers 0.60–0.67,
+  and the nearest unrelated note 0.40–0.54.
+- Hit and stale responses say how they matched (`match`) and, for semantic
+  matches, how closely (`score`).
+- `query` is now optional when `source_url` is given, so
+  `lithos_cache_lookup(source_url=...)` works as the skill documents. It was
+  previously rejected for the missing argument.
+- New `invalid_input` cases: no `query` and no `source_url`;
+  `semantic_fallback` without `query`; `min_similarity` outside [0, 1].
+- The `lithos.cache.lookups` counter gains a `match` attribute.
+- Influx already verifies `source_url` client-side, so it is unaffected; that
+  guard is now redundant.
+
+The agent skill documents the identity vs similarity split and the `match`
+check before updating `stale_id`; plugin 0.4.2 → 0.4.3.
+
 ## [0.6.0] — 2026-10-04
 
 A week of work on `main` since 0.5.0:

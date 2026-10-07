@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from starlette.routing import Mount
 
+from lithos.cognitive_memory import CACHE_LOOKUP_MIN_SIMILARITY
 from lithos.config import LithosConfig
 from lithos.frontmatter_codec import encode
 from lithos.knowledge import KnowledgeManager
@@ -1797,7 +1798,7 @@ class TestCacheLookup:
 
         doc = (
             await server.knowledge.create(
-                title="Fresh Cache Doc",
+                title="Quantum Computing Notes",
                 content="Information about quantum computing.",
                 agent="agent",
                 tags=["research"],
@@ -1813,6 +1814,8 @@ class TestCacheLookup:
         assert result["document"]["content"] == "Information about quantum computing."
         assert result["stale_exists"] is False
         assert result["stale_id"] is None
+        assert result["match"] == "semantic"
+        assert result["score"] >= CACHE_LOOKUP_MIN_SIMILARITY
 
     @pytest.mark.asyncio
     async def test_cache_miss_stale_doc(self, server: LithosServer):
@@ -1821,7 +1824,7 @@ class TestCacheLookup:
 
         doc = (
             await server.knowledge.create(
-                title="Stale Cache Doc",
+                title="AI Trends Report",
                 content="Outdated information about AI trends.",
                 agent="agent",
                 tags=["research"],
@@ -1835,6 +1838,8 @@ class TestCacheLookup:
         assert result["document"] is None
         assert result["stale_exists"] is True
         assert result["stale_id"] == doc.id
+        assert result["match"] == "semantic"
+        assert result["score"] >= CACHE_LOOKUP_MIN_SIMILARITY
 
     @pytest.mark.asyncio
     async def test_cache_clean_miss(self, server: LithosServer):
@@ -1869,29 +1874,55 @@ class TestCacheLookup:
         assert result["hit"] is True
         assert result["document"]["id"] == doc.id
         assert result["document"]["source_url"] == "https://example.com/article"
+        assert result["match"] == "source_url"
+        assert result["score"] is None
 
-    @pytest.mark.asyncio
-    async def test_source_url_fast_path_miss_falls_back(self, server: LithosServer):
-        """Cache lookup falls back to semantic when source_url not found."""
+        no_query = await self._call_cache_lookup(server, source_url="https://example.com/article")
+        assert no_query["document"]["id"] == doc.id
+
+    async def _create_asyncio_doc(self, server: LithosServer) -> str:
         from datetime import timedelta
 
         doc = (
             await server.knowledge.create(
-                title="Fallback Semantic Doc",
-                content="Information about neural networks and deep learning.",
+                title="Python Asyncio Patterns",
+                content="Information about Python asyncio patterns.",
                 agent="agent",
                 expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
+        return doc.id
+
+    @pytest.mark.asyncio
+    async def test_source_url_miss_does_not_fall_back(self, server: LithosServer):
+        """A source_url lookup is an identity check: a close semantic match is not a hit."""
+        await self._create_asyncio_doc(server)
 
         result = await self._call_cache_lookup(
             server,
-            query="neural networks deep learning",
+            query="Python asyncio patterns",
             source_url="https://nonexistent.com/page",
         )
-        # Should fall back to semantic and potentially find the doc
-        assert isinstance(result["hit"], bool)
+        assert result["hit"] is False
+        assert result["stale_exists"] is False
+        assert result["match"] is None
+
+    @pytest.mark.asyncio
+    async def test_source_url_miss_with_semantic_fallback(self, server: LithosServer):
+        """semantic_fallback=True opts back into a similarity match on a URL miss."""
+        doc_id = await self._create_asyncio_doc(server)
+
+        result = await self._call_cache_lookup(
+            server,
+            query="Python asyncio patterns",
+            source_url="https://nonexistent.com/page",
+            semantic_fallback=True,
+        )
+        assert result["hit"] is True
+        assert result["document"]["id"] == doc_id
+        assert result["match"] == "semantic"
+        assert result["score"] >= CACHE_LOOKUP_MIN_SIMILARITY
 
     @pytest.mark.asyncio
     async def test_confidence_filter(self, server: LithosServer):
@@ -1900,7 +1931,7 @@ class TestCacheLookup:
 
         doc = (
             await server.knowledge.create(
-                title="Low Confidence Doc",
+                title="Dark Matter Theories",
                 content="Uncertain information about dark matter theories.",
                 agent="agent",
                 confidence=0.2,
@@ -1909,10 +1940,14 @@ class TestCacheLookup:
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
 
+        permissive = await self._call_cache_lookup(
+            server, query="dark matter theories", min_confidence=0.1
+        )
+        assert permissive["hit"] is True
+
         result = await self._call_cache_lookup(
             server, query="dark matter theories", min_confidence=0.5
         )
-        # Should not match because confidence is below threshold
         assert result["hit"] is False
 
     @pytest.mark.asyncio
@@ -1920,6 +1955,8 @@ class TestCacheLookup:
         """Cache lookup always returns the highest-confidence passing doc."""
         from datetime import timedelta
         from unittest.mock import patch
+
+        from lithos.search import SemanticResult
 
         low_doc = (
             await server.knowledge.create(
@@ -1948,8 +1985,8 @@ class TestCacheLookup:
             server.search,
             "semantic_search",
             return_value=[
-                type("R", (), {"id": low_doc.id})(),
-                type("R", (), {"id": high_doc.id})(),
+                SemanticResult(id=low_doc.id, title="", snippet="", similarity=0.9, path=""),
+                SemanticResult(id=high_doc.id, title="", snippet="", similarity=0.8, path=""),
             ],
         ):
             result = await self._call_cache_lookup(
@@ -1961,6 +1998,49 @@ class TestCacheLookup:
         assert result["hit"] is True
         assert result["document"]["id"] == high_doc.id
         assert result["document"]["confidence"] == 0.9
+        assert result["score"] == 0.8
+
+    @pytest.mark.asyncio
+    async def test_fresh_candidate_beats_more_similar_stale_one(self, server: LithosServer):
+        """A fresh candidate is the hit even when a stale one ranked higher; the
+        envelope's score is the hit's own similarity."""
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        from lithos.search import SemanticResult
+
+        stale_doc = (
+            await server.knowledge.create(
+                title="Expired Edge Caching Doc",
+                content="Expired notes on edge caching.",
+                agent="agent",
+                expires_at=datetime.now(UTC) - timedelta(hours=1),
+            )
+        ).document
+        fresh_doc = (
+            await server.knowledge.create(
+                title="Fresh Edge Caching Doc",
+                content="Current notes on edge caching.",
+                agent="agent",
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
+            )
+        ).document
+
+        with patch.object(
+            server.search,
+            "semantic_search",
+            return_value=[
+                SemanticResult(id=stale_doc.id, title="", snippet="", similarity=0.95, path=""),
+                SemanticResult(id=fresh_doc.id, title="", snippet="", similarity=0.75, path=""),
+            ],
+        ):
+            result = await self._call_cache_lookup(server, query="edge caching")
+
+        assert result["hit"] is True
+        assert result["document"]["id"] == fresh_doc.id
+        assert result["score"] == 0.75
+        assert result["stale_exists"] is False
+        assert result["stale_id"] is None
 
     @pytest.mark.asyncio
     async def test_max_age_hours_filter(self, server: LithosServer):
@@ -1970,7 +2050,7 @@ class TestCacheLookup:
         # Create a doc that hasn't expired but is old
         doc = (
             await server.knowledge.create(
-                title="Old Research Doc",
+                title="Blockchain Consensus Mechanisms",
                 content="Research about blockchain consensus mechanisms.",
                 agent="agent",
                 expires_at=datetime.now(UTC) + timedelta(hours=100),
@@ -1986,10 +2066,11 @@ class TestCacheLookup:
         server.search.index(KnowledgeManager.to_indexable(doc))
 
         result = await self._call_cache_lookup(
-            server, query="blockchain consensus", max_age_hours=24
+            server, query="blockchain consensus mechanisms", max_age_hours=24
         )
-        # Should be treated as stale because it's older than 24 hours
+        # Older than max_age_hours, so reported as stale rather than a hit
         assert result["hit"] is False
+        assert result["stale_id"] == doc.id
 
     @pytest.mark.asyncio
     async def test_tag_filtering_on_fast_path(self, server: LithosServer):
@@ -2015,10 +2096,9 @@ class TestCacheLookup:
             source_url="https://example.com/tagged",
             tags=["rust"],
         )
-        # Fast path doc doesn't match tags, falls through
-        assert result["document"] is None or (
-            result["document"] is not None and "rust" in result["document"].get("tags", [])
-        )
+        assert result["hit"] is False
+        assert result["stale_exists"] is False
+        assert result["match"] is None
 
     @pytest.mark.asyncio
     async def test_cache_lookup_search_backend_error(self, server: LithosServer):

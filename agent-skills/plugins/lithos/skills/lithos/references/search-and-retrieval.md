@@ -4,8 +4,8 @@
 
 | Scenario | Tool |
 |----------|------|
-| "Does a doc about X already exist?" (before writing) | `lithos_cache_lookup(query="X")` |
-| "Does a doc from this URL exist?" | `lithos_cache_lookup(source_url="https://...")` |
+| "Does a doc about X already exist?" (before writing) | `lithos_cache_lookup(query="X")` — similarity match |
+| "Does a doc from this URL exist?" | `lithos_cache_lookup(source_url="https://...")` — exact match |
 | "Find docs about X" (browsing/exploring) | `lithos_search(query="X")` |
 | "Find docs about X in project Y" | `lithos_list(content_query="X", tags=["project:Y"])` |
 | "Get the best knowledge for task Z" | `lithos_retrieve(query="...", task_id="Z")` |
@@ -19,18 +19,25 @@ Use **before creating new knowledge**, especially when you have a source URL:
 
 ```
 lithos_cache_lookup(
-    query="transformer attention mechanisms",
     source_url="https://example.com/article",   # exact dedup via normalized URL index
     max_age_hours=168,                           # 1 week
     min_confidence=0.5
 )
 ```
 
-- With `source_url`: exact lookup via URL index — instant, no search involved
-- Without `source_url`: falls back to semantic search (catches everything)
+It answers one of two questions, depending on what you pass:
+
+| Call | Question | How it matches |
+|------|----------|----------------|
+| `source_url=...` | Is a note from **this URL** stored? | URL index only. A URL miss is a clean miss: nothing similar is returned. `query` is optional |
+| `source_url=...`, `query=...`, `semantic_fallback=True` | This URL, **or** a note close to `query`? | URL first; semantic search only if no note from that URL is stored |
+| `query=...` only | Does a note **about this** exist? | Semantic search; only notes with cosine similarity ≥ `min_similarity` (default 0.7) count |
+
+- **Read `match` on every result.** `"source_url"` means the note is from that exact source. `"semantic"` means it is only similar, and `score` holds its similarity (a note queried by its own title scores ~0.8–0.9). It is `null` on a clean miss
+- **Tune the floor** with `min_similarity`: raise it (~0.85) to catch only near-duplicates, lower it (~0.6) to catch anything on the topic
 - Only evaluates up to `limit` candidates (default 3) — quick existence check, not comprehensive
 - **Three outcomes**: `hit=True` (fresh, returns full content), `stale_exists=True` (expired, returns `stale_id`), clean miss
-- **Key pattern**: If `stale_exists=True`, pass `stale_id` as `id` to `lithos_write` to UPDATE rather than create a duplicate
+- **Key pattern**: If `stale_exists=True` with `match="source_url"`, pass `stale_id` as `id` to `lithos_write` to UPDATE rather than create a duplicate. With `match="semantic"`, the stale note is only similar — `lithos_read` it and update it only if it covers the same thing
 
 ---
 

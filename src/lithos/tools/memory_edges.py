@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastmcp import FastMCP
 
+from lithos.cognitive_memory import CACHE_LOOKUP_MIN_SIMILARITY
 from lithos.envelopes import error_envelope
 from lithos.telemetry import get_current_span, tool_metrics
 from lithos.tools._seam import tool_span
@@ -170,22 +171,43 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
     @tool_metrics()
     @tool_span()
     async def lithos_cache_lookup(
-        query: str,
+        query: str | None = None,
         source_url: str | None = None,
+        semantic_fallback: bool = False,
+        min_similarity: float = CACHE_LOOKUP_MIN_SIMILARITY,
         max_age_hours: float | None = None,
         min_confidence: float = 0.5,
         limit: int = 3,
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Check if fresh cached knowledge exists before doing expensive research.
+        """Check whether knowledge already exists: by exact source_url, or by similar meaning.
 
-        Returns a cache hit with full document content if fresh knowledge exists,
-        a stale reference if expired knowledge exists (update instead of duplicate),
-        or a clean miss if nothing relevant is found.
+        With ``source_url`` this is an identity check: is a note from this
+        URL stored? Only the normalized URL index is consulted, so a URL miss
+        is a clean miss, unless ``semantic_fallback=True`` asks to also
+        accept a semantically close note. Without ``source_url`` it searches
+        by meaning and only counts notes with similarity >= ``min_similarity``.
+
+        Returns a cache hit with full document content if fresh knowledge
+        exists, a stale reference if expired knowledge exists (update instead
+        of duplicate), or a clean miss. ``match`` says how the hit or stale
+        note was found: ``"source_url"`` means it is the same source;
+        ``"semantic"`` means it is merely similar (``score`` is its cosine
+        similarity), so read it before treating it as a duplicate or
+        overwriting ``stale_id``.
 
         Args:
-            query: What you are about to research
+            query: What you are about to research. Required unless
+                ``source_url`` is given; also required with ``semantic_fallback``.
             source_url: Canonical URL for exact dedup-aware lookup
+            semantic_fallback: When no note from ``source_url`` is stored (or
+                none passes ``tags``), also search by ``query`` (default:
+                False). A stored note from the URL that is stale or below
+                ``min_confidence`` is still reported as such. Ignored without
+                ``source_url``.
+            min_similarity: Minimum cosine similarity (0-1) for a semantic
+                match (default: 0.7). A note queried by its own title scores
+                ~0.8-0.9; related-but-different notes ~0.6.
             max_age_hours: Reject docs older than N hours (uses updated_at)
             min_confidence: Minimum confidence score threshold — candidates whose
                 ``metadata.confidence`` is strictly below this value are skipped
@@ -194,11 +216,15 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             tags: Restrict to tagged docs (AND semantics)
 
         Returns:
-            Dict with hit, document, stale_exists, stale_id
+            Dict with hit, document, stale_exists, stale_id, match
+            (``"source_url"`` | ``"semantic"`` | null) and score (similarity
+            for a semantic match, else null)
         """
         return await server.memory.cache_lookup(
             query=query,
             source_url=source_url,
+            semantic_fallback=semantic_fallback,
+            min_similarity=min_similarity,
             max_age_hours=max_age_hours,
             min_confidence=min_confidence,
             limit=limit,

@@ -42,13 +42,13 @@ lithos_stats()
 
 | Tool | Summary | Touches |
 |---|---|---|
-| `lithos_cache_lookup` | Check if fresh cached knowledge exists before doing expensive research. | CognitiveMemory |
+| `lithos_cache_lookup` | Check whether knowledge already exists: by exact source_url, or by similar meaning. | CognitiveMemory |
 | `lithos_conflict_resolve` | Resolve a contradiction between two notes. | CognitiveMemory, Knowledge |
 | `lithos_edge_list` | Query edges from edges.db by optional filters. | CognitiveMemory, Knowledge |
 | `lithos_edge_upsert` | Create or update a typed edge in edges.db. | CognitiveMemory, Knowledge |
 
 ```text
-lithos_cache_lookup(query: str, source_url: str | None = None, max_age_hours: float | None = None, min_confidence: float = 0.5, limit: int = 3, tags: list[str] | None = None)
+lithos_cache_lookup(query: str | None = None, source_url: str | None = None, semantic_fallback: bool = False, min_similarity: float = CACHE_LOOKUP_MIN_SIMILARITY, max_age_hours: float | None = None, min_confidence: float = 0.5, limit: int = 3, tags: list[str] | None = None)
 lithos_conflict_resolve(edge_id: str, resolution: str, resolver: str, winner_id: str | None = None)
 lithos_edge_list(from_id: str | None = None, to_id: str | None = None, type: str | None = None, namespace: str | None = None)
 lithos_edge_upsert(from_id: str, to_id: str, type: str, weight: float, namespace: str, provenance_actor: str | None = None, provenance_type: str | None = None, evidence: Any = None, conflict_state: str | None = None)

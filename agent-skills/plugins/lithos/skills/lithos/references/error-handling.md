@@ -68,6 +68,8 @@ URL deduplication normalizes before comparison: lowercase scheme/host, strips fr
 
 ```
 result = lithos_cache_lookup(source_url="https://...", max_age_hours=168)
+# A source_url lookup without semantic_fallback only ever matches that URL,
+# so result["match"] is "source_url" whenever hit or stale_exists is true.
 
 if result["hit"]:
     # Fresh knowledge exists — read and use it
@@ -80,6 +82,17 @@ elif result["stale_exists"]:
 else:
     # Clean miss — create new
     lithos_write(title="...", content="...", agent="<id>")
+```
+
+With a `query` lookup (or `semantic_fallback=True`), a hit or stale note can
+have `match="semantic"`: it is similar, not the same source. Read it before
+treating it as a duplicate or overwriting `stale_id`:
+
+```
+result = lithos_cache_lookup(query="<topic>")
+if result["stale_exists"] and result["match"] == "semantic":
+    doc = lithos_read(id=result["stale_id"])
+    # update only if doc covers the same thing; otherwise write a new note
 ```
 
 ---

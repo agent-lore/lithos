@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **74** (168 module-level)
+- Cross-component edges: **74** (169 module-level)
 - Component cycles: none
 - Module cycles: lithos.server ↔ lithos.tools ↔ lithos.tools.agents ↔ lithos.tools.findings_stats ↔ lithos.tools.memory_edges ↔ lithos.tools.notes ↔ lithos.tools.read_search ↔ lithos.tools.tasks
 - Tier-skipping edges (Entrypoints → Foundation): 5 (Entrypoints -> Config, Entrypoints -> Errors, Entrypoints -> Events, Entrypoints -> Logging, Entrypoints -> Telemetry)
@@ -35,10 +35,10 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
 | Codec | 1 | 806 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
-| CognitiveMemory | 1 | 1156 | 953 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
+| CognitiveMemory | 1 | 1222 | 1019 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 2 |
 | Config | 1 | 565 | 394 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 3 | 3217 | 2717 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
-| Entrypoints | 13 | 6324 | 5127 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 15 |
+| Entrypoints | 13 | 6350 | 5152 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 15 |
 | Errors | 2 | 276 | 205 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 351 | 282 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1307 | 1086 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
@@ -54,7 +54,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **47**, lines: **26873**, SLOC: **21732**
+- Modules: **47**, lines: **26965**, SLOC: **21823**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -72,7 +72,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **829**, cyclomatic > 10: **66**
+- Functions: **835**, cyclomatic > 10: **65**
 
 Top 10 most complex functions:
 
@@ -87,7 +87,7 @@ Top 10 most complex functions:
 | 26 | `lithos.knowledge.KnowledgeManager.create` |
 | 26 | `lithos.search.TantivyIndex.search` |
 | 26 | `lithos.tools.notes.register.lithos_note_update` |
-| 25 | `lithos.cognitive_memory.CognitiveMemory.cache_lookup` |
+| 22 | `lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer` |
 
 ## Seams
 
@@ -153,4 +153,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.89** (50866 test lines / 26873 source lines)
+- Test-to-source line ratio: **1.89** (51086 test lines / 26965 source lines)

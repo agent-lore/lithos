@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-from lithos.cognitive_memory import CognitiveMemory, NodeStats
+from lithos.cognitive_memory import CACHE_LOOKUP_MIN_SIMILARITY, CognitiveMemory, NodeStats
 from lithos.config import LithosConfig
 from lithos.errors import ScoutFailure, SearchBackendError
 from lithos.events import EDGE_UPSERTED, EventBus
@@ -1102,7 +1102,7 @@ class TestReinforceMisleading:
 
 
 class TestCacheLookup:
-    """Validation paths and search-backend errors of ``cache_lookup``.
+    """Validation, path selection and search-backend errors of ``cache_lookup``.
 
     Hit-path / staleness coverage stays in ``tests/test_server.py::TestCacheLookup``,
     which exercises the same code through the MCP wrapper.
@@ -1116,6 +1116,8 @@ class TestCacheLookup:
             "document": None,
             "stale_exists": False,
             "stale_id": None,
+            "match": None,
+            "score": None,
         }
 
     async def test_invalid_max_age_hours_returns_error_envelope(
@@ -1147,6 +1149,75 @@ class TestCacheLookup:
         assert result["status"] == "error"
         assert result["code"] == "search_backend_error"
         assert "chroma" in result["message"]
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message_part"),
+        [
+            ({}, "query is required"),
+            ({"query": "   "}, "query is required"),
+            ({"source_url": "  "}, "query is required"),
+            (
+                {"source_url": "https://example.com/a", "semantic_fallback": True},
+                "requires a query",
+            ),
+            ({"query": "x", "min_similarity": -0.1}, "min_similarity"),
+            ({"query": "x", "min_similarity": 1.1}, "min_similarity"),
+        ],
+    )
+    async def test_invalid_query_and_similarity_args_return_error_envelope(
+        self, memory: CognitiveMemory, kwargs: dict, message_part: str
+    ) -> None:
+        memory._search.semantic_search = MagicMock(return_value=[])
+        result = await memory.cache_lookup(**kwargs)
+        assert result["status"] == "error"
+        assert result["code"] == "invalid_input"
+        assert message_part in result["message"]
+        memory._search.semantic_search.assert_not_called()
+
+    async def test_source_url_miss_does_not_search_semantically(
+        self, memory: CognitiveMemory
+    ) -> None:
+        memory._knowledge.find_by_source_url = AsyncMock(return_value=None)
+        memory._search.semantic_search = MagicMock(return_value=[])
+        result = await memory.cache_lookup(query="x", source_url="https://example.com/a")
+        assert result["hit"] is False
+        assert result["match"] is None
+        memory._search.semantic_search.assert_not_called()
+
+    async def test_source_url_miss_with_semantic_fallback_searches(
+        self, memory: CognitiveMemory
+    ) -> None:
+        memory._knowledge.find_by_source_url = AsyncMock(return_value=None)
+        memory._search.semantic_search = MagicMock(return_value=[])
+        await memory.cache_lookup(
+            query="x", source_url="https://example.com/a", semantic_fallback=True
+        )
+        memory._search.semantic_search.assert_called_once()
+
+    async def test_url_doc_failing_tags_falls_back_only_when_opted_in(
+        self, memory: CognitiveMemory
+    ) -> None:
+        url_doc = MagicMock(id="url-doc", metadata=MagicMock(tags=["python"]))
+        memory._knowledge.find_by_source_url = AsyncMock(return_value=url_doc)
+        memory._search.semantic_search = MagicMock(return_value=[])
+        kwargs = {"query": "x", "source_url": "https://example.com/a", "tags": ["rust"]}
+
+        result = await memory.cache_lookup(**kwargs)
+        assert result["match"] is None
+        memory._search.semantic_search.assert_not_called()
+
+        await memory.cache_lookup(**kwargs, semantic_fallback=True)
+        memory._search.semantic_search.assert_called_once()
+        assert memory._search.semantic_search.call_args.kwargs["tags"] == ["rust"]
+
+    async def test_semantic_path_uses_min_similarity_as_threshold(
+        self, memory: CognitiveMemory
+    ) -> None:
+        memory._search.semantic_search = MagicMock(return_value=[])
+        await memory.cache_lookup(query="x")
+        await memory.cache_lookup(query="x", min_similarity=0.85)
+        thresholds = [c.kwargs["threshold"] for c in memory._search.semantic_search.call_args_list]
+        assert thresholds == [CACHE_LOOKUP_MIN_SIMILARITY, 0.85]
 
 
 class TestCacheLookupHitPath:
@@ -1209,6 +1280,74 @@ class TestCacheLookupHitPath:
         result = await real_memory.cache_lookup(query="quantum computing", tags=["research"])
         assert result["hit"] is True
         assert result["document"]["id"] == doc.id
+        assert result["match"] == "semantic"
+        assert result["score"] >= CACHE_LOOKUP_MIN_SIMILARITY
+
+    async def test_unrelated_nearest_doc_is_a_clean_miss(
+        self, real_memory: CognitiveMemory
+    ) -> None:
+        """Regression for task d0392561: the nearest note of any kind used to
+        come back as a hit because the semantic path had no similarity floor."""
+        from datetime import datetime, timedelta
+
+        doc = (
+            await real_memory._knowledge.create(
+                title="Curiosity Rover Update",
+                content="NASA's Curiosity rover is exploring Gale crater on Mars.",
+                agent="agent",
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
+            )
+        ).document
+        real_memory._search.index(KnowledgeManager.to_indexable(doc))
+        query = "robot curiosity as an intrinsic reward"
+        nearest = real_memory._search.semantic_search(query=query, limit=1, threshold=0.0)
+        assert [r.id for r in nearest] == [doc.id]
+
+        result = await real_memory.cache_lookup(query=query)
+        assert result["hit"] is False
+        assert result["stale_exists"] is False
+        assert result["match"] is None
+
+    async def test_source_url_hit_without_query(self, real_memory: CognitiveMemory) -> None:
+        from datetime import datetime, timedelta
+
+        doc = (
+            await real_memory._knowledge.create(
+                title="Curiosity-Driven Learning",
+                content="A large-scale study of curiosity-driven learning.",
+                agent="agent",
+                source_url="https://arxiv.org/abs/1808.04355",
+                expires_at=datetime.now(UTC) + timedelta(hours=24),
+            )
+        ).document
+        real_memory._search.index(KnowledgeManager.to_indexable(doc))
+
+        result = await real_memory.cache_lookup(source_url="https://arxiv.org/abs/1808.04355")
+        assert result["hit"] is True
+        assert result["document"]["id"] == doc.id
+        assert result["match"] == "source_url"
+        assert result["score"] is None
+
+    async def test_stale_semantic_candidate_reports_match_and_score(
+        self, real_memory: CognitiveMemory
+    ) -> None:
+        from datetime import datetime, timedelta
+
+        doc = (
+            await real_memory._knowledge.create(
+                title="Container Orchestration",
+                content="Content about container orchestration.",
+                agent="agent",
+                expires_at=datetime.now(UTC) - timedelta(hours=1),
+            )
+        ).document
+        real_memory._search.index(KnowledgeManager.to_indexable(doc))
+
+        result = await real_memory.cache_lookup(query="container orchestration")
+        assert result["hit"] is False
+        assert result["stale_id"] == doc.id
+        assert result["match"] == "semantic"
+        assert result["score"] >= CACHE_LOOKUP_MIN_SIMILARITY
 
     async def _write_poisoned_doc(
         self,
