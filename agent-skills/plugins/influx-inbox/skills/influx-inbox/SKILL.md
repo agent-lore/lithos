@@ -111,7 +111,7 @@ Optional: `metadata.title` (title hint), `metadata.summary` (pre-fetched summary
 - `outcome` — e.g. `ingested into 2 profile(s): ai-agents, robotics`, `filtered out: top score 6 (ai-foundations) below threshold 7`, or `cache_hit: existing note <id>; no new profiles matched`
 - With overrides the outcome adds `; forced: ai-foundations (score 6 below threshold 7)` and `; tier full achieved: full` (`full` = full text + deep extraction, `full_text` = full text only, `summary` = no full text could be extracted)
 - `metadata.inbox_result.per_profile` — score and result per profile (`note_id` when Influx captured it; otherwise find the note by URL with `lithos_search`); a forced profile's entry has `"forced": true`
-- `metadata.inbox_result.override` — present only when you sent `force` or `tier`: `force_requested`, `forced` (a below-threshold note was written), `forced_profile`, `tier_requested`, `tier_achieved`. If you sent an override, the outcome is not an `error:`, and this block is missing, the running Influx predates overrides and ignored them
+- `metadata.inbox_result.override` — present only when you sent `force` or `tier`: `force_requested`, `forced` (a below-threshold note was written), `forced_profile` (the profile it was filed under, or tried), `tier_requested`, `tier_achieved`. If you sent an override, the outcome is not an `error:`, and this block is missing, the running Influx predates overrides and ignored them
 
 ## Security Considerations
 
