@@ -71,7 +71,7 @@ Check before starting a task — someone may already be working on it. Look up a
 ## Core Workflows
 
 ### Research and Write
-1. `lithos_cache_lookup(source_url="https://...")` — check if knowledge already exists
+1. `lithos_cache_lookup(source_url="https://...")` — is this exact source already stored? No URL? Use `lithos_cache_lookup(query="<topic>")`: a hit there has `match="semantic"` — a similar note, not necessarily the same source, so read it before deciding not to write
 2. `lithos_search(query="<topic>")` or `lithos_retrieve(query="<topic>")` — find related docs
 3. Do your research
 4. `lithos_write(...)` — store findings with appropriate `note_type` and tags
@@ -109,8 +109,8 @@ Always set **both** `tags=["project:<slug>"]` and `metadata={"project": "<slug>"
 
 | Question | Tool |
 |----------|------|
-| Does a doc about X already exist? | `lithos_cache_lookup(query="X")` |
-| Does a doc from this URL exist? | `lithos_cache_lookup(source_url="https://...")` |
+| Does a doc about X already exist? | `lithos_cache_lookup(query="X")` (semantic, similarity ≥ 0.7) |
+| Does a doc from this URL exist? | `lithos_cache_lookup(source_url="https://...")` (exact; add `semantic_fallback=True` to also accept a close match) |
 | Find docs about X (exploring) | `lithos_search(query="X")` |
 | Find docs about X in project Y | `lithos_list(content_query="X", tags=["project:Y"])` |
 | Best knowledge for task Z | `lithos_retrieve(query="...", task_id="Z")` |

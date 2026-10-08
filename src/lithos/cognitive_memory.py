@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from lithos.envelopes import error_envelope
+from lithos.envelopes import error_envelope, invalid_input_envelope
 from lithos.errors import SearchBackendError
 from lithos.events import EVENT_ORIGIN_ENRICH, LithosEvent, make_edge_upserted_event
 from lithos.frontmatter_codec import normalize_datetime
@@ -45,13 +45,14 @@ if TYPE_CHECKING:
     from lithos.events import EventBus
     from lithos.graph import KnowledgeGraph
     from lithos.intake import CorpusIntake
-    from lithos.knowledge import KnowledgeManager
+    from lithos.knowledge import KnowledgeDocument, KnowledgeManager
     from lithos.provenance import ProvenanceProjection
     from lithos.search import SearchEngine
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CACHE_LOOKUP_MIN_SIMILARITY",
     "ENRICH_AGENT",
     "ENTITY_EXTRACTOR_VERSION",
     "CognitiveMemory",
@@ -117,6 +118,79 @@ def _as_optional_str(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+# Default similarity floor on ``cache_lookup``'s semantic path. Measured with
+# MiniLM on the live corpus (task d0392561): a note queried by its own title
+# scores 0.82-0.89, a note citing it ~0.76, related-but-different papers
+# 0.60-0.67, and the nearest unrelated note 0.40-0.54.
+CACHE_LOOKUP_MIN_SIMILARITY = 0.7
+
+# A ``cache_lookup`` candidate: doc id and its similarity (``None`` for a URL match).
+_CacheCandidate = tuple[str, float | None]
+
+
+def _validate_cache_lookup(
+    *,
+    has_query: bool,
+    has_source_url: bool,
+    semantic_fallback: bool,
+    min_similarity: float,
+    max_age_hours: float | None,
+    min_confidence: float,
+    limit: int,
+) -> dict[str, Any] | None:
+    """Return the ``invalid_input`` envelope for a bad ``cache_lookup`` call, else ``None``."""
+    if not has_query and not has_source_url:
+        return invalid_input_envelope("query is required unless source_url is given.")
+    if semantic_fallback and not has_query:
+        return invalid_input_envelope("semantic_fallback=True requires a query.")
+    if max_age_hours is not None and max_age_hours <= 0:
+        return invalid_input_envelope("max_age_hours must be positive.")
+    if limit < 1:
+        return invalid_input_envelope("limit must be >= 1.")
+    if not (0.0 <= min_confidence <= 1.0):
+        return invalid_input_envelope("min_confidence must be between 0.0 and 1.0.")
+    if not (0.0 <= min_similarity <= 1.0):
+        return invalid_input_envelope("min_similarity must be between 0.0 and 1.0.")
+    return None
+
+
+def _cache_envelope(
+    *,
+    document: KnowledgeDocument | None = None,
+    stale_id: str | None = None,
+    match: str | None = None,
+    score: float | None = None,
+) -> dict[str, Any]:
+    """Shape a ``cache_lookup`` hit (``document``), stale reference (``stale_id``) or clean miss."""
+    return {
+        "hit": document is not None,
+        "document": _cache_document(document) if document is not None else None,
+        "stale_exists": stale_id is not None,
+        "stale_id": stale_id,
+        "match": match,
+        "score": score,
+    }
+
+
+def _cache_document(doc: KnowledgeDocument) -> dict[str, Any]:
+    meta = doc.metadata
+    return {
+        "id": doc.id,
+        "title": doc.title,
+        "content": doc.content,
+        "confidence": meta.confidence,
+        "updated_at": meta.updated_at.isoformat(),
+        "expires_at": meta.expires_at.isoformat() if meta.expires_at else None,
+        "tags": meta.tags,
+        "source_url": meta.source_url,
+    }
+
+
+def _record_cache_lookup(started: float, outcome: str, *, match: str | None) -> None:
+    lithos_metrics.cache_lookup_duration.record((time.perf_counter() - started) * 1000)
+    lithos_metrics.cache_lookups.add(1, {"outcome": outcome, "match": match or "none"})
 
 
 class CognitiveMemory:
@@ -846,9 +920,11 @@ class CognitiveMemory:
 
     async def cache_lookup(
         self,
-        query: str,
+        query: str | None = None,
         *,
         source_url: str | None = None,
+        semantic_fallback: bool = False,
+        min_similarity: float = CACHE_LOOKUP_MIN_SIMILARITY,
         max_age_hours: float | None = None,
         min_confidence: float = 0.5,
         limit: int = 3,
@@ -856,160 +932,150 @@ class CognitiveMemory:
     ) -> dict[str, Any]:
         """Check if fresh cached knowledge exists before doing expensive research.
 
-        Returns a hit envelope, a stale-reference envelope, or a clean miss.
+        With ``source_url`` this is an identity check against the URL index.
+        Only when no note from that URL passes ``tags`` does
+        ``semantic_fallback`` add a semantic search; a stored but stale or
+        low-confidence note from the URL is reported as such, not replaced by
+        a neighbour. Without ``source_url`` it searches semantically and keeps
+        candidates with similarity >= ``min_similarity``.
+
+        Returns a hit envelope, a stale-reference envelope, or a clean miss,
+        each carrying ``match`` (``"source_url"``, ``"semantic"`` or ``None``)
+        and ``score`` (the similarity of a semantic match, else ``None``).
         Validation errors return ``{"status": "error", "code": ..., "message": ...}``.
         """
-        logger.info("lithos_cache_lookup query_len=%d source_url=%s", len(query), source_url)
+        if source_url is not None and not source_url.strip():
+            source_url = None  # a blank URL means "no URL", not an identity check on ""
+        logger.info(
+            "lithos_cache_lookup query_len=%d source_url=%s semantic_fallback=%s",
+            len(query or ""),
+            source_url,
+            semantic_fallback,
+        )
+        invalid = _validate_cache_lookup(
+            has_query=bool(query and query.strip()),
+            has_source_url=source_url is not None,
+            semantic_fallback=semantic_fallback,
+            min_similarity=min_similarity,
+            max_age_hours=max_age_hours,
+            min_confidence=min_confidence,
+            limit=limit,
+        )
+        if invalid is not None:
+            return invalid
 
-        # Input validation
-        if max_age_hours is not None and max_age_hours <= 0:
-            return {
-                "status": "error",
-                "code": "invalid_input",
-                "message": "max_age_hours must be positive.",
-            }
-        if limit < 1:
-            return {
-                "status": "error",
-                "code": "invalid_input",
-                "message": "limit must be >= 1.",
-            }
-        if not (0.0 <= min_confidence <= 1.0):
-            return {
-                "status": "error",
-                "code": "invalid_input",
-                "message": "min_confidence must be between 0.0 and 1.0.",
-            }
-
-        _lookup_start = time.perf_counter()
-        tracer = get_tracer()
-        with tracer.start_as_current_span("lithos.cache_lookup") as span:
+        lookup_start = time.perf_counter()
+        with get_tracer().start_as_current_span("lithos.cache_lookup") as span:
             span.set_attribute("lithos.tool", "lithos_cache_lookup")
             span.set_attribute("cache.source_url_used", source_url is not None)
+            span.set_attribute("cache.semantic_fallback", semantic_fallback)
+            try:
+                match, candidates = await self._cache_lookup_candidates(
+                    query,
+                    source_url=source_url,
+                    semantic_fallback=semantic_fallback,
+                    min_similarity=min_similarity,
+                    limit=limit,
+                    tags=tags,
+                )
+            except SearchBackendError as exc:
+                span.set_attribute("cache.search_error", True)
+                _record_cache_lookup(lookup_start, "error_search_backend", match=None)
+                return error_envelope(
+                    "search_backend_error", f"Semantic search backend failed: {exc}"
+                )
 
-            candidates: list[str] = []
-            candidates_evaluated = 0
-
-            # Fast path: source_url exact lookup
-            if source_url is not None:
-                fast_doc = await self._knowledge.find_by_source_url(source_url)
-                if fast_doc is not None:
-                    # Tag filtering on fast path
-                    if tags:
-                        doc_tags = fast_doc.metadata.tags
-                        if all(t in doc_tags for t in tags):
-                            candidates = [fast_doc.id]
-                        # else: tag filter failed, fall through to semantic
-                    else:
-                        candidates = [fast_doc.id]
-
-            # Fallback: semantic search
-            if not candidates:
-                try:
-                    sem_results = await asyncio.to_thread(
-                        self._search.semantic_search,
-                        query=query,
-                        limit=limit,
-                        threshold=0.0,
-                        tags=tags,
-                    )
-                    candidates = [r.id for r in sem_results[:limit]]
-                except SearchBackendError as exc:
-                    span.set_attribute("cache.search_error", True)
-                    elapsed_ms = (time.perf_counter() - _lookup_start) * 1000
-                    lithos_metrics.cache_lookup_duration.record(elapsed_ms)
-                    lithos_metrics.cache_lookups.add(1, {"outcome": "error_search_backend"})
-                    return {
-                        "status": "error",
-                        "code": "search_backend_error",
-                        "message": f"Semantic search backend failed: {exc}",
-                    }
-
-            # Evaluate candidates
-            best_hit = None
-            first_stale_id: str | None = None
-            now = datetime.now(UTC)
-            passing_docs: list[Any] = []
-
-            for doc_id in candidates:
-                try:
-                    doc, _ = await self._knowledge.read(id=doc_id)
-                except (FileNotFoundError, ValueError):
-                    continue
-
-                candidates_evaluated += 1
-                meta = doc.metadata
-
-                if meta.confidence < min_confidence:
-                    continue
-
-                # Check staleness (explicit expiry)
-                if meta.is_stale:
-                    if first_stale_id is None:
-                        first_stale_id = doc_id
-                    continue
-
-                if max_age_hours is not None:
-                    updated = normalize_datetime(meta.updated_at)
-                    cutoff = now - timedelta(hours=max_age_hours)
-                    if updated < cutoff:
-                        if first_stale_id is None:
-                            first_stale_id = doc_id
-                        continue
-
-                passing_docs.append(doc)
-
-            if passing_docs:
-                best_hit = max(passing_docs, key=lambda d: d.metadata.confidence)
-
-            span.set_attribute("cache.candidates_evaluated", candidates_evaluated)
-
-            elapsed_ms = (time.perf_counter() - _lookup_start) * 1000
-            lithos_metrics.cache_lookup_duration.record(elapsed_ms)
-
-            if best_hit is not None:
-                span.set_attribute("cache.hit", True)
-                span.set_attribute("cache.stale_exists", False)
-                lithos_metrics.cache_lookups.add(1, {"outcome": "hit"})
-                return {
-                    "hit": True,
-                    "document": {
-                        "id": best_hit.id,
-                        "title": best_hit.title,
-                        "content": best_hit.content,
-                        "confidence": best_hit.metadata.confidence,
-                        "updated_at": best_hit.metadata.updated_at.isoformat(),
-                        "expires_at": (
-                            best_hit.metadata.expires_at.isoformat()
-                            if best_hit.metadata.expires_at
-                            else None
-                        ),
-                        "tags": best_hit.metadata.tags,
-                        "source_url": best_hit.metadata.source_url,
-                    },
-                    "stale_exists": False,
-                    "stale_id": None,
-                }
-            elif first_stale_id is not None:
-                span.set_attribute("cache.hit", False)
-                span.set_attribute("cache.stale_exists", True)
-                lithos_metrics.cache_lookups.add(1, {"outcome": "miss_stale"})
-                return {
-                    "hit": False,
-                    "document": None,
-                    "stale_exists": True,
-                    "stale_id": first_stale_id,
-                }
+            hit, stale, evaluated = await self._evaluate_cache_candidates(
+                candidates, min_confidence=min_confidence, max_age_hours=max_age_hours
+            )
+            span.set_attribute("cache.candidates_evaluated", evaluated)
+            if hit is not None:
+                outcome = "hit"
+                envelope = _cache_envelope(document=hit[0], match=match, score=hit[1])
+            elif stale is not None:
+                outcome = "miss_stale"
+                envelope = _cache_envelope(stale_id=stale[0], match=match, score=stale[1])
             else:
-                span.set_attribute("cache.hit", False)
-                span.set_attribute("cache.stale_exists", False)
-                lithos_metrics.cache_lookups.add(1, {"outcome": "miss_clean"})
-                return {
-                    "hit": False,
-                    "document": None,
-                    "stale_exists": False,
-                    "stale_id": None,
-                }
+                outcome = "miss_clean"
+                envelope = _cache_envelope()
+            span.set_attribute("cache.hit", envelope["hit"])
+            span.set_attribute("cache.stale_exists", envelope["stale_exists"])
+            span.set_attribute("cache.match", envelope["match"] or "none")
+            _record_cache_lookup(lookup_start, outcome, match=envelope["match"])
+            return envelope
+
+    async def _cache_lookup_candidates(
+        self,
+        query: str | None,
+        *,
+        source_url: str | None,
+        semantic_fallback: bool,
+        min_similarity: float,
+        limit: int,
+        tags: list[str] | None,
+    ) -> tuple[str | None, list[_CacheCandidate]]:
+        """Collect ``cache_lookup`` candidates and how they matched.
+
+        Raises:
+            SearchBackendError: The semantic path ran and its backend failed.
+        """
+        if source_url is not None:
+            doc = await self._knowledge.find_by_source_url(source_url)
+            if doc is not None and all(t in doc.metadata.tags for t in tags or ()):
+                return "source_url", [(doc.id, None)]
+            if not semantic_fallback:
+                return None, []
+        if not query:
+            return None, []
+        results = await asyncio.to_thread(
+            self._search.semantic_search,
+            query=query,
+            limit=limit,
+            threshold=min_similarity,
+            tags=tags,
+        )
+        return "semantic", [(r.id, r.similarity) for r in results[:limit]]
+
+    async def _evaluate_cache_candidates(
+        self,
+        candidates: list[_CacheCandidate],
+        *,
+        min_confidence: float,
+        max_age_hours: float | None,
+    ) -> tuple[tuple[KnowledgeDocument, float | None] | None, _CacheCandidate | None, int]:
+        """Pick the best fresh candidate and the first stale one.
+
+        Returns ``(hit, stale, evaluated)``. ``hit`` is the highest-confidence
+        fresh doc with its score (ties go to the earlier, more similar
+        candidate); ``stale`` is the first candidate rejected for staleness
+        (``expires_at`` passed or older than ``max_age_hours``); ``evaluated``
+        counts the candidates that could be read.
+        """
+        cutoff = (
+            datetime.now(UTC) - timedelta(hours=max_age_hours)
+            if max_age_hours is not None
+            else None
+        )
+        fresh: list[tuple[KnowledgeDocument, float | None]] = []
+        stale: _CacheCandidate | None = None
+        evaluated = 0
+        for doc_id, score in candidates:
+            try:
+                doc, _ = await self._knowledge.read(id=doc_id)
+            except (FileNotFoundError, ValueError):
+                continue
+            evaluated += 1
+            meta = doc.metadata
+            if meta.confidence < min_confidence:
+                continue
+            too_old = cutoff is not None and normalize_datetime(meta.updated_at) < cutoff
+            if meta.is_stale or too_old:
+                if stale is None:
+                    stale = (doc_id, score)
+                continue
+            fresh.append((doc, score))
+        hit = max(fresh, key=lambda pair: pair[0].metadata.confidence) if fresh else None
+        return hit, stale, evaluated
 
     async def conflict_resolve(
         self,

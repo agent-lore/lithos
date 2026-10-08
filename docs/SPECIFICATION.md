@@ -585,15 +585,33 @@ Unified search across the knowledge base.
 #### `lithos_cache_lookup`
 Check the knowledge base for a cached answer before performing expensive research.
 
+A lookup with `source_url` is an identity check ("is a note from this URL
+stored?") and consults only the normalized URL index, unless the caller opts
+into `semantic_fallback`. A lookup without `source_url` asks "does a note about
+this exist?" and searches by meaning, keeping only candidates with cosine
+similarity >= `min_similarity`.
+
 **Arguments:**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `query` | string | Yes | Natural language query for semantic matching |
-| `source_url` | string | No | Exact URL to check first (fast path) |
+| `query` | string | Conditional | Natural language query for semantic matching. Required unless `source_url` is given, and always required with `semantic_fallback` |
+| `source_url` | string | No | Exact URL to look up via the normalized URL index. A blank string is treated as absent |
+| `semantic_fallback` | bool | No | When no note from `source_url` is stored (or none passes `tags`), also search by `query` (default: false). Ignored without `source_url` |
+| `min_similarity` | float | No | Minimum cosine similarity (0-1) for a semantic match (default: 0.7) |
 | `max_age_hours` | float | No | Reject documents older than N hours (by `updated_at`) |
 | `min_confidence` | float | No | Minimum confidence score (default: 0.5) |
 | `limit` | int | No | Max candidates to evaluate (default: 3) |
 | `tags` | string[] | No | Filter by tags |
+
+Every non-error response carries `match` and `score`:
+- `match` is how the hit or stale candidate was found: `"source_url"` (the same
+  source), `"semantic"` (a similar note, not necessarily the same source), or
+  `null` on a clean miss.
+- `score` is the cosine similarity of a semantic match, else `null`.
+
+Callers should treat a hit as a duplicate, or update `stale_id` in place, only
+when `match` is `"source_url"` or they have confirmed the note covers the same
+thing.
 
 **Returns (hit):**
 ```json
@@ -601,7 +619,9 @@ Check the knowledge base for a cached answer before performing expensive researc
   "hit": true,
   "document": { "id": "...", "title": "...", "content": "...", "source_url": "...", "confidence": 0.9, "updated_at": "...", "expires_at": "...", "tags": ["..."] },
   "stale_exists": false,
-  "stale_id": null
+  "stale_id": null,
+  "match": "semantic",
+  "score": 0.83
 }
 ```
 
@@ -611,7 +631,9 @@ Check the knowledge base for a cached answer before performing expensive researc
   "hit": false,
   "document": null,
   "stale_exists": true,
-  "stale_id": "<uuid>"
+  "stale_id": "<uuid>",
+  "match": "source_url",
+  "score": null
 }
 ```
 
@@ -621,7 +643,9 @@ Check the knowledge base for a cached answer before performing expensive researc
   "hit": false,
   "document": null,
   "stale_exists": false,
-  "stale_id": null
+  "stale_id": null,
+  "match": null,
+  "score": null
 }
 ```
 
@@ -634,11 +658,15 @@ Check the knowledge base for a cached answer before performing expensive researc
 { "status": "error", "code": "search_backend_error", "message": "..." }
 ```
 
+`invalid_input` covers a missing `query` (with no `source_url`, or with
+`semantic_fallback`), `min_similarity` or `min_confidence` outside [0, 1],
+non-positive `max_age_hours`, and `limit` < 1.
+
 **Evaluation pipeline:**
-1. **Fast path**: If `source_url` provided, exact URL lookup via `find_by_source_url()`, filtered by tags.
-2. **Semantic fallback**: If fast path misses, `semantic_search(threshold=0.0)` returns top candidates.
-3. **Candidate evaluation** (in order): confidence filter → staleness check (`expires_at`) → `max_age_hours` check → first passing candidate = hit.
-4. **Stale tracking**: If all candidates fail due to staleness, returns `stale_id` so the caller can update the stale document.
+1. **URL path**: If `source_url` is provided, exact URL lookup via `find_by_source_url()`, filtered by tags. A match is the only candidate (`match = "source_url"`), even if evaluation then rejects it as stale or low-confidence. Only when no note from the URL passes the tag filter does the lookup continue to step 2, and only with `semantic_fallback`; otherwise it is a clean miss.
+2. **Semantic path**: Without `source_url` (or on a URL miss with `semantic_fallback`), `semantic_search(threshold=min_similarity)` returns up to `limit` candidates (`match = "semantic"`).
+3. **Candidate evaluation**, in order: confidence filter → staleness check (`expires_at`) → `max_age_hours` check. The hit is the highest-confidence passing candidate; ties go to the more similar one.
+4. **Stale tracking**: If no candidate passes but one failed only on staleness, returns the first such `stale_id` (with its `match`/`score`) so the caller can update the stale document.
 
 #### `lithos_list`
 List knowledge items with filters.
@@ -1718,7 +1746,7 @@ Tools indicate routine domain failures through return values, and unexpected bac
 | Knowledge item not found | `lithos_read` returns `{ status: "error", code: "doc_not_found" }`; `lithos_delete` returns the same envelope |
 | Unknown search mode | `lithos_search` returns `{ status: "error", code: "invalid_mode" }` |
 | Search backend failure during `lithos_list(content_query=...)` | `lithos_list` returns `{ status: "error", code: "search_backend_error" }` |
-| Search backend failure during cache lookup fallback | `lithos_cache_lookup` returns `{ status: "error", code: "search_backend_error" }` |
+| Search backend failure on the cache lookup semantic path | `lithos_cache_lookup` returns `{ status: "error", code: "search_backend_error" }` |
 | Claim conflict (aspect taken / task closed / task missing) | `lithos_task_claim` returns `{ status: "error", code: "claim_failed" }` |
 | Claim renewal by wrong agent or missing claim | `lithos_task_renew` returns `{ status: "error", code: "claim_not_found" }` |
 | Claim release with no matching claim | `lithos_task_release` returns `{ status: "error", code: "claim_not_found" }` |

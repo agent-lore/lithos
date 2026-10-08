@@ -227,34 +227,34 @@ class TestCacheLookupConformance:
         """Fresh doc returns hit=True with full content."""
         doc = (
             await server.knowledge.create(
-                title="Cache Hit Conformance",
-                content="Fresh content about distributed systems.",
+                title="Distributed Systems Consensus",
+                content="Fresh content about distributed systems consensus.",
                 agent="agent",
                 expires_at=datetime.now(UTC) + timedelta(hours=24),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
 
-        result = await self._call_cache_lookup(server, query="distributed systems")
+        result = await self._call_cache_lookup(server, query="distributed systems consensus")
         assert result["hit"] is True
         assert result["document"] is not None
         assert result["document"]["id"] == doc.id
-        assert result["document"]["content"] == "Fresh content about distributed systems."
+        assert result["document"]["content"] == "Fresh content about distributed systems consensus."
 
     @pytest.mark.asyncio
     async def test_cache_stale_expired_doc(self, server: LithosServer):
         """Expired doc returns hit=False, stale_exists=True, stale_id."""
         doc = (
             await server.knowledge.create(
-                title="Cache Stale Conformance",
-                content="Expired content about graph databases.",
+                title="Graph Database Query Languages",
+                content="Expired content about graph database query languages.",
                 agent="agent",
                 expires_at=datetime.now(UTC) - timedelta(hours=1),
             )
         ).document
         server.search.index(KnowledgeManager.to_indexable(doc))
 
-        result = await self._call_cache_lookup(server, query="graph databases")
+        result = await self._call_cache_lookup(server, query="graph database query languages")
         assert result["hit"] is False
         assert result["stale_exists"] is True
         assert result["stale_id"] == doc.id
@@ -282,7 +282,7 @@ class TestStaleUpdateFlowConformance:
         # Create with already-expired TTL
         doc = (
             await server.knowledge.create(
-                title="Stale Flow Doc",
+                title="Serverless Computing",
                 content="Old content about serverless computing.",
                 agent="agent",
                 expires_at=datetime.now(UTC) - timedelta(minutes=1),
@@ -342,6 +342,7 @@ class TestSourceUrlFastPathConformance:
         assert result["hit"] is True
         assert result["document"]["id"] == doc.id
         assert result["document"]["source_url"] == "https://example.com/fast-path-test"
+        assert result["match"] == "source_url"
 
 
 class TestOnDiskCompatibilityConformance:
