@@ -1,0 +1,30 @@
+name: Notify docs site
+
+# getlithos.dev (agent-lore/lithos-docs) documents this repo's main and pulls
+# some files from it at build time. Tell it to rebuild when main moves.
+# Needs the LITHOS_DOCS_DISPATCH_TOKEN secret: a fine-grained PAT with
+# "Contents: read and write" on agent-lore/lithos-docs. Without it this job
+# is skipped and the docs site's weekly scheduled build is the backstop.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch upstream-changed to agent-lore/lithos-docs
+        env:
+          TOKEN: ${{ secrets.LITHOS_DOCS_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "LITHOS_DOCS_DISPATCH_TOKEN not set; skipping (weekly docs build is the backstop)"
+            exit 0
+          fi
+          curl -fsS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TOKEN" \
+            https://api.github.com/repos/agent-lore/lithos-docs/dispatches \
+            -d "{\"event_type\":\"upstream-changed\",\"client_payload\":{\"repo\":\"${GITHUB_REPOSITORY}\",\"sha\":\"${GITHUB_SHA}\"}}"
