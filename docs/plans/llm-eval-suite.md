@@ -73,6 +73,8 @@ they cannot reconstruct the input (review comment on PR #431).
 
 ### E2 — Golden sets
 
+**Status: schema + synthetic seed set shipped 2026-10** (`evals/edges/README.md`); the production export and Dave's labelled subset are task 4044f201.
+
 One directory per artefact type under `evals/<artefact>/`, in the repo:
 
 - `cases.jsonl` — inputs: for typed-edge adjudication, a focus snippet plus
@@ -91,6 +93,8 @@ the phase-4 workstreams: compiled pages (K3), analogy frames (K5), digest
 items (K4), priming briefs (K5).
 
 ### E3 — Runner
+
+**Status: shipped 2026-10 (task 70610498).** `lithos eval run|compare`, `lithos.lcma.eval.{cases,scoring,runner,compare,prices}`, `evals/prices.toml`. Reference agreement is scored on every candidate slot; label agreement on reviewed slots only.
 
 `lithos eval run --artefact edges --model <name> --base-url <url> [--cases N]
 [--json]`, implemented in `lithos/eval/` behind the `lithos.lcma` seam
@@ -119,6 +123,8 @@ real traffic without a production experiment. Budget-capped separately.
 
 ### E5 — Promotion rule
 
+**Status: shipped 2026-10.** `evals/POLICY.md` with the thresholds in a `toml` block that `--gate` reads.
+
 Written into `evals/POLICY.md` and enforced by `lithos eval compare
 --gate`: a candidate model or prompt is promotable when relation agreement is
 within 3 points of the incumbent, direction agreement within 5, every failure
@@ -137,6 +143,8 @@ be rejected). Runs report the judge's agreement with the human rationale
 labels alongside everything else.
 
 ### E7 — CI
+
+**Status: shipped 2026-10 (task 9ad0a592).** `tests/test_eval_smoke.py` runs inside `make test`; `make eval-smoke` runs it alone.
 
 `make eval-smoke` runs the parser and scorer on the fixtures with a recorded
 completion (no network) so parser changes are gated; full model runs are

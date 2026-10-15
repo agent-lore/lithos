@@ -17,6 +17,38 @@ Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
 
 ### Added — LLM synthesis
 
+#### `lithos eval run` / `compare --gate`, golden-set schema, promotion policy, smoke gate (eval suite E2/E3/E5/E7; tasks 70610498, 9ad0a592)
+
+A model, reasoning setting, provider or prompt change can now be scored on a
+fixed golden set before it reaches staging, and the decision is a rule, not a
+probe.
+
+- `lithos eval run --model M --base-url U [--reasoning-effort E] [--extra-body
+  JSON] [--limit N]` runs `evals/edges/cases.jsonl` through the production
+  prompt builder, client and parser and writes `evals/runs/<ts>-<model>.json`:
+  relation and direction agreement with reviewed human labels and with the
+  incumbent's reference judgements, contract-violation / parse-failure /
+  partial / empty / error rates, confidence calibration, edges per call at the
+  confidence floor, token split (hidden reasoning included), latency p50/p95
+  and cost per 1,000 calls from `evals/prices.toml`. `--recorded file` scores
+  recorded completions with no network.
+- `lithos eval compare A B --gate` applies `evals/POLICY.md` (relation
+  agreement within 3 points, direction within 5, no failure rate above the
+  incumbent's, cost at least 30% lower or equal cost with higher agreement)
+  and exits 1 on a "no". The thresholds live in that file's `toml` block.
+  Direction agreement is measured over the ground truth's directed slots, so
+  a candidate cannot empty it by answering `none`; run documents carry
+  fingerprints of the cases, labels and coverage they scored, and `--gate`
+  refuses runs over different evidence (a `--limit` trial against a full run).
+- `evals/edges/`: the case and label schema (`README.md`), a synthetic seed
+  set covering every relation plus deliberate negatives, and recorded
+  completions that reproduce the constant-direction and malformed-output
+  failure modes; `tests/test_eval_smoke.py` (also `make eval-smoke`) pins what
+  the scorer must see in each, so a parser or scorer regression fails CI.
+- `scripts/eval_labels.py sheet|import`: the labelling loop — a Markdown
+  review sheet with proposed labels that a reviewer edits in place and imports
+  back into `labels.jsonl`.
+
 #### Replayable LLM call log and `lithos eval export` / `log-report` (eval suite E1, task 73b074f8)
 
 Every typed-edge adjudication call is now recorded verbatim: the exact

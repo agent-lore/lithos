@@ -18,8 +18,13 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
 | `lithos.lcma.eval` | XS | 0 | 0 |
+| `lithos.lcma.eval.cases` | S | 2 | 7 |
+| `lithos.lcma.eval.compare` | S | 2 | 7 |
 | `lithos.lcma.eval.export` | S | 0 | 2 |
-| `lithos.lcma.eval.report` | S | 0 | 2 |
+| `lithos.lcma.eval.prices` | XS | 1 | 2 |
+| `lithos.lcma.eval.report` | XS | 0 | 2 |
+| `lithos.lcma.eval.runner` | S | 0 | 9 |
+| `lithos.lcma.eval.scoring` | S | 1 | 6 |
 | `lithos.lcma.llm` | S | 3 | 0 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
 | `lithos.lcma.retrieve` | L | 0 | 1 |
@@ -55,13 +60,60 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 ### `lithos.lcma.entities`
 - def `extract_entities` — Extract entity names from note content.
 
+### `lithos.lcma.eval.cases`
+- class `Case`
+- class `Label`
+- def `case_from_dict`
+- def `label_from_dict`
+- def `cases_fingerprint` — Digest of what the model is scored on: ids, inputs and reference judgements.
+- def `labels_fingerprint` — Digest of the reviewed labels a run was scored against; ``None`` when unlabelled.
+- def `load_cases`
+- def `load_labels` — Labels keyed by slot; a duplicate slot is an error (one truth per slot).
+- def `check_labels_cover_cases` — Problems that make a label set unusable: unknown case or candidate index.
+
+### `lithos.lcma.eval.compare`
+- def `load_policy` — Thresholds from the first ``toml`` fenced block in POLICY.md (defaults filled in).
+- class `Check`
+- class `GateResult`
+- def `agreement_basis` — Human labels when both runs were scored against them, else the reference.
+- def `gate` — Apply the promotion rule to two metrics tables.
+- def `evidence_mismatch` — Reasons two run documents did not score the same evidence (empty = comparable).
+- def `format_run_summary` — Plain-text headline for one run: the E3 table in reading order.
+- def `comparison_rows` — ``(metric, a, b)`` rows in the order the E3 table reports them.
+- def `format_comparison` — Markdown: a metrics table for the two runs, then the gate verdict if asked.
+
 ### `lithos.lcma.eval.export`
 - def `case_from_call` — Shape one logged call into a golden-set case (pure).
 - def `export_cases` — Cases newest-first plus the number of rows skipped for a missing blob.
 
+### `lithos.lcma.eval.prices`
+- class `ModelPrice`
+- def `load_prices`
+- def `cost_per_1k_calls` — USD for 1,000 calls at the run's mean token split; ``None`` without a price.
+
 ### `lithos.lcma.eval.report`
 - def `summarize_calls` — Group rows by ``(model, reasoning_effort)`` and summarise each group.
 - def `format_report` — Plain-text rendering, one block per model.
+
+### `lithos.lcma.eval.runner`
+- def `messages_for` — Replay the verbatim prompt when it is the current prompt version, else rebuild.
+- def `result_from_llm`
+- def `results_from_recorded` — Score recorded completions with no network (the ``eval-smoke`` path).
+- def `run_cases` — Call the endpoint once per case (bounded concurrency); never raises per case.
+- def `run_slug`
+- def `config_summary` — The knobs that shaped the run — everything but the credential.
+- def `build_run_document`
+- def `write_run`
+- def `load_run`
+
+### `lithos.lcma.eval.scoring`
+- class `CaseResult` — One completion for one case, as the production parser saw it.
+- def `classify_completion` — ``(outcome, problems, judgements)`` using the production parser.
+- def `mean`
+- def `percentile`
+- def `score_against_labels` — Agreement with reviewed human labels, by relation and by model confidence.
+- def `score_against_reference` — Agreement with the incumbent's recorded judgements on every candidate slot.
+- def `compute_metrics` — The E3 table for one run: rates, agreement, calibration, spend, latency, cost.
 
 ### `lithos.lcma.llm`
 - class `ChatMessage`

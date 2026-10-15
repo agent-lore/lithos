@@ -21,7 +21,7 @@ lower a budget after improving the code to lock in the gain.
 
 ## Import graph
 
-- Cross-component edges: **74** (172 module-level)
+- Cross-component edges: **74** (178 module-level)
 - Component cycles: none
 - Module cycles: lithos.server ↔ lithos.tools ↔ lithos.tools.agents ↔ lithos.tools.findings_stats ↔ lithos.tools.memory_edges ↔ lithos.tools.notes ↔ lithos.tools.read_search ↔ lithos.tools.tasks
 - Tier-skipping edges (Entrypoints → Foundation): 5 (Entrypoints -> Config, Entrypoints -> Errors, Entrypoints -> Events, Entrypoints -> Logging, Entrypoints -> Telemetry)
@@ -35,17 +35,17 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
 | Codec | 1 | 806 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
-| CognitiveMemory | 1 | 1268 | 1055 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 2 |
+| CognitiveMemory | 1 | 1369 | 1151 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 618 | 424 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 3 | 3217 | 2717 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
-| Entrypoints | 13 | 6435 | 5218 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 15 |
+| Entrypoints | 13 | 6629 | 5398 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 15 |
 | Errors | 2 | 276 | 205 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 351 | 282 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1307 | 1086 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | IdResolution | 1 | 127 | 100 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
 | Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 2175 | 1759 | 5 | 8 | 0.62 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
-| LCMA | 16 | 6274 | 5099 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 19 |
+| LCMA | 21 | 7315 | 5996 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 25 |
 | Logging | 1 | 164 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 2102 | 1717 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 7 |
@@ -54,7 +54,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **51**, lines: **27863**, SLOC: **22566**
+- Modules: **56**, lines: **29199**, SLOC: **23739**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -72,7 +72,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **875**, cyclomatic > 10: **66**
+- Functions: **926**, cyclomatic > 10: **73**
 
 Top 10 most complex functions:
 
@@ -81,13 +81,13 @@ Top 10 most complex functions:
 | 70 | `lithos.tools.notes.register.lithos_write` |
 | 62 | `lithos.knowledge.KnowledgeManager.update` |
 | 41 | `lithos.lcma.retrieve._run_retrieve_impl` |
+| 36 | `lithos.lcma.eval.scoring.compute_metrics` |
 | 33 | `lithos.search.SearchEngine.graph_search` |
 | 30 | `lithos.tools.read_search.register.lithos_list` |
 | 26 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
 | 26 | `lithos.knowledge.KnowledgeManager.create` |
 | 26 | `lithos.lcma.eval.report.summarize_calls` |
 | 26 | `lithos.search.TantivyIndex.search` |
-| 26 | `lithos.tools.notes.register.lithos_note_update` |
 
 ## Seams
 
@@ -153,4 +153,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.87** (52054 test lines / 27863 source lines)
+- Test-to-source line ratio: **1.83** (53292 test lines / 29199 source lines)

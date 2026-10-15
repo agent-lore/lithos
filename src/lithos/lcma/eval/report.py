@@ -13,18 +13,7 @@ from statistics import median
 from typing import Any
 
 from lithos.lcma.call_log import CALL_OUTCOMES
-
-
-def _percentile(values: list[float], q: float) -> float:
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    index = min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))
-    return ordered[index]
-
-
-def _mean(values: list[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
+from lithos.lcma.eval.scoring import mean, percentile
 
 
 def summarize_calls(rows: list[dict[str, object]]) -> list[dict[str, Any]]:
@@ -67,13 +56,13 @@ def summarize_calls(rows: list[dict[str, object]]) -> list[dict[str, Any]]:
                 "outcomes": outcomes,
                 "rates": {name: count / calls for name, count in outcomes.items()},
                 "estimated_share": sum(1 for row in group if row["estimated"]) / calls,
-                "prompt_tokens_mean": _mean(prompt),
-                "completion_tokens_mean": _mean(completion),
-                "total_tokens_mean": _mean(prompt) + _mean(completion),
+                "prompt_tokens_mean": mean(prompt),
+                "completion_tokens_mean": mean(completion),
+                "total_tokens_mean": mean(prompt) + mean(completion),
                 "reasoning_share": reasoning_share,
                 "latency_ms_p50": median(latencies) if latencies else 0.0,
-                "latency_ms_p95": _percentile(latencies, 0.95),
-                "edges_per_call": _mean([float(row["edges_written"] or 0) for row in group]),  # type: ignore[arg-type]
+                "latency_ms_p95": percentile(latencies, 0.95),
+                "edges_per_call": mean([float(row["edges_written"] or 0) for row in group]),  # type: ignore[arg-type]
             }
         )
     return summaries
