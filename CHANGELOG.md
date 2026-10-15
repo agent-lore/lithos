@@ -15,6 +15,29 @@ Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
 - **Two new response keys.** `match` (`"source_url"` / `"semantic"` / `null`)
   and `score` appear on every non-error `lithos_cache_lookup` response.
 
+### Added — LLM synthesis
+
+#### Request knobs for reasoning models (`lcma.llm.reasoning_effort`, `temperature`, `extra_body`)
+
+Groundwork for the GPT-6 Luna migration and the LLM eval suite
+(`docs/plans/llm-eval-suite.md`). OpenAI's migration guide recommends
+starting a GPT-4.x-style workload on Luna with reasoning effort `none`;
+until now the client had no way to say so.
+
+- `lcma.llm.reasoning_effort` (`LITHOS_LCMA__LLM__REASONING_EFFORT`): one of
+  `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, sent as the
+  Chat Completions `reasoning_effort` field (OpenAI and OpenRouter). Unset
+  keeps the provider default, so existing deployments are unchanged.
+- `lcma.llm.temperature` (default 0.1, the previous hard-coded value): omitted
+  from the request when unset, and always omitted while reasoning is on,
+  because OpenAI rejects sampling parameters alongside reasoning.
+- `lcma.llm.extra_body`: a JSON object merged last into every request for
+  provider-specific fields (Ollama `think`, vLLM `chat_template_kwargs`,
+  OpenRouter `provider` routing). It may not set `model` or `messages`.
+- `LlmResult.reasoning_tokens` carries
+  `usage.completion_tokens_details.reasoning_tokens` when the endpoint
+  reports it, so cost reports can separate hidden reasoning from output.
+
 ### Fixed — cognitive memory
 
 #### `lithos_cache_lookup` reports how it matched and stops returning unrelated notes (task d0392561)

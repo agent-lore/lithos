@@ -464,3 +464,50 @@ class TestLlmConfigHardening:
             LlmConfig(base_url="ollama:11434/v1", model="m")
         with pytest.raises(ValidationError, match="http:// or https://"):
             LlmConfig(base_url="ftp://host/v1", model="m")
+
+
+class TestLlmRequestKnobs:
+    """LlmConfig request shaping for reasoning models (reasoning_effort/temperature/extra_body)."""
+
+    def test_defaults(self) -> None:
+        cfg = LlmConfig()
+        assert cfg.reasoning_effort is None
+        assert cfg.temperature == 0.1
+        assert cfg.extra_body == {}
+
+    def test_reasoning_effort_accepts_known_values_and_strips(self) -> None:
+        for effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
+            assert LlmConfig(reasoning_effort=effort).reasoning_effort == effort
+        assert LlmConfig(reasoning_effort="  none ").reasoning_effort == "none"
+
+    def test_blank_reasoning_effort_means_unset(self) -> None:
+        assert LlmConfig(reasoning_effort="").reasoning_effort is None
+        assert LlmConfig(reasoning_effort="   ").reasoning_effort is None
+
+    def test_unknown_reasoning_effort_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="reasoning_effort"):
+            LlmConfig(reasoning_effort="turbo")
+
+    def test_temperature_none_and_range(self) -> None:
+        assert LlmConfig(temperature=None).temperature is None
+        assert LlmConfig(temperature=0.0).temperature == 0.0
+        with pytest.raises(ValidationError):
+            LlmConfig(temperature=2.5)
+
+    def test_extra_body_rejects_reserved_keys(self) -> None:
+        with pytest.raises(ValidationError, match="extra_body"):
+            LlmConfig(extra_body={"messages": []})
+        with pytest.raises(ValidationError, match="extra_body"):
+            LlmConfig(extra_body={"model": "other"})
+        assert LlmConfig(extra_body={"think": False}).extra_body == {"think": False}
+
+    def test_env_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITHOS_LCMA__LLM__BASE_URL", "https://openrouter.ai/api/v1")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__MODEL", "openai/gpt-6-luna")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__REASONING_EFFORT", "none")
+        monkeypatch.setenv("LITHOS_LCMA__LLM__TEMPERATURE", "")  # compose pass-through default
+        monkeypatch.setenv("LITHOS_LCMA__LLM__EXTRA_BODY", '{"provider": {"order": ["openai"]}}')
+        cfg = LithosConfig()
+        assert cfg.lcma.llm.reasoning_effort == "none"
+        assert cfg.lcma.llm.temperature == 0.1  # blank env means default, not None
+        assert cfg.lcma.llm.extra_body == {"provider": {"order": ["openai"]}}

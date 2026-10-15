@@ -55,6 +55,14 @@ def _usage_int(value: object) -> int | None:
     return coerced if coerced >= 0 else None
 
 
+def _reasoning_tokens(usage: dict[str, Any]) -> int | None:
+    """``usage.completion_tokens_details.reasoning_tokens`` as a non-negative int, else None."""
+    details = usage.get("completion_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    return _usage_int(details.get("reasoning_tokens"))
+
+
 @dataclass(frozen=True)
 class ChatMessage:
     role: str
@@ -70,6 +78,9 @@ class LlmResult:
     completion_tokens: int
     #: True when the endpoint omitted ``usage`` and tokens are a chars//4 estimate.
     estimated: bool = False
+    #: Hidden-reasoning share of ``completion_tokens`` when the endpoint reports
+    #: ``usage.completion_tokens_details.reasoning_tokens``; None otherwise.
+    reasoning_tokens: int | None = None
 
     @property
     def total_tokens(self) -> int:
@@ -111,13 +122,22 @@ class LlmClient:
         body: dict[str, Any] = {
             "model": self._config.model,
             "max_tokens": self._config.max_output_tokens,
-            "temperature": 0.1,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
         }
+        if self._config.reasoning_effort is not None:
+            body["reasoning_effort"] = self._config.reasoning_effort
+        # Sampling parameters are rejected alongside hidden reasoning (OpenAI);
+        # an unset effort keeps the historical temperature so provider-default
+        # behaviour is unchanged.
+        if self._config.temperature is not None and not self._config.reasoning_on:
+            body["temperature"] = self._config.temperature
         if json_response:
             # Maps to Ollama's format=json on its /v1 shim; parsers must still
             # treat the output as untrusted.
             body["response_format"] = {"type": "json_object"}
+        # Provider-specific knobs win over the modelled fields; config
+        # validation keeps model/messages out of reach.
+        body.update(self._config.extra_body)
 
         response = await self._post_with_retry(body)
         return self._parse_response(response, request_chars=sum(len(m.content) for m in messages))
@@ -196,6 +216,7 @@ class LlmClient:
                     text=text,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
+                    reasoning_tokens=_reasoning_tokens(usage),
                 )
             # Some providers report only an aggregate total. The total is what
             # the budget ledger consumes, so it is authoritative (not an
