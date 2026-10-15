@@ -64,7 +64,9 @@ def test_incumbent_recording_scores_as_expected() -> None:
     assert m["contract_violation_rate"] == 0.0
     # one deliberate miss out of the labelled slots (seed-004 candidate 1)
     assert m["labels"]["relation_agreement"] == pytest.approx((len(LABELS) - 1) / len(LABELS))
-    assert m["labels"]["direction_agreement"] == 1.0
+    # the missed depends_on slot is directed, so it is a direction miss too (4 directed truth slots)
+    assert m["labels"]["n_directed"] == 4
+    assert m["labels"]["direction_agreement"] == pytest.approx(3 / 4)
     assert m["labels"]["by_relation"]["depends_on"]["relation_agreement"] == 0.0
     assert m["labels"]["calibration"]["<0.6"]["n"] == 1  # the miss was the low-confidence answer
     assert m["reference"]["relation_agreement"] == 1.0  # it *is* the reference

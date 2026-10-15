@@ -20,7 +20,7 @@ from typing import Any
 from lithos.config import LlmConfig
 from lithos.errors import LlmError
 from lithos.lcma.edge_inference import INFERENCE_VERSION, build_adjudication_prompt
-from lithos.lcma.eval.cases import Case, Label, Slot
+from lithos.lcma.eval.cases import Case, Label, Slot, cases_fingerprint, labels_fingerprint
 from lithos.lcma.eval.prices import ModelPrice
 from lithos.lcma.eval.scoring import CaseResult, classify_completion, compute_metrics
 from lithos.lcma.llm import ChatMessage, LlmClient, LlmResult
@@ -171,6 +171,12 @@ def build_run_document(
     metrics = compute_metrics(
         cases, results, labels=labels, confidence_floor=llm_config.confidence_floor, price=price
     )
+    evidence = {
+        "cases_fingerprint": cases_fingerprint(cases),
+        "labels_fingerprint": labels_fingerprint(labels),
+        "n_cases": len(cases),
+        "result_case_ids": sorted(r.case_id for r in results),
+    }
     return {
         "run_id": f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{run_slug(llm_config.model, llm_config.reasoning_effort)}",
         "created_at": datetime.now(UTC).isoformat(),
@@ -179,6 +185,8 @@ def build_run_document(
         "cases_path": str(cases_path) if cases_path else None,
         "labels_path": str(labels_path) if labels_path else None,
         "config": config_summary(llm_config),
+        # What was scored, so `compare --gate` can refuse runs over different evidence.
+        "evidence": evidence,
         "metrics": metrics,
         "results": [r.__dict__ for r in results],
     }

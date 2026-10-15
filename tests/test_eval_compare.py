@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from lithos.config import LlmConfig
+from lithos.lcma.eval.cases import load_cases, load_labels
 from lithos.lcma.eval.compare import (
     DEFAULT_POLICY,
     agreement_basis,
     comparison_rows,
+    evidence_mismatch,
     format_comparison,
     gate,
     load_policy,
 )
+from lithos.lcma.eval.runner import build_run_document, results_from_recorded
 
 
 def _metrics(
@@ -68,6 +73,14 @@ class TestGate:
         assert "no directed slots" in next(
             c.detail for c in result.checks if c.name == "direction_agreement"
         )
+
+    def test_direction_measured_on_one_run_only_fails(self) -> None:
+        """PR #451 review: a candidate without a direction score cannot pass the check."""
+        for inc_dir, cand_dir in ((0.9, None), (None, 0.9)):
+            result = gate(_metrics(direction=inc_dir), _metrics(direction=cand_dir, cost=0.1))
+            assert not result.promotable
+            check = next(c for c in result.checks if c.name == "direction_agreement")
+            assert "one run only" in check.detail
 
     def test_any_failure_rate_above_incumbent_fails(self) -> None:
         result = gate(_metrics(), _metrics(cost=0.1, rates={"parse_error": 0.01}))
@@ -132,6 +145,71 @@ class TestPolicyFile:
         path.write_text("```toml\ncost_min_reduction = 0.5\n```\n")
         assert load_policy(path)["cost_min_reduction"] == 0.5
         assert load_policy(path)["relation_agreement_max_drop"] == 0.03  # default kept
+
+
+def _seed_run(model: str, recorded: str, limit: int | None = None):
+    cases = load_cases(Path("evals/edges/cases.jsonl"), limit=limit)
+    labels = load_labels(Path("evals/edges/labels.jsonl"))
+    rows = [
+        json.loads(line)
+        for line in Path(f"evals/edges/recorded/{recorded}").read_text().splitlines()
+    ]
+    results = results_from_recorded(cases, {r["case_id"]: r["completion"] for r in rows})
+    return build_run_document(
+        artefact="edges",
+        cases=cases,
+        results=results,
+        llm_config=LlmConfig(model=model),
+        labels=labels,
+        price=None,
+        cases_path=None,
+        labels_path=None,
+        recorded=True,
+    )
+
+
+class TestEvidence:
+    """PR #451 review: the gate must refuse runs that scored different evidence."""
+
+    def test_same_evidence_is_comparable(self) -> None:
+        a = _seed_run("inc", "seed-incumbent.jsonl")
+        b = _seed_run("cand", "seed-constant-direction.jsonl")
+        assert evidence_mismatch(a, b) == []
+        assert "Evidence: same cases" in format_comparison(a, b)
+
+    def test_limited_run_is_refused(self) -> None:
+        full = _seed_run("inc", "seed-incumbent.jsonl")
+        partial = _seed_run("cand", "seed-incumbent.jsonl", limit=1)
+        reasons = evidence_mismatch(full, partial)
+        assert any("different cases" in r for r in reasons)
+        assert any("different case ids" in r for r in reasons)
+        assert "WARNING — not comparable" in format_comparison(full, partial)
+
+    def test_missing_result_coverage_and_old_documents(self) -> None:
+        full = _seed_run("inc", "seed-incumbent.jsonl")
+        short = json.loads(json.dumps(full))
+        short["evidence"]["result_case_ids"] = short["evidence"]["result_case_ids"][:-1]
+        assert any("5 of 6 cases" in r for r in evidence_mismatch(full, short))
+        legacy = {"metrics": full["metrics"], "config": full["config"]}
+        assert evidence_mismatch(full, legacy) == [
+            "candidate run has no evidence fingerprint (re-run it)"
+        ]
+        relabelled = json.loads(json.dumps(full))
+        relabelled["evidence"]["labels_fingerprint"] = "other"
+        assert any("different labels" in r for r in evidence_mismatch(full, relabelled))
+
+    def test_facade_refuses_to_gate_mismatched_runs(self, tmp_path: Path) -> None:
+        from lithos.cognitive_memory import compare_llm_eval_runs
+
+        full = _seed_run("inc", "seed-incumbent.jsonl")
+        partial = _seed_run("cand", "seed-incumbent.jsonl", limit=1)
+        a, b = tmp_path / "a.json", tmp_path / "b.json"
+        a.write_text(json.dumps(full))
+        b.write_text(json.dumps(partial))
+        text, verdict = compare_llm_eval_runs(a, b, apply_gate=False, policy_path=None)
+        assert verdict is None and "not comparable" in text
+        with pytest.raises(ValueError, match="different evidence"):
+            compare_llm_eval_runs(a, b, apply_gate=True, policy_path=Path("evals/POLICY.md"))
 
 
 class TestReport:

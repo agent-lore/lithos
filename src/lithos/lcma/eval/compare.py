@@ -98,8 +98,14 @@ def gate(
     inc_dir, cand_dir = (
         _agreement(m, basis, "direction_agreement") for m in (incumbent, candidate)
     )
-    if inc_dir is None or cand_dir is None:
-        dir_ok, detail = True, "no directed slots to compare"
+    if inc_dir is None and cand_dir is None:
+        # Both scored on a truth with no directed slots: nothing to compare.
+        # (The denominator is the truth's directed slots, so a candidate cannot
+        # reach None by answering `none`; one-sided None is a scoring mismatch.)
+        dir_ok, detail = True, "no directed slots in the ground truth"
+    elif inc_dir is None or cand_dir is None:
+        dir_ok = False
+        detail = f"{pct(cand_dir)} vs {pct(inc_dir)} (direction measured on one run only)"
     else:
         dir_ok = cand_dir >= inc_dir - rule["direction_agreement_max_drop"]
         detail = f"{pct(cand_dir)} vs {pct(inc_dir)} (max drop {rule['direction_agreement_max_drop']:.0%})"
@@ -134,6 +140,34 @@ def gate(
     checks.append(Check("cost_per_1k_calls", cost_ok, detail))
 
     return GateResult(all(c.passed for c in checks), basis, checks)
+
+
+def evidence_mismatch(run_a: dict[str, Any], run_b: dict[str, Any]) -> list[str]:
+    """Reasons two run documents did not score the same evidence (empty = comparable).
+
+    Checks the case-content and label fingerprints and that both runs produced
+    a result for every case, so a `--limit` trial, a revised label set or a
+    re-exported golden set cannot be gated against a full run by accident.
+    """
+    a, b = run_a.get("evidence"), run_b.get("evidence")
+    reasons: list[str] = []
+    for name, ev in (("incumbent", a), ("candidate", b)):
+        if not isinstance(ev, dict):
+            reasons.append(f"{name} run has no evidence fingerprint (re-run it)")
+    if reasons:
+        return reasons
+    assert isinstance(a, dict) and isinstance(b, dict)
+    if a.get("cases_fingerprint") != b.get("cases_fingerprint"):
+        reasons.append("runs scored different cases (cases_fingerprint differs)")
+    if a.get("labels_fingerprint") != b.get("labels_fingerprint"):
+        reasons.append("runs scored against different labels (labels_fingerprint differs)")
+    for name, ev in (("incumbent", a), ("candidate", b)):
+        ids = ev.get("result_case_ids") or []
+        if len(ids) != ev.get("n_cases") or len(set(ids)) != len(ids):
+            reasons.append(f"{name} run has results for {len(ids)} of {ev.get('n_cases')} cases")
+    if a.get("result_case_ids") != b.get("result_case_ids"):
+        reasons.append("runs covered different case ids")
+    return reasons
 
 
 def _fmt(value: Any) -> str:
@@ -236,6 +270,13 @@ def format_comparison(
     ]
     for name, va, vb in comparison_rows(run_a["metrics"], run_b["metrics"]):
         lines.append(f"| {name} | {_fmt(va)} | {_fmt(vb)} |")
+    mismatch = evidence_mismatch(run_a, run_b)
+    lines.append("")
+    lines.append(
+        "Evidence: same cases, labels and coverage"
+        if not mismatch
+        else "WARNING — not comparable: " + "; ".join(mismatch)
+    )
     if gate_result is not None:
         verdict = "PROMOTABLE" if gate_result.promotable else "NOT PROMOTABLE"
         lines.append("")

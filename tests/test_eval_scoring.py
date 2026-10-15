@@ -223,6 +223,36 @@ class TestMetrics:
         assert m["cost_per_1k_calls"] is None
         assert m["tokens"]["reasoning_share"] is None
 
+    def test_answering_none_cannot_erase_the_direction_denominator(self) -> None:
+        """PR #451 review: directed truth slots stay in the denominator when the
+        model answers none, so direction agreement is 0.0, never None."""
+        cases = [_case(f"c{i}", n=5) for i in range(20)]
+        labels = {}
+        for case in cases:
+            for index in range(1, 6):
+                directed = case.case_id == "c0" and index in (1, 2)
+                labels[(case.case_id, index)] = label_from_dict(
+                    {
+                        "case_id": case.case_id,
+                        "candidate_index": index,
+                        "relation": "supports" if directed else "none",
+                        "direction": "focus_to_candidate" if directed else None,
+                        "labeller": "d",
+                        "labelled_at": "x",
+                    }
+                )
+        all_none = [
+            _result(c, _completion(*(_judgement(i, "none") for i in range(1, 6)))) for c in cases
+        ]
+        m = compute_metrics(cases, all_none, labels=labels, confidence_floor=0.6)
+        assert m["labels"]["relation_agreement"] == pytest.approx(98 / 100)
+        assert m["labels"]["n_directed"] == 2
+        assert m["labels"]["direction_agreement"] == 0.0
+        # unusable completions are direction misses as well
+        garbage = [_result(c, "garbage") for c in cases]
+        m2 = compute_metrics(cases, garbage, labels=labels, confidence_floor=0.6)
+        assert m2["labels"]["direction_agreement"] == 0.0
+
     def test_no_labels_and_empty_reference(self) -> None:
         c1 = _case("c1")
         m = compute_metrics([c1], [_result(c1, _completion())], confidence_floor=0.6)

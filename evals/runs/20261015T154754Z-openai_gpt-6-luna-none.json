@@ -16,6 +16,19 @@
   "snippet_chars": 700,
   "prompt_version": 1
  },
+ "evidence": {
+  "cases_fingerprint": "99145aee9c4276efe42cde715375efe467a481d7b66ee97eb4bc25ca5c68846e",
+  "labels_fingerprint": "6b089fb28b5a25058dd78d116dde790ad182964c3e161254fe2a49cb670684a1",
+  "n_cases": 6,
+  "result_case_ids": [
+   "seed-001",
+   "seed-002",
+   "seed-003",
+   "seed-004",
+   "seed-005",
+   "seed-006"
+  ]
+ },
  "metrics": {
   "n_cases": 6,
   "n_calls": 6,
@@ -37,8 +50,8 @@
   "labels": {
    "n_slots": 11,
    "relation_agreement": 0.8181818181818182,
-   "n_directed": 3,
-   "direction_agreement": 1.0,
+   "n_directed": 4,
+   "direction_agreement": 0.75,
    "by_relation": {
     "analogy_to": {
      "n_slots": 1,
@@ -55,8 +68,8 @@
     "depends_on": {
      "n_slots": 1,
      "relation_agreement": 0.0,
-     "n_directed": 0,
-     "direction_agreement": null
+     "n_directed": 1,
+     "direction_agreement": 0.0
     },
     "is_example_of": {
      "n_slots": 1,

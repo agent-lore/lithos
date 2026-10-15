@@ -9,8 +9,9 @@ scorer.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -163,6 +164,39 @@ def label_from_dict(data: dict[str, Any]) -> Label:
         status=status,
         notes=str(data.get("notes", "")),
     )
+
+
+def _digest(payload: object) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def cases_fingerprint(cases: list[Case]) -> str:
+    """Digest of what the model is scored on: ids, inputs and reference judgements.
+
+    Two runs are comparable only when this matches — same cases, same
+    candidate text, same reference — not merely the same file path or count.
+    """
+    return _digest(
+        [
+            {
+                "case_id": c.case_id,
+                "focus": c.focus,
+                "candidates": c.candidates,
+                "snippet_chars": c.snippet_chars,
+                "reference": (c.reference or {}).get("judgements"),
+            }
+            for c in sorted(cases, key=lambda c: c.case_id)
+        ]
+    )
+
+
+def labels_fingerprint(labels: dict[Slot, Label] | None) -> str | None:
+    """Digest of the reviewed labels a run was scored against; ``None`` when unlabelled."""
+    if not labels:
+        return None
+    return _digest([asdict(labels[slot]) for slot in sorted(labels)])
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

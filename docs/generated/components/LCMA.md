@@ -18,8 +18,8 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
 | `lithos.lcma.eval` | XS | 0 | 0 |
-| `lithos.lcma.eval.cases` | S | 2 | 5 |
-| `lithos.lcma.eval.compare` | S | 2 | 6 |
+| `lithos.lcma.eval.cases` | S | 2 | 7 |
+| `lithos.lcma.eval.compare` | S | 2 | 7 |
 | `lithos.lcma.eval.export` | S | 0 | 2 |
 | `lithos.lcma.eval.prices` | XS | 1 | 2 |
 | `lithos.lcma.eval.report` | XS | 0 | 2 |
@@ -65,6 +65,8 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 - class `Label`
 - def `case_from_dict`
 - def `label_from_dict`
+- def `cases_fingerprint` — Digest of what the model is scored on: ids, inputs and reference judgements.
+- def `labels_fingerprint` — Digest of the reviewed labels a run was scored against; ``None`` when unlabelled.
 - def `load_cases`
 - def `load_labels` — Labels keyed by slot; a duplicate slot is an error (one truth per slot).
 - def `check_labels_cover_cases` — Problems that make a label set unusable: unknown case or candidate index.
@@ -75,6 +77,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 - class `GateResult`
 - def `agreement_basis` — Human labels when both runs were scored against them, else the reference.
 - def `gate` — Apply the promotion rule to two metrics tables.
+- def `evidence_mismatch` — Reasons two run documents did not score the same evidence (empty = comparable).
 - def `format_run_summary` — Plain-text headline for one run: the E3 table in reading order.
 - def `comparison_rows` — ``(metric, a, b)`` rows in the order the E3 table reports them.
 - def `format_comparison` — Markdown: a metrics table for the two runs, then the gate verdict if asked.

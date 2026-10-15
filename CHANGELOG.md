@@ -36,6 +36,10 @@ probe.
   agreement within 3 points, direction within 5, no failure rate above the
   incumbent's, cost at least 30% lower or equal cost with higher agreement)
   and exits 1 on a "no". The thresholds live in that file's `toml` block.
+  Direction agreement is measured over the ground truth's directed slots, so
+  a candidate cannot empty it by answering `none`; run documents carry
+  fingerprints of the cases, labels and coverage they scored, and `--gate`
+  refuses runs over different evidence (a `--limit` trial against a full run).
 - `evals/edges/`: the case and label schema (`README.md`), a synthetic seed
   set covering every relation plus deliberate negatives, and recorded
   completions that reproduce the constant-direction and malformed-output

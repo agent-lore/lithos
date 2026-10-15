@@ -88,6 +88,10 @@ def _ratio(hits: int, total: int) -> float | None:
 
 @dataclass
 class _Agreement:
+    """Slot tallies. ``directed`` counts the *truth's* directed slots, so a model
+    cannot shrink the direction denominator by answering ``none``: a missed
+    relation on a directed slot is also a missed direction (review of PR #451)."""
+
     slots: int = 0
     relation_hits: int = 0
     directed: int = 0
@@ -112,16 +116,17 @@ def _compare_slot(
 ) -> bool:
     """Score one slot into *agg*; returns whether the relation matched."""
     agg.slots += 1
+    truth_directed = truth_relation != "none" and truth_relation not in SYMMETRIC_RELATIONS
+    if truth_directed:
+        agg.directed += 1
     if unusable:
         return False
     relation = str(answer["relation"]) if answer is not None else "none"
     matched = relation == truth_relation
     if matched:
         agg.relation_hits += 1
-        if truth_relation != "none" and truth_relation not in SYMMETRIC_RELATIONS:
-            agg.directed += 1
-            if answer is not None and answer.get("direction") == truth_direction:
-                agg.direction_hits += 1
+        if truth_directed and answer is not None and answer.get("direction") == truth_direction:
+            agg.direction_hits += 1
     return matched
 
 

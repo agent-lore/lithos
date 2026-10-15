@@ -41,7 +41,13 @@ from lithos.lcma.enrich import ENRICH_AGENT, EnrichWorker
 # extract-entities command shares the enrichment worker's extractor (#313).
 from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION, extract_entities
 from lithos.lcma.eval.cases import check_labels_cover_cases, load_cases, load_labels
-from lithos.lcma.eval.compare import format_comparison, format_run_summary, gate, load_policy
+from lithos.lcma.eval.compare import (
+    evidence_mismatch,
+    format_comparison,
+    format_run_summary,
+    gate,
+    load_policy,
+)
 from lithos.lcma.eval.export import export_cases
 from lithos.lcma.eval.prices import load_prices
 from lithos.lcma.eval.report import format_report, summarize_calls
@@ -1352,6 +1358,11 @@ def compare_llm_eval_runs(
     incumbent, candidate = load_run(incumbent_path), load_run(candidate_path)
     verdict = None
     if apply_gate:
+        mismatch = evidence_mismatch(incumbent, candidate)
+        if mismatch:
+            raise ValueError(
+                "refusing to gate runs over different evidence: " + "; ".join(mismatch)
+            )
         policy = load_policy(policy_path) if policy_path is not None else None
         verdict = gate(incumbent["metrics"], candidate["metrics"], policy)
     text = format_comparison(incumbent, candidate, verdict)

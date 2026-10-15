@@ -81,8 +81,10 @@ def write_sheet(
     lines = [
         "# Golden-set review sheet",
         "",
-        "Edit the `label:` line under each slot. Grammar: `label: <relation> "
-        "[direction] [low|medium|high] [rationale_ok=yes|no]`; `label: skip` leaves it out.",
+        (
+            "Edit the `label:` line under each slot. Grammar: `label: <relation> "
+            + "[direction] [low|medium|high] [rationale_ok=yes|no]`; `label: skip` leaves it out."
+        ),
         "",
     ]
     slots = 0

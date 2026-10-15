@@ -169,6 +169,10 @@ class TestRecordedAndDocuments:
             recorded=True,
         )
         assert doc["run_id"].endswith("-openai_gpt-6-luna-low")
+        assert doc["evidence"]["n_cases"] == len(cases)
+        assert doc["evidence"]["result_case_ids"] == sorted(c.case_id for c in cases)
+        assert len(doc["evidence"]["cases_fingerprint"]) == 64
+        assert doc["evidence"]["labels_fingerprint"] is not None
         assert doc["config"]["temperature"] is None  # omitted while reasoning is on
         assert "api_key" not in json.dumps(doc)
         assert doc["metrics"]["labels"]["n_slots"] == len(labels)
