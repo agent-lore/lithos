@@ -411,3 +411,92 @@ async def test_integral_float_usage_is_accepted() -> None:
         await client.close()
     assert not result.estimated
     assert result.total_tokens == 150
+
+
+async def _request_body(**config_overrides: Any) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_ok_response())
+
+    client = _client_with(handler, **config_overrides)
+    try:
+        await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    return seen["body"]
+
+
+async def test_default_request_has_temperature_and_no_reasoning_field() -> None:
+    body = await _request_body()
+    assert body["temperature"] == 0.1
+    assert "reasoning_effort" not in body
+
+
+async def test_reasoning_effort_none_keeps_temperature() -> None:
+    body = await _request_body(reasoning_effort="none")
+    assert body["reasoning_effort"] == "none"
+    assert body["temperature"] == 0.1
+
+
+async def test_reasoning_on_omits_temperature() -> None:
+    # OpenAI rejects sampling parameters alongside hidden reasoning.
+    body = await _request_body(reasoning_effort="low")
+    assert body["reasoning_effort"] == "low"
+    assert "temperature" not in body
+
+
+async def test_temperature_none_is_omitted() -> None:
+    body = await _request_body(temperature=None)
+    assert "temperature" not in body
+
+
+async def test_extra_body_merged_last() -> None:
+    body = await _request_body(extra_body={"think": False, "max_tokens": 99})
+    assert body["think"] is False
+    assert body["max_tokens"] == 99  # extra_body wins over the modelled field
+    assert body["model"] == "qwen3"
+
+
+async def test_reasoning_tokens_extracted_when_reported() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_ok_response(
+                usage={
+                    "prompt_tokens": 100,
+                    "completion_tokens": 40,
+                    "completion_tokens_details": {"reasoning_tokens": 25},
+                }
+            ),
+        )
+
+    client = _client_with(handler)
+    try:
+        result = await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert result.reasoning_tokens == 25
+    assert result.completion_tokens == 40
+
+
+async def test_reasoning_tokens_none_when_absent_or_invalid() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_ok_response(
+                usage={
+                    "prompt_tokens": 100,
+                    "completion_tokens": 40,
+                    "completion_tokens_details": {"reasoning_tokens": -1},
+                }
+            ),
+        )
+
+    client = _client_with(handler)
+    try:
+        result = await client.chat(MESSAGES)
+    finally:
+        await client.close()
+    assert result.reasoning_tokens is None

@@ -130,7 +130,7 @@
         "qualname": "lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer"
       }
     ],
-    "total_functions": 835
+    "total_functions": 839
   },
   "domain": {
     "associations": 26,
@@ -339,13 +339,13 @@
       },
       "Config": {
         "classes": 10,
-        "functions": 24,
+        "functions": 27,
         "largest_module": "lithos.config",
-        "largest_module_lines": 565,
-        "lines": 565,
+        "largest_module_lines": 614,
+        "lines": 614,
         "modules": 1,
         "public_symbols": 13,
-        "sloc": 394
+        "sloc": 423
       },
       "Coordination": {
         "classes": 9,
@@ -429,13 +429,13 @@
       },
       "LCMA": {
         "classes": 13,
-        "functions": 159,
+        "functions": 160,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1253,
-        "lines": 5560,
+        "lines": 5581,
         "modules": 12,
         "public_symbols": 36,
-        "sloc": 4488
+        "sloc": 4500
       },
       "Logging": {
         "classes": 1,
@@ -504,13 +504,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 26965,
+    "total_lines": 27035,
     "total_modules": 47,
-    "total_sloc": 21823
+    "total_sloc": 21864
   },
   "tests": {
     "ratio": 1.89,
-    "src_lines": 26965,
-    "test_lines": 51086
+    "src_lines": 27035,
+    "test_lines": 51222
   }
 }

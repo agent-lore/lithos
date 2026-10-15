@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import (
@@ -168,6 +168,15 @@ class EventsConfig(BaseModel):
     max_sse_clients: int = 50
 
 
+#: Reasoning-effort values accepted by the OpenAI Chat Completions API and
+#: OpenRouter's ``reasoning_effort`` pass-through. ``none`` disables reasoning.
+REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
+
+#: Request fields ``extra_body`` may not override: the model identity and the
+#: prompt are owned by the engine, never by deployment config.
+_EXTRA_BODY_RESERVED = frozenset({"model", "messages"})
+
+
 class LlmConfig(BaseModel):
     """OpenAI-compatible chat-completions endpoint for background LLM synthesis (WS1).
 
@@ -225,10 +234,50 @@ class LlmConfig(BaseModel):
     # separately. Other endpoints ignore both headers.
     app_url: str = "https://github.com/agent-lore/lithos"
     app_title: str = "lithos"
+    # Request shaping for reasoning models. ``reasoning_effort`` is sent as the
+    # top-level Chat Completions field (OpenAI and OpenRouter both accept it for
+    # the gpt-5/gpt-6 families); ``none`` switches hidden reasoning off, which
+    # is OpenAI's recommended starting point for a GPT-4.x-style workload on
+    # GPT-6 Luna. Unset leaves the provider default in place. ``temperature``
+    # is omitted from the request when None, and the client also omits it
+    # whenever reasoning is on (OpenAI rejects sampling parameters alongside
+    # reasoning). ``extra_body`` is merged last, verbatim, for provider knobs
+    # the schema does not model (Ollama ``think``, vLLM ``chat_template_kwargs``,
+    # OpenRouter ``provider`` routing); its env form is a JSON object.
+    reasoning_effort: str | None = None
+    temperature: float | None = Field(default=0.1, ge=0.0, le=2.0)
+    extra_body: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def enabled(self) -> bool:
         return self.base_url is not None
+
+    @property
+    def reasoning_on(self) -> bool:
+        """True when the request asks the provider for hidden reasoning."""
+        return self.reasoning_effort is not None and self.reasoning_effort != "none"
+
+    @field_validator("reasoning_effort", mode="before")
+    @classmethod
+    def _normalize_reasoning_effort(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            if stripped not in REASONING_EFFORTS:
+                raise ValueError(
+                    f"lcma.llm.reasoning_effort must be one of {sorted(REASONING_EFFORTS)}"
+                )
+            return stripped
+        return value
+
+    @field_validator("extra_body", mode="after")
+    @classmethod
+    def _check_extra_body_keys(cls, value: dict[str, Any]) -> dict[str, Any]:
+        clash = _EXTRA_BODY_RESERVED & set(value)
+        if clash:
+            raise ValueError(f"lcma.llm.extra_body must not set {sorted(clash)}")
+        return value
 
     @field_validator("base_url", mode="before")
     @classmethod
