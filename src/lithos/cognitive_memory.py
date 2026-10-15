@@ -30,12 +30,15 @@ from lithos.errors import SearchBackendError
 from lithos.events import EVENT_ORIGIN_ENRICH, LithosEvent, make_edge_upserted_event
 from lithos.frontmatter_codec import normalize_datetime
 from lithos.intake import EdgeRequest, NoteUpdateRequest
+from lithos.lcma.call_log import BLOB_SUBDIR, BlobStore
 from lithos.lcma.edge_reinforce import RELATED_TO_STRENGTHEN_DELTA, reinforce_related_edge
 from lithos.lcma.enrich import ENRICH_AGENT, EnrichWorker
 
 # Re-exported for callers outside the lcma boundary (ADR-0005): the CLI
 # extract-entities command shares the enrichment worker's extractor (#313).
 from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION, extract_entities
+from lithos.lcma.eval.export import export_cases
+from lithos.lcma.eval.report import format_report, summarize_calls
 from lithos.lcma.stats import StatsStore
 from lithos.telemetry import get_tracer, lithos_metrics
 
@@ -1220,3 +1223,46 @@ async def recalibrate_salience(
         return before, after, lifted
     finally:
         await store.close()
+
+
+# ---------------------------------------------------------------------------
+# LLM eval suite — facade over lithos.lcma.eval for the CLI (ADR-0005 seam)
+# ---------------------------------------------------------------------------
+
+
+async def export_llm_calls(
+    config: LithosConfig,
+    *,
+    since: datetime | None,
+    model: str | None = None,
+    shadow: bool = False,
+    limit: int | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Golden-set cases from the replayable call log; see ``lithos.lcma.eval.export``.
+
+    Read-only on ``stats.db`` and the blob directory (WAL lets a live server keep
+    writing). Returns ``(cases, rows_skipped_for_missing_blobs)``.
+    """
+    store = StatsStore(config)
+    await store.open()
+    try:
+        blobs = BlobStore(config.storage.lithos_store_path / BLOB_SUBDIR)
+        return await export_cases(
+            store, blobs, since=since, model=model, shadow=shadow, limit=limit
+        )
+    finally:
+        await store.close()
+
+
+async def llm_call_log_report(
+    config: LithosConfig, *, since: datetime | None, shadow: bool | None = False
+) -> tuple[list[dict[str, Any]], str]:
+    """Per-model summary of the call log plus its text rendering (the canary readout)."""
+    store = StatsStore(config)
+    await store.open()
+    try:
+        rows = await store.list_llm_calls(since=since, shadow=shadow)
+    finally:
+        await store.close()
+    summaries = summarize_calls(rows)
+    return summaries, format_report(summaries)

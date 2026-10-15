@@ -11,7 +11,7 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.cli` | L | 0 | 16 |
+| `lithos.cli` | L | 0 | 19 |
 | `lithos.cli_reconcile` | M | 0 | 1 |
 | `lithos.pipeline` | S | 1 | 1 |
 | `lithos.server` | L | 1 | 2 |
@@ -43,6 +43,9 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 - def `inspect_tasks` — List coordination tasks (open by default).
 - def `inspect_doc` — Inspect a knowledge document by ID or path.
 - def `audit` — Show the read-access audit log.
+- def `eval_group` — LLM eval suite: fixtures from the call log and per-model reports.
+- def `eval_export` — Export replayable calls as golden-set cases (JSONL, one case per line).
+- def `eval_log_report` — Summarise the call log per model: outcome rates, tokens, latency, edges per call.
 - def `main` — Main entry point.
 
 ### `lithos.cli_reconcile`

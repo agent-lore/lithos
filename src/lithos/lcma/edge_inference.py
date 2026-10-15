@@ -56,7 +56,8 @@ from typing import TYPE_CHECKING
 from lithos.errors import LlmError
 from lithos.events import EVENT_ORIGIN_ENRICH, NOTE_CREATED, NOTE_UPDATED
 from lithos.intake import EdgeRequest
-from lithos.lcma.llm import ChatMessage, LlmClient
+from lithos.lcma.call_log import CallLogWriter, LlmCall
+from lithos.lcma.llm import ChatMessage, LlmClient, LlmResult
 
 if TYPE_CHECKING:
     from lithos.config import LlmConfig
@@ -213,6 +214,45 @@ def build_adjudication_prompt(
     ]
 
 
+def request_payload(
+    messages: list[ChatMessage],
+    *,
+    focus_id: str,
+    focus_title: str,
+    focus_content: str,
+    candidates: list[NeighbourInfo],
+    snippet_chars: int,
+) -> dict[str, object]:
+    """What the model saw, as one JSON-able record for the replayable call log.
+
+    Carries the verbatim messages *and* the structured inputs they were
+    rendered from (already truncated to ``snippet_chars``, exactly as sent),
+    so an eval can replay this prompt version byte-for-byte or rebuild a
+    newer prompt version from the same focus/candidate pairs.
+    """
+    return {
+        "prompt_version": INFERENCE_VERSION,
+        "snippet_chars": snippet_chars,
+        "messages": [{"role": m.role, "content": m.content} for m in messages],
+        "focus": {
+            "id": focus_id,
+            "title": focus_title,
+            "content": focus_content[:snippet_chars],
+        },
+        "candidates": [
+            {
+                "index": i,
+                "node_id": c.node_id,
+                "title": c.title,
+                "snippet": c.snippet[:snippet_chars],
+                "similarity": c.similarity,
+                "namespace": c.namespace,
+            }
+            for i, c in enumerate(candidates, start=1)
+        ],
+    }
+
+
 def parse_adjudications(text: str, n_candidates: int) -> tuple[list[Adjudication], int] | None:
     """Defensively parse the model's JSON; ``None`` means wholesale failure.
 
@@ -323,6 +363,7 @@ class EdgeInferenceEngine:
         search: SearchEngine,
         intake: CorpusIntake,
         agent: str,
+        call_log: CallLogWriter | None = None,
     ) -> None:
         self._config = config
         self._client = client
@@ -331,7 +372,20 @@ class EdgeInferenceEngine:
         self._search = search
         self._intake = intake
         self._agent = agent
+        # Replayable call log (eval suite E1); None keeps inference log-free.
+        self._call_log = call_log
         self._calls_this_drain = 0
+
+    @property
+    def call_log(self) -> CallLogWriter | None:
+        return self._call_log
+
+    async def sweep_call_log(self) -> None:
+        """Daily retention sweep of the replayable log; a no-op when the log is off."""
+        if self._call_log is None:
+            return
+        rows, blobs = await self._call_log.sweep(self._config.call_log_retention_days)
+        logger.info("LLM call log swept", extra={"rows_deleted": rows, "blobs_deleted": blobs})
 
     def reset_drain_counter(self) -> None:
         """Called by the worker at the top of each drain cycle."""
@@ -388,6 +442,14 @@ class EdgeInferenceEngine:
         messages = build_adjudication_prompt(
             doc.title, doc.content, candidates, snippet_chars=self._config.snippet_chars
         )
+        payload = request_payload(
+            messages,
+            focus_id=node_id,
+            focus_title=doc.title,
+            focus_content=doc.content,
+            candidates=candidates,
+            snippet_chars=self._config.snippet_chars,
+        )
         started = time.monotonic()
         try:
             result = await self._client.chat(messages)
@@ -396,7 +458,10 @@ class EdgeInferenceEngine:
             # stays absent so the node's next create/update retries.
             logger.warning("LLM adjudication failed for %s: %s", node_id, exc)
             self._count_call("error", started)
+            latency_ms = (time.monotonic() - started) * 1000.0
+            await self._log_call(node_id, version, payload, "error", latency_ms, error=str(exc))
             return
+        latency_ms = (time.monotonic() - started) * 1000.0
 
         await self._stats_store.record_llm_spend(day, result.total_tokens)
         if _HAS_TELEMETRY and _lithos_metrics is not None:
@@ -415,6 +480,9 @@ class EdgeInferenceEngine:
                 node_id, version, INFERENCE_VERSION, model=self._config.model, edges_written=0
             )
             self._count_call("parse_error", started)
+            await self._log_call(
+                node_id, version, payload, "parse_error", latency_ms, result=result
+            )
             return
         adjudications, problems = parsed
         if problems:
@@ -433,6 +501,7 @@ class EdgeInferenceEngine:
         if await self._current_version(node_id) != version:
             self._skip("stale_version")
             self._count_call("stale", started)
+            await self._log_call(node_id, version, payload, "stale", latency_ms, result=result)
             return
 
         namespace = self._namespace_of(node_id)
@@ -479,6 +548,15 @@ class EdgeInferenceEngine:
             node_id, version, INFERENCE_VERSION, model=self._config.model, edges_written=written
         )
         self._count_call("partial" if problems else "ok", started)
+        await self._log_call(
+            node_id,
+            version,
+            payload,
+            "partial" if problems else "ok",
+            latency_ms,
+            result=result,
+            edges_written=written,
+        )
         logger.info(
             "Edge inference for %s: %d/%d judgements written, %d blocked (version=%d)",
             node_id,
@@ -545,6 +623,41 @@ class EdgeInferenceEngine:
     def _namespace_of(self, node_id: str) -> str:
         meta = self._knowledge.get_cached_meta(node_id)
         return meta.namespace if meta is not None else "default"
+
+    async def _log_call(
+        self,
+        node_id: str,
+        version: int,
+        payload: dict[str, object],
+        outcome: str,
+        latency_ms: float,
+        *,
+        result: LlmResult | None = None,
+        edges_written: int = 0,
+        error: str | None = None,
+    ) -> None:
+        """Hand the call to the replayable log; a no-op when the log is off."""
+        if self._call_log is None:
+            return
+        await self._call_log.record(
+            LlmCall(
+                node_id=node_id,
+                doc_version=version,
+                inference_version=INFERENCE_VERSION,
+                model=self._config.model,
+                reasoning_effort=self._config.reasoning_effort,
+                request=payload,
+                completion=result.text if result is not None else None,
+                outcome=outcome,
+                prompt_tokens=result.prompt_tokens if result is not None else 0,
+                completion_tokens=result.completion_tokens if result is not None else 0,
+                reasoning_tokens=result.reasoning_tokens if result is not None else None,
+                estimated=result.estimated if result is not None else False,
+                latency_ms=latency_ms,
+                edges_written=edges_written,
+                error=error,
+            )
+        )
 
     def _skip(self, reason: str) -> None:
         if _HAS_TELEMETRY and _lithos_metrics is not None:

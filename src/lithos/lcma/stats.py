@@ -16,6 +16,8 @@ consolidation_salience_ops — idempotency ledgers for task consolidation.
 Tables (MVP 3 WS1 LLM synthesis):
   llm_budget          — UTC-day token/call spend ledger (soft daily ceiling)
   edge_inference_log  — (node_id, doc_version, inference_version) idempotency
+  llm_call_log        — replayable per-call record (eval suite E1); payloads are
+                        content-addressed blobs, see lithos.lcma.call_log
 """
 
 from __future__ import annotations
@@ -34,6 +36,8 @@ from lithos.async_sqlite_store import AsyncSqliteStore
 from lithos.config import LithosConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from lithos.telemetry import _LithosMetrics
 
 _lithos_metrics: _LithosMetrics | None = None
@@ -143,13 +147,60 @@ CREATE TABLE IF NOT EXISTS edge_inference_log (
     PRIMARY KEY (node_id, doc_version, inference_version)
 );
 
+CREATE TABLE IF NOT EXISTS llm_call_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    called_at TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    doc_version INTEGER NOT NULL,
+    inference_version INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    reasoning_effort TEXT,
+    request_sha TEXT NOT NULL,
+    completion_sha TEXT,
+    candidates_json TEXT NOT NULL,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER,
+    estimated INTEGER NOT NULL DEFAULT 0,
+    latency_ms REAL NOT NULL DEFAULT 0,
+    outcome TEXT NOT NULL,
+    edges_written INTEGER NOT NULL DEFAULT 0,
+    shadow INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_receipts_ts ON receipts(ts);
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_called_at ON llm_call_log(called_at);
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_model ON llm_call_log(model, called_at);
 CREATE INDEX IF NOT EXISTS idx_receipts_task_id ON receipts(task_id);
 CREATE INDEX IF NOT EXISTS idx_receipts_agent_id ON receipts(agent_id);
 CREATE INDEX IF NOT EXISTS idx_working_memory_task_id ON working_memory(task_id);
 CREATE INDEX IF NOT EXISTS idx_enrich_queue_processed_at ON enrich_queue(processed_at);
 CREATE INDEX IF NOT EXISTS idx_coactivation_namespace ON coactivation(namespace);
 """
+
+
+#: Insert order for ``llm_call_log``; the writer supplies every key.
+_LLM_CALL_LOG_COLUMNS = (
+    "called_at",
+    "node_id",
+    "doc_version",
+    "inference_version",
+    "model",
+    "reasoning_effort",
+    "request_sha",
+    "completion_sha",
+    "candidates_json",
+    "prompt_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "estimated",
+    "latency_ms",
+    "outcome",
+    "edges_written",
+    "shadow",
+    "error",
+)
 
 
 def _generate_receipt_id() -> str:
@@ -1121,6 +1172,88 @@ class StatsStore(AsyncSqliteStore):
                    VALUES (?, ?, ?, ?, ?)""",
                 (node_id, doc_version, inference_version, model, edges_written),
             )
+
+    # ------------------------------------------------------------------
+    # Replayable LLM call log (eval suite E1) — see lithos.lcma.call_log
+    # ------------------------------------------------------------------
+
+    async def record_llm_call(self, row: dict[str, object]) -> int:
+        """Insert one call row (``LlmCall.as_row``; blobs already stored); returns its id.
+
+        Takes the column mapping rather than the ``LlmCall`` itself so this
+        module does not import ``lithos.lcma.call_log`` (which imports it).
+        """
+        columns = _LLM_CALL_LOG_COLUMNS
+        async with self._session() as db:
+            cursor = await db.execute(
+                f"INSERT INTO llm_call_log ({', '.join(columns)}) "
+                f"VALUES ({', '.join('?' * len(columns))})",
+                tuple(row.get(column) for column in columns),
+            )
+            return int(cursor.lastrowid or 0)
+
+    async def list_llm_calls(
+        self,
+        *,
+        since: datetime | None = None,
+        model: str | None = None,
+        shadow: bool | None = False,
+        outcomes: Iterable[str] | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, object]]:
+        """Rows newest-first, filtered on the indexed columns.
+
+        ``shadow=None`` returns live and shadow rows together; the default
+        (``False``) is the live traffic only.
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if since is not None:
+            clauses.append("called_at >= ?")
+            params.append(since.astimezone(UTC).isoformat())
+        if model is not None:
+            clauses.append("model = ?")
+            params.append(model)
+        if shadow is not None:
+            clauses.append("shadow = ?")
+            params.append(int(shadow))
+        if outcomes is not None:
+            wanted = sorted(set(outcomes))
+            if not wanted:
+                return []
+            clauses.append(f"outcome IN ({','.join('?' * len(wanted))})")
+            params.extend(wanted)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"SELECT * FROM llm_call_log {where} ORDER BY called_at DESC, id DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        async with self._session() as db:
+            cursor = await db.execute(sql, params)
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def delete_llm_calls_before(self, cutoff: datetime) -> int:
+        """Retention sweep: delete rows called before *cutoff*; returns rows deleted."""
+        async with self._session() as db:
+            cursor = await db.execute(
+                "DELETE FROM llm_call_log WHERE called_at < ?",
+                (cutoff.astimezone(UTC).isoformat(),),
+            )
+            return cursor.rowcount or 0
+
+    async def referenced_llm_blob_shas(self) -> set[str]:
+        """Every blob digest some remaining row still points at (the sweep's keep-set)."""
+        async with self._session() as db:
+            cursor = await db.execute(
+                "SELECT request_sha, completion_sha FROM llm_call_log",
+            )
+            rows = await cursor.fetchall()
+        keep: set[str] = set()
+        for row in rows:
+            keep.add(str(row["request_sha"]))
+            if row["completion_sha"] is not None:
+                keep.add(str(row["completion_sha"]))
+        return keep
 
     async def purge_edge_inference_log(self, *, model: str | None = None) -> int:
         """Delete inference-ledger rows; the operator reset for re-inference.

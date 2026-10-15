@@ -17,6 +17,26 @@ Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
 
 ### Added — LLM synthesis
 
+#### Replayable LLM call log and `lithos eval export` / `log-report` (eval suite E1, task 73b074f8)
+
+Every typed-edge adjudication call is now recorded verbatim: the exact
+messages sent and the raw completion as content-addressed blobs under
+`.lithos/llm-calls/blobs/`, with a row per call in `stats.db`
+(`llm_call_log`: node, document version, model, reasoning effort, token
+split including hidden reasoning, latency, outcome, edges written). A later
+note edit cannot change what a past call saw, so a judgement can be replayed
+against a new model or prompt. Rows older than
+`lcma.llm.call_log_retention_days` (default 30, 0 disables the log) and the
+blobs they alone referenced are dropped by the daily enrich sweep.
+
+- `lithos eval export --since 7d [--model M] [--limit N] [--out file]`
+  turns usable calls into golden-set cases (JSONL): verbatim messages, the
+  structured focus/candidate inputs, and the incumbent's judgements as the
+  reference. Deduped on the request digest.
+- `lithos eval log-report --since 7d [--json]` summarises the log per
+  model: outcome rates, prompt/completion/reasoning tokens per call, latency
+  p50/p95 and edges per call — the readout for a staging canary.
+
 #### Request knobs for reasoning models (`lcma.llm.reasoning_effort`, `temperature`, `extra_body`)
 
 Groundwork for the GPT-6 Luna migration and the LLM eval suite

@@ -376,6 +376,7 @@ data/                              # configurable via StorageConfig.data_dir
     coordination.db                #   agents, tasks, claims, findings
     edges.db                       #   typed weighted edges (separate from NetworkX)
     stats.db                       #   usage stats, salience, decay, receipts, WM
+    llm-calls/blobs/<sha256>       #   verbatim LLM prompts/completions (llm_call_log, eval E1)
     migrations/
       registry.json                #   schema migrations
 ```
