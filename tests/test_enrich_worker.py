@@ -1799,6 +1799,78 @@ class TestFullSweep:
         wm = await stats_store.get_working_memory(task_id)
         assert len(wm) == 0
 
+    async def test_full_sweep_retires_old_llm_calls(
+        self,
+        test_config: LithosConfig,
+        lcma_config: LcmaConfig,
+        event_bus: EventBus,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+    ) -> None:
+        """The daily sweep drops call-log rows past the retention window (eval E1)."""
+        import aiosqlite
+
+        from lithos.config import LlmConfig
+        from lithos.coordination import CoordinationService
+        from lithos.lcma.call_log import LlmCall
+
+        coord = CoordinationService(test_config)
+        await coord.initialize()
+        km = KnowledgeManager(test_config)
+        lcma_config.llm = LlmConfig(
+            base_url="http://ollama:11434/v1", model="m", call_log_retention_days=7
+        )
+        worker = EnrichWorker(
+            config=lcma_config,
+            event_bus=event_bus,
+            stats_store=stats_store,
+            projection=projection,
+            knowledge=km,
+            coordination=coord,
+            intake=_make_intake(km, event_bus, edge_store, coord),
+            search=MagicMock(),
+        )
+        assert worker._edge_inference is not None
+        call_log = worker._edge_inference.call_log
+        assert call_log is not None
+
+        def call(node: str) -> LlmCall:
+            return LlmCall(
+                node_id=node,
+                doc_version=1,
+                inference_version=1,
+                model="m",
+                reasoning_effort=None,
+                request={"messages": [], "candidates": [], "focus": {"id": node}},
+                completion="{}",
+                outcome="ok",
+                prompt_tokens=1,
+                completion_tokens=1,
+                reasoning_tokens=None,
+                estimated=False,
+                latency_ms=1.0,
+            )
+
+        await call_log.record(call("old"))
+        await call_log.record(call("new"))
+        old_id = min(int(r["id"]) for r in await stats_store.list_llm_calls())
+        async with aiosqlite.connect(stats_store.db_path) as db:
+            await db.execute(
+                "UPDATE llm_call_log SET called_at = ? WHERE id = ?",
+                ((datetime.now(UTC) - timedelta(days=8)).isoformat(), old_id),
+            )
+            await db.commit()
+
+        try:
+            await worker.full_sweep()
+        finally:
+            await worker.stop()
+
+        remaining = await stats_store.list_llm_calls()
+        assert [r["node_id"] for r in remaining] == ["new"]
+        assert call_log.blobs.usage()[0] == 2  # new row's request + completion only
+
     async def test_full_sweep_repairs_stale_derived_from_edge(
         self,
         test_config: LithosConfig,

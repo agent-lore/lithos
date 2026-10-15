@@ -177,6 +177,31 @@ afterwards to refresh derived views.
 > `python -m spacy download en_core_web_sm`. The Docker image bakes it in at
 > build time.
 
+### `eval` — LLM eval suite
+
+Groundwork for `docs/plans/llm-eval-suite.md`. Every background adjudication
+call is recorded verbatim in `stats.db` (`llm_call_log`) with its prompt and
+completion stored as content-addressed blobs under
+`.lithos/llm-calls/blobs/`, kept for `lcma.llm.call_log_retention_days`
+(default 30; 0 disables the log).
+
+```bash
+# Golden-set cases from the last 7 days of live calls, one JSON object per line
+lithos eval export --since 7d --out evals/edges/cases.jsonl
+
+# Only one model's calls, at most 250 cases, to stdout
+lithos eval export --since 14d --model openai/gpt-5-mini --limit 250
+
+# Per-model outcome rates, tokens per call, latency and edges per call
+lithos eval log-report --since 7d
+lithos eval log-report --since 7d --json
+```
+
+Both commands read `stats.db` and the blob store under the data directory and
+write nothing; they are safe beside a running server (WAL), or point
+`--data-dir` at a copy. `--shadow` selects shadow-mode calls once E4 exists.
+`--since` accepts `<N>d`, `<N>h` or `<N>m`.
+
 ## Specifying a Data Directory
 
 All commands accept `--data-dir` (or `-d`) to point at a non-default data location:

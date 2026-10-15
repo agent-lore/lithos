@@ -230,3 +230,121 @@ class TestRecalibrateSalienceCommand:
         assert "Lifted 1 rows" in result.output
         assert self._salience(test_config, "cold") == pytest.approx(0.3)
         assert self._salience(test_config, "hot") == pytest.approx(0.9)
+
+
+class TestEvalCommands:
+    """`lithos eval export` / `log-report` over the replayable call log (eval suite E1)."""
+
+    async def _record(self, test_config) -> None:
+        import json
+
+        from lithos.lcma.call_log import BLOB_SUBDIR, CallLogWriter, LlmCall
+        from lithos.lcma.edge_inference import (
+            NeighbourInfo,
+            build_adjudication_prompt,
+            request_payload,
+        )
+
+        store = StatsStore(test_config)
+        await store.open()
+        try:
+            candidates = [
+                NeighbourInfo("c1", "Note c1", "snippet", 0.6, "default", frozenset(), frozenset())
+            ]
+            messages = build_adjudication_prompt("Focus", "body", candidates, snippet_chars=700)
+            payload = request_payload(
+                messages,
+                focus_id="focus",
+                focus_title="Focus",
+                focus_content="body",
+                candidates=candidates,
+                snippet_chars=700,
+            )
+            writer = CallLogWriter(store, test_config.storage.lithos_store_path / BLOB_SUBDIR)
+            await writer.record(
+                LlmCall(
+                    node_id="focus",
+                    doc_version=1,
+                    inference_version=1,
+                    model="openai/gpt-6-luna",
+                    reasoning_effort="none",
+                    request=payload,
+                    completion=json.dumps({"judgements": [{"candidate": 1, "relation": "none"}]}),
+                    outcome="ok",
+                    prompt_tokens=100,
+                    completion_tokens=10,
+                    reasoning_tokens=0,
+                    estimated=False,
+                    latency_ms=250.0,
+                )
+            )
+        finally:
+            await store.close()
+
+    def test_export_writes_jsonl(self, test_config, tmp_path) -> None:
+        import json
+
+        asyncio.run(self._record(test_config))
+        out = tmp_path / "cases.jsonl"
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--data-dir",
+                str(test_config.storage.data_dir),
+                "eval",
+                "export",
+                "--since",
+                "1h",
+                "--out",
+                str(out),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "1 cases exported" in result.output
+        lines = out.read_text().splitlines()
+        assert len(lines) == 1
+        case = json.loads(lines[0])
+        assert case["focus"]["id"] == "focus"
+        assert case["reference"]["model"] == "openai/gpt-6-luna"
+        assert case["messages"][0]["role"] == "system"
+
+    def test_export_to_stdout_and_model_filter(self, test_config) -> None:
+        asyncio.run(self._record(test_config))
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["--data-dir", str(test_config.storage.data_dir), "eval", "export", "--model", "nope"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "0 cases exported" in result.output
+
+    def test_log_report_text_and_json(self, test_config) -> None:
+        import json
+
+        asyncio.run(self._record(test_config))
+        runner = CliRunner()
+        base = ["--data-dir", str(test_config.storage.data_dir), "eval", "log-report"]
+        text = runner.invoke(cli, [*base, "--since", "2d"])
+        assert text.exit_code == 0, text.output
+        assert "openai/gpt-6-luna (reasoning_effort=none)" in text.output
+        as_json = runner.invoke(cli, [*base, "--json"])
+        assert as_json.exit_code == 0, as_json.output
+        [summary] = json.loads(as_json.output)
+        assert summary["calls"] == 1
+
+    def test_bad_since_is_a_usage_error(self, test_config) -> None:
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--data-dir",
+                str(test_config.storage.data_dir),
+                "eval",
+                "log-report",
+                "--since",
+                "soon",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "expected <N>d" in result.output

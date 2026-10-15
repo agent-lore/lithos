@@ -53,6 +53,7 @@ class TestStatsStoreCreation:
             "consolidation_salience_ops",
             "llm_budget",
             "edge_inference_log",
+            "llm_call_log",
         }
         assert tables == expected
 
@@ -455,6 +456,7 @@ class TestCorruptRecovery:
                 "consolidation_salience_ops",
                 "llm_budget",
                 "edge_inference_log",
+                "llm_call_log",
             }
         finally:
             await store.close()

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -887,6 +888,90 @@ def audit(
             click.echo(f"{e.id:>6}  {ts:<27}  {e.agent_id:<20}  {e.operation:<14}  {e.doc_id}")
 
     asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# lithos eval — LLM eval suite (docs/plans/llm-eval-suite.md)
+# ---------------------------------------------------------------------------
+
+_SINCE_UNITS = {"d": 86400, "h": 3600, "m": 60}
+
+
+def _parse_since(value: str) -> datetime:
+    """``7d`` / ``12h`` / ``30m`` → the UTC instant that far in the past."""
+    text = value.strip().lower()
+    if len(text) < 2 or text[-1] not in _SINCE_UNITS or not text[:-1].isdigit():
+        raise click.BadParameter("expected <N>d, <N>h or <N>m (e.g. 7d)", param_hint="--since")
+    return datetime.now(UTC) - timedelta(seconds=int(text[:-1]) * _SINCE_UNITS[text[-1]])
+
+
+@cli.group(name="eval")
+def eval_group() -> None:
+    """LLM eval suite: fixtures from the call log and per-model reports."""
+
+
+@eval_group.command(name="export")
+@click.option("--since", default="7d", show_default=True, help="Window back from now: <N>d|h|m.")
+@click.option("--model", default=None, help="Only calls made by this model id.")
+@click.option("--shadow", is_flag=True, default=False, help="Export shadow-mode calls instead.")
+@click.option("--limit", type=click.IntRange(min=1), default=None, help="At most this many cases.")
+@click.option(
+    "--out",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Write JSONL here instead of stdout.",
+)
+@click.pass_context
+def eval_export(
+    ctx: click.Context,
+    since: str,
+    model: str | None,
+    shadow: bool,
+    limit: int | None,
+    out: Path | None,
+) -> None:
+    """Export replayable calls as golden-set cases (JSONL, one case per line).
+
+    Reads stats.db and the llm-calls blob store under the data directory;
+    safe to run beside a live server, or point -d at a copy.
+    """
+    import json
+
+    from lithos.cognitive_memory import export_llm_calls
+
+    config: LithosConfig = ctx.obj["config"]
+    cases, missing = asyncio.run(
+        export_llm_calls(config, since=_parse_since(since), model=model, shadow=shadow, limit=limit)
+    )
+    lines = [json.dumps(case, ensure_ascii=False, sort_keys=True) for case in cases]
+    if out is None:
+        for line in lines:
+            click.echo(line)
+    else:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    summary = f"{len(cases)} cases exported"
+    if missing:
+        summary += f" ({missing} calls skipped: blob missing)"
+    click.echo(summary, err=True)
+
+
+@eval_group.command(name="log-report")
+@click.option("--since", default="7d", show_default=True, help="Window back from now: <N>d|h|m.")
+@click.option("--shadow", is_flag=True, default=False, help="Report shadow-mode calls instead.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit JSON instead of text.")
+@click.pass_context
+def eval_log_report(ctx: click.Context, since: str, shadow: bool, as_json: bool) -> None:
+    """Summarise the call log per model: outcome rates, tokens, latency, edges per call."""
+    import json
+
+    from lithos.cognitive_memory import llm_call_log_report
+
+    config: LithosConfig = ctx.obj["config"]
+    summaries, text = asyncio.run(
+        llm_call_log_report(config, since=_parse_since(since), shadow=shadow)
+    )
+    click.echo(json.dumps(summaries, indent=2) if as_json else text)
 
 
 def main() -> None:

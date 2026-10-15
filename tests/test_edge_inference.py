@@ -27,6 +27,7 @@ from lithos.edge_store import EdgeStore
 from lithos.events import EDGE_UPSERTED, NOTE_CREATED, NOTE_UPDATED, EventBus
 from lithos.frontmatter_codec import KnowledgeDocument, KnowledgeMetadata
 from lithos.intake import CorpusIntake
+from lithos.lcma.call_log import BLOB_SUBDIR, CallLogWriter, encode_request
 from lithos.lcma.edge_inference import (
     Adjudication,
     EdgeInferenceEngine,
@@ -348,6 +349,7 @@ class _EngineHarness:
         llm_overrides: dict[str, Any] | None = None,
         search_results: list[SemanticResult] | None = None,
         doc: KnowledgeDocument | None = None,
+        call_log: bool = False,
     ) -> None:
         self.calls = {"n": 0}
 
@@ -373,6 +375,11 @@ class _EngineHarness:
         )
         self.edge_store = edge_store
         self.stats_store = stats_store
+        self.call_log = (
+            CallLogWriter(stats_store, test_config.storage.lithos_store_path / BLOB_SUBDIR)
+            if call_log
+            else None
+        )
         self.engine = EdgeInferenceEngine(
             config=llm_config,
             client=LlmClient(llm_config, transport=httpx.MockTransport(counting_handler)),
@@ -383,6 +390,7 @@ class _EngineHarness:
             ),
             intake=self.intake,
             agent="lithos-enrich",
+            call_log=self.call_log,
         )
 
     async def close(self) -> None:
@@ -804,6 +812,164 @@ class TestReinference:
         assert not await stats_store.has_edge_inference("focus", 2, 1)
 
 
+class TestCallLogIntegration:
+    """Every call exit lands one replayable row (eval suite E1) with the right outcome."""
+
+    async def _only_row(self, stats_store: StatsStore) -> dict[str, Any]:
+        rows = await stats_store.list_llm_calls()
+        assert len(rows) == 1
+        return rows[0]
+
+    async def test_ok_call_logs_verbatim_prompt_and_completion(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        body = _adjudication_body([_GOOD_JUDGEMENT])
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=body),
+            llm_overrides={"reasoning_effort": "none"},
+            call_log=True,
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+        row = await self._only_row(stats_store)
+        assert (row["outcome"], row["edges_written"]) == ("ok", 1)
+        assert (row["node_id"], row["doc_version"], row["inference_version"]) == ("focus", 1, 1)
+        assert (row["model"], row["reasoning_effort"]) == ("test-model", "none")
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (200, 50)
+        assert row["latency_ms"] >= 0
+        assert json.loads(str(row["candidates_json"])) == [{"node_id": "cand", "similarity": 0.6}]
+        assert harness.call_log is not None
+        request = json.loads(harness.call_log.blobs.get(str(row["request_sha"])) or b"")
+        assert request["prompt_version"] == 1
+        assert request["focus"] == {
+            "id": "focus",
+            "title": "Note focus",
+            "content": "Some content about caching strategies.",
+        }
+        assert request["candidates"][0]["node_id"] == "cand"
+        assert request["messages"][0]["role"] == "system"
+        assert "CANDIDATES" in request["messages"][1]["content"]
+        assert encode_request(request) == harness.call_log.blobs.get(str(row["request_sha"]))
+        completion = harness.call_log.blobs.get(str(row["completion_sha"]))
+        assert completion == body["choices"][0]["message"]["content"].encode()
+
+    async def test_partial_outcome_logged(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=_adjudication_body([])),  # none covered
+            call_log=True,
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+        row = await self._only_row(stats_store)
+        assert (row["outcome"], row["edges_written"]) == ("partial", 0)
+
+    async def test_parse_error_logged_with_completion(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        body = {
+            "choices": [{"message": {"role": "assistant", "content": "not json at all"}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 10},
+        }
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=body),
+            call_log=True,
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+        row = await self._only_row(stats_store)
+        assert row["outcome"] == "parse_error"
+        assert harness.call_log is not None
+        assert harness.call_log.blobs.get(str(row["completion_sha"])) == b"not json at all"
+
+    async def test_error_logged_without_completion(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("endpoint down")
+
+        harness = _EngineHarness(
+            test_config, stats_store, edge_store, handler=handler, call_log=True
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+        row = await self._only_row(stats_store)
+        assert row["outcome"] == "error"
+        assert row["completion_sha"] is None
+        assert "ConnectError" in str(row["error"])
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (0, 0)
+
+    async def test_stale_logged(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=_adjudication_body([_GOOD_JUDGEMENT])),
+            call_log=True,
+        )
+        harness.knowledge.read = AsyncMock(
+            side_effect=[(_doc("focus", version=1), False), (_doc("focus", version=2), False)]
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+        row = await self._only_row(stats_store)
+        assert (row["outcome"], row["edges_written"], row["doc_version"]) == ("stale", 0, 1)
+
+    async def test_log_failure_never_breaks_inference(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=_adjudication_body([_GOOD_JUDGEMENT])),
+            call_log=True,
+        )
+        stats_store.record_llm_call = AsyncMock(side_effect=RuntimeError("disk full"))  # type: ignore[method-assign]
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+        assert len(await edge_store.list_edges(from_id="focus", to_id="cand")) == 1
+
+    async def test_no_log_without_writer(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(200, json=_adjudication_body([_GOOD_JUDGEMENT])),
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+        assert await stats_store.list_llm_calls() == []
+
+
 class TestWorkerLifecycle:
     """Production construction: engine exists iff llm enabled; stop() closes it."""
 
@@ -824,7 +990,30 @@ class TestWorkerLifecycle:
             search=MagicMock(),
         )
         assert worker._edge_inference is not None
+        assert worker._edge_inference.call_log is not None  # default 30-day retention → on
         await worker.stop()  # must close the engine's httpx client without error
+
+    async def test_zero_retention_disables_call_log_only(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        from lithos.lcma.enrich import EnrichWorker
+
+        test_config.lcma.llm = LlmConfig(
+            base_url="http://ollama:11434/v1", model="m", call_log_retention_days=0
+        )
+        worker = EnrichWorker(
+            config=test_config.lcma,
+            event_bus=EventBus(test_config.events),
+            stats_store=stats_store,
+            projection=MagicMock(edge_store=edge_store),
+            knowledge=MagicMock(),
+            coordination=AsyncMock(),
+            intake=MagicMock(),
+            search=MagicMock(),
+        )
+        assert worker._edge_inference is not None
+        assert worker._edge_inference.call_log is None
+        await worker.stop()
 
     async def test_disabled_worker_has_no_engine(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore

@@ -12,10 +12,14 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
 | `lithos.lcma` | XS | 0 | 0 |
-| `lithos.lcma.edge_inference` | M | 3 | 4 |
+| `lithos.lcma.call_log` | S | 3 | 1 |
+| `lithos.lcma.edge_inference` | M | 3 | 5 |
 | `lithos.lcma.edge_reinforce` | XS | 0 | 1 |
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
+| `lithos.lcma.eval` | XS | 0 | 0 |
+| `lithos.lcma.eval.export` | S | 0 | 2 |
+| `lithos.lcma.eval.report` | S | 0 | 2 |
 | `lithos.lcma.llm` | S | 3 | 0 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
 | `lithos.lcma.retrieve` | L | 0 | 1 |
@@ -26,11 +30,18 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 
 ## Public API
 
+### `lithos.lcma.call_log`
+- class `LlmCall` — One adjudication call exactly as the engine saw it, ready to be logged.
+- def `encode_request` — Canonical bytes for a request payload: sorted keys, UTF-8, no ASCII escapes.
+- class `BlobStore` — Content-addressed, write-once file store keyed by SHA-256 of the bytes.
+- class `CallLogWriter` — Record calls (blobs + row) and sweep the log on behalf of the inference engine.
+
 ### `lithos.lcma.edge_inference`
 - class `NeighbourInfo` — A semantic-search hit enriched with the metadata the pre-filter needs.
 - class `Adjudication` — One validated judgement from the LLM response.
 - def `prefilter_candidates` — Cheap, token-free candidate filter + ranking.
 - def `build_adjudication_prompt` — Build the two-message prompt: fixed system instruction + numbered candidates.
+- def `request_payload` — What the model saw, as one JSON-able record for the replayable call log.
 - def `parse_adjudications` — Defensively parse the model's JSON; ``None`` means wholesale failure.
 - def `edge_endpoints` — Resolve ``(from_id, to_id)`` from the judged direction.
 - class `EdgeInferenceEngine` — Per-node orchestration: gates → neighbours → one LLM call → inferred edges.
@@ -43,6 +54,14 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 
 ### `lithos.lcma.entities`
 - def `extract_entities` — Extract entity names from note content.
+
+### `lithos.lcma.eval.export`
+- def `case_from_call` — Shape one logged call into a golden-set case (pure).
+- def `export_cases` — Cases newest-first plus the number of rows skipped for a missing blob.
+
+### `lithos.lcma.eval.report`
+- def `summarize_calls` — Group rows by ``(model, reasoning_effort)`` and summarise each group.
+- def `format_report` — Plain-text rendering, one block per model.
 
 ### `lithos.lcma.llm`
 - class `ChatMessage`

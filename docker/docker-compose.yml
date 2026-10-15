@@ -40,6 +40,7 @@ services:
       - LITHOS_LCMA__LLM__REASONING_EFFORT=${LITHOS_LCMA__LLM__REASONING_EFFORT:-}
       - LITHOS_LCMA__LLM__TEMPERATURE=${LITHOS_LCMA__LLM__TEMPERATURE:-}
       - LITHOS_LCMA__LLM__EXTRA_BODY=${LITHOS_LCMA__LLM__EXTRA_BODY:-}
+      - LITHOS_LCMA__LLM__CALL_LOG_RETENTION_DAYS=${LITHOS_LCMA__LLM__CALL_LOG_RETENTION_DAYS:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
       interval: 10s

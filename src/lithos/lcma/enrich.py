@@ -25,6 +25,7 @@ from lithos.events import (
     TASK_COMPLETED,
     LithosEvent,
 )
+from lithos.lcma.call_log import CallLogWriter
 from lithos.lcma.edge_inference import EdgeInferenceEngine
 from lithos.lcma.edge_reinforce import reinforce_related_edge
 from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION, extract_entities
@@ -154,6 +155,9 @@ class EnrichWorker:
         # configured; None keeps the whole synthesis path a no-op.
         self._edge_inference: EdgeInferenceEngine | None = None
         if config.llm.enabled:
+            # The replayable call log (eval suite E1) rides on the same switch;
+            # a zero retention window turns it off without touching inference.
+            log_on = config.llm.call_log_retention_days > 0
             self._edge_inference = EdgeInferenceEngine(
                 config=config.llm,
                 client=LlmClient(config.llm),
@@ -162,6 +166,7 @@ class EnrichWorker:
                 search=search,
                 intake=intake,
                 agent=ENRICH_AGENT,
+                call_log=CallLogWriter.for_store(stats_store) if log_on else None,
             )
 
         self._queue: asyncio.Queue[LithosEvent] | None = None
@@ -672,6 +677,10 @@ class EnrichWorker:
             completed_task_ids=all_done_ids,
             ttl_days=self._config.wm_eviction_days,
         )
+
+        # --- Retention sweep of the replayable LLM call log (eval E1) ---
+        if self._edge_inference is not None:
+            await self._edge_inference.sweep_call_log()
 
         # Load the corpus once — shared by the provenance reconcile and the
         # entity heal below. _extract_entities short-circuits on current-marker

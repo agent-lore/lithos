@@ -53,6 +53,12 @@ hosted eval service; benchmarking against public leaderboards.
 
 ### E1 — Replayable inputs (prerequisite, smallest slice)
 
+**Status: shipped 2026-10 (task 73b074f8).** `llm_call_log` in `stats.db` plus
+`.lithos/llm-calls/blobs/`; `lithos eval export` and `lithos eval log-report`
+in `docs/cli.md`. The request blob holds the verbatim messages *and* the
+structured focus/candidate inputs, so a new prompt version can be rebuilt
+from the same case. Retention `lcma.llm.call_log_retention_days` (30).
+
 The engine persists what the model saw, verbatim. Each call records the
 **exact prompt messages sent** (system + user, after snippet truncation) and
 the raw completion, plus the metadata needed to index them: focus note id

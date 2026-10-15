@@ -247,6 +247,10 @@ class LlmConfig(BaseModel):
     reasoning_effort: str | None = None
     temperature: float | None = Field(default=0.1, ge=0.0, le=2.0)
     extra_body: dict[str, Any] = Field(default_factory=dict)
+    # Replayable call log (eval suite E1): every adjudication call is stored
+    # verbatim (stats.db llm_call_log + content-addressed blobs) for this many
+    # days, then swept by the daily enrich sweep. 0 disables the log.
+    call_log_retention_days: int = Field(default=30, ge=0)
 
     @property
     def enabled(self) -> bool:
