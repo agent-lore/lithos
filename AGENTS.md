@@ -63,6 +63,10 @@ Issues and PRDs live as GitHub issues on `agent-lore/lithos` (use `gh`). See `do
 
 Five canonical roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) using default label strings. See `docs/agents/triage-labels.md`.
 
+### Runbooks
+
+Operator procedures live in `docs/runbooks/` (e.g. evaluating and migrating the adjudication LLM: `docs/runbooks/llm-model-migration.md`).
+
 ### Domain docs
 
 Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily). See `docs/agents/domain.md`.

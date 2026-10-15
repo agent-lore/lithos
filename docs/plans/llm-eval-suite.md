@@ -12,6 +12,8 @@ Decisions taken with the draft: local models are desirable but **not a hard
 goal** for now; eval fixtures **may contain snippets of third-party text**
 (influx articles), kept in the repo.
 
+Operating procedure: `docs/runbooks/llm-model-migration.md`.
+
 ## 1. Problem
 
 Lithos already writes LLM output into its authoritative stores: 5,907

@@ -179,6 +179,9 @@ afterwards to refresh derived views.
 
 ### `eval` — LLM eval suite
 
+End-to-end procedure (when to run what, who labels, the canary):
+`docs/runbooks/llm-model-migration.md`.
+
 Groundwork for `docs/plans/llm-eval-suite.md`. Every background adjudication
 call is recorded verbatim in `stats.db` (`llm_call_log`) with its prompt and
 completion stored as content-addressed blobs under

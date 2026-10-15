@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Docs
+
+- `docs/runbooks/llm-model-migration.md`: the end-to-end procedure for
+  evaluating and migrating the adjudication LLM — roles and timeline,
+  filling the call log, exporting and labelling the golden set, running and
+  gating candidates (hosted or local), the staging canary and prod cutover,
+  troubleshooting.
+
 ### Behaviour changes — read before upgrading
 
 Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
