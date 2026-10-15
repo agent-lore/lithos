@@ -11,7 +11,7 @@ Agent-facing facade of LCMA: retrieval, learning, and asserted state.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.cognitive_memory` | L | 2 | 3 |
+| `lithos.cognitive_memory` | L | 2 | 5 |
 
 ## Public API
 
@@ -21,6 +21,8 @@ Agent-facing facade of LCMA: retrieval, learning, and asserted state.
 - def `recalibrate_salience` — Run the one-time salience floor backfill as a standalone maintenance op.
 - def `export_llm_calls` — Golden-set cases from the replayable call log; see ``lithos.lcma.eval.export``.
 - def `llm_call_log_report` — Per-model summary of the call log plus its text rendering (the canary readout).
+- def `run_llm_eval` — Run (or score recorded completions for) a golden set; see ``lithos.lcma.eval.runner``.
+- def `compare_llm_eval_runs` — Markdown comparison of two run files, plus the gate verdict when asked (None otherwise).
 
 ## Dependencies
 

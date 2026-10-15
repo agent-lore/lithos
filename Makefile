@@ -1,4 +1,4 @@
-.PHONY: install fmt lint typecheck test test-integration test-all docker-build check diagrams metrics-history metrics-diff
+.PHONY: install fmt lint typecheck test test-integration test-all docker-build check diagrams metrics-history metrics-diff eval-smoke
 
 install:
 	uv sync
@@ -44,3 +44,8 @@ metrics-diff:
 	uv run python scripts/metrics_diff.py $$tmp docs/generated/metrics.json
 
 check: lint typecheck test
+
+# Parser + scorer over the committed eval fixtures with recorded completions
+# (no network). Already part of `make test`; this runs just that gate.
+eval-smoke:
+	uv run pytest tests/test_eval_smoke.py -q

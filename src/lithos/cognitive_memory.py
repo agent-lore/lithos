@@ -19,10 +19,13 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lithos.envelopes import error_envelope, invalid_input_envelope
@@ -37,13 +40,23 @@ from lithos.lcma.enrich import ENRICH_AGENT, EnrichWorker
 # Re-exported for callers outside the lcma boundary (ADR-0005): the CLI
 # extract-entities command shares the enrichment worker's extractor (#313).
 from lithos.lcma.entities import ENTITY_EXTRACTOR_VERSION, extract_entities
+from lithos.lcma.eval.cases import check_labels_cover_cases, load_cases, load_labels
+from lithos.lcma.eval.compare import format_comparison, format_run_summary, gate, load_policy
 from lithos.lcma.eval.export import export_cases
+from lithos.lcma.eval.prices import load_prices
 from lithos.lcma.eval.report import format_report, summarize_calls
+from lithos.lcma.eval.runner import (
+    build_run_document,
+    load_run,
+    results_from_recorded,
+    run_cases,
+    write_run,
+)
 from lithos.lcma.stats import StatsStore
 from lithos.telemetry import get_tracer, lithos_metrics
 
 if TYPE_CHECKING:
-    from lithos.config import LithosConfig
+    from lithos.config import LithosConfig, LlmConfig
     from lithos.coordination import CoordinationService
     from lithos.events import EventBus
     from lithos.graph import KnowledgeGraph
@@ -1266,3 +1279,80 @@ async def llm_call_log_report(
         await store.close()
     summaries = summarize_calls(rows)
     return summaries, format_report(summaries)
+
+
+async def run_llm_eval(
+    *,
+    artefact: str,
+    cases_path: Path,
+    labels_path: Path | None,
+    prices_path: Path | None,
+    runs_dir: Path,
+    llm_config: LlmConfig,
+    limit: int | None = None,
+    concurrency: int = 4,
+    recorded_path: Path | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> tuple[Path, dict[str, Any], str]:
+    """Run (or score recorded completions for) a golden set; see ``lithos.lcma.eval.runner``.
+
+    Returns the run file written under *runs_dir*, the run document, and its
+    text summary. Never touches a store; the only I/O is the endpoint call
+    and the run file.
+    """
+    if artefact != "edges":
+        raise ValueError(f"unknown eval artefact {artefact!r} (only 'edges' exists)")
+    cases = load_cases(cases_path, limit=limit)
+    labels = load_labels(labels_path) if labels_path is not None else None
+    if labels:
+        problems = check_labels_cover_cases(labels, load_cases(cases_path))
+        if problems:
+            raise ValueError("labels do not match cases: " + "; ".join(problems[:5]))
+    price = None
+    if prices_path is not None and prices_path.exists():
+        price = load_prices(prices_path).get(llm_config.model)
+    if recorded_path is not None:
+        recorded = {
+            str(row["case_id"]): str(row["completion"])
+            for row in (
+                json.loads(line) for line in recorded_path.read_text().splitlines() if line.strip()
+            )
+        }
+        results = results_from_recorded(cases, recorded)
+    else:
+        if llm_config.base_url is None:
+            raise ValueError(
+                "an endpoint (base_url) is required unless scoring recorded completions"
+            )
+        results = await run_cases(
+            cases,
+            llm_config,
+            concurrency=concurrency,
+            progress=(lambda r: progress(r.outcome)) if progress else None,
+        )
+    document = build_run_document(
+        artefact=artefact,
+        cases=cases,
+        results=results,
+        llm_config=llm_config,
+        labels=labels,
+        price=price,
+        cases_path=cases_path,
+        labels_path=labels_path,
+        recorded=recorded_path is not None,
+    )
+    path = write_run(document, runs_dir)
+    return path, document, format_run_summary(document)
+
+
+def compare_llm_eval_runs(
+    incumbent_path: Path, candidate_path: Path, *, apply_gate: bool, policy_path: Path | None
+) -> tuple[str, bool | None]:
+    """Markdown comparison of two run files, plus the gate verdict when asked (None otherwise)."""
+    incumbent, candidate = load_run(incumbent_path), load_run(candidate_path)
+    verdict = None
+    if apply_gate:
+        policy = load_policy(policy_path) if policy_path is not None else None
+        verdict = gate(incumbent["metrics"], candidate["metrics"], policy)
+    text = format_comparison(incumbent, candidate, verdict)
+    return text, (verdict.promotable if verdict is not None else None)

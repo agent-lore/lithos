@@ -1,0 +1,259 @@
+{
+ "run_id": "20261015T154746Z-openai_gpt-5-mini",
+ "created_at": "2026-10-15T15:47:46.063213+00:00",
+ "artefact": "edges",
+ "recorded": false,
+ "cases_path": "evals/edges/cases.jsonl",
+ "labels_path": "evals/edges/labels.jsonl",
+ "config": {
+  "model": "openai/gpt-5-mini",
+  "base_url": "https://openrouter.ai/api/v1",
+  "reasoning_effort": null,
+  "temperature": 0.1,
+  "max_output_tokens": 4096,
+  "extra_body": {},
+  "confidence_floor": 0.6,
+  "snippet_chars": 700,
+  "prompt_version": 1
+ },
+ "metrics": {
+  "n_cases": 6,
+  "n_calls": 6,
+  "outcomes": {
+   "ok": 6,
+   "partial": 0,
+   "empty": 0,
+   "parse_error": 0,
+   "error": 0
+  },
+  "rates": {
+   "ok": 1.0,
+   "partial": 0.0,
+   "empty": 0.0,
+   "parse_error": 0.0,
+   "error": 0.0
+  },
+  "contract_violation_rate": 0.0,
+  "labels": {
+   "n_slots": 11,
+   "relation_agreement": 0.8181818181818182,
+   "n_directed": 3,
+   "direction_agreement": 0.6666666666666666,
+   "by_relation": {
+    "analogy_to": {
+     "n_slots": 1,
+     "relation_agreement": 1.0,
+     "n_directed": 0,
+     "direction_agreement": null
+    },
+    "contradicts": {
+     "n_slots": 1,
+     "relation_agreement": 1.0,
+     "n_directed": 0,
+     "direction_agreement": null
+    },
+    "depends_on": {
+     "n_slots": 1,
+     "relation_agreement": 0.0,
+     "n_directed": 0,
+     "direction_agreement": null
+    },
+    "is_example_of": {
+     "n_slots": 1,
+     "relation_agreement": 1.0,
+     "n_directed": 1,
+     "direction_agreement": 1.0
+    },
+    "none": {
+     "n_slots": 5,
+     "relation_agreement": 0.8,
+     "n_directed": 0,
+     "direction_agreement": null
+    },
+    "refines": {
+     "n_slots": 1,
+     "relation_agreement": 1.0,
+     "n_directed": 1,
+     "direction_agreement": 1.0
+    },
+    "supports": {
+     "n_slots": 1,
+     "relation_agreement": 1.0,
+     "n_directed": 1,
+     "direction_agreement": 0.0
+    }
+   },
+   "calibration": {
+    "<0.6": {
+     "n": 0,
+     "agreement": null
+    },
+    "0.6-0.8": {
+     "n": 1,
+     "agreement": 1.0
+    },
+    ">=0.8": {
+     "n": 6,
+     "agreement": 0.6666666666666666
+    }
+   }
+  },
+  "reference": {
+   "n_slots": 11,
+   "relation_agreement": 0.8181818181818182,
+   "n_directed": 3,
+   "direction_agreement": 0.6666666666666666,
+   "reference_models": [
+    "seed-incumbent"
+   ]
+  },
+  "confidence_floor": 0.6,
+  "edges_per_call_at_floor": 1.1666666666666667,
+  "tokens": {
+   "prompt_mean": 363.0,
+   "completion_mean": 755.3333333333334,
+   "reasoning_mean": 629.3333333333334,
+   "reasoning_share": 0.8331862312444837,
+   "estimated_share": 0.0
+  },
+  "latency_ms": {
+   "p50": 6240.884608472697,
+   "p95": 9658.539697993547
+  },
+  "cost_per_1k_calls": 1.6014166666666667
+ },
+ "results": [
+  {
+   "case_id": "seed-001",
+   "outcome": "ok",
+   "problems": 0,
+   "judgements": [
+    {
+     "candidate_index": 1,
+     "relation": "supports",
+     "direction": "focus_to_candidate",
+     "confidence": 0.75,
+     "rationale": "Both assert that handling writes at write-time prevents stale reads, keeping the backing store authoritative."
+    }
+   ],
+   "prompt_tokens": 373,
+   "completion_tokens": 1128,
+   "reasoning_tokens": 1024,
+   "estimated": false,
+   "latency_ms": 9658.539697993547,
+   "completion": "{\"judgements\":[{\"candidate\":1,\"relation\":\"supports\",\"direction\":\"focus_to_candidate\",\"confidence\":0.75,\"rationale\":\"Both assert that handling writes at write-time prevents stale reads, keeping the backing store authoritative.\"},{\"candidate\":2,\"relation\":\"none\",\"direction\":\"focus_to_candidate\",\"confidence\":0.95,\"rationale\":\"Unrelated domain: sourdough feeding schedule vs caching/store consistency.\"}]}",
+   "error": null
+  },
+  {
+   "case_id": "seed-002",
+   "outcome": "ok",
+   "problems": 0,
+   "judgements": [
+    {
+     "candidate_index": 1,
+     "relation": "refines",
+     "direction": "candidate_to_focus",
+     "confidence": 0.9,
+     "rationale": "Adds a limitation: WAL allows concurrent readers but still serialises writers, sharpening the focus claim."
+    },
+    {
+     "candidate_index": 2,
+     "relation": "analogy_to",
+     "direction": "focus_to_candidate",
+     "confidence": 0.86,
+     "rationale": "Both use snapshots to prevent readers blocking writers, but via different mechanisms (SQLite WAL vs Postgres MVCC)."
+    }
+   ],
+   "prompt_tokens": 370,
+   "completion_tokens": 805,
+   "reasoning_tokens": 640,
+   "estimated": false,
+   "latency_ms": 8123.853696044534,
+   "completion": "{\"judgements\":[{\"candidate\":1,\"relation\":\"refines\",\"direction\":\"candidate_to_focus\",\"confidence\":0.90,\"rationale\":\"Adds a limitation: WAL allows concurrent readers but still serialises writers, sharpening the focus claim.\"},{\"candidate\":2,\"relation\":\"analogy_to\",\"direction\":\"focus_to_candidate\",\"confidence\":0.86,\"rationale\":\"Both use snapshots to prevent readers blocking writers, but via different mechanisms (SQLite WAL vs Postgres MVCC).\"}]}",
+   "error": null
+  },
+  {
+   "case_id": "seed-003",
+   "outcome": "ok",
+   "problems": 0,
+   "judgements": [
+    {
+     "candidate_index": 1,
+     "relation": "is_example_of",
+     "direction": "candidate_to_focus",
+     "confidence": 0.92,
+     "rationale": "Concrete implementation of jittered backoff (random 0–250ms) illustrating the general anti-thundering-herd principle."
+    },
+    {
+     "candidate_index": 2,
+     "relation": "contradicts",
+     "direction": "focus_to_candidate",
+     "confidence": 0.88,
+     "rationale": "Claims jitter is unnecessary and collisions never mattered, opposing the focus claim that jitter prevents retry collisions."
+    }
+   ],
+   "prompt_tokens": 383,
+   "completion_tokens": 951,
+   "reasoning_tokens": 832,
+   "estimated": false,
+   "latency_ms": 6443.922056932934,
+   "completion": "{\"judgements\":[{\"candidate\":1,\"relation\":\"is_example_of\",\"direction\":\"candidate_to_focus\",\"confidence\":0.92,\"rationale\":\"Concrete implementation of jittered backoff (random 0–250ms) illustrating the general anti-thundering-herd principle.\"},{\"candidate\":2,\"relation\":\"contradicts\",\"direction\":\"focus_to_candidate\",\"confidence\":0.88,\"rationale\":\"Claims jitter is unnecessary and collisions never mattered, opposing the focus claim that jitter prevents retry collisions.\"}]}",
+   "error": null
+  },
+  {
+   "case_id": "seed-004",
+   "outcome": "ok",
+   "problems": 0,
+   "judgements": [
+    {
+     "candidate_index": 1,
+     "relation": "is_example_of",
+     "direction": "candidate_to_focus",
+     "confidence": 0.9,
+     "rationale": "Typed-edge inference's pre-call budget check is a concrete instance of the described soft ceiling behavior."
+    }
+   ],
+   "prompt_tokens": 365,
+   "completion_tokens": 917,
+   "reasoning_tokens": 768,
+   "estimated": false,
+   "latency_ms": 6037.847160012461,
+   "completion": "{\"judgements\":[{\"candidate\":1,\"relation\":\"is_example_of\",\"direction\":\"candidate_to_focus\",\"confidence\":0.90,\"rationale\":\"Typed-edge inference's pre-call budget check is a concrete instance of the described soft ceiling behavior.\"},{\"candidate\":2,\"relation\":\"none\",\"direction\":\"focus_to_candidate\",\"confidence\":0.95,\"rationale\":\"Tomato pruning is unrelated to token budgets or admission/check semantics.\"}]}",
+   "error": null
+  },
+  {
+   "case_id": "seed-005",
+   "outcome": "ok",
+   "problems": 0,
+   "judgements": [
+    {
+     "candidate_index": 1,
+     "relation": "supports",
+     "direction": "focus_to_candidate",
+     "confidence": 0.95,
+     "rationale": "Candidate is a near-verbatim restatement of the focus claim, directly aligning with it."
+    }
+   ],
+   "prompt_tokens": 332,
+   "completion_tokens": 409,
+   "reasoning_tokens": 320,
+   "estimated": false,
+   "latency_ms": 3789.303604979068,
+   "completion": "{\"judgements\":[{\"candidate\":1,\"relation\":\"supports\",\"direction\":\"focus_to_candidate\",\"confidence\":0.95,\"rationale\":\"Candidate is a near-verbatim restatement of the focus claim, directly aligning with it.\"}]}",
+   "error": null
+  },
+  {
+   "case_id": "seed-006",
+   "outcome": "ok",
+   "problems": 0,
+   "judgements": [],
+   "prompt_tokens": 355,
+   "completion_tokens": 322,
+   "reasoning_tokens": 192,
+   "estimated": false,
+   "latency_ms": 2669.7515590349212,
+   "completion": "{\"judgements\":[{\"candidate\":1,\"relation\":\"none\",\"direction\":\"focus_to_candidate\",\"confidence\":0.95,\"rationale\":\"Bicycle chain maintenance is unrelated to quarterly planning outcomes for shipping, migration, or labeling.\"},{\"candidate\":2,\"relation\":\"none\",\"direction\":\"focus_to_candidate\",\"confidence\":0.95,\"rationale\":\"Lemon drizzle cake instructions are unrelated to the quarterly planning outcomes described.\"}]}",
+   "error": null
+  }
+ ]
+}

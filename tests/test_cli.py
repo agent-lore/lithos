@@ -348,3 +348,97 @@ class TestEvalCommands:
         )
         assert result.exit_code != 0
         assert "expected <N>d" in result.output
+
+
+class TestEvalRunAndCompare:
+    """`lithos eval run --recorded` and `lithos eval compare --gate` over the seed fixtures."""
+
+    def _run(self, runner: CliRunner, runs_dir, recorded: str, model: str):
+        return runner.invoke(
+            cli,
+            [
+                "eval",
+                "run",
+                "--model",
+                model,
+                "--recorded",
+                f"evals/edges/recorded/{recorded}",
+                "--runs-dir",
+                str(runs_dir),
+            ],
+        )
+
+    def test_recorded_run_writes_document_and_summary(self, tmp_path) -> None:
+        runner = CliRunner()
+        result = self._run(runner, tmp_path, "seed-incumbent.jsonl", "seed-incumbent")
+        assert result.exit_code == 0, result.output
+        assert "[recorded completions]" in result.output
+        assert "vs labels (11 slots): relation 90.9%" in result.output
+        assert "cost per 1k calls: n/a" in result.output
+        files = list(tmp_path.glob("*-seed-incumbent.json"))
+        assert len(files) == 1
+
+    def test_json_output_and_gate_verdict(self, tmp_path) -> None:
+        import json
+
+        runner = CliRunner()
+        incumbent = self._run(runner, tmp_path, "seed-incumbent.jsonl", "openai/gpt-5-mini")
+        assert incumbent.exit_code == 0, incumbent.output
+        candidate = runner.invoke(
+            cli,
+            [
+                "eval",
+                "run",
+                "--model",
+                "openai/gpt-6-luna",
+                "--reasoning-effort",
+                "none",
+                "--recorded",
+                "evals/edges/recorded/seed-constant-direction.jsonl",
+                "--runs-dir",
+                str(tmp_path),
+                "--json",
+            ],
+        )
+        assert candidate.exit_code == 0, candidate.output
+        document = json.loads(candidate.stdout)  # stderr carries the "run written" line
+        assert document["config"]["reasoning_effort"] == "none"
+        assert document["metrics"]["labels"]["direction_agreement"] == 0.0
+        inc_file = next(tmp_path.glob("*-openai_gpt-5-mini.json"))
+        cand_file = next(tmp_path.glob("*-openai_gpt-6-luna-none.json"))
+
+        table = runner.invoke(cli, ["eval", "compare", str(inc_file), str(cand_file)])
+        assert table.exit_code == 0, table.output
+        assert "| labels.direction_agreement | 1.000 | 0.000 |" in table.output
+
+        gated = runner.invoke(cli, ["eval", "compare", str(inc_file), str(cand_file), "--gate"])
+        assert gated.exit_code == 1
+        assert "NOT PROMOTABLE" in gated.output
+        assert "FAIL: direction_agreement" in gated.output
+
+    def test_usage_errors(self, tmp_path) -> None:
+        runner = CliRunner()
+        no_endpoint = runner.invoke(
+            cli, ["eval", "run", "--model", "m", "--runs-dir", str(tmp_path)]
+        )
+        assert no_endpoint.exit_code != 0
+        assert "--base-url is required" in no_endpoint.output
+        bad_body = runner.invoke(
+            cli,
+            [
+                "eval",
+                "run",
+                "--model",
+                "m",
+                "--recorded",
+                "evals/edges/recorded/seed-incumbent.jsonl",
+                "--extra-body",
+                "{nope",
+                "--runs-dir",
+                str(tmp_path),
+            ],
+        )
+        assert bad_body.exit_code != 0
+        assert "--extra-body" in bad_body.output
+        missing = tmp_path / "nope.json"
+        assert runner.invoke(cli, ["eval", "compare", str(missing), str(missing)]).exit_code != 0

@@ -974,6 +974,200 @@ def eval_log_report(ctx: click.Context, since: str, shadow: bool, as_json: bool)
     click.echo(json.dumps(summaries, indent=2) if as_json else text)
 
 
+def _llm_config_for_eval(
+    *,
+    model: str,
+    base_url: str | None,
+    api_key_env: str,
+    reasoning_effort: str | None,
+    temperature: float | None,
+    max_output_tokens: int | None,
+    timeout: float | None,
+    extra_body: str | None,
+    confidence_floor: float | None,
+) -> Any:
+    """LlmConfig for one eval run; unset options keep the config defaults."""
+    import json
+    import os
+
+    from lithos.config import LlmConfig
+
+    fields: dict[str, Any] = {"model": model, "base_url": base_url}
+    key = os.environ.get(api_key_env)
+    if key:
+        fields["api_key"] = key
+    if reasoning_effort is not None:
+        fields["reasoning_effort"] = reasoning_effort
+    if temperature is not None:
+        fields["temperature"] = temperature
+    if max_output_tokens is not None:
+        fields["max_output_tokens"] = max_output_tokens
+    if timeout is not None:
+        fields["timeout_seconds"] = timeout
+    if extra_body is not None:
+        try:
+            fields["extra_body"] = json.loads(extra_body)
+        except ValueError as exc:
+            raise click.BadParameter(
+                f"not a JSON object: {exc}", param_hint="--extra-body"
+            ) from exc
+    if confidence_floor is not None:
+        fields["confidence_floor"] = confidence_floor
+    return LlmConfig(**fields)
+
+
+@eval_group.command(name="run")
+@click.option("--artefact", type=click.Choice(["edges"]), default="edges", show_default=True)
+@click.option(
+    "--cases",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=Path("evals/edges/cases.jsonl"),
+    show_default=True,
+)
+@click.option(
+    "--labels",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="labels.jsonl (default: labels.jsonl beside --cases when it exists).",
+)
+@click.option(
+    "--prices",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=Path("evals/prices.toml"),
+    show_default=True,
+)
+@click.option(
+    "--runs-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("evals/runs"),
+    show_default=True,
+)
+@click.option("--model", required=True, help="Model id as the endpoint names it.")
+@click.option(
+    "--base-url", default=None, help="OpenAI-compatible /v1 endpoint (not needed with --recorded)."
+)
+@click.option(
+    "--api-key-env",
+    default="OPENROUTER_API_KEY",
+    show_default=True,
+    help="Environment variable holding the API key (never pass the key itself).",
+)
+@click.option("--reasoning-effort", default=None, help="none|minimal|low|medium|high|xhigh|max.")
+@click.option("--temperature", type=float, default=None)
+@click.option("--max-output-tokens", type=click.IntRange(min=1), default=None)
+@click.option("--timeout", type=float, default=None, help="Seconds per call.")
+@click.option("--extra-body", default=None, help="JSON object merged into every request.")
+@click.option("--confidence-floor", type=click.FloatRange(0.0, 1.0), default=None)
+@click.option("--limit", type=click.IntRange(min=1), default=None, help="First N cases only.")
+@click.option("--concurrency", type=click.IntRange(min=1), default=4, show_default=True)
+@click.option(
+    "--recorded",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Score recorded completions ({case_id, completion} JSONL) instead of calling an endpoint.",
+)
+@click.option(
+    "--json", "as_json", is_flag=True, default=False, help="Print the run document as JSON."
+)
+def eval_run(
+    artefact: str,
+    cases: Path,
+    labels: Path | None,
+    prices: Path,
+    runs_dir: Path,
+    model: str,
+    base_url: str | None,
+    api_key_env: str,
+    reasoning_effort: str | None,
+    temperature: float | None,
+    max_output_tokens: int | None,
+    timeout: float | None,
+    extra_body: str | None,
+    confidence_floor: float | None,
+    limit: int | None,
+    concurrency: int,
+    recorded: Path | None,
+    as_json: bool,
+) -> None:
+    """Run a golden set against a model and write evals/runs/<ts>-<model>.json.
+
+    Reuses the production prompt builder, client and parser; writes nothing
+    but the run file. Compare two runs with `lithos eval compare`.
+    """
+    import json
+
+    from lithos.cognitive_memory import run_llm_eval
+
+    if base_url is None and recorded is None:
+        raise click.UsageError("--base-url is required unless --recorded is given")
+    if labels is None and (cases.parent / "labels.jsonl").exists():
+        labels = cases.parent / "labels.jsonl"
+    llm_config = _llm_config_for_eval(
+        model=model,
+        base_url=base_url,
+        api_key_env=api_key_env,
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        timeout=timeout,
+        extra_body=extra_body,
+        confidence_floor=confidence_floor,
+    )
+    marks = {"ok": ".", "partial": "p", "empty": "e", "parse_error": "P", "error": "E"}
+
+    def progress(outcome: str) -> None:
+        click.echo(marks.get(outcome, "?"), nl=False, err=True)
+
+    try:
+        path, document, summary = asyncio.run(
+            run_llm_eval(
+                artefact=artefact,
+                cases_path=cases,
+                labels_path=labels,
+                prices_path=prices,
+                runs_dir=runs_dir,
+                llm_config=llm_config,
+                limit=limit,
+                concurrency=concurrency,
+                recorded_path=recorded,
+                progress=None if as_json else progress,
+            )
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not as_json:
+        click.echo("", err=True)
+    click.echo(json.dumps(document, indent=1) if as_json else summary)
+    click.echo(f"run written: {path}", err=True)
+
+
+@eval_group.command(name="compare")
+@click.argument("incumbent", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--gate", is_flag=True, default=False, help="Apply evals/POLICY.md; exit 1 when not promotable."
+)
+@click.option(
+    "--policy",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=Path("evals/POLICY.md"),
+    show_default=True,
+)
+def eval_compare(incumbent: Path, candidate: Path, gate: bool, policy: Path) -> None:
+    """Side-by-side metrics for two run files; --gate adds the promotion verdict."""
+    from lithos.cognitive_memory import compare_llm_eval_runs
+
+    try:
+        text, promotable = compare_llm_eval_runs(
+            incumbent, candidate, apply_gate=gate, policy_path=policy if gate else None
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(text)
+    if gate and not promotable:
+        sys.exit(1)
+
+
 def main() -> None:
     """Main entry point."""
     cli()

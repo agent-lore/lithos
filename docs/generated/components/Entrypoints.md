@@ -11,7 +11,7 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.cli` | L | 0 | 19 |
+| `lithos.cli` | L | 0 | 21 |
 | `lithos.cli_reconcile` | M | 0 | 1 |
 | `lithos.pipeline` | S | 1 | 1 |
 | `lithos.server` | L | 1 | 2 |
@@ -46,6 +46,8 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 - def `eval_group` — LLM eval suite: fixtures from the call log and per-model reports.
 - def `eval_export` — Export replayable calls as golden-set cases (JSONL, one case per line).
 - def `eval_log_report` — Summarise the call log per model: outcome rates, tokens, latency, edges per call.
+- def `eval_run` — Run a golden set against a model and write evals/runs/<ts>-<model>.json.
+- def `eval_compare` — Side-by-side metrics for two run files; --gate adds the promotion verdict.
 - def `main` — Main entry point.
 
 ### `lithos.cli_reconcile`

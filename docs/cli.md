@@ -202,6 +202,35 @@ write nothing; they are safe beside a running server (WAL), or point
 `--data-dir` at a copy. `--shadow` selects shadow-mode calls once E4 exists.
 `--since` accepts `<N>d`, `<N>h` or `<N>m`.
 
+`run` and `compare` work on the committed fixtures and need no data
+directory:
+
+```bash
+# Baseline the incumbent, then a candidate, on the same golden set
+export OPENROUTER_API_KEY=...   # read from the env var named by --api-key-env
+lithos eval run --model openai/gpt-5-mini --base-url https://openrouter.ai/api/v1
+lithos eval run --model openai/gpt-6-luna --base-url https://openrouter.ai/api/v1 \
+    --reasoning-effort none
+
+# A local model through Ollama's /v1 shim, reasoning off
+lithos eval run --model qwen3:30b --base-url http://localhost:11434/v1 \
+    --extra-body '{"think": false}' --api-key-env NONE
+
+# Score recorded completions with no network (what `make eval-smoke` gates)
+lithos eval run --model seed-incumbent --recorded evals/edges/recorded/seed-incumbent.jsonl
+
+# Side by side, then the promotion verdict from evals/POLICY.md (exit 1 = no)
+lithos eval compare evals/runs/<incumbent>.json evals/runs/<candidate>.json
+lithos eval compare evals/runs/<incumbent>.json evals/runs/<candidate>.json --gate
+```
+
+`run` reuses the production prompt builder, client and parser, writes
+`evals/runs/<timestamp>-<model>[-effort].json` (config without the key, one
+result per case, the metrics table) and prints the headline numbers. Labels
+default to `labels.jsonl` beside `--cases`; prices come from
+`evals/prices.toml`. `--limit N` runs the first N cases; `--concurrency`
+bounds in-flight calls.
+
 ## Specifying a Data Directory
 
 All commands accept `--data-dir` (or `-d`) to point at a non-default data location:
