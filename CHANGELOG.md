@@ -48,11 +48,19 @@ probe.
   a candidate cannot empty it by answering `none`; run documents carry
   fingerprints of the cases, labels and coverage they scored, and `--gate`
   refuses runs over different evidence (a `--limit` trial against a full run).
+- `evals/edges/cases.jsonl`: the first production golden set (task 4044f201),
+  with 307 cases and 1,402 slots: 271 cases exported from the first five days
+  of prod and staging traffic (influx notes only), 30 hand-built negatives
+  (near-duplicates, same-source, unrelated) and 6 French-titled cases.
+  Sampling, filters and known skews are in `evals/edges/README.md`. The
+  human labels are still to come. The smoke test replays every exported
+  case's reference.
 - `evals/edges/`: the case and label schema (`README.md`), a synthetic seed
-  set covering every relation plus deliberate negatives, and recorded
-  completions that reproduce the constant-direction and malformed-output
-  failure modes; `tests/test_eval_smoke.py` (also `make eval-smoke`) pins what
-  the scorer must see in each, so a parser or scorer regression fails CI.
+  set (`evals/edges/seed/`) covering every relation plus deliberate
+  negatives, and recorded completions that reproduce the constant-direction
+  and malformed-output failure modes; `tests/test_eval_smoke.py` (also
+  `make eval-smoke`) pins what the scorer must see in each, so a parser or
+  scorer regression fails CI.
 - `scripts/eval_labels.py sheet|import`: the labelling loop — a Markdown
   review sheet with proposed labels that a reviewer edits in place and imports
   back into `labels.jsonl`.

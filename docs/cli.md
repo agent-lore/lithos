@@ -220,7 +220,8 @@ lithos eval run --model qwen3:30b --base-url http://localhost:11434/v1 \
     --extra-body '{"think": false}' --api-key-env NONE
 
 # Score recorded completions with no network (what `make eval-smoke` gates)
-lithos eval run --model seed-incumbent --recorded evals/edges/recorded/seed-incumbent.jsonl
+lithos eval run --model seed-incumbent --cases evals/edges/seed/cases.jsonl \
+    --recorded evals/edges/seed/recorded/seed-incumbent.jsonl
 
 # Side by side, then the promotion verdict from evals/POLICY.md (exit 1 = no)
 lithos eval compare evals/runs/<incumbent>.json evals/runs/<candidate>.json

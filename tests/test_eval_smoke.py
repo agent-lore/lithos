@@ -14,13 +14,15 @@ from pathlib import Path
 import pytest
 
 from lithos.config import LlmConfig
+from lithos.lcma.edge_inference import build_adjudication_prompt
 from lithos.lcma.eval.cases import check_labels_cover_cases, load_cases, load_labels
 from lithos.lcma.eval.compare import gate, load_policy
 from lithos.lcma.eval.prices import load_prices
 from lithos.lcma.eval.runner import build_run_document, results_from_recorded
 from lithos.lcma.eval.scoring import compute_metrics
 
-EDGES = Path("evals/edges")
+EDGES = Path("evals/edges/seed")
+PRODUCTION = Path("evals/edges/cases.jsonl")
 CASES = load_cases(EDGES / "cases.jsonl")
 LABELS = load_labels(EDGES / "labels.jsonl")
 
@@ -105,3 +107,31 @@ def test_run_document_builds_from_recordings() -> None:
     )
     assert doc["recorded"] is True
     assert doc["metrics"]["cost_per_1k_calls"] is None  # seed model has no price row
+
+
+def test_production_set_replays_its_reference() -> None:
+    """The committed production set loads, renders and re-scores its own reference."""
+    cases = load_cases(PRODUCTION)
+    assert len({case.case_id for case in cases}) == len(cases)
+    exported = [case for case in cases if case.reference is not None]
+    for case in exported:
+        # Hand-built cases can only be rebuilt; this pins that a rebuild is
+        # what the incumbent saw for the exported ones.
+        rebuilt = build_adjudication_prompt(
+            str(case.focus["title"]),
+            str(case.focus["content"]),
+            case.neighbours(),
+            snippet_chars=case.snippet_chars,
+        )
+        assert case.messages == [{"role": m.role, "content": m.content} for m in rebuilt]
+    assert all(
+        any(tag.startswith(("negative:", "lang:")) for tag in case.tags)
+        for case in cases
+        if case.reference is None
+    )
+    recorded = {case.case_id: str(case.reference["completion"]) for case in exported}
+    m = compute_metrics(
+        exported, results_from_recorded(exported, recorded), labels={}, confidence_floor=0.6
+    )
+    assert m["outcomes"].get("parse_error", 0) == 0
+    assert m["reference"]["relation_agreement"] == 1.0

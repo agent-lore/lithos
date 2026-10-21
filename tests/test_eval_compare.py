@@ -148,11 +148,11 @@ class TestPolicyFile:
 
 
 def _seed_run(model: str, recorded: str, limit: int | None = None):
-    cases = load_cases(Path("evals/edges/cases.jsonl"), limit=limit)
-    labels = load_labels(Path("evals/edges/labels.jsonl"))
+    cases = load_cases(Path("evals/edges/seed/cases.jsonl"), limit=limit)
+    labels = load_labels(Path("evals/edges/seed/labels.jsonl"))
     rows = [
         json.loads(line)
-        for line in Path(f"evals/edges/recorded/{recorded}").read_text().splitlines()
+        for line in Path(f"evals/edges/seed/recorded/{recorded}").read_text().splitlines()
     ]
     results = results_from_recorded(cases, {r["case_id"]: r["completion"] for r in rows})
     return build_run_document(

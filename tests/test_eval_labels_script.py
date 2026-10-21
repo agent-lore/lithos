@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import eval_labels  # noqa: E402
 
-SEED = ROOT / "evals" / "edges" / "cases.jsonl"
+SEED = ROOT / "evals" / "edges" / "seed" / "cases.jsonl"
 
 
 def test_sheet_then_import_round_trip(tmp_path: Path) -> None:
