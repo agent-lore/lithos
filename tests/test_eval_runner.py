@@ -25,8 +25,8 @@ from lithos.lcma.eval.runner import (
 )
 from lithos.lcma.llm import LlmClient
 
-SEED_CASES = Path("evals/edges/cases.jsonl")
-SEED_LABELS = Path("evals/edges/labels.jsonl")
+SEED_CASES = Path("evals/edges/seed/cases.jsonl")
+SEED_LABELS = Path("evals/edges/seed/labels.jsonl")
 
 
 def _case(**overrides: Any):
@@ -143,7 +143,9 @@ class TestRecordedAndDocuments:
         cases = load_cases(SEED_CASES)
         recorded = {
             json.loads(line)["case_id"]: json.loads(line)["completion"]
-            for line in Path("evals/edges/recorded/seed-incumbent.jsonl").read_text().splitlines()
+            for line in Path("evals/edges/seed/recorded/seed-incumbent.jsonl")
+            .read_text()
+            .splitlines()
         }
         results = results_from_recorded(cases, recorded)
         assert len(results) == len(cases)
