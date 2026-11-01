@@ -1,15 +1,15 @@
-"""Enforce the hard architecture budgets declared in docs/architecture.toml.
+"""Enforce the accepted architecture budgets in docs/architecture.toml.
 
-Each ``[budgets]`` entry is a ceiling on a measured structural metric. A breach
-means the change made the architecture measurably worse: either undo the
-structural change, or — if the regression is a deliberate, discussed tradeoff —
-raise the budget in ``docs/architecture.toml`` in the same PR so the decision
-is visible in review. Lower budgets after improving the code to lock in gains.
+A breach requires a design decision, not necessarily a refactor. Architectural
+invariants require an explicit architecture revision to change; review
+thresholds can be adjusted when keeping cohesive code together is clearer.
+See AGENTS.md for the policy and document adjustments in the same PR.
 """
 
 from __future__ import annotations
 
 import pytest
+from scripts.quality import policy_config, policy_errors, policy_mode, violations
 
 from tests.guardrail import _metrics_toolkit as mt
 from tests.guardrail._common import load_architecture
@@ -31,7 +31,7 @@ def test_budget_keys_are_known(metrics: dict) -> None:
     unknown = [key for key in _BUDGETS if not _is_known(metrics, key)]
     assert not unknown, (
         f"Unknown [budgets] keys in docs/architecture.toml: {unknown}. "
-        "Known keys are defined in tests/guardrail/_metrics_toolkit.py::budget_actual."
+        + "Known keys are defined in tests/guardrail/_metrics_toolkit.py::budget_actual."
     )
 
 
@@ -47,9 +47,27 @@ def _is_known(metrics: dict, key: str) -> bool:
 def test_budgets_hold(metrics: dict, key: str) -> None:
     actual = mt.budget_actual(metrics, key)
     budget = _BUDGETS[key]
+    config = policy_config(load_architecture())
+    if policy_mode(config, key) != "invariant":
+        return  # review/context budgets are reported, not hard gates
+    assert key in metrics["review"]["actuals"], f"Invariant {key} is unsupported for this language"
     assert actual <= budget, (
         f"Architecture budget breached: {key} = {actual}, budget = {budget}.\n"
-        f"Either revert the structural change that caused this, or — if it is a\n"
-        f"deliberate tradeoff — raise `{key}` in docs/architecture.toml [budgets]\n"
-        f"in this PR so the decision is reviewable. See docs/generated/metrics.md."
+        + "For an architectural invariant, preserve the rule or explicitly justify\n"
+        + "an architecture revision in this PR. For a review threshold, refactor\n"
+        + "only where there is a clean seam that improves clarity or cohesion.\n"
+        + "Do not split files or extract helpers solely to satisfy a number.\n"
+        + "If keeping the code together is clearer, adjust the relevant threshold\n"
+        + "in docs/architecture.toml [budgets] and explain the affected code and\n"
+        + "design tradeoff in this PR. See tests/guardrail/AGENTS.md and\n"
+        + "docs/generated/metrics.md. CI enforces the accepted configuration."
     )
+
+
+def test_policy_configuration(metrics: dict) -> None:
+    assert not policy_errors(metrics["review"]), "\n".join(policy_errors(metrics["review"]))
+
+
+def test_entity_invariants(metrics: dict) -> None:
+    broken = [r for r in violations(metrics) if r["policy"] == "invariant"]
+    assert not broken, f"Architectural invariants breached: {broken}"

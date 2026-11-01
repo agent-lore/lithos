@@ -11,7 +11,7 @@ lint:
 	uv run ruff format --check src/ tests/ scripts/
 
 typecheck:
-	uv run pyright src/ scripts/ tests/guardrail/ tests/test_metrics_diff.py tests/test_metrics_history.py
+	uv run pyright src/ scripts/ tests/guardrail/ tests/test_metrics_diff.py tests/test_metrics_history.py tests/test_quality.py
 
 test:
 	uv run pytest -m "not integration" tests/ -q
@@ -41,7 +41,7 @@ metrics-history:
 metrics-diff:
 	@set -e; tmp=$$(mktemp); trap 'rm -f $$tmp' EXIT; \
 	git show $(or $(BASE),origin/main):docs/generated/metrics.json > $$tmp 2>/dev/null || echo '{}' > $$tmp; \
-	uv run python scripts/metrics_diff.py $$tmp docs/generated/metrics.json
+	uv run python scripts/metrics_diff.py $$tmp docs/generated/metrics.json --check
 
 check: lint typecheck test
 

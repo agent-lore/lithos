@@ -114,3 +114,18 @@ def test_importlinter_contracts_cover_architecture_tiers() -> None:
         "[tool.importlinter] forbidden contract enforces — add the missing "
         "source/forbidden entries (or fix the tier map):\n  " + "\n  ".join(gaps)
     )
+
+
+def test_layering_policy() -> None:
+    arch = load_architecture()
+    mode = arch.get("project", {}).get("layering", "open")
+    assert mode in {"open", "adjacent"}, "project.layering must be open or adjacent"
+    if mode == "open":
+        return
+    rank = {comp: i for i, members in enumerate(arch.get("tiers", {}).values()) for comp in members}
+    skipped = [
+        f"{src} -> {dst}"
+        for src, dst in dt.component_edges(arch["components"])
+        if src in rank and dst in rank and rank[dst] - rank[src] > 1
+    ]
+    assert not skipped, "Adjacent-layer policy breached: " + ", ".join(sorted(skipped))

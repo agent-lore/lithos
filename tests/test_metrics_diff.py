@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import metrics_diff
+import metrics_diff  # pyright: ignore[reportMissingImports]
 
 
 def test_diff_reports_changed_scalars() -> None:
@@ -33,7 +33,8 @@ def test_diff_summarizes_lists_by_length() -> None:
 
     changes = metrics_diff.diff_metrics(old, new)
 
-    assert changes == [("graph.component_cycles.count", 1, 2)]
+    assert ("graph.component_cycles.count", 1, 2) in changes
+    assert any(key == "graph.component_cycles.items" for key, _, _ in changes)
 
 
 def test_diff_tolerates_missing_sections() -> None:
@@ -46,7 +47,10 @@ def test_diff_tolerates_missing_sections() -> None:
 
 
 def test_diff_empty_when_identical() -> None:
-    metrics = {"graph": {"cross_component_edges": 63}, "size": {"modules_over_800": ["a", "b"]}}
+    metrics = {
+        "graph": {"cross_component_edges": 63},
+        "size": {"modules_over_800": ["a", "b"]},
+    }
 
     assert metrics_diff.diff_metrics(metrics, metrics) == []
 
@@ -98,3 +102,38 @@ def test_main_with_base_emits_diff(tmp_path: Path, capsys: pytest.CaptureFixture
     out = capsys.readouterr().out
     assert "size.total_sloc" in out
     assert "no base to diff" not in out.lower()
+
+
+def test_same_length_lists_still_report_changed_membership() -> None:
+    changes = metrics_diff.diff_metrics({"cycles": [["A", "B"]]}, {"cycles": [["C", "D"]]})
+    assert len(changes) == 1
+    assert changes[0][0] == "cycles.items"
+
+
+def test_cli_enforces_explicit_changed_code_policy_and_accepts_bounded_exception(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.quality import policy_config
+
+    metadata = {"definitions": {"complexity": 1}, "language": "python", "scope": {}, "tools": {}}
+    old = {"measurement": metadata, "functions": {"pkg.f": {"complexity": 11, "length": 20}}}
+    new = {
+        "measurement": metadata,
+        "functions": {"pkg.f": {"complexity": 18, "length": 20}},
+        "review": policy_config({"review": {"enforce_worsened": True}}),
+    }
+    base, head = _write(tmp_path / "base.json", old), _write(tmp_path / "head.json", new)
+    assert metrics_diff.main([str(base), str(head), "--check"]) == 1
+    assert "worsened" in capsys.readouterr().out
+    new["review"]["exceptions"] = [
+        {
+            "metric": "function_complexity",
+            "target": "pkg.f",
+            "limit": 18,
+            "reason": "Cohesive parser",
+            "review": "PR #123",
+        }
+    ]
+    _write(head, new)
+    assert metrics_diff.main([str(base), str(head), "--check", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["violations"][0]["accepted"]

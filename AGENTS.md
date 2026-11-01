@@ -70,3 +70,19 @@ Operator procedures live in `docs/runbooks/` (e.g. evaluating and migrating the 
 ### Domain docs
 
 Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily). See `docs/agents/domain.md`.
+
+## Guardrail policy
+
+Guardrails support maintainability; passing a metric alone is not evidence of
+good design. Dependency restrictions, cycle limits, and private-access contracts
+are architectural invariants. Size, complexity, and dependency counts are review
+thresholds: do not split cohesive code or add forwarding layers just to meet a
+number. Refactor when a clean seam improves clarity, cohesion, or testability.
+
+`[policies]` classifies the accepted budgets; `[review]` holds per-entity thresholds
+and optional new/worsened-code gates. If keeping code together is clearer, record
+a proportionate, bounded `[[exceptions]]` entry with a reason and review reference,
+or explain a threshold adjustment in the same PR. Never automatically raise
+budgets or bypass an invariant. Lower thresholds when that protects useful gains.
+Changed-code gates remain disabled until the first 1.6 baseline is merged.
+See `docs/quality-guide.md` for the migration and evidence contracts.

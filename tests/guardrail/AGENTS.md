@@ -17,8 +17,8 @@ output for identical input:
 - **Sort every collection before emitting.** Sets and dict iteration order leak
   otherwise. When two renders disagree byte-for-byte, an unsorted collection is
   the first suspect.
-- **No wall-clock, git sha, absolute path, hostname, or env-dependent data** in
-  any artifact. Round ratios; `json.dumps(..., indent=2, sort_keys=True)`.
+- **No wall-clock, git sha, absolute path, or hostname** in any artifact.
+  Record analyzer/dependency versions as deterministic measurement provenance. Round ratios; `json.dumps(..., indent=2, sort_keys=True)`.
 - **No implicit string concatenation** when splitting a long string for line
   width — GitHub code quality flags it (it reads as a missing comma in lists).
   Join the pieces with explicit `+` (plain prefix on placeholder-less pieces);
@@ -90,13 +90,35 @@ you add an artifact, add it to `conftest._generate_all()` too.
    `conftest._generate_all()` so fresh runs emit it before validation.
 4. `make diagrams` now emits it and CI drift-gates it automatically.
 
-## Budgets are hand-edited ratchets
+## Guardrail policy: invariants and review thresholds
 
-`[budgets]` are hard counts; `test_metrics_budgets` fails CI on breach. CI must
-**never** auto-rewrite them — they are a source-of-truth file, and raising one is
-a deliberate, reviewed line in the PR diff (the message names both remediation
-paths). `test_budget_keys_are_known` catches a typo'd key so a ratchet can't be
-silently disabled.
+Guardrails support maintainability and architectural quality. Passing the
+metrics alone is not evidence of a good change.
+
+- **Architectural invariants:** dependency restrictions and explicitly
+  prohibited cycles express design decisions. Preserve them unless the PR
+  explicitly revises the architecture and explains why.
+- **Review thresholds:** file/function length, complexity, and dependency counts
+  prompt design review, unless the project explicitly designates one as an
+  invariant. Do not split files, extract helpers, or add forwarding layers solely
+  to satisfy a number. Refactor when there is a cohesive responsibility, a clear
+  interface, or independently testable behavior.
+
+If there is no clean seam and separation would scatter related logic, increase
+coupling, or reduce comprehensibility, keep the code together. Adjust the
+relevant threshold in `docs/architecture.toml` in the same PR, explaining the
+affected code and why the design is clearer. Keep the adjustment proportionate;
+lower thresholds after improvements where doing so protects useful gains.
+
+`[policies]` assigns `invariant`, `review`, or `context` to budget keys and
+entity metrics (`function_complexity`, `function_length`, `module_lines`).
+Cycle budgets default to invariant; other metrics default to review. Only
+invariants block generation. `scripts/metrics_diff.py --check` can additionally
+enforce `[review] enforce_new` and `enforce_worsened` against a comparable base.
+See `docs/quality-guide.md` for bounded exceptions and baseline migration.
+CI must **never** auto-rewrite budgets, and agents must not silently bypass
+checks or raise budgets just to make a build pass. `test_budget_keys_are_known`
+catches a typo'd key so a budget can't be silently disabled.
 
 ## Gotcha: `metrics.test_lines` is self-referential
 
