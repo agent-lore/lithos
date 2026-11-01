@@ -7,25 +7,27 @@ two files can never disagree.
 
 Determinism contract (what makes the CI drift gate meaningful):
 
-* everything derives from the working tree only — no timestamps, shas, or
-  tool versions in the payload;
+* everything derives from the working tree only — no timestamps or commit shas; analyzer/tool versions
+  identify the measurement rules;
 * every list is explicitly sorted before it reaches the dict;
 * ratios are rounded to two decimals.
 
-Hard budgets for a subset of these metrics live in ``docs/architecture.toml``
-under ``[budgets]`` and are enforced by ``test_metrics_budgets.py``.
+Budgets and policy classifications live in ``docs/architecture.toml``;
+``test_metrics_budgets.py`` enforces invariants and the PR report flags review thresholds.
 """
 
 from __future__ import annotations
 
 import ast
+import math
 import pathlib
 from typing import Any
 
 import networkx as nx
+from scripts.quality import policy_config
 
 from tests.guardrail import _diagram_toolkit as dt
-from tests.guardrail import _private_access
+from tests.guardrail import _measurement, _private_access
 from tests.guardrail._common import (
     CPP_SUFFIXES,
     LANGUAGE,
@@ -41,9 +43,33 @@ from tests.guardrail._common import (
 )
 
 COMPLEXITY_THRESHOLD = 10
+FUNCTION_LENGTH_THRESHOLD = 75
 GOD_MODULE_LINES = 800
 
+# Every addition so far has been purely additive (readers treat missing keys
+# as gaps), so the version stays 1; bump it only on a structural break that
+# old readers would misparse.
 _SCHEMA_VERSION = 1
+
+
+def _lower_median(values: list[int]) -> int:
+    """Lower median (no interpolation, stays an int); 0 when empty."""
+    if not values:
+        return 0
+    ordered = sorted(values)
+    return ordered[(len(ordered) - 1) // 2]
+
+
+def _nearest_rank_p90(values: list[int]) -> int:
+    """Nearest-rank 90th percentile (the ceil(0.9*n)-th smallest); 0 when empty.
+
+    Nearest-rank keeps the result an actual observed int — deterministic and
+    budgetable ([budgets] values are integers).
+    """
+    if not values:
+        return 0
+    ordered = sorted(values)
+    return ordered[math.ceil(0.9 * len(ordered)) - 1]
 
 
 # --------------------------------------------------------------------------- #
@@ -111,6 +137,18 @@ def _graph_metrics(components: dict[str, list[str]], tiers: dict[str, list[str]]
 
     return {
         "component_cycles": component_cycles,
+        "edges": [
+            {
+                "source": src,
+                "target": dst,
+                "imports": [
+                    f"{m} -> {i}"
+                    for m, i in module_edges
+                    if component_of(m, components) == src and component_of(i, components) == dst
+                ],
+            }
+            for src, dst in comp_edges
+        ],
         "components": per_component,
         "cross_component_edges": len(comp_edges),
         "cross_component_module_edges": len(crossing),
@@ -160,11 +198,13 @@ def _size_metrics(components: dict[str, list[str]]) -> dict[str, Any]:
     total_lines = total_sloc = total_modules = 0
     over_800: list[str] = []
     max_module, max_lines = "", 0
+    per_module: dict[str, dict[str, int]] = {}
 
     for module, paths in sorted(module_paths().items()):
         texts = [p.read_text(encoding="utf-8") for p in paths]
         lines = sum(_physical_lines(t) for t in texts)
         sloc = sum(_sloc(t) for t in texts)
+        per_module[module] = {"lines": lines, "sloc": sloc}
         total_lines += lines
         total_sloc += sloc
         total_modules += 1
@@ -204,6 +244,7 @@ def _size_metrics(components: dict[str, list[str]]) -> dict[str, Any]:
         "max_module": max_module,
         "max_module_lines": max_lines,
         "modules_over_800": sorted(over_800),
+        "per_module": per_module,
         "total_lines": total_lines,
         "total_modules": total_modules,
         "total_sloc": total_sloc,
@@ -247,15 +288,20 @@ def _cyclomatic(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
     return score
 
 
-def _function_complexities(tree: ast.Module, module: str) -> list[tuple[str, int]]:
-    """(qualname, complexity) for every function/method in *module*."""
-    results: list[tuple[str, int]] = []
+def _function_complexities(tree: ast.Module, module: str) -> list[tuple[str, int, int]]:
+    """(qualname, complexity, physical length) for every function/method in *module*.
+
+    Length is the physical line span (``end_lineno - lineno + 1``), so a
+    closure-heavy factory reports its full span including nested defs.
+    """
+    results: list[tuple[str, int, int]] = []
 
     def visit(node: ast.AST, prefix: str) -> None:
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
                 qualname = f"{prefix}.{child.name}"
-                results.append((qualname, _cyclomatic(child)))
+                length = (child.end_lineno or child.lineno) - child.lineno + 1
+                results.append((qualname, _cyclomatic(child), length))
                 visit(child, qualname)
             elif isinstance(child, ast.ClassDef):
                 visit(child, f"{prefix}.{child.name}")
@@ -266,29 +312,38 @@ def _function_complexities(tree: ast.Module, module: str) -> list[tuple[str, int
     return results
 
 
-def _cpp_function_complexities(module: str, paths: list[pathlib.Path]) -> list[tuple[str, int]]:
-    """(qualname, CCN) per C++ function definition, via lizard's tokenizer.
+def _cpp_function_complexities(
+    module: str, paths: list[pathlib.Path]
+) -> list[tuple[str, int, int]]:
+    """(qualname, CCN, physical length) per C++ function definition, via lizard.
 
     lizard needs no compiler or build flags, keeping the cpp instance a pure
     text scan; its counting rules differ from the Python AST visitor above, so
     compare complexity trends within a language, not across languages. Pin the
-    lizard version — the committed snapshot embeds its counting rules.
+    lizard version — the committed snapshot embeds its counting rules. Length
+    is the physical span (``end_line - start_line + 1``), matching the Python
+    definition.
     """
     # Only cpp instances need lizard installed (short import line so 88-width
     # reflow can't strand the ignore comment).
     import lizard  # pyright: ignore
 
-    results: list[tuple[str, int]] = []
+    results: list[tuple[str, int, int]] = []
     for path in paths:
         analysis = lizard.analyze_file(str(path))
         results.extend(
-            (f"{module}.{fn.name}", int(fn.cyclomatic_complexity)) for fn in analysis.function_list
+            (
+                f"{module}.{fn.long_name}",
+                int(fn.cyclomatic_complexity),
+                int(fn.end_line - fn.start_line + 1),
+            )
+            for fn in analysis.function_list
         )
     return sorted(results)
 
 
-def _accumulate_complexity(stats: dict[str, Any], complexities: list[tuple[str, int]]) -> None:
-    for qualname, score in complexities:
+def _accumulate_complexity(stats: dict[str, Any], complexities: list[tuple[str, int, int]]) -> None:
+    for qualname, score, _length in complexities:
         if score > COMPLEXITY_THRESHOLD:
             stats["functions_over_10"] += 1
         if score > stats["max_complexity"] or (
@@ -297,12 +352,40 @@ def _accumulate_complexity(stats: dict[str, Any], complexities: list[tuple[str, 
             stats["max_complexity"], stats["max_function"] = score, qualname
 
 
+def _merge_module_complexity(
+    per_module: dict[str, dict[str, int]], module: str, complexities: list[tuple[str, int, int]]
+) -> None:
+    entry = per_module.setdefault(module, {"functions": 0, "max_complexity": 0})
+    entry["functions"] += len(complexities)
+    for _, score, _length in complexities:
+        if score > entry["max_complexity"]:
+            entry["max_complexity"] = score
+
+
+def _record_functions(details, functions, module, paths):
+    for name, score, length in functions:
+        identity = name
+        occurrence = 1
+        while identity in details:
+            occurrence += 1
+            identity = f"{name}#{occurrence}"
+        details[identity] = {
+            "complexity": score,
+            "length": length,
+            "module": module,
+            "path": paths[0].relative_to(REPO_ROOT).as_posix(),
+            "paths": [p.relative_to(REPO_ROOT).as_posix() for p in paths],
+        }
+
+
 def _complexity_metrics(components: dict[str, list[str]]) -> dict[str, Any]:
     per_component: dict[str, dict[str, Any]] = {
         comp: {"functions_over_10": 0, "max_complexity": 0, "max_function": ""}
         for comp in sorted(components)
     }
-    all_functions: list[tuple[str, int]] = []
+    per_module: dict[str, dict[str, int]] = {}
+    all_functions: list[tuple[str, int, int]] = []
+    details: dict[str, dict[str, Any]] = {}
 
     if LANGUAGE == "python":
         for path in sorted(SRC_ROOT.rglob("*.py")):
@@ -310,22 +393,46 @@ def _complexity_metrics(components: dict[str, list[str]]) -> dict[str, Any]:
             comp = component_of(module, components)
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             complexities = _function_complexities(tree, module)
+            _record_functions(details, complexities, module, [path])
             all_functions.extend(complexities)
+            _merge_module_complexity(per_module, module, complexities)
             if comp is not None:
                 _accumulate_complexity(per_component[comp], complexities)
     else:
         for module, paths in sorted(module_paths().items()):
             comp = component_of(module, components)
             complexities = _cpp_function_complexities(module, paths)
+            _record_functions(details, complexities, module, paths)
             all_functions.extend(complexities)
+            _merge_module_complexity(per_module, module, complexities)
             if comp is not None:
                 _accumulate_complexity(per_component[comp], complexities)
 
     top = sorted(all_functions, key=lambda item: (-item[1], item[0]))[:10]
+    scores = [score for _, score, _ in all_functions]
+    lengths = [length for _, _, length in all_functions]
+    max_length = max(lengths, default=0)
+    max_length_fn = min(
+        (name for name, _, length in all_functions if length == max_length), default=""
+    )
     return {
+        "functions": details,
         "components": per_component,
-        "functions_over_10": sum(1 for _, score in all_functions if score > COMPLEXITY_THRESHOLD),
-        "top_functions": [{"complexity": score, "qualname": name} for name, score in top],
+        "function_lengths": {
+            "max": max_length,
+            "max_function": max_length_fn,
+            "median": _lower_median(lengths),
+            "over_75": sum(1 for length in lengths if length > FUNCTION_LENGTH_THRESHOLD),
+            "p90": _nearest_rank_p90(lengths),
+        },
+        "functions_over_10": sum(1 for score in scores if score > COMPLEXITY_THRESHOLD),
+        "max": max(scores, default=0),
+        "median": _lower_median(scores),
+        "p90": _nearest_rank_p90(scores),
+        "per_module": per_module,
+        "top_functions": [
+            {"complexity": score, "length": length, "qualname": name} for name, score, length in top
+        ],
         "total_functions": len(all_functions),
     }
 
@@ -345,6 +452,18 @@ def _domain_metrics() -> dict[str, Any]:
     return {
         "associations": len(dt._associations(models)),
         "models": len(models),
+        "relationships": [
+            {"source": a.src, "target": a.dst, "cardinality": a.card, "field": a.label}
+            for a in dt._associations(models)
+        ],
+        "details": {
+            f"{model.module}.{model.name}": {
+                "fields": {
+                    name: ast.unparse(annotation) for name, annotation in dt._fields(model.node)
+                }
+            }
+            for model in models
+        },
         "models_without_docstrings": sum(1 for m in models if ast.get_docstring(m.node) is None),
     }
 
@@ -387,7 +506,11 @@ def _test_metrics(src_lines: int) -> dict[str, Any]:
     test_lines = sum(
         _physical_lines(p.read_text(encoding="utf-8"))
         for p in sorted(tests_root.rglob("*"))
-        if p.suffix in suffixes
+        if p.is_file()
+        and p.suffix in suffixes
+        and not p.relative_to(tests_root).as_posix().startswith("guardrail/")
+        and p.relative_to(tests_root).as_posix()
+        not in {"test_metrics_diff.py", "test_metrics_history.py", "test_quality.py"}
     )
     return {
         "ratio": round(test_lines / src_lines, 2) if src_lines else 0.0,
@@ -403,28 +526,77 @@ def compute_metrics() -> dict[str, Any]:
     tiers: dict[str, list[str]] = arch.get("tiers", {})
 
     size = _size_metrics(components)
-    return {
-        "complexity": _complexity_metrics(components),
-        "domain": _domain_metrics(),
+    complexity = _complexity_metrics(components)
+    # Merge the two per-module views into one trendable top-level map; size's
+    # iteration defines the module set, so len(modules) == size.total_modules.
+    size_per_module = size.pop("per_module")
+    complexity_per_module = complexity.pop("per_module")
+    modules = {
+        module: {
+            "component": component_of(module, components),
+            "path": module_paths()[module][0].relative_to(REPO_ROOT).as_posix(),
+            "functions": complexity_per_module.get(module, {}).get("functions", 0),
+            "lines": stats["lines"],
+            "max_complexity": complexity_per_module.get(module, {}).get("max_complexity", 0),
+            "sloc": stats["sloc"],
+        }
+        for module, stats in size_per_module.items()
+    }
+    provenance = _measurement.measurement()
+    domain = _domain_metrics()
+    result = {
+        "measurement": provenance,
+        "quality": _measurement.quality_evidence(provenance),
+        "review": policy_config(arch),
+        "components": {
+            name: {
+                "prefixes": prefixes,
+                "tier": next((tier for tier, members in tiers.items() if name in members), ""),
+            }
+            for name, prefixes in components.items()
+        },
+        "functions": complexity.pop("functions"),
+        "complexity": complexity,
+        "domain_models": domain.pop("details"),
+        "domain": domain,
         "graph": _graph_metrics(components, tiers),
         "mcp": _mcp_metrics(),
+        "modules": modules,
         "schema": _SCHEMA_VERSION,
         "seams": _private_access.seams_metrics(),
         "size": size,
         "tests": _test_metrics(size["total_lines"]),
     }
+    result["review"]["actuals"] = {
+        key: budget_actual(result, key)
+        for key in arch.get("budgets", {})
+        if key in BUDGET_ACTUALS
+        and not (
+            LANGUAGE == "cpp" and key in {"cross_module_private_refs", "tests_private_imports"}
+        )
+    }
+    return result
+
+
+# One entry per declarable [budgets] key. Module-level so the hub (and any
+# other reader) can cross-check its own mirror of this map against the kit's.
+BUDGET_ACTUALS: dict[str, Any] = {
+    "complexity_p90": lambda m: m["complexity"]["p90"],
+    "component_cycles": lambda m: len(m["graph"]["component_cycles"]),
+    "cross_component_edges": lambda m: m["graph"]["cross_component_edges"],
+    "cross_component_module_edges": lambda m: m["graph"]["cross_component_module_edges"],
+    "cross_module_private_refs": lambda m: m["seams"]["cross_module_private_refs"],
+    "functions_over_10": lambda m: m["complexity"]["functions_over_10"],
+    "functions_over_75_lines": lambda m: m["complexity"]["function_lengths"]["over_75"],
+    "max_function_complexity": lambda m: m["complexity"]["max"],
+    "max_module_lines": lambda m: m["size"]["max_module_lines"],
+    "module_cycles": lambda m: m["graph"]["module_cycle_count"],
+    "modules_over_800_lines": lambda m: len(m["size"]["modules_over_800"]),
+    "tests_private_imports": lambda m: m["seams"]["tests_private_imports"],
+    "tier_skipping_edges": lambda m: m["graph"]["tier_skipping_edges"],
+}
 
 
 def budget_actual(metrics: dict[str, Any], key: str) -> int:
     """Measured value for a ``[budgets]`` key. Raises KeyError for unknown keys."""
-    actuals = {
-        "component_cycles": len(metrics["graph"]["component_cycles"]),
-        "cross_component_edges": metrics["graph"]["cross_component_edges"],
-        "cross_component_module_edges": metrics["graph"]["cross_component_module_edges"],
-        "cross_module_private_refs": metrics["seams"]["cross_module_private_refs"],
-        "max_module_lines": metrics["size"]["max_module_lines"],
-        "module_cycles": metrics["graph"]["module_cycle_count"],
-        "modules_over_800_lines": len(metrics["size"]["modules_over_800"]),
-        "tests_private_imports": metrics["seams"]["tests_private_imports"],
-    }
-    return actuals[key]
+    return int(BUDGET_ACTUALS[key](metrics))

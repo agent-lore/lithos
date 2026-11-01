@@ -3,21 +3,273 @@
 
 # Architecture metrics
 
+## Measurement scope
+
+```json
+{
+  "analyzer_version": "1.6.0",
+  "capabilities": {
+    "complexity": "measured",
+    "domain": "measured",
+    "mcp": "measured",
+    "seams": "measured",
+    "structure": "measured"
+  },
+  "config_hash": "2c6318e559471b7a7b8ee78a8897e3a41589243d7d872b152772813a03213e73",
+  "definitions": {
+    "complexity": 1,
+    "structure": 1,
+    "test_volume": 2
+  },
+  "language": "python",
+  "scope": {
+    "domain": {
+      "exclude_modules": [
+        "lithos.config",
+        "lithos.errors",
+        "lithos.lcma",
+        "lithos.pipeline",
+        "lithos.edge_store"
+      ],
+      "include_modules": [
+        "lithos.coordination",
+        "lithos.agent_registry",
+        "lithos.graph",
+        "lithos.events",
+        "lithos.knowledge",
+        "lithos.frontmatter_codec",
+        "lithos.corpus_index",
+        "lithos.provenance",
+        "lithos.cognitive_memory",
+        "lithos.intake",
+        "lithos.search"
+      ]
+    },
+    "excluded": [
+      "third-party code",
+      "files outside the source root",
+      "templates and browser code",
+      "kit tooling"
+    ],
+    "source_root": "src/lithos",
+    "source_suffixes": [
+      ".py"
+    ],
+    "test_exclusions": [
+      "tests/guardrail",
+      "tests/test_metrics_diff.py",
+      "tests/test_metrics_history.py",
+      "tests/test_quality.py"
+    ]
+  },
+  "source_hash": "e701544a0825fc5502861b223533a11297d57740cc989f7d0126cc1051c892db",
+  "tools": {
+    "grimp": "3.14",
+    "networkx": "3.6.1"
+  }
+}
+```
+
+Test/source ratio is a volume statistic, not test effectiveness; kit tooling is excluded.
+
 ## Budgets
 
-Hard limits from `docs/architecture.toml [budgets]`, enforced in CI by
-`tests/guardrail/test_metrics_budgets.py`. Headroom = budget - actual;
-lower a budget after improving the code to lock in the gain.
+Only invariant budgets block generation; review/context thresholds are reported.
+Accepted budgets from `docs/architecture.toml [budgets]`, enforced in CI by
+`tests/guardrail/test_metrics_budgets.py`. Headroom = budget - actual.
 
-| Metric | Actual | Budget | Headroom |
-|---|---:|---:|---:|
-| `component_cycles` | 0 | 0 | 0 |
-| `cross_component_edges` | 74 | 74 | 0 |
-| `cross_module_private_refs` | 31 | 42 | 11 |
-| `max_module_lines` | 2866 | 2900 | 34 |
-| `module_cycles` | 1 | 1 | 0 |
-| `modules_over_800_lines` | 12 | 12 | 0 |
-| `tests_private_imports` | 89 | 89 | 0 |
+Architectural invariants (dependency restrictions and prohibited cycles)
+require an explicit architecture decision to change. Size and complexity
+thresholds prompt design review: do not split cohesive code solely to
+satisfy a number. If there is no clean seam and keeping the code together
+is clearer, adjust the relevant threshold and explain the design tradeoff
+in the same PR. Lower thresholds when that protects useful improvements.
+
+| Metric | Actual | Budget | Headroom | Policy |
+|---|---:|---:|---:|---|
+| `component_cycles` | 0 | 0 | 0 | invariant |
+| `cross_component_edges` | 74 | 74 | 0 | review |
+| `cross_module_private_refs` | 31 | 42 | 11 | invariant |
+| `max_module_lines` | 2866 | 2900 | 34 | review |
+| `module_cycles` | 1 | 1 | 0 | invariant |
+| `modules_over_800_lines` | 12 | 12 | 0 | review |
+| `tests_private_imports` | 89 | 89 | 0 | invariant |
+
+### Quality review
+
+
+| Status | Metric | Target | Before | After | Policy | Exception |
+|---|---|---|---:|---:|---|---|
+| unchanged | function_complexity | lithos.cli.extract_entities_cmd._extract | 17 | 17 | review | — |
+| unchanged | function_complexity | lithos.cli.validate.do_validate | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos.cli_reconcile._finish_provenance | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.cli_reconcile._plan_and_apply | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.cli_reconcile.reconcile | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos.cognitive_memory.CognitiveMemory.conflict_resolve | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos.cognitive_memory.CognitiveMemory.validate_task_feedback | 26 | 26 | review | — |
+| unchanged | function_complexity | lithos.cognitive_memory.run_llm_eval | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos.config.LithosConfig._apply_backward_compat_env_overrides | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.coordination.CoordinationService._apply_task_update | 19 | 19 | review | — |
+| unchanged | function_complexity | lithos.coordination.CoordinationService.create_task | 21 | 21 | review | — |
+| unchanged | function_complexity | lithos.coordination.CoordinationService.get_task_status | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos.coordination.CoordinationService.list_tasks | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.coordination.CoordinationService.spawn_task | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos.coordination.CoordinationService.update_task | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos.coordination.CoordinationService.upsert_task_edge | 16 | 16 | review | — |
+| unchanged | function_complexity | lithos.corpus_index.CachedMeta.from_frontmatter | 17 | 17 | review | — |
+| unchanged | function_complexity | lithos.corpus_index.CorpusIndex.candidate_ids | 17 | 17 | review | — |
+| unchanged | function_complexity | lithos.corpus_index.CorpusIndex.provenance_neighbours | 17 | 17 | review | — |
+| unchanged | function_complexity | lithos.corpus_index.CorpusIndex.rebuild | 17 | 17 | review | — |
+| unchanged | function_complexity | lithos.frontmatter_codec.KnowledgeMetadata.from_dict | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.frontmatter_codec.KnowledgeMetadata.to_dict | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.frontmatter_codec.normalize_url | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos.graph.KnowledgeGraph._get_reachable_nodes | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos.graph.KnowledgeGraph._plan_reconcile_to | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos.graph.KnowledgeGraph.add_document | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos.intake.CorpusIntake.write | 21 | 21 | review | — |
+| unchanged | function_complexity | lithos.knowledge.KnowledgeManager.create | 26 | 26 | review | — |
+| unchanged | function_complexity | lithos.knowledge.KnowledgeManager.list_all | 19 | 19 | review | — |
+| unchanged | function_complexity | lithos.knowledge.KnowledgeManager.update | 62 | 62 | review | — |
+| unchanged | function_complexity | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 23 | 23 | review | — |
+| unchanged | function_complexity | lithos.lcma.edge_inference.parse_adjudications | 18 | 18 | review | — |
+| unchanged | function_complexity | lithos.lcma.enrich.EnrichWorker._apply_decay | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos.lcma.enrich.EnrichWorker._consolidate_task | 19 | 19 | review | — |
+| unchanged | function_complexity | lithos.lcma.enrich.EnrichWorker._handle_event | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos.lcma.enrich.EnrichWorker._record_drain_metrics | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos.lcma.enrich.EnrichWorker.drain | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos.lcma.enrich._resolve_node_id | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos.lcma.entities._clean_candidate | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos.lcma.entities._heuristic_entities | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.cases.case_from_dict | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.cases.label_from_dict | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.compare.evidence_mismatch | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.compare.gate | 22 | 22 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.report.summarize_calls | 26 | 26 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.scoring.compute_metrics | 36 | 36 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.scoring.score_against_labels | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos.lcma.retrieve._rerank_fast | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos.lcma.retrieve._run_retrieve_impl | 41 | 41 | review | — |
+| unchanged | function_complexity | lithos.lcma.scouts._gate | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos.lcma.scouts.scout_exact_alias | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos.lcma.scouts.scout_graph | 17 | 17 | review | — |
+| unchanged | function_complexity | lithos.lcma.scouts.scout_source_url | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.lcma.stats.StatsStore.drain_pending_nodes | 11 | 11 | review | — |
+| unchanged | function_complexity | lithos.lcma.utils.merge_and_normalize | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.pipeline.build_pipeline | 14 | 14 | review | — |
+| unchanged | function_complexity | lithos.search.ChromaIndex._collect | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos.search.ChromaIndex._rank_chunks | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos.search.ChromaIndex.search | 19 | 19 | review | — |
+| unchanged | function_complexity | lithos.search.SearchEngine.graph_search | 33 | 33 | review | — |
+| unchanged | function_complexity | lithos.search.SearchEngine.hybrid_search | 16 | 16 | review | — |
+| unchanged | function_complexity | lithos.search.TantivyIndex.search | 26 | 26 | review | — |
+| unchanged | function_complexity | lithos.search.chunk_text | 20 | 20 | review | — |
+| unchanged | function_complexity | lithos.server.LithosServer._sse_endpoint | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos.server.LithosServer._sse_endpoint._event_stream | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos.telemetry.setup_telemetry | 19 | 19 | review | — |
+| unchanged | function_complexity | lithos.tools.notes.register.lithos_note_update | 26 | 26 | review | — |
+| unchanged | function_complexity | lithos.tools.notes.register.lithos_write | 70 | 70 | review | — |
+| unchanged | function_complexity | lithos.tools.read_search.register.lithos_list | 30 | 30 | review | — |
+| unchanged | function_complexity | lithos.tools.read_search.register.lithos_related | 19 | 19 | review | — |
+| unchanged | function_complexity | lithos.tools.read_search.register.lithos_search | 20 | 20 | review | — |
+| unchanged | function_complexity | lithos.tools.tasks.register.lithos_task_complete | 12 | 12 | review | — |
+| unchanged | function_complexity | lithos.watch_intake.WatchIntake.rename_on_disk | 15 | 15 | review | — |
+| unchanged | function_length | lithos.cli.extract_entities_cmd | 100 | 100 | review | — |
+| unchanged | function_length | lithos.cli.serve | 77 | 77 | review | — |
+| unchanged | function_length | lithos.cli.validate | 101 | 101 | review | — |
+| unchanged | function_length | lithos.cli_reconcile._plan_and_apply | 81 | 81 | review | — |
+| unchanged | function_length | lithos.cli_reconcile.reconcile | 92 | 92 | review | — |
+| unchanged | function_length | lithos.cognitive_memory.CognitiveMemory.cache_lookup | 85 | 85 | review | — |
+| unchanged | function_length | lithos.cognitive_memory.CognitiveMemory.conflict_resolve | 111 | 111 | review | — |
+| unchanged | function_length | lithos.cognitive_memory.CognitiveMemory.validate_task_feedback | 87 | 87 | review | — |
+| unchanged | function_length | lithos.coordination.CoordinationService._apply_task_update | 106 | 106 | review | — |
+| unchanged | function_length | lithos.coordination.CoordinationService._compute_blockers | 79 | 79 | review | — |
+| unchanged | function_length | lithos.coordination.CoordinationService._migrate_tasks_ensure_resolved_at | 91 | 91 | review | — |
+| unchanged | function_length | lithos.coordination.CoordinationService.complete_task | 79 | 79 | review | — |
+| unchanged | function_length | lithos.coordination.CoordinationService.create_task | 136 | 136 | review | — |
+| unchanged | function_length | lithos.coordination.CoordinationService.get_task_status | 90 | 90 | review | — |
+| unchanged | function_length | lithos.coordination.CoordinationService.list_tasks | 88 | 88 | review | — |
+| unchanged | function_length | lithos.coordination.CoordinationService.update_task | 103 | 103 | review | — |
+| unchanged | function_length | lithos.coordination.CoordinationService.upsert_task_edge | 127 | 127 | review | — |
+| unchanged | function_length | lithos.corpus_index.CorpusIndex.rebuild | 98 | 98 | review | — |
+| unchanged | function_length | lithos.edge_store.EdgeStore.upsert | 107 | 107 | review | — |
+| unchanged | function_length | lithos.frontmatter_codec.KnowledgeMetadata.from_dict | 79 | 79 | review | — |
+| unchanged | function_length | lithos.graph.KnowledgeGraph._plan_reconcile_to | 92 | 92 | review | — |
+| unchanged | function_length | lithos.intake.CorpusIntake.note_update | 103 | 103 | review | — |
+| unchanged | function_length | lithos.intake.CorpusIntake.write | 183 | 183 | review | — |
+| unchanged | function_length | lithos.knowledge.KnowledgeManager.create | 212 | 212 | review | — |
+| unchanged | function_length | lithos.knowledge.KnowledgeManager.list_all | 97 | 97 | review | — |
+| unchanged | function_length | lithos.knowledge.KnowledgeManager.update | 304 | 304 | review | — |
+| unchanged | function_length | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 163 | 163 | review | — |
+| unchanged | function_length | lithos.lcma.edge_inference.parse_adjudications | 77 | 77 | review | — |
+| unchanged | function_length | lithos.lcma.enrich.EnrichWorker._consolidate_task | 78 | 78 | review | — |
+| unchanged | function_length | lithos.lcma.enrich.EnrichWorker.drain | 78 | 78 | review | — |
+| unchanged | function_length | lithos.lcma.retrieve._rerank_fast | 128 | 128 | review | — |
+| unchanged | function_length | lithos.lcma.retrieve._run_retrieve_impl | 363 | 363 | review | — |
+| unchanged | function_length | lithos.lcma.scouts.scout_graph | 85 | 85 | review | — |
+| unchanged | function_length | lithos.lcma.utils.merge_and_normalize | 91 | 91 | review | — |
+| unchanged | function_length | lithos.pipeline.build_pipeline | 118 | 118 | review | — |
+| unchanged | function_length | lithos.provenance.ProvenanceProjection._plan_actions | 85 | 85 | review | — |
+| unchanged | function_length | lithos.search.SearchEngine.graph_search | 207 | 207 | review | — |
+| unchanged | function_length | lithos.search.SearchEngine.hybrid_search | 143 | 143 | review | — |
+| unchanged | function_length | lithos.search.SearchEngine.semantic_search | 78 | 78 | review | — |
+| unchanged | function_length | lithos.search.TantivyIndex.search | 103 | 103 | review | — |
+| unchanged | function_length | lithos.search.chunk_text | 91 | 91 | review | — |
+| unchanged | function_length | lithos.server.LithosServer.__init__ | 92 | 92 | review | — |
+| unchanged | function_length | lithos.server.LithosServer._audit_endpoint | 78 | 78 | review | — |
+| unchanged | function_length | lithos.server.LithosServer._sse_endpoint | 128 | 128 | review | — |
+| unchanged | function_length | lithos.server.LithosServer.initialize | 146 | 146 | review | — |
+| unchanged | function_length | lithos.telemetry.setup_telemetry | 131 | 131 | review | — |
+| unchanged | function_length | lithos.tools.agents.register | 195 | 195 | review | — |
+| unchanged | function_length | lithos.tools.findings_stats.register | 201 | 201 | review | — |
+| unchanged | function_length | lithos.tools.findings_stats.register.lithos_stats | 88 | 88 | review | — |
+| unchanged | function_length | lithos.tools.memory_edges.register | 211 | 211 | review | — |
+| unchanged | function_length | lithos.tools.notes.register | 571 | 571 | review | — |
+| unchanged | function_length | lithos.tools.notes.register.lithos_note_update | 161 | 161 | review | — |
+| unchanged | function_length | lithos.tools.notes.register.lithos_write | 366 | 366 | review | — |
+| unchanged | function_length | lithos.tools.read_search.register | 739 | 739 | review | — |
+| unchanged | function_length | lithos.tools.read_search.register.lithos_list | 197 | 197 | review | — |
+| unchanged | function_length | lithos.tools.read_search.register.lithos_related | 127 | 127 | review | — |
+| unchanged | function_length | lithos.tools.read_search.register.lithos_retrieve | 92 | 92 | review | — |
+| unchanged | function_length | lithos.tools.read_search.register.lithos_search | 174 | 174 | review | — |
+| unchanged | function_length | lithos.tools.tasks.register | 1148 | 1148 | review | — |
+| unchanged | function_length | lithos.tools.tasks.register.lithos_task_complete | 115 | 115 | review | — |
+| unchanged | function_length | lithos.tools.tasks.register.lithos_task_create | 82 | 82 | review | — |
+| unchanged | function_length | lithos.tools.tasks.register.lithos_task_spawn | 77 | 77 | review | — |
+| unchanged | function_length | lithos.tools.tasks.register.lithos_task_update | 121 | 121 | review | — |
+| unchanged | function_length | lithos.watch_intake.WatchIntake.rename_on_disk | 82 | 82 | review | — |
+| unchanged | module_lines | lithos.cli | 1177 | 1177 | review | — |
+| unchanged | module_lines | lithos.cognitive_memory | 1369 | 1369 | review | — |
+| unchanged | module_lines | lithos.coordination | 2866 | 2866 | review | — |
+| unchanged | module_lines | lithos.frontmatter_codec | 806 | 806 | review | — |
+| unchanged | module_lines | lithos.graph | 877 | 877 | review | — |
+| unchanged | module_lines | lithos.knowledge | 1345 | 1345 | review | — |
+| unchanged | module_lines | lithos.lcma.scouts | 1036 | 1036 | review | — |
+| unchanged | module_lines | lithos.lcma.stats | 1386 | 1386 | review | — |
+| unchanged | module_lines | lithos.search | 2102 | 2102 | review | — |
+| unchanged | module_lines | lithos.server | 894 | 894 | review | — |
+| unchanged | module_lines | lithos.telemetry | 1311 | 1311 | review | — |
+| unchanged | module_lines | lithos.tools.tasks | 1209 | 1209 | review | — |
+- branch_coverage: missing; value —; scope not recorded; evidence not recorded
+- mutation: missing; value —; scope not recorded; evidence not recorded
+- Review lowering budget max_module_lines: actual 2866, accepted ceiling 2900.
+- Review lowering budget cross_module_private_refs: actual 31, accepted ceiling 42.
+
+
+## Quality evidence
+
+Optional measurements are source-bound; missing or stale evidence is not a score.
+
+```json
+{
+  "branch_coverage": {
+    "status": "missing"
+  },
+  "mutation": {
+    "status": "missing"
+  },
+  "outcomes": []
+}
+```
 
 ## Import graph
 
@@ -73,21 +325,23 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 ## Complexity
 
 - Functions: **926**, cyclomatic > 10: **73**
+- Cyclomatic distribution: median **2**, p90 **9**, max **70**
+- Function length (lines): median 14, p90 63, max 1148 (`lithos.tools.tasks.register`); over 75: **64**
 
 Top 10 most complex functions:
 
-| Complexity | Function |
-|---:|---|
-| 70 | `lithos.tools.notes.register.lithos_write` |
-| 62 | `lithos.knowledge.KnowledgeManager.update` |
-| 41 | `lithos.lcma.retrieve._run_retrieve_impl` |
-| 36 | `lithos.lcma.eval.scoring.compute_metrics` |
-| 33 | `lithos.search.SearchEngine.graph_search` |
-| 30 | `lithos.tools.read_search.register.lithos_list` |
-| 26 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
-| 26 | `lithos.knowledge.KnowledgeManager.create` |
-| 26 | `lithos.lcma.eval.report.summarize_calls` |
-| 26 | `lithos.search.TantivyIndex.search` |
+| Complexity | Length | Function |
+|---:|---:|---|
+| 70 | 366 | `lithos.tools.notes.register.lithos_write` |
+| 62 | 304 | `lithos.knowledge.KnowledgeManager.update` |
+| 41 | 363 | `lithos.lcma.retrieve._run_retrieve_impl` |
+| 36 | 62 | `lithos.lcma.eval.scoring.compute_metrics` |
+| 33 | 207 | `lithos.search.SearchEngine.graph_search` |
+| 30 | 197 | `lithos.tools.read_search.register.lithos_list` |
+| 26 | 87 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
+| 26 | 212 | `lithos.knowledge.KnowledgeManager.create` |
+| 26 | 50 | `lithos.lcma.eval.report.summarize_calls` |
+| 26 | 103 | `lithos.search.TantivyIndex.search` |
 
 ## Seams
 
@@ -153,4 +407,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.83** (53292 test lines / 29199 source lines)
+- Test-to-source line ratio: **1.72** (50302 test lines / 29199 source lines)
