@@ -62,7 +62,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "63e4818ba46fac812977686b117332179034c5da5dcb0c48b8d66ae93ffe2f84",
+  "source_hash": "b9c2503030880c790e7bdf0d17ac232dee6e2cbda970949e7920b6b116ea7b50",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -129,7 +129,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_complexity | lithos.intake.CorpusIntake.write | 21 | 21 | review | — |
 | unchanged | function_complexity | lithos.knowledge.KnowledgeManager.create | 25 | 25 | review | — |
 | unchanged | function_complexity | lithos.knowledge.KnowledgeManager.list_all | 19 | 19 | review | — |
-| unchanged | function_complexity | lithos.knowledge.KnowledgeManager.update | 62 | 62 | review | — |
+| unchanged | function_complexity | lithos.knowledge.KnowledgeManager.update | 63 | 63 | review | — |
 | unchanged | function_complexity | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 23 | 23 | review | — |
 | unchanged | function_complexity | lithos.lcma.edge_inference.parse_adjudications | 18 | 18 | review | — |
 | unchanged | function_complexity | lithos.lcma.enrich.EnrichWorker._apply_decay | 13 | 13 | review | — |
@@ -198,7 +198,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos.intake.CorpusIntake.write | 183 | 183 | review | — |
 | unchanged | function_length | lithos.knowledge.KnowledgeManager.create | 194 | 194 | review | — |
 | unchanged | function_length | lithos.knowledge.KnowledgeManager.list_all | 97 | 97 | review | — |
-| unchanged | function_length | lithos.knowledge.KnowledgeManager.update | 276 | 276 | review | — |
+| unchanged | function_length | lithos.knowledge.KnowledgeManager.update | 281 | 281 | review | — |
 | unchanged | function_length | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 163 | 163 | review | — |
 | unchanged | function_length | lithos.lcma.edge_inference.parse_adjudications | 77 | 77 | review | — |
 | unchanged | function_length | lithos.lcma.enrich.EnrichWorker._consolidate_task | 78 | 78 | review | — |
@@ -242,7 +242,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | module_lines | lithos.coordination | 2866 | 2866 | review | — |
 | unchanged | module_lines | lithos.frontmatter_codec | 806 | 806 | review | — |
 | unchanged | module_lines | lithos.graph | 877 | 877 | review | — |
-| unchanged | module_lines | lithos.knowledge | 1334 | 1334 | review | — |
+| unchanged | module_lines | lithos.knowledge | 1339 | 1339 | review | — |
 | unchanged | module_lines | lithos.lcma.scouts | 1036 | 1036 | review | — |
 | unchanged | module_lines | lithos.lcma.stats | 1386 | 1386 | review | — |
 | unchanged | module_lines | lithos.search | 2102 | 2102 | review | — |
@@ -296,7 +296,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Graph | 2 | 1307 | 1086 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | IdResolution | 1 | 127 | 100 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
 | Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
-| Knowledge | 3 | 2164 | 1751 | 5 | 8 | 0.62 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
+| Knowledge | 3 | 2169 | 1752 | 5 | 8 | 0.62 | 63 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
 | LCMA | 21 | 7315 | 5996 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 25 |
 | Logging | 1 | 164 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
@@ -306,7 +306,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **56**, lines: **29188**, SLOC: **23731**
+- Modules: **56**, lines: **29193**, SLOC: **23732**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -333,7 +333,7 @@ Top 10 most complex functions:
 | Complexity | Length | Function |
 |---:|---:|---|
 | 70 | 366 | `lithos.tools.notes.register.lithos_write` |
-| 62 | 276 | `lithos.knowledge.KnowledgeManager.update` |
+| 63 | 281 | `lithos.knowledge.KnowledgeManager.update` |
 | 41 | 363 | `lithos.lcma.retrieve._run_retrieve_impl` |
 | 36 | 62 | `lithos.lcma.eval.scoring.compute_metrics` |
 | 33 | 207 | `lithos.search.SearchEngine.graph_search` |
@@ -407,4 +407,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.73** (50533 test lines / 29188 source lines)
+- Test-to-source line ratio: **1.73** (50575 test lines / 29193 source lines)

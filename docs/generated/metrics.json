@@ -53,7 +53,7 @@
       },
       "Knowledge": {
         "functions_over_10": 7,
-        "max_complexity": 62,
+        "max_complexity": 63,
         "max_function": "lithos.knowledge.KnowledgeManager.update"
       },
       "LCMA": {
@@ -105,8 +105,8 @@
         "qualname": "lithos.tools.notes.register.lithos_write"
       },
       {
-        "complexity": 62,
-        "length": 276,
+        "complexity": 63,
+        "length": 281,
         "qualname": "lithos.knowledge.KnowledgeManager.update"
       },
       {
@@ -4681,8 +4681,8 @@
       ]
     },
     "lithos.knowledge.KnowledgeManager.update": {
-      "complexity": 62,
-      "length": 276,
+      "complexity": 63,
+      "length": 281,
       "module": "lithos.knowledge",
       "path": "src/lithos/knowledge.py",
       "paths": [
@@ -10015,7 +10015,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "63e4818ba46fac812977686b117332179034c5da5dcb0c48b8d66ae93ffe2f84",
+    "source_hash": "b9c2503030880c790e7bdf0d17ac232dee6e2cbda970949e7920b6b116ea7b50",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -10169,10 +10169,10 @@
     "lithos.knowledge": {
       "component": "Knowledge",
       "functions": 42,
-      "lines": 1334,
-      "max_complexity": 62,
+      "lines": 1339,
+      "max_complexity": 63,
       "path": "src/lithos/knowledge.py",
-      "sloc": 1061
+      "sloc": 1062
     },
     "lithos.lcma": {
       "component": "LCMA",
@@ -10687,11 +10687,11 @@
         "classes": 9,
         "functions": 92,
         "largest_module": "lithos.knowledge",
-        "largest_module_lines": 1334,
-        "lines": 2164,
+        "largest_module_lines": 1339,
+        "lines": 2169,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1751
+        "sloc": 1752
       },
       "LCMA": {
         "classes": 23,
@@ -10770,13 +10770,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 29188,
+    "total_lines": 29193,
     "total_modules": 56,
-    "total_sloc": 23731
+    "total_sloc": 23732
   },
   "tests": {
     "ratio": 1.73,
-    "src_lines": 29188,
-    "test_lines": 50533
+    "src_lines": 29193,
+    "test_lines": 50575
   }
 }

@@ -759,10 +759,15 @@ class KnowledgeManager:
                     except ValueError as e:
                         return WriteResult(status="invalid_input", message=str(e))
 
+            # The stored URL is only needed when the caller is changing it, and
+            # only when it is a string: the decoder preserves raw frontmatter,
+            # and the startup scan ignores a non-string source_url rather than
+            # indexing it, so update() must not trip over one either.
             old_norm: str | None = None
-            if doc.metadata.source_url:
+            stored_url = doc.metadata.source_url
+            if not isinstance(source_url, _UnsetType) and isinstance(stored_url, str):
                 with contextlib.suppress(ValueError):
-                    old_norm = normalize_url(doc.metadata.source_url)
+                    old_norm = normalize_url(stored_url)
 
             new_norm: str | None | _UnsetType = _UNSET
             if source_url is None:

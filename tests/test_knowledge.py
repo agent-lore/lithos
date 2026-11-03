@@ -4717,6 +4717,48 @@ class TestUpdateRejectionPreservesIndexes:
         assert self._snapshot(knowledge_manager, test_config, doc) == before
 
 
+class TestUpdateWithNonStringStoredSourceUrl:
+    """A note whose frontmatter carries a non-string source_url stays updatable.
+
+    The decoder preserves raw frontmatter values and the startup scan ignores a
+    non-string source_url rather than indexing it. update() must follow suit:
+    it only normalises the stored URL when the caller is changing the URL, and
+    never when the stored value is not a string (PR #456 review).
+    """
+
+    @staticmethod
+    def _load_note_with_bool_url(test_config: LithosConfig) -> tuple[KnowledgeManager, str]:
+        knowledge_path = test_config.storage.knowledge_path
+        doc_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        post = fm.Post("# Malformed\n\nBody.", id=doc_id, title="Malformed", source_url=True)
+        (knowledge_path / "malformed.md").write_text(fm.dumps(post))
+        mgr = KnowledgeManager(test_config)
+        assert mgr._index.has_document(doc_id)
+        assert not list(mgr._index.iter_source_urls())
+        return mgr, doc_id
+
+    async def test_content_only_update_succeeds(self, test_config: LithosConfig):
+        mgr, doc_id = self._load_note_with_bool_url(test_config)
+
+        result = await mgr.update(id=doc_id, agent="editor", content="New body.")
+
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.content == "New body."
+        assert not list(mgr._index.iter_source_urls())
+
+    async def test_replacing_the_url_succeeds(self, test_config: LithosConfig):
+        mgr, doc_id = self._load_note_with_bool_url(test_config)
+        url = "https://example.com/repaired"
+
+        result = await mgr.update(id=doc_id, agent="editor", source_url=url)
+
+        assert result.status == "updated"
+        assert mgr._index.id_by_source_url(normalize_url(url)) == doc_id
+        reread, _ = await mgr.read(id=doc_id)
+        assert reread.metadata.source_url == normalize_url(url)
+
+
 class TestUpdateSupersedes:
     """supersedes parameter on update(): set, preserve, and clear."""
 
