@@ -62,7 +62,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "e701544a0825fc5502861b223533a11297d57740cc989f7d0126cc1051c892db",
+  "source_hash": "63e4818ba46fac812977686b117332179034c5da5dcb0c48b8d66ae93ffe2f84",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -127,7 +127,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_complexity | lithos.graph.KnowledgeGraph._plan_reconcile_to | 12 | 12 | review | — |
 | unchanged | function_complexity | lithos.graph.KnowledgeGraph.add_document | 12 | 12 | review | — |
 | unchanged | function_complexity | lithos.intake.CorpusIntake.write | 21 | 21 | review | — |
-| unchanged | function_complexity | lithos.knowledge.KnowledgeManager.create | 26 | 26 | review | — |
+| unchanged | function_complexity | lithos.knowledge.KnowledgeManager.create | 25 | 25 | review | — |
 | unchanged | function_complexity | lithos.knowledge.KnowledgeManager.list_all | 19 | 19 | review | — |
 | unchanged | function_complexity | lithos.knowledge.KnowledgeManager.update | 62 | 62 | review | — |
 | unchanged | function_complexity | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 23 | 23 | review | — |
@@ -196,9 +196,9 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos.graph.KnowledgeGraph._plan_reconcile_to | 92 | 92 | review | — |
 | unchanged | function_length | lithos.intake.CorpusIntake.note_update | 103 | 103 | review | — |
 | unchanged | function_length | lithos.intake.CorpusIntake.write | 183 | 183 | review | — |
-| unchanged | function_length | lithos.knowledge.KnowledgeManager.create | 212 | 212 | review | — |
+| unchanged | function_length | lithos.knowledge.KnowledgeManager.create | 194 | 194 | review | — |
 | unchanged | function_length | lithos.knowledge.KnowledgeManager.list_all | 97 | 97 | review | — |
-| unchanged | function_length | lithos.knowledge.KnowledgeManager.update | 304 | 304 | review | — |
+| unchanged | function_length | lithos.knowledge.KnowledgeManager.update | 276 | 276 | review | — |
 | unchanged | function_length | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 163 | 163 | review | — |
 | unchanged | function_length | lithos.lcma.edge_inference.parse_adjudications | 77 | 77 | review | — |
 | unchanged | function_length | lithos.lcma.enrich.EnrichWorker._consolidate_task | 78 | 78 | review | — |
@@ -242,7 +242,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | module_lines | lithos.coordination | 2866 | 2866 | review | — |
 | unchanged | module_lines | lithos.frontmatter_codec | 806 | 806 | review | — |
 | unchanged | module_lines | lithos.graph | 877 | 877 | review | — |
-| unchanged | module_lines | lithos.knowledge | 1345 | 1345 | review | — |
+| unchanged | module_lines | lithos.knowledge | 1334 | 1334 | review | — |
 | unchanged | module_lines | lithos.lcma.scouts | 1036 | 1036 | review | — |
 | unchanged | module_lines | lithos.lcma.stats | 1386 | 1386 | review | — |
 | unchanged | module_lines | lithos.search | 2102 | 2102 | review | — |
@@ -296,7 +296,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Graph | 2 | 1307 | 1086 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | IdResolution | 1 | 127 | 100 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
 | Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
-| Knowledge | 3 | 2175 | 1759 | 5 | 8 | 0.62 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
+| Knowledge | 3 | 2164 | 1751 | 5 | 8 | 0.62 | 62 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
 | LCMA | 21 | 7315 | 5996 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 25 |
 | Logging | 1 | 164 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
@@ -306,7 +306,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **56**, lines: **29199**, SLOC: **23739**
+- Modules: **56**, lines: **29188**, SLOC: **23731**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -324,7 +324,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **926**, cyclomatic > 10: **73**
+- Functions: **927**, cyclomatic > 10: **73**
 - Cyclomatic distribution: median **2**, p90 **9**, max **70**
 - Function length (lines): median 14, p90 63, max 1148 (`lithos.tools.tasks.register`); over 75: **64**
 
@@ -333,15 +333,15 @@ Top 10 most complex functions:
 | Complexity | Length | Function |
 |---:|---:|---|
 | 70 | 366 | `lithos.tools.notes.register.lithos_write` |
-| 62 | 304 | `lithos.knowledge.KnowledgeManager.update` |
+| 62 | 276 | `lithos.knowledge.KnowledgeManager.update` |
 | 41 | 363 | `lithos.lcma.retrieve._run_retrieve_impl` |
 | 36 | 62 | `lithos.lcma.eval.scoring.compute_metrics` |
 | 33 | 207 | `lithos.search.SearchEngine.graph_search` |
 | 30 | 197 | `lithos.tools.read_search.register.lithos_list` |
 | 26 | 87 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
-| 26 | 212 | `lithos.knowledge.KnowledgeManager.create` |
 | 26 | 50 | `lithos.lcma.eval.report.summarize_calls` |
 | 26 | 103 | `lithos.search.TantivyIndex.search` |
+| 26 | 161 | `lithos.tools.notes.register.lithos_note_update` |
 
 ## Seams
 
@@ -407,4 +407,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **44** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.72** (50302 test lines / 29199 source lines)
+- Test-to-source line ratio: **1.73** (50533 test lines / 29188 source lines)

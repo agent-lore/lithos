@@ -337,6 +337,41 @@ class KnowledgeManager:
 
         return full_path.relative_to(base_path), full_path
 
+    async def _resolve_url_ownership(
+        self, norm_url: str, *, claimant_id: str | None, claimant_label: str
+    ) -> WriteResult | None:
+        """Return a ``duplicate`` result if another live note owns ``norm_url``.
+
+        A map entry whose owner is no longer on disk is stale: it is dropped so
+        the claimant may take the URL. That repair is the only index mutation
+        permitted during validation — it removes a dangling pointer and is safe
+        whether or not the surrounding write goes on to succeed. Call under the
+        write lock.
+        """
+        existing_owner = self._index.id_by_source_url(norm_url)
+        if existing_owner is None or existing_owner == claimant_id:
+            return None
+        try:
+            existing_doc, _ = await self.read(id=existing_owner)
+        except FileNotFoundError:
+            self._index.remove_source_url(norm_url, existing_owner)
+            return None
+        logger.info(
+            "Duplicate URL rejected: url=%s existing_owner=%s claimant=%s",
+            norm_url,
+            existing_owner,
+            claimant_label,
+        )
+        return WriteResult(
+            status="duplicate",
+            duplicate_of=DuplicateInfo(
+                id=existing_owner,
+                title=existing_doc.title,
+                source_url=norm_url,
+            ),
+            message=f"URL already exists in document '{existing_doc.title}'",
+        )
+
     @traced("lithos.knowledge.create")
     @timed_write("create")
     async def create(
@@ -392,29 +427,11 @@ class KnowledgeManager:
                         message=str(e),
                     )
 
-                # Check dedup map
-                existing_id = self._index.id_by_source_url(norm_url)
-                if existing_id is not None:
-                    try:
-                        existing_doc, _ = await self.read(id=existing_id)
-                        logger.info(
-                            "Duplicate URL rejected: url=%s existing_owner=%s rejected_doc title=%r",
-                            norm_url,
-                            existing_id,
-                            title,
-                        )
-                        return WriteResult(
-                            status="duplicate",
-                            duplicate_of=DuplicateInfo(
-                                id=existing_id,
-                                title=existing_doc.title,
-                                source_url=norm_url,
-                            ),
-                            message=f"URL already exists in document '{existing_doc.title}'",
-                        )
-                    except FileNotFoundError:
-                        # Stale map entry; allow create
-                        self._index.remove_source_url(norm_url, existing_id)
+                duplicate = await self._resolve_url_ownership(
+                    norm_url, claimant_id=None, claimant_label=repr(title)
+                )
+                if duplicate is not None:
+                    return duplicate
 
             # Validate and normalize derived_from_ids
             normalized_provenance: list[str] = []
@@ -672,6 +689,12 @@ class KnowledgeManager:
             lithos_metrics.knowledge_ops.add(1, {"op": "update"})
             doc, _ = await self.read(id=id)
 
+            # ---- Phase 1: validate. Nothing here touches the document, the
+            # file on disk, or any derived index, so every early return below
+            # leaves the Corpus exactly as it was (task 996fb118). read()
+            # decodes a fresh document, so the in-memory object is discarded
+            # on rejection; the indexes are the state that must be protected.
+
             # Guard free-form metadata against reserved-key collisions (#305).
             # {} (clear) has no keys to check; _UNSET means preserve.
             if not isinstance(extra, _UnsetType) and extra:
@@ -680,9 +703,6 @@ class KnowledgeManager:
                 except ValueError as e:
                     return WriteResult(status="invalid_input", message=str(e))
 
-            # Reject invalid confidence before any in-memory metadata mutation —
-            # update() mutates the cached doc, so a late rejection would leave a
-            # poisoned in-memory document (#312).
             if not isinstance(confidence, _UnsetType):
                 try:
                     confidence = validate_confidence(confidence)
@@ -718,89 +738,53 @@ class KnowledgeManager:
                 )
 
             old_slug = slugify(doc.metadata.title)
-            old_source_url = doc.metadata.source_url
+            new_slug = old_slug if title is None else slugify(title)
+            if new_slug != old_slug:
+                existing_owner = self._index.id_by_slug(new_slug)
+                if existing_owner is not None and existing_owner != id:
+                    raise SlugCollisionError(new_slug, existing_owner)
 
-            # Guard: check slug collision BEFORE any state mutations.
-            # If a title rename would collide, bail out immediately so that
-            # source_url / provenance mutations further down never run.
-            if title is not None:
-                new_slug = slugify(title)
-                if new_slug != old_slug:
-                    existing_owner = self._index.id_by_slug(new_slug)
-                    if existing_owner is not None and existing_owner != id:
-                        raise SlugCollisionError(new_slug, existing_owner)
-
-            if not isinstance(source_url, _UnsetType):
-                if source_url is None:
-                    if old_source_url:
-                        try:
-                            old_norm = normalize_url(old_source_url)
-                            self._index.remove_source_url(old_norm, id)
-                        except ValueError:
-                            pass
-                    doc.metadata.source_url = None
-                else:
-                    try:
-                        new_norm = normalize_url(source_url)
-                    except ValueError as e:
-                        return WriteResult(
-                            status="invalid_input",
-                            message=str(e),
-                        )
-
-                    existing_owner = self._index.id_by_source_url(new_norm)
-                    if existing_owner is not None and existing_owner != id:
-                        try:
-                            existing_doc, _ = await self.read(id=existing_owner)
-                            logger.info(
-                                "Duplicate URL rejected: url=%s existing_owner=%s rejected_doc_id=%s",
-                                new_norm,
-                                existing_owner,
-                                id,
-                            )
-                            return WriteResult(
-                                status="duplicate",
-                                duplicate_of=DuplicateInfo(
-                                    id=existing_owner,
-                                    title=existing_doc.title,
-                                    source_url=new_norm,
-                                ),
-                                message=f"URL already exists in document '{existing_doc.title}'",
-                            )
-                        except FileNotFoundError:
-                            self._index.remove_source_url(new_norm, existing_owner)
-
-                    # Remove old mapping if URL changed
-                    if old_source_url:
-                        try:
-                            old_norm = normalize_url(old_source_url)
-                            if old_norm != new_norm:
-                                self._index.remove_source_url(old_norm, id)
-                        except ValueError:
-                            pass
-
-                    doc.metadata.source_url = new_norm
-                    self._index.set_source_url(new_norm, id)
-
-            # Handle derived_from_ids update
-            warnings: list[str] = []
+            # None / [] clear provenance; a non-empty list is validated and
+            # normalised. Validated before the URL ownership check so that the
+            # stale-owner repair inside it is the last thing to run.
+            normalized_provenance: list[str] | _UnsetType = _UNSET
             if not isinstance(derived_from_ids, _UnsetType):
-                if derived_from_ids is None or derived_from_ids == []:
-                    # Clear provenance
-                    doc.metadata.derived_from_ids = []
-                    self._index.replace_provenance(id, [])
+                if not derived_from_ids:
+                    normalized_provenance = []
                 else:
-                    # Replace with new list — validate first
                     try:
-                        normalized = validate_derived_from_ids(derived_from_ids, self_id=id)
-                    except ValueError as e:
-                        return WriteResult(
-                            status="invalid_input",
-                            message=str(e),
+                        normalized_provenance = validate_derived_from_ids(
+                            derived_from_ids, self_id=id
                         )
+                    except ValueError as e:
+                        return WriteResult(status="invalid_input", message=str(e))
 
-                    doc.metadata.derived_from_ids = normalized
-                    warnings = self._index.replace_provenance(id, normalized)
+            old_norm: str | None = None
+            if doc.metadata.source_url:
+                with contextlib.suppress(ValueError):
+                    old_norm = normalize_url(doc.metadata.source_url)
+
+            new_norm: str | None | _UnsetType = _UNSET
+            if source_url is None:
+                new_norm = None
+            elif not isinstance(source_url, _UnsetType):
+                try:
+                    new_norm = normalize_url(source_url)
+                except ValueError as e:
+                    return WriteResult(status="invalid_input", message=str(e))
+                duplicate = await self._resolve_url_ownership(
+                    new_norm, claimant_id=id, claimant_label=id
+                )
+                if duplicate is not None:
+                    return duplicate
+
+            # ---- Phase 2: apply the validated change to the decoded document
+            # and write it to disk. A failed write raises out of the lock with
+            # every index still describing the previous version.
+            if not isinstance(new_norm, _UnsetType):
+                doc.metadata.source_url = new_norm
+            if not isinstance(normalized_provenance, _UnsetType):
+                doc.metadata.derived_from_ids = normalized_provenance
 
             if not isinstance(expires_at, _UnsetType):
                 doc.metadata.expires_at = expires_at
@@ -864,16 +848,21 @@ class KnowledgeManager:
             if agent not in doc.metadata.contributors and agent != doc.metadata.author:
                 doc.metadata.contributors.append(agent)
 
-            # Slug collision was already checked at the top of update();
-            # recompute new_slug from the (possibly updated) title for the
-            # index-update that follows.
-            new_slug = slugify(doc.metadata.title)
-
-            # Write to disk — bump version here so early returns above leave
-            # the in-memory document at its original version.
             doc.metadata.version += 1
             _safe_path, full_path = self._resolve_safe_path(doc.path)
             _atomic_write(full_path, encode(doc))
+
+            # ---- Phase 3: the note is on disk; bring every derived index in
+            # line with it.
+            if not isinstance(new_norm, _UnsetType):
+                if old_norm is not None and old_norm != new_norm:
+                    self._index.remove_source_url(old_norm, id)
+                if new_norm is not None:
+                    self._index.set_source_url(new_norm, id)
+
+            warnings: list[str] = []
+            if not isinstance(normalized_provenance, _UnsetType):
+                warnings = self._index.replace_provenance(id, normalized_provenance)
 
             if new_slug != old_slug:
                 self._index.reroute_slug(old_slug, new_slug, id)

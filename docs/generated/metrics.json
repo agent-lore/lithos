@@ -106,7 +106,7 @@
       },
       {
         "complexity": 62,
-        "length": 304,
+        "length": 276,
         "qualname": "lithos.knowledge.KnowledgeManager.update"
       },
       {
@@ -136,11 +136,6 @@
       },
       {
         "complexity": 26,
-        "length": 212,
-        "qualname": "lithos.knowledge.KnowledgeManager.create"
-      },
-      {
-        "complexity": 26,
         "length": 50,
         "qualname": "lithos.lcma.eval.report.summarize_calls"
       },
@@ -148,9 +143,14 @@
         "complexity": 26,
         "length": 103,
         "qualname": "lithos.search.TantivyIndex.search"
+      },
+      {
+        "complexity": 26,
+        "length": 161,
+        "qualname": "lithos.tools.notes.register.lithos_note_update"
       }
     ],
-    "total_functions": 926
+    "total_functions": 927
   },
   "components": {
     "Codec": {
@@ -4347,6 +4347,15 @@
         "src/lithos/knowledge.py"
       ]
     },
+    "lithos.knowledge.KnowledgeManager._resolve_url_ownership": {
+      "complexity": 4,
+      "length": 34,
+      "module": "lithos.knowledge",
+      "path": "src/lithos/knowledge.py",
+      "paths": [
+        "src/lithos/knowledge.py"
+      ]
+    },
     "lithos.knowledge.KnowledgeManager._scan_existing": {
       "complexity": 8,
       "length": 36,
@@ -4375,8 +4384,8 @@
       ]
     },
     "lithos.knowledge.KnowledgeManager.create": {
-      "complexity": 26,
-      "length": 212,
+      "complexity": 25,
+      "length": 194,
       "module": "lithos.knowledge",
       "path": "src/lithos/knowledge.py",
       "paths": [
@@ -4673,7 +4682,7 @@
     },
     "lithos.knowledge.KnowledgeManager.update": {
       "complexity": 62,
-      "length": 304,
+      "length": 276,
       "module": "lithos.knowledge",
       "path": "src/lithos/knowledge.py",
       "paths": [
@@ -10006,7 +10015,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "e701544a0825fc5502861b223533a11297d57740cc989f7d0126cc1051c892db",
+    "source_hash": "63e4818ba46fac812977686b117332179034c5da5dcb0c48b8d66ae93ffe2f84",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -10159,11 +10168,11 @@
     },
     "lithos.knowledge": {
       "component": "Knowledge",
-      "functions": 41,
-      "lines": 1345,
+      "functions": 42,
+      "lines": 1334,
       "max_complexity": 62,
       "path": "src/lithos/knowledge.py",
-      "sloc": 1069
+      "sloc": 1061
     },
     "lithos.lcma": {
       "component": "LCMA",
@@ -10676,13 +10685,13 @@
       },
       "Knowledge": {
         "classes": 9,
-        "functions": 91,
+        "functions": 92,
         "largest_module": "lithos.knowledge",
-        "largest_module_lines": 1345,
-        "lines": 2175,
+        "largest_module_lines": 1334,
+        "lines": 2164,
         "modules": 3,
         "public_symbols": 9,
-        "sloc": 1759
+        "sloc": 1751
       },
       "LCMA": {
         "classes": 23,
@@ -10761,13 +10770,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 29199,
+    "total_lines": 29188,
     "total_modules": 56,
-    "total_sloc": 23739
+    "total_sloc": 23731
   },
   "tests": {
-    "ratio": 1.72,
-    "src_lines": 29199,
-    "test_lines": 50302
+    "ratio": 1.73,
+    "src_lines": 29188,
+    "test_lines": 50533
   }
 }
