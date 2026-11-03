@@ -4486,6 +4486,279 @@ class TestSlugCollision:
         )
 
 
+class TestUpdateRejectionPreservesIndexes:
+    """Rejected compound updates leave the Corpus and every derived index untouched.
+
+    Regression for task 996fb118: update() applied source_url index mutations
+    before derived_from_ids validation, so a self-reference rejection left the
+    original URL unowned and the replacement URL pointing at the note while the
+    note on disk still carried the original URL.
+    """
+
+    ORIGINAL_URL = "https://example.com/original"
+    REPLACEMENT_URL = "https://example.com/replacement"
+
+    @staticmethod
+    async def _seed(knowledge_manager: KnowledgeManager, *, with_provenance: bool):
+        src_id: str | None = None
+        if with_provenance:
+            src = (
+                await knowledge_manager.create(title="Source", content="S.", agent="agent")
+            ).document
+            assert src is not None
+            src_id = src.id
+        created = await knowledge_manager.create(
+            title="Original Title",
+            content="Body.",
+            agent="agent",
+            source_url=TestUpdateRejectionPreservesIndexes.ORIGINAL_URL,
+            derived_from_ids=[src_id] if src_id else None,
+        )
+        assert created.status == "created", created.message
+        assert created.document is not None
+        return created.document, src_id
+
+    @staticmethod
+    def _snapshot(knowledge_manager: KnowledgeManager, test_config, doc) -> dict:
+        kp = test_config.storage.knowledge_path
+        index = knowledge_manager._index
+        return {
+            "disk": (kp / doc.path).read_bytes(),
+            "orig_url_owner": index.id_by_source_url(
+                normalize_url(TestUpdateRejectionPreservesIndexes.ORIGINAL_URL)
+            ),
+            "repl_url_owner": index.id_by_source_url(
+                normalize_url(TestUpdateRejectionPreservesIndexes.REPLACEMENT_URL)
+            ),
+            "slug_owner": index.id_by_slug(slugify("Original Title")),
+            "renamed_slug_owner": index.id_by_slug(slugify("Renamed Title")),
+            "title": index.title_by_id(doc.id),
+            "sources": index.doc_sources(doc.id),
+            "cached": index.get_cached_meta(doc.id),
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "bad_provenance",
+        [pytest.param("self", id="self-reference"), pytest.param("not-a-uuid", id="malformed")],
+    )
+    @pytest.mark.parametrize(
+        "url_change",
+        [
+            pytest.param({"source_url": REPLACEMENT_URL}, id="url-replace"),
+            pytest.param({"source_url": None}, id="url-clear"),
+            pytest.param(
+                {"source_url": REPLACEMENT_URL, "title": "Renamed Title"}, id="url-and-title"
+            ),
+        ],
+    )
+    async def test_rejected_compound_update_preserves_state(
+        self,
+        knowledge_manager: KnowledgeManager,
+        test_config,
+        bad_provenance: str,
+        url_change: dict,
+    ):
+        doc, src_id = await self._seed(knowledge_manager, with_provenance=True)
+        before = self._snapshot(knowledge_manager, test_config, doc)
+        assert before["orig_url_owner"] == doc.id
+        assert before["sources"] == [src_id]
+
+        derived = [doc.id if bad_provenance == "self" else bad_provenance]
+        result = await knowledge_manager.update(
+            id=doc.id, agent="audit", derived_from_ids=derived, **url_change
+        )
+        assert result.status == "invalid_input"
+
+        assert self._snapshot(knowledge_manager, test_config, doc) == before
+        reread, _ = await knowledge_manager.read(id=doc.id)
+        assert reread.metadata.version == 1
+        assert reread.metadata.source_url == normalize_url(self.ORIGINAL_URL)
+
+    @pytest.mark.asyncio
+    async def test_dedup_after_rejected_update_matches_before(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """A rejected URL replacement must not shift which URLs are claimed."""
+        doc, _ = await self._seed(knowledge_manager, with_provenance=False)
+
+        rejected = await knowledge_manager.update(
+            id=doc.id, agent="audit", source_url=self.REPLACEMENT_URL, derived_from_ids=[doc.id]
+        )
+        assert rejected.status == "invalid_input"
+
+        # The original URL is still owned: a new note claiming it is a duplicate.
+        dup = await knowledge_manager.create(
+            title="Claimant", content="C.", agent="agent", source_url=self.ORIGINAL_URL
+        )
+        assert dup.status == "duplicate"
+        assert dup.duplicate_of is not None and dup.duplicate_of.id == doc.id
+
+        # The replacement URL was never taken: a new note may claim it.
+        fresh = await knowledge_manager.create(
+            title="Fresh", content="F.", agent="agent", source_url=self.REPLACEMENT_URL
+        )
+        assert fresh.status == "created", fresh.message
+
+    @pytest.mark.asyncio
+    async def test_duplicate_url_rejection_preserves_provenance_and_slug(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """URL duplicate (owned by another note) rejects after provenance validation passed."""
+        owner = (
+            await knowledge_manager.create(
+                title="Owner", content="O.", agent="agent", source_url=self.REPLACEMENT_URL
+            )
+        ).document
+        assert owner is not None
+        doc, src_id = await self._seed(knowledge_manager, with_provenance=True)
+        before = self._snapshot(knowledge_manager, test_config, doc)
+
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="audit",
+            title="Renamed Title",
+            source_url=self.REPLACEMENT_URL,
+            derived_from_ids=[],
+        )
+        assert result.status == "duplicate"
+        assert result.duplicate_of is not None and result.duplicate_of.id == owner.id
+
+        after = self._snapshot(knowledge_manager, test_config, doc)
+        assert after == before
+        assert after["sources"] == [src_id]
+        assert after["repl_url_owner"] == owner.id
+
+    @pytest.mark.asyncio
+    async def test_write_failure_leaves_indexes_untouched(
+        self, knowledge_manager: KnowledgeManager, test_config, monkeypatch: pytest.MonkeyPatch
+    ):
+        """If the atomic disk write raises, no index has been mutated yet.
+
+        This pins the bounded guarantee of the validate → write → index
+        ordering. It says nothing about failures *inside* the index phase.
+        """
+        doc, src_id = await self._seed(knowledge_manager, with_provenance=True)
+        before = self._snapshot(knowledge_manager, test_config, doc)
+
+        def _boom(path, content):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("lithos.knowledge._atomic_write", _boom)
+
+        with pytest.raises(OSError, match="disk full"):
+            await knowledge_manager.update(
+                id=doc.id,
+                agent="audit",
+                title="Renamed Title",
+                source_url=self.REPLACEMENT_URL,
+                derived_from_ids=[],
+            )
+
+        assert self._snapshot(knowledge_manager, test_config, doc) == before
+        reread, _ = await knowledge_manager.read(id=doc.id)
+        assert reread.metadata.version == 1
+        assert reread.metadata.derived_from_ids == [src_id]
+
+    @pytest.mark.asyncio
+    async def test_successful_compound_update_applies_everything(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        """Contract retention: a valid compound update moves every index together."""
+        doc, src_id = await self._seed(knowledge_manager, with_provenance=True)
+        new_src = (
+            await knowledge_manager.create(title="New Source", content="N.", agent="agent")
+        ).document
+        assert new_src is not None
+
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="editor",
+            title="Renamed Title",
+            source_url=self.REPLACEMENT_URL,
+            derived_from_ids=[new_src.id],
+        )
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.metadata.version == 2
+
+        after = self._snapshot(knowledge_manager, test_config, doc)
+        assert after["orig_url_owner"] is None
+        assert after["repl_url_owner"] == doc.id
+        assert after["slug_owner"] is None
+        assert after["renamed_slug_owner"] == doc.id
+        assert after["title"] == "Renamed Title"
+        assert after["sources"] == [new_src.id]
+        assert after["cached"].title == "Renamed Title"
+        assert after["cached"].source_url == normalize_url(self.REPLACEMENT_URL)
+        assert doc.id not in knowledge_manager.get_derived_docs(src_id)  # type: ignore[arg-type]
+
+        reread, _ = await knowledge_manager.read(id=doc.id)
+        assert reread.metadata.source_url == normalize_url(self.REPLACEMENT_URL)
+        assert reread.metadata.derived_from_ids == [new_src.id]
+
+    @pytest.mark.asyncio
+    async def test_compound_version_conflict_preserves_state(
+        self, knowledge_manager: KnowledgeManager, test_config
+    ):
+        doc, _ = await self._seed(knowledge_manager, with_provenance=True)
+        before = self._snapshot(knowledge_manager, test_config, doc)
+
+        result = await knowledge_manager.update(
+            id=doc.id,
+            agent="editor",
+            title="Renamed Title",
+            source_url=self.REPLACEMENT_URL,
+            derived_from_ids=[],
+            expected_version=99,
+        )
+        assert result.status == "version_conflict"
+        assert result.current_version == 1
+        assert self._snapshot(knowledge_manager, test_config, doc) == before
+
+
+class TestUpdateWithNonStringStoredSourceUrl:
+    """A note whose frontmatter carries a non-string source_url stays updatable.
+
+    The decoder preserves raw frontmatter values and the startup scan ignores a
+    non-string source_url rather than indexing it. update() must follow suit:
+    it only normalises the stored URL when the caller is changing the URL, and
+    never when the stored value is not a string (PR #456 review).
+    """
+
+    @staticmethod
+    def _load_note_with_bool_url(test_config: LithosConfig) -> tuple[KnowledgeManager, str]:
+        knowledge_path = test_config.storage.knowledge_path
+        doc_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        post = fm.Post("# Malformed\n\nBody.", id=doc_id, title="Malformed", source_url=True)
+        (knowledge_path / "malformed.md").write_text(fm.dumps(post))
+        mgr = KnowledgeManager(test_config)
+        assert mgr._index.has_document(doc_id)
+        assert not list(mgr._index.iter_source_urls())
+        return mgr, doc_id
+
+    async def test_content_only_update_succeeds(self, test_config: LithosConfig):
+        mgr, doc_id = self._load_note_with_bool_url(test_config)
+
+        result = await mgr.update(id=doc_id, agent="editor", content="New body.")
+
+        assert result.status == "updated"
+        assert result.document is not None
+        assert result.document.content == "New body."
+        assert not list(mgr._index.iter_source_urls())
+
+    async def test_replacing_the_url_succeeds(self, test_config: LithosConfig):
+        mgr, doc_id = self._load_note_with_bool_url(test_config)
+        url = "https://example.com/repaired"
+
+        result = await mgr.update(id=doc_id, agent="editor", source_url=url)
+
+        assert result.status == "updated"
+        assert mgr._index.id_by_source_url(normalize_url(url)) == doc_id
+        reread, _ = await mgr.read(id=doc_id)
+        assert reread.metadata.source_url == normalize_url(url)
+
+
 class TestUpdateSupersedes:
     """supersedes parameter on update(): set, preserve, and clear."""
 
