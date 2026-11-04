@@ -22,7 +22,7 @@
         "max_function": "lithos.coordination.CoordinationService.create_task"
       },
       "Entrypoints": {
-        "functions_over_10": 15,
+        "functions_over_10": 14,
         "max_complexity": 70,
         "max_function": "lithos.tools.notes.register.lithos_write"
       },
@@ -88,13 +88,13 @@
       }
     },
     "function_lengths": {
-      "max": 1148,
+      "max": 1098,
       "max_function": "lithos.tools.tasks.register",
       "median": 14,
-      "over_75": 64,
-      "p90": 63
+      "over_75": 63,
+      "p90": 64
     },
-    "functions_over_10": 73,
+    "functions_over_10": 72,
     "max": 70,
     "median": 2,
     "p90": 9,
@@ -131,7 +131,7 @@
       },
       {
         "complexity": 26,
-        "length": 87,
+        "length": 82,
         "qualname": "lithos.cognitive_memory.CognitiveMemory.validate_task_feedback"
       },
       {
@@ -150,7 +150,7 @@
         "qualname": "lithos.tools.notes.register.lithos_note_update"
       }
     ],
-    "total_functions": 927
+    "total_functions": 928
   },
   "components": {
     "Codec": {
@@ -270,7 +270,7 @@
   },
   "domain": {
     "associations": 26,
-    "models": 44,
+    "models": 45,
     "models_without_docstrings": 0,
     "relationships": [
       {
@@ -456,6 +456,13 @@
         "retrieval_count": "int",
         "salience": "float",
         "spaced_rep_strength": "float"
+      }
+    },
+    "lithos.cognitive_memory.TaskCompletion": {
+      "fields": {
+        "task_id": "str",
+        "unblocked": "tuple[str, ...]",
+        "updated_at": "str"
       }
     },
     "lithos.coordination.AccessLogEntry": {
@@ -1656,6 +1663,15 @@
         "src/lithos/cognitive_memory.py"
       ]
     },
+    "lithos.cognitive_memory.CognitiveMemory.complete_task": {
+      "complexity": 10,
+      "length": 74,
+      "module": "lithos.cognitive_memory",
+      "path": "src/lithos/cognitive_memory.py",
+      "paths": [
+        "src/lithos/cognitive_memory.py"
+      ]
+    },
     "lithos.cognitive_memory.CognitiveMemory.conflict_resolve": {
       "complexity": 11,
       "length": 111,
@@ -1847,7 +1863,7 @@
     },
     "lithos.cognitive_memory.CognitiveMemory.validate_task_feedback": {
       "complexity": 26,
-      "length": 87,
+      "length": 82,
       "module": "lithos.cognitive_memory",
       "path": "src/lithos/cognitive_memory.py",
       "paths": [
@@ -8903,7 +8919,7 @@
     },
     "lithos.tools.tasks.register": {
       "complexity": 1,
-      "length": 1148,
+      "length": 1098,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -8947,8 +8963,8 @@
       ]
     },
     "lithos.tools.tasks.register.lithos_task_complete": {
-      "complexity": 12,
-      "length": 115,
+      "complexity": 4,
+      "length": 65,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -10015,7 +10031,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "b9c2503030880c790e7bdf0d17ac232dee6e2cbda970949e7920b6b116ea7b50",
+    "source_hash": "cd50d9c16be4aecaf78290c47ab7a977ce0b2956b84267a3b7d0f8b2b092f0a3",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -10072,11 +10088,11 @@
     },
     "lithos.cognitive_memory": {
       "component": "CognitiveMemory",
-      "functions": 41,
-      "lines": 1369,
+      "functions": 42,
+      "lines": 1458,
       "max_complexity": 26,
       "path": "src/lithos/cognitive_memory.py",
-      "sloc": 1151
+      "sloc": 1230
     },
     "lithos.config": {
       "component": "Config",
@@ -10457,10 +10473,10 @@
     "lithos.tools.tasks": {
       "component": "Entrypoints",
       "functions": 20,
-      "lines": 1209,
-      "max_complexity": 12,
+      "lines": 1157,
+      "max_complexity": 9,
       "path": "src/lithos/tools/tasks.py",
-      "sloc": 1094
+      "sloc": 1050
     },
     "lithos.watch_intake": {
       "component": "Entrypoints",
@@ -10484,7 +10500,7 @@
     "actuals": {
       "component_cycles": 0,
       "cross_component_edges": 74,
-      "cross_module_private_refs": 31,
+      "cross_module_private_refs": 30,
       "max_module_lines": 2866,
       "module_cycles": 1,
       "modules_over_800_lines": 12,
@@ -10532,7 +10548,7 @@
   "schema": 1,
   "seams": {
     "cross_module_private_detail": [
-      "lithos.tools.tasks -> lithos.server.LithosServer._emit (x8)",
+      "lithos.tools.tasks -> lithos.server.LithosServer._emit (x7)",
       "lithos.tools.agents -> lithos.server.LithosServer._emit (x2)",
       "lithos.tools.findings_stats -> lithos.server.LithosServer._config (x2)",
       "lithos.tools.read_search -> lithos.server.LithosServer._config (x2)",
@@ -10554,7 +10570,7 @@
       "lithos.tools.notes -> lithos.knowledge._UNSET",
       "lithos.tools.notes -> lithos.knowledge._UnsetType"
     ],
-    "cross_module_private_refs": 31,
+    "cross_module_private_refs": 30,
     "tests_private_detail": [
       "tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x19)",
       "tests/test_telemetry.py -> lithos.telemetry._lcma_metrics_registered (x8)",
@@ -10602,14 +10618,14 @@
         "sloc": 609
       },
       "CognitiveMemory": {
-        "classes": 2,
-        "functions": 41,
+        "classes": 3,
+        "functions": 42,
         "largest_module": "lithos.cognitive_memory",
-        "largest_module_lines": 1369,
-        "lines": 1369,
+        "largest_module_lines": 1458,
+        "lines": 1458,
         "modules": 1,
-        "public_symbols": 7,
-        "sloc": 1151
+        "public_symbols": 8,
+        "sloc": 1230
       },
       "Config": {
         "classes": 10,
@@ -10634,12 +10650,12 @@
       "Entrypoints": {
         "classes": 5,
         "functions": 151,
-        "largest_module": "lithos.tools.tasks",
-        "largest_module_lines": 1209,
-        "lines": 6629,
+        "largest_module": "lithos.cli",
+        "largest_module_lines": 1177,
+        "lines": 6577,
         "modules": 13,
         "public_symbols": 37,
-        "sloc": 5398
+        "sloc": 5354
       },
       "Errors": {
         "classes": 12,
@@ -10778,13 +10794,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 29193,
+    "total_lines": 29230,
     "total_modules": 56,
-    "total_sloc": 23732
+    "total_sloc": 23767
   },
   "tests": {
-    "ratio": 1.73,
-    "src_lines": 29193,
-    "test_lines": 50613
+    "ratio": 1.74,
+    "src_lines": 29230,
+    "test_lines": 50847
   }
 }

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -14,7 +13,6 @@ from lithos.envelopes import error_envelope, invalid_input_envelope
 from lithos.events import (
     TASK_CANCELLED,
     TASK_CLAIMED,
-    TASK_COMPLETED,
     TASK_CREATED,
     TASK_RELEASED,
     TASK_REOPENED,
@@ -472,76 +470,26 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span.set_attribute("lithos.task_id", task_id)
         span.set_attribute("lithos.outcome_provided", outcome is not None)
         span.set_attribute("lithos.outcome_len", outcome_len)
-        # -- Validate feedback BEFORE completing the task --
-        feedback_supplied = cited_nodes is not None or misleading_nodes is not None
-        validated: dict[str, Any] | None = None
-        if feedback_supplied:
-            error, validated = await server.memory.validate_task_feedback(
-                task_id=task_id,
-                agent=agent,
-                cited_nodes=cited_nodes,
-                misleading_nodes=misleading_nodes,
-                receipt_id=receipt_id,
-            )
-            if error is not None:
-                return error
 
-        # The committed stamp comes back from the coordination layer — it can
-        # advance strictly past the prior stamp (#420), so echo it verbatim.
-        updated_at = await server.coordination.complete_task(
-            task_id=task_id,
-            agent=agent,
+        # Validate-then-transition-then-reinforce ordering, the event, and the
+        # unblocked query are owned by the memory facade; failures surface as
+        # CoordinationError and are mapped by tool_span.
+        completion = await server.memory.complete_task(
+            task_id,
+            agent,
             outcome=outcome,
-            now=datetime.now(UTC),
+            cited_nodes=cited_nodes,
+            misleading_nodes=misleading_nodes,
+            receipt_id=receipt_id,
         )
-        span.set_attribute("lithos.success", updated_at is not None)
-
-        if updated_at is None:
-            return error_envelope(
-                "task_not_found", f"Task '{task_id}' not found or not in an open state."
-            )
-
-        # -- Apply reinforcement side-effects after task is completed --
-        if validated is not None:
-            logger.info(
-                "lithos_task_complete: applying feedback reinforcement",
-                extra={
-                    "task_id": task_id,
-                    "agent": agent,
-                    "cited_count": len(validated.get("cited") or []),
-                    "misleading_count": len(validated.get("misleading") or []),
-                    "ignored_count": len(validated.get("ignored") or []),
-                },
-            )
-            await server.memory.apply_task_feedback(validated)
-
-        await server._emit(
-            LithosEvent(
-                type=TASK_COMPLETED,
-                agent=agent,
-                payload={
-                    "task_id": task_id,
-                    "agent": agent,
-                    "outcome": outcome,
-                    "cited_nodes": json.dumps(cited_nodes),
-                    "misleading_nodes": json.dumps(misleading_nodes),
-                    "receipt_id": json.dumps(receipt_id),
-                    "updated_at": updated_at,
-                },
-            )
-        )
-
-        # Surface tasks this completion just made ready (their last
-        # blocking predecessor is now satisfied) so an orchestrator can
-        # pick them up without re-polling lithos_task_ready.
-        unblocked = await server.coordination.newly_unblocked_by(task_id)
-        span.set_attribute("lithos.unblocked_count", len(unblocked))
+        span.set_attribute("lithos.success", True)
+        span.set_attribute("lithos.unblocked_count", len(completion.unblocked))
         return {
             "success": True,
-            "unblocked": unblocked,
+            "unblocked": list(completion.unblocked),
             "task_id": task_id,
             "title": task_title,
-            "updated_at": updated_at,
+            "updated_at": completion.updated_at,
         }
 
     @mcp.tool()
