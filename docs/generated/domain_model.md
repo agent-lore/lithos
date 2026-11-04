@@ -64,6 +64,11 @@ classDiagram
     +spaced_rep_strength float
     +last_decay_applied_at str | None
   }
+  class TaskCompletion {
+    +task_id str
+    +updated_at str
+    +unblocked tuple[str, ...]
+  }
 ```
 
 ## Coordination

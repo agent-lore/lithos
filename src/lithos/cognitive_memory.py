@@ -29,8 +29,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lithos.envelopes import error_envelope, invalid_input_envelope
-from lithos.errors import SearchBackendError
-from lithos.events import EVENT_ORIGIN_ENRICH, LithosEvent, make_edge_upserted_event
+from lithos.errors import CoordinationError, SearchBackendError
+from lithos.events import (
+    EVENT_ORIGIN_ENRICH,
+    TASK_COMPLETED,
+    LithosEvent,
+    make_edge_upserted_event,
+)
 from lithos.frontmatter_codec import normalize_datetime
 from lithos.intake import EdgeRequest, NoteUpdateRequest
 from lithos.lcma.call_log import BLOB_SUBDIR, BlobStore
@@ -119,6 +124,20 @@ class NodeStats:
     decay_rate: float
     spaced_rep_strength: float
     last_decay_applied_at: str | None
+
+
+@dataclass(frozen=True)
+class TaskCompletion:
+    """Outcome of :meth:`CognitiveMemory.complete_task`.
+
+    ``updated_at`` is the committed stamp from the coordination layer, echoed
+    verbatim (#420). ``unblocked`` lists the dependents this completion made
+    ready, so an orchestrator need not re-poll ``lithos_task_ready``.
+    """
+
+    task_id: str
+    updated_at: str
+    unblocked: tuple[str, ...]
 
 
 def _as_int(value: object, default: int) -> int:
@@ -374,16 +393,17 @@ class CognitiveMemory:
         cited_nodes: list[str] | None,
         misleading_nodes: list[str] | None,
         receipt_id: str | None,
-    ) -> tuple[dict[str, Any], None] | tuple[None, dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Validate receipt and compute filtered node sets without side effects.
 
-        Returns ``(error_envelope, None)`` on hard failure, or
-        ``(None, validated_data)`` on success.  ``validated_data`` contains the
-        keys ``cited``, ``misleading``, ``ignored`` (each a list[str] or None)
-        and ``skip`` (bool — True when feedback should be silently dropped).
+        Returns the validated data: keys ``cited``, ``misleading``, ``ignored``
+        (each a list[str] or None) and ``skip`` (bool — True when feedback
+        should be silently dropped). Raises
+        :class:`~lithos.errors.CoordinationError` (``receipt_not_found``) when
+        an explicit ``receipt_id`` is unknown or belongs to another task.
 
-        The ``lithos_task_complete`` handler calls this *before* completing the
-        task so invalid feedback fails fast without completing it; the paired
+        :meth:`complete_task` calls this *before* the state transition so
+        invalid feedback fails fast without completing the task; the paired
         :meth:`apply_task_feedback` runs *after* completion.
         """
         # -- Resolve receipt --
@@ -391,12 +411,9 @@ class CognitiveMemory:
         if receipt_id is not None:
             receipt = await self.get_receipt(receipt_id, task_id)
             if receipt is None:
-                return (
-                    error_envelope(
-                        "receipt_not_found",
-                        f"Receipt '{receipt_id}' not found or does not belong to task '{task_id}'.",
-                    ),
-                    None,
+                raise CoordinationError(
+                    "receipt_not_found",
+                    f"Receipt '{receipt_id}' not found or does not belong to task '{task_id}'.",
                 )
         else:
             receipt = await self.get_latest_receipt(task_id, agent)
@@ -406,7 +423,7 @@ class CognitiveMemory:
                     task_id,
                     agent,
                 )
-                return (None, {"skip": True, "cited": None, "misleading": None, "ignored": []})
+                return {"skip": True, "cited": None, "misleading": None, "ignored": []}
 
         receipt_node_ids: set[str] = set()
         raw_ids = receipt.get("final_node_ids")
@@ -449,16 +466,13 @@ class CognitiveMemory:
             if nid not in cited_set and nid not in misleading_set and nid in existing_ids
         ]
 
-        return (
-            None,
-            {"skip": False, "cited": cited, "misleading": misleading, "ignored": ignored},
-        )
+        return {"skip": False, "cited": cited, "misleading": misleading, "ignored": ignored}
 
     async def apply_task_feedback(self, validated: dict[str, Any]) -> None:
         """Apply reinforcement side-effects using pre-validated data.
 
-        *validated* is the second element of a :meth:`validate_task_feedback`
-        success tuple. Runs after the task is completed (see that method).
+        *validated* is the return value of :meth:`validate_task_feedback`.
+        Runs after the task is completed (see :meth:`complete_task`).
         """
         if validated.get("skip"):
             return
@@ -476,6 +490,81 @@ class CognitiveMemory:
 
         if ignored:
             await self.reinforce_ignored(ignored)
+
+    async def complete_task(
+        self,
+        task_id: str,
+        agent: str,
+        *,
+        outcome: str | None = None,
+        cited_nodes: list[str] | None = None,
+        misleading_nodes: list[str] | None = None,
+        receipt_id: str | None = None,
+        now: datetime | None = None,
+    ) -> TaskCompletion:
+        """Complete ``task_id`` and learn from the agent's retrieval feedback.
+
+        Ordering is the contract: feedback is validated *before* the state
+        transition (so a bad receipt leaves the task open and reinforces
+        nothing), reinforcement is applied *after* it (so a task that is not
+        open reinforces nothing), then ``task.completed`` is emitted and the
+        newly ready dependents are collected. ``cited_nodes`` and
+        ``misleading_nodes`` both ``None`` means no feedback was offered.
+
+        Raises :class:`~lithos.errors.CoordinationError`: ``receipt_not_found``
+        from validation, ``task_not_found`` when the task is missing or not open.
+        """
+        assert self._coordination is not None, (
+            "CognitiveMemory.complete_task requires attach_coordination(...) before use."
+        )
+        validated: dict[str, Any] | None = None
+        if cited_nodes is not None or misleading_nodes is not None:
+            validated = await self.validate_task_feedback(
+                task_id=task_id,
+                agent=agent,
+                cited_nodes=cited_nodes,
+                misleading_nodes=misleading_nodes,
+                receipt_id=receipt_id,
+            )
+
+        updated_at = await self._coordination.complete_task(
+            task_id=task_id, agent=agent, outcome=outcome, now=now or datetime.now(UTC)
+        )
+        if updated_at is None:
+            raise CoordinationError(
+                "task_not_found", f"Task '{task_id}' not found or not in an open state."
+            )
+
+        if validated is not None:
+            logger.info(
+                "Applying task feedback reinforcement",
+                extra={
+                    "task_id": task_id,
+                    "agent": agent,
+                    "cited_count": len(validated.get("cited") or []),
+                    "misleading_count": len(validated.get("misleading") or []),
+                    "ignored_count": len(validated.get("ignored") or []),
+                },
+            )
+            await self.apply_task_feedback(validated)
+
+        await self._emit(
+            LithosEvent(
+                type=TASK_COMPLETED,
+                agent=agent,
+                payload={
+                    "task_id": task_id,
+                    "agent": agent,
+                    "outcome": outcome,
+                    "cited_nodes": json.dumps(cited_nodes),
+                    "misleading_nodes": json.dumps(misleading_nodes),
+                    "receipt_id": json.dumps(receipt_id),
+                    "updated_at": updated_at,
+                },
+            )
+        )
+        unblocked = await self._coordination.newly_unblocked_by(task_id)
+        return TaskCompletion(task_id=task_id, updated_at=updated_at, unblocked=tuple(unblocked))
 
     async def refresh_cached_counts(self) -> None:
         """Refresh the cached LCMA gauge values from the database.

@@ -62,7 +62,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "b9c2503030880c790e7bdf0d17ac232dee6e2cbda970949e7920b6b116ea7b50",
+  "source_hash": "cd50d9c16be4aecaf78290c47ab7a977ce0b2956b84267a3b7d0f8b2b092f0a3",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -89,7 +89,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 |---|---:|---:|---:|---|
 | `component_cycles` | 0 | 0 | 0 | invariant |
 | `cross_component_edges` | 74 | 74 | 0 | review |
-| `cross_module_private_refs` | 31 | 42 | 11 | invariant |
+| `cross_module_private_refs` | 30 | 42 | 12 | invariant |
 | `max_module_lines` | 2866 | 2900 | 34 | review |
 | `module_cycles` | 1 | 1 | 0 | invariant |
 | `modules_over_800_lines` | 12 | 12 | 0 | review |
@@ -171,7 +171,6 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_complexity | lithos.tools.read_search.register.lithos_list | 30 | 30 | review | — |
 | unchanged | function_complexity | lithos.tools.read_search.register.lithos_related | 19 | 19 | review | — |
 | unchanged | function_complexity | lithos.tools.read_search.register.lithos_search | 20 | 20 | review | — |
-| unchanged | function_complexity | lithos.tools.tasks.register.lithos_task_complete | 12 | 12 | review | — |
 | unchanged | function_complexity | lithos.watch_intake.WatchIntake.rename_on_disk | 15 | 15 | review | — |
 | unchanged | function_length | lithos.cli.extract_entities_cmd | 100 | 100 | review | — |
 | unchanged | function_length | lithos.cli.serve | 77 | 77 | review | — |
@@ -180,7 +179,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos.cli_reconcile.reconcile | 92 | 92 | review | — |
 | unchanged | function_length | lithos.cognitive_memory.CognitiveMemory.cache_lookup | 85 | 85 | review | — |
 | unchanged | function_length | lithos.cognitive_memory.CognitiveMemory.conflict_resolve | 111 | 111 | review | — |
-| unchanged | function_length | lithos.cognitive_memory.CognitiveMemory.validate_task_feedback | 87 | 87 | review | — |
+| unchanged | function_length | lithos.cognitive_memory.CognitiveMemory.validate_task_feedback | 82 | 82 | review | — |
 | unchanged | function_length | lithos.coordination.CoordinationService._apply_task_update | 106 | 106 | review | — |
 | unchanged | function_length | lithos.coordination.CoordinationService._compute_blockers | 79 | 79 | review | — |
 | unchanged | function_length | lithos.coordination.CoordinationService._migrate_tasks_ensure_resolved_at | 91 | 91 | review | — |
@@ -231,14 +230,13 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos.tools.read_search.register.lithos_related | 127 | 127 | review | — |
 | unchanged | function_length | lithos.tools.read_search.register.lithos_retrieve | 92 | 92 | review | — |
 | unchanged | function_length | lithos.tools.read_search.register.lithos_search | 174 | 174 | review | — |
-| unchanged | function_length | lithos.tools.tasks.register | 1148 | 1148 | review | register is a flat closure factory (complexity 1) over 18 separately measured lithos_task_* handlers: 375 of its 1148 lines are the agent-facing MCP docstrings and 118 are tool signatures, leaving ~32 lines of adapter code per handler. Domain grouping plus the late-binding rule in lithos.tools keep registration together; a lifecycle/task-graph split would yield two registers still far above 75 and reduce, not remove, the finding. Headroom is for wiring edits or one new handler, not orchestration — that belongs in the service layer (task 3706b7f7). (Lithos task dcfebfd1; PR #457. Revisit when register gains branching (complexity above 1), when Phase 4 priority/roll-up work touches the lifecycle vs task-graph seam anyway, or when the span exceeds 1250 (the exception then lapses and the finding returns unaccepted).) |
-| unchanged | function_length | lithos.tools.tasks.register.lithos_task_complete | 115 | 115 | review | — |
+| unchanged | function_length | lithos.tools.tasks.register | 1098 | 1098 | review | register is a flat closure factory (complexity 1) over 18 separately measured lithos_task_* handlers: 375 of its 1148 lines are the agent-facing MCP docstrings and 118 are tool signatures, leaving ~32 lines of adapter code per handler. Domain grouping plus the late-binding rule in lithos.tools keep registration together; a lifecycle/task-graph split would yield two registers still far above 75 and reduce, not remove, the finding. Headroom is for wiring edits or one new handler, not orchestration — that belongs in the service layer (task 3706b7f7). (Lithos task dcfebfd1; PR #457. Revisit when register gains branching (complexity above 1), when Phase 4 priority/roll-up work touches the lifecycle vs task-graph seam anyway, or when the span exceeds 1250 (the exception then lapses and the finding returns unaccepted).) |
 | unchanged | function_length | lithos.tools.tasks.register.lithos_task_create | 82 | 82 | review | — |
 | unchanged | function_length | lithos.tools.tasks.register.lithos_task_spawn | 77 | 77 | review | — |
 | unchanged | function_length | lithos.tools.tasks.register.lithos_task_update | 121 | 121 | review | — |
 | unchanged | function_length | lithos.watch_intake.WatchIntake.rename_on_disk | 82 | 82 | review | — |
 | unchanged | module_lines | lithos.cli | 1177 | 1177 | review | — |
-| unchanged | module_lines | lithos.cognitive_memory | 1369 | 1369 | review | — |
+| unchanged | module_lines | lithos.cognitive_memory | 1458 | 1458 | review | — |
 | unchanged | module_lines | lithos.coordination | 2866 | 2866 | review | — |
 | unchanged | module_lines | lithos.frontmatter_codec | 806 | 806 | review | — |
 | unchanged | module_lines | lithos.graph | 877 | 877 | review | — |
@@ -248,12 +246,12 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | module_lines | lithos.search | 2102 | 2102 | review | — |
 | unchanged | module_lines | lithos.server | 894 | 894 | review | — |
 | unchanged | module_lines | lithos.telemetry | 1311 | 1311 | review | — |
-| unchanged | module_lines | lithos.tools.tasks | 1209 | 1209 | review | — |
+| unchanged | module_lines | lithos.tools.tasks | 1157 | 1157 | review | — |
 - branch_coverage: missing; value —; scope not recorded; evidence not recorded
 - mutation: missing; value —; scope not recorded; evidence not recorded
-- Review lowering function_length exception for lithos.tools.tasks.register to 1148.
+- Review lowering function_length exception for lithos.tools.tasks.register to 1098.
 - Review lowering budget max_module_lines: actual 2866, accepted ceiling 2900.
-- Review lowering budget cross_module_private_refs: actual 31, accepted ceiling 42.
+- Review lowering budget cross_module_private_refs: actual 30, accepted ceiling 42.
 
 
 ## Quality evidence
@@ -288,10 +286,10 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
 | Codec | 1 | 806 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
-| CognitiveMemory | 1 | 1369 | 1151 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
+| CognitiveMemory | 1 | 1458 | 1230 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 618 | 424 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 3 | 3217 | 2717 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
-| Entrypoints | 13 | 6629 | 5398 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 15 |
+| Entrypoints | 13 | 6577 | 5354 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 14 |
 | Errors | 2 | 276 | 205 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 351 | 282 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1307 | 1086 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
@@ -307,7 +305,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **56**, lines: **29193**, SLOC: **23732**
+- Modules: **56**, lines: **29230**, SLOC: **23767**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -325,9 +323,9 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **927**, cyclomatic > 10: **73**
+- Functions: **928**, cyclomatic > 10: **72**
 - Cyclomatic distribution: median **2**, p90 **9**, max **70**
-- Function length (lines): median 14, p90 63, max 1148 (`lithos.tools.tasks.register`); over 75: **64**
+- Function length (lines): median 14, p90 64, max 1098 (`lithos.tools.tasks.register`); over 75: **63**
 
 Top 10 most complex functions:
 
@@ -339,7 +337,7 @@ Top 10 most complex functions:
 | 36 | 62 | `lithos.lcma.eval.scoring.compute_metrics` |
 | 33 | 207 | `lithos.search.SearchEngine.graph_search` |
 | 30 | 197 | `lithos.tools.read_search.register.lithos_list` |
-| 26 | 87 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
+| 26 | 82 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
 | 26 | 50 | `lithos.lcma.eval.report.summarize_calls` |
 | 26 | 103 | `lithos.search.TantivyIndex.search` |
 | 26 | 161 | `lithos.tools.notes.register.lithos_note_update` |
@@ -349,8 +347,8 @@ Top 10 most complex functions:
 Private-name reaches across module seams. Both counts can be pinned as
 `[budgets]` ratchets (`cross_module_private_refs`, `tests_private_imports`).
 
-- Cross-module private refs (src): **31**
-  - `lithos.tools.tasks -> lithos.server.LithosServer._emit (x8)`
+- Cross-module private refs (src): **30**
+  - `lithos.tools.tasks -> lithos.server.LithosServer._emit (x7)`
   - `lithos.tools.agents -> lithos.server.LithosServer._emit (x2)`
   - `lithos.tools.findings_stats -> lithos.server.LithosServer._config (x2)`
   - `lithos.tools.read_search -> lithos.server.LithosServer._config (x2)`
@@ -406,6 +404,6 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 ## Domain, tools & tests
 
-- Domain models: **44** (26 associations, 0 without docstrings)
+- Domain models: **45** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.73** (50613 test lines / 29193 source lines)
+- Test-to-source line ratio: **1.74** (50847 test lines / 29230 source lines)

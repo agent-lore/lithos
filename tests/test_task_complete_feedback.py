@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 
 from lithos.config import LithosConfig
+from lithos.events import TASK_COMPLETED
 from lithos.server import LithosServer
 
 pytestmark = pytest.mark.asyncio
@@ -399,15 +400,7 @@ class TestEventPayload:
         task_id = await _create_task(srv)
         node_ids = await _create_notes(srv, 2)
         await _insert_receipt(srv, "rcpt-evt", task_id, "test-agent", node_ids)
-
-        captured_events: list[Any] = []
-        original_emit = srv._emit
-
-        async def capture_emit(event: Any) -> None:
-            captured_events.append(event)
-            await original_emit(event)
-
-        srv._emit = capture_emit  # type: ignore[assignment]
+        queue = srv.event_bus.subscribe(event_types=[TASK_COMPLETED])
 
         await _call(
             srv,
@@ -419,10 +412,10 @@ class TestEventPayload:
             receipt_id="rcpt-evt",
         )
 
-        # Find TASK_COMPLETED event
-        tc_events = [e for e in captured_events if e.type == "task.completed"]
-        assert len(tc_events) == 1
-        payload = tc_events[0].payload
+        event = queue.get_nowait()
+        assert event.type == TASK_COMPLETED
+        assert queue.empty()
+        payload = event.payload
         assert json.loads(payload["cited_nodes"]) == [node_ids[0]]
         assert json.loads(payload["misleading_nodes"]) == [node_ids[1]]
         assert json.loads(payload["receipt_id"]) == "rcpt-evt"
