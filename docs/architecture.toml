@@ -114,7 +114,7 @@ component_cycles       = 0    # measured 2026-07; task 4a3836a9 extracted the co
 module_cycles          = 1    # server<->tools; the knowledge<->graph<->search<->provenance SCC broke when the codec moved out (task 4a3836a9); goal: 0
 modules_over_800_lines = 12   # incl. tools.tasks (985) split from server in #374; knowledge.py 2444→1773 (codec out) but still over. 11→12: frontmatter_codec (808) crossed in PR #411 — the #407 review fix (nested date-key normalization + total canonical_metadata_value) landed in a module already at 799; split candidate is the #306 metadata-value cluster (validate_metadata_match / extract_extra / normalize_yaml_dates / canonical_metadata_value), blocked today by _KNOWN_METADATA_KEYS living beside KnowledgeMetadata. Direction: down
 max_module_lines       = 2900 # stop-loss; largest today is coordination.py at 2823 after the agent registry moved out to lithos.agent_registry (#423 prep; was 3005 after task 6dbc3b80 CAS + tag set-ops and the PR #419 review hardenings). Ratcheted 3050→2900. Next split candidate: claims/findings
-cross_module_private_refs = 42  # measured 2026-07; server._emit/_config x12 etc. (normalize_datetime made public in task 4a3836a9); goal: 0
+cross_module_private_refs = 20  # measured 2026-11-04 after task 8a6c9418 made LithosServer.emit public (30→20: the ten tools→server._emit reaches); remaining: server._config x4, findings_stats cached counters, lcma internals. Prior: 42 measured 2026-07 (normalize_datetime made public in task 4a3836a9); goal: 0
 tests_private_imports     = 89  # measured 2026-09; test_telemetry alone is 46; direction: down. 91→89: parse_datetime went public in lithos.sqlite_datetime (#423 prep). 88→90: two white-box config-wiring tests import _rerank_fast / _usage_from_stats to prove the newly-exposed LcmaConfig rerank/usage fields actually change behaviour (task e7d8ef60, review finding 5). 90→91: the WS1 NoOp-instrument test uses test_telemetry.py's established _reset_for_testing idiom (19 prior uses in that file) to verify the five new lcma_llm_* metrics construct and record as no-ops (task 7387506b, PR #405 review).
 
 # MCP tool surface: modules scanned for @…tool()-decorated handlers (counted in
@@ -142,7 +142,7 @@ intake       = "Intake"
 projection   = "Provenance"
 memory       = "CognitiveMemory"
 event_bus    = "Events"
-_emit        = "Events"        # server-local wrapper around event_bus.emit
+emit         = "Events"        # server-local wrapper around event_bus.emit (public since task 8a6c9418)
 watch_intake = "Entrypoints"
 
 # Domain class diagram: which modules to scan for dataclasses / Pydantic models.
@@ -272,17 +272,18 @@ module_lines = "review"
 [[exceptions]]
 metric = "function_length"
 target = "lithos.tools.tasks.register"
-limit = 1250   # measured 1148 on 2026-11-04 (task dcfebfd1); 102 lines ≈ 9% headroom ≈ one average handler (~64 lines) or two feature-sized wiring edits (#412 +64, #415 +52, #419 +38, #436 +68)
+limit = 1100   # measured 1006 on 2026-11-04 (task 8a6c9418 moved the span/log preamble into tool_span: 1148 -> 1006); 94 lines ≈ 9% headroom ≈ one average handler (~56 lines) or two feature-sized wiring edits (#412 +64, #415 +52, #419 +38, #436 +68). Ratcheted 1250 -> 1100 to keep the same proportion
 reason = """\
 register is a flat closure factory (complexity 1) over 18 separately measured \
-lithos_task_* handlers: 375 of its 1148 lines are the agent-facing MCP docstrings \
-and 118 are tool signatures, leaving ~32 lines of adapter code per handler. \
+lithos_task_* handlers: 375 of its 1006 lines are the agent-facing MCP docstrings \
+and 118 are tool signatures, leaving ~28 lines of adapter code per handler (the \
+span/log preamble now lives in tool_span, task 8a6c9418). \
 Domain grouping plus the late-binding rule in lithos.tools keep registration \
 together; a lifecycle/task-graph split would yield two registers still far above \
 75 and reduce, not remove, the finding. Headroom is for wiring edits or one new \
 handler, not orchestration — that belongs in the service layer (task 3706b7f7)."""
 review = """\
-Lithos task dcfebfd1; PR #457. Revisit when register gains branching (complexity \
-above 1), when Phase 4 priority/roll-up work touches the lifecycle vs task-graph \
-seam anyway, or when the span exceeds 1250 (the exception then lapses and the \
-finding returns unaccepted)."""
+Lithos task dcfebfd1; PR #457; ratcheted in task 8a6c9418. Revisit when register \
+gains branching (complexity above 1), when Phase 4 priority/roll-up work touches \
+the lifecycle vs task-graph seam anyway, or when the span exceeds 1100 (the \
+exception then lapses and the finding returns unaccepted)."""

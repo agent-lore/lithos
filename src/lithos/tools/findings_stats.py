@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -13,12 +12,10 @@ from lithos.envelopes import invalid_input_envelope
 from lithos.events import FINDING_POSTED, LithosEvent
 from lithos.frontmatter_codec import normalize_datetime
 from lithos.telemetry import get_current_span, tool_metrics
-from lithos.tools._seam import tool_span
+from lithos.tools._seam import resolve_task_id, tool_span
 
 if TYPE_CHECKING:
     from lithos.server import LithosServer
-
-logger = logging.getLogger(__name__)
 
 
 def register(mcp: FastMCP, server: LithosServer) -> None:
@@ -49,15 +46,12 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             null when the task id is unknown — findings may be posted ahead
             of their task)
         """
-        task_id, task_title = await server.coordination.resolve_task_id(task_id)
+        task_id, task_title = await resolve_task_id(server.coordination, task_id)
         if knowledge_id is not None:
             # Lenient reference resolution: the stored link must be usable by
             # the task-context scout, which compares exact note ids.
             knowledge_id = server.knowledge.resolve_id_lenient(knowledge_id)
-        logger.info("lithos_finding_post task=%s agent=%s", task_id, agent)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
-        span.set_attribute("lithos.task_id", task_id)
         finding_id = await server.coordination.post_finding(
             task_id=task_id,
             agent=agent,
@@ -74,7 +68,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         if knowledge_id is not None:
             payload["knowledge_id"] = knowledge_id
 
-        await server._emit(
+        await server.emit(
             LithosEvent(
                 type=FINDING_POSTED,
                 agent=agent,
@@ -100,9 +94,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with findings list
         """
-        logger.info("lithos_finding_list task=%s", task_id)
         span = get_current_span()
-        span.set_attribute("lithos.task_id", task_id)
 
         since_dt = None
         if since:
@@ -111,7 +103,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             except ValueError:
                 return invalid_input_envelope(f"Invalid since datetime: {since}")
 
-        task_id, _ = await server.coordination.resolve_task_id(task_id)
+        task_id, _ = await resolve_task_id(server.coordination, task_id)
         findings = await server.coordination.list_findings(
             task_id=task_id,
             since=since_dt,
@@ -142,8 +134,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             stats, and health signals (index drift, broken links, expired
             claims, last-updated timestamps).
         """
-        logger.info("lithos_stats")
-
         # Get document count (from in-memory cache — always available)
         total_docs = server.knowledge.document_count
 

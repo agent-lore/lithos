@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import FastMCP
@@ -16,8 +15,6 @@ from lithos.tools._seam import tool_span
 if TYPE_CHECKING:
     from lithos.server import LithosServer
 
-logger = logging.getLogger(__name__)
-
 
 def register(mcp: FastMCP, server: LithosServer) -> None:
     """Register the memory/edge tools. See the late-binding rule in
@@ -25,7 +22,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("from_id", "to_id", "type"))
     async def lithos_edge_upsert(
         from_id: str,
         to_id: str,
@@ -62,8 +59,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         # persisted as a phantom endpoint.
         from_id = server.knowledge.resolve_id_lenient(from_id)
         to_id = server.knowledge.resolve_id_lenient(to_id)
-        logger.info("lithos_edge_upsert from=%s to=%s type=%s", from_id, to_id, type)
-
         if not namespace:
             return error_envelope("invalid_input", "namespace is required")
 
@@ -100,7 +95,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("from_id", "to_id", "type", "namespace"))
     async def lithos_edge_list(
         from_id: str | None = None,
         to_id: str | None = None,
@@ -123,7 +118,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             from_id = server.knowledge.resolve_id_lenient(from_id)
         if to_id is not None:
             to_id = server.knowledge.resolve_id_lenient(to_id)
-        logger.info("lithos_edge_list from=%s to=%s type=%s ns=%s", from_id, to_id, type, namespace)
         span = get_current_span()
 
         edges = await server.memory.edge_list(

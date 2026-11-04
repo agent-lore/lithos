@@ -356,6 +356,37 @@ class TestTelemetryIntegration:
         assert span_names.count("lithos.tool.conflict_resolve") == 1
         assert "lithos.memory.conflict_resolve" in span_names
 
+    async def test_task_claim_span_carries_agent_resolved_task_id_and_aspect(self, otel_server):
+        """The seam tags the well-known arguments; a prefix is replaced by the
+        resolved full id, so dashboards keyed on ``lithos.task_id`` see one
+        value per task however the caller spelled it (task 8a6c9418)."""
+        server, exporter = otel_server
+
+        created = await call_tool(
+            server, "lithos_task_create", {"title": "Span tags", "agent": "creator"}
+        )
+        full_id = created["task_id"]
+
+        result = await call_tool(
+            server,
+            "lithos_task_claim",
+            {"task_id": full_id[:8], "aspect": "impl", "agent": "claimer"},
+        )
+        assert result["success"] is True
+
+        spans = exporter.get_finished_spans()
+        claim_span = next(s for s in spans if s.name == "lithos.tool.task_claim")
+        attrs = dict(claim_span.attributes)
+        assert attrs["lithos.tool"] == "lithos_task_claim"
+        assert attrs["lithos.agent"] == "claimer"
+        assert attrs["lithos.task_id"] == full_id
+        assert attrs["lithos.aspect"] == "impl"
+        assert attrs["lithos.success"] is True
+
+        create_span = next(s for s in spans if s.name == "lithos.tool.task_create")
+        assert dict(create_span.attributes)["lithos.agent"] == "creator"
+        assert dict(create_span.attributes)["lithos.task_id"] == full_id
+
 
 class TestWriteDurationHistogram:
     """Tests for lithos.knowledge.write_duration_ms histogram (issue #89)."""

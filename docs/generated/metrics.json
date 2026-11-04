@@ -88,11 +88,11 @@
       }
     },
     "function_lengths": {
-      "max": 1098,
+      "max": 1006,
       "max_function": "lithos.tools.tasks.register",
       "median": 14,
-      "over_75": 63,
-      "p90": 64
+      "over_75": 62,
+      "p90": 62
     },
     "functions_over_10": 72,
     "max": 70,
@@ -101,7 +101,7 @@
     "top_functions": [
       {
         "complexity": 70,
-        "length": 366,
+        "length": 364,
         "qualname": "lithos.tools.notes.register.lithos_write"
       },
       {
@@ -126,7 +126,7 @@
       },
       {
         "complexity": 30,
-        "length": 197,
+        "length": 196,
         "qualname": "lithos.tools.read_search.register.lithos_list"
       },
       {
@@ -146,11 +146,11 @@
       },
       {
         "complexity": 26,
-        "length": 161,
+        "length": 159,
         "qualname": "lithos.tools.notes.register.lithos_note_update"
       }
     ],
-    "total_functions": 928
+    "total_functions": 932
   },
   "components": {
     "Codec": {
@@ -7666,15 +7666,6 @@
         "src/lithos/server.py"
       ]
     },
-    "lithos.server.LithosServer._emit": {
-      "complexity": 2,
-      "length": 6,
-      "module": "lithos.server",
-      "path": "src/lithos/server.py",
-      "paths": [
-        "src/lithos/server.py"
-      ]
-    },
     "lithos.server.LithosServer._get_health": {
       "complexity": 7,
       "length": 37,
@@ -7786,6 +7777,15 @@
     "lithos.server.LithosServer.config": {
       "complexity": 1,
       "length": 2,
+      "module": "lithos.server",
+      "path": "src/lithos/server.py",
+      "paths": [
+        "src/lithos/server.py"
+      ]
+    },
+    "lithos.server.LithosServer.emit": {
+      "complexity": 2,
+      "length": 6,
       "module": "lithos.server",
       "path": "src/lithos/server.py",
       "paths": [
@@ -8611,6 +8611,33 @@
         "src/lithos/tools/_seam.py"
       ]
     },
+    "lithos.tools._seam._Preamble.enter": {
+      "complexity": 7,
+      "length": 11,
+      "module": "lithos.tools._seam",
+      "path": "src/lithos/tools/_seam.py",
+      "paths": [
+        "src/lithos/tools/_seam.py"
+      ]
+    },
+    "lithos.tools._seam._Preamble.for_handler": {
+      "complexity": 7,
+      "length": 8,
+      "module": "lithos.tools._seam",
+      "path": "src/lithos/tools/_seam.py",
+      "paths": [
+        "src/lithos/tools/_seam.py"
+      ]
+    },
+    "lithos.tools._seam._TaskResolver.resolve_task_id": {
+      "complexity": 1,
+      "length": 1,
+      "module": "lithos.tools._seam",
+      "path": "src/lithos/tools/_seam.py",
+      "paths": [
+        "src/lithos/tools/_seam.py"
+      ]
+    },
     "lithos.tools._seam.resolve_note_id": {
       "complexity": 3,
       "length": 16,
@@ -8620,9 +8647,18 @@
         "src/lithos/tools/_seam.py"
       ]
     },
+    "lithos.tools._seam.resolve_task_id": {
+      "complexity": 1,
+      "length": 14,
+      "module": "lithos.tools._seam",
+      "path": "src/lithos/tools/_seam.py",
+      "paths": [
+        "src/lithos/tools/_seam.py"
+      ]
+    },
     "lithos.tools._seam.tool_span": {
       "complexity": 1,
-      "length": 51,
+      "length": 64,
       "module": "lithos.tools._seam",
       "path": "src/lithos/tools/_seam.py",
       "paths": [
@@ -8649,7 +8685,7 @@
     },
     "lithos.tools.agents.register": {
       "complexity": 1,
-      "length": 195,
+      "length": 191,
       "module": "lithos.tools.agents",
       "path": "src/lithos/tools/agents.py",
       "paths": [
@@ -8658,7 +8694,7 @@
     },
     "lithos.tools.agents.register.lithos_agent_archive": {
       "complexity": 4,
-      "length": 50,
+      "length": 49,
       "module": "lithos.tools.agents",
       "path": "src/lithos/tools/agents.py",
       "paths": [
@@ -8667,7 +8703,7 @@
     },
     "lithos.tools.agents.register.lithos_agent_info": {
       "complexity": 5,
-      "length": 27,
+      "length": 26,
       "module": "lithos.tools.agents",
       "path": "src/lithos/tools/agents.py",
       "paths": [
@@ -8676,7 +8712,7 @@
     },
     "lithos.tools.agents.register.lithos_agent_list": {
       "complexity": 6,
-      "length": 47,
+      "length": 46,
       "module": "lithos.tools.agents",
       "path": "src/lithos/tools/agents.py",
       "paths": [
@@ -8685,7 +8721,7 @@
     },
     "lithos.tools.agents.register.lithos_agent_register": {
       "complexity": 4,
-      "length": 52,
+      "length": 51,
       "module": "lithos.tools.agents",
       "path": "src/lithos/tools/agents.py",
       "paths": [
@@ -8694,7 +8730,7 @@
     },
     "lithos.tools.findings_stats.register": {
       "complexity": 1,
-      "length": 201,
+      "length": 194,
       "module": "lithos.tools.findings_stats",
       "path": "src/lithos/tools/findings_stats.py",
       "paths": [
@@ -8703,7 +8739,7 @@
     },
     "lithos.tools.findings_stats.register.lithos_finding_list": {
       "complexity": 5,
-      "length": 43,
+      "length": 41,
       "module": "lithos.tools.findings_stats",
       "path": "src/lithos/tools/findings_stats.py",
       "paths": [
@@ -8712,7 +8748,7 @@
     },
     "lithos.tools.findings_stats.register.lithos_finding_post": {
       "complexity": 3,
-      "length": 55,
+      "length": 52,
       "module": "lithos.tools.findings_stats",
       "path": "src/lithos/tools/findings_stats.py",
       "paths": [
@@ -8721,7 +8757,7 @@
     },
     "lithos.tools.findings_stats.register.lithos_stats": {
       "complexity": 3,
-      "length": 88,
+      "length": 86,
       "module": "lithos.tools.findings_stats",
       "path": "src/lithos/tools/findings_stats.py",
       "paths": [
@@ -8739,7 +8775,7 @@
     },
     "lithos.tools.memory_edges.register": {
       "complexity": 1,
-      "length": 211,
+      "length": 208,
       "module": "lithos.tools.memory_edges",
       "path": "src/lithos/tools/memory_edges.py",
       "paths": [
@@ -8766,7 +8802,7 @@
     },
     "lithos.tools.memory_edges.register.lithos_edge_list": {
       "complexity": 3,
-      "length": 34,
+      "length": 33,
       "module": "lithos.tools.memory_edges",
       "path": "src/lithos/tools/memory_edges.py",
       "paths": [
@@ -8775,7 +8811,7 @@
     },
     "lithos.tools.memory_edges.register.lithos_edge_upsert": {
       "complexity": 6,
-      "length": 71,
+      "length": 69,
       "module": "lithos.tools.memory_edges",
       "path": "src/lithos/tools/memory_edges.py",
       "paths": [
@@ -8784,7 +8820,7 @@
     },
     "lithos.tools.notes.register": {
       "complexity": 1,
-      "length": 571,
+      "length": 565,
       "module": "lithos.tools.notes",
       "path": "src/lithos/tools/notes.py",
       "paths": [
@@ -8793,7 +8829,7 @@
     },
     "lithos.tools.notes.register.lithos_delete": {
       "complexity": 4,
-      "length": 30,
+      "length": 28,
       "module": "lithos.tools.notes",
       "path": "src/lithos/tools/notes.py",
       "paths": [
@@ -8802,7 +8838,7 @@
     },
     "lithos.tools.notes.register.lithos_note_update": {
       "complexity": 26,
-      "length": 161,
+      "length": 159,
       "module": "lithos.tools.notes",
       "path": "src/lithos/tools/notes.py",
       "paths": [
@@ -8811,7 +8847,7 @@
     },
     "lithos.tools.notes.register.lithos_write": {
       "complexity": 70,
-      "length": 366,
+      "length": 364,
       "module": "lithos.tools.notes",
       "path": "src/lithos/tools/notes.py",
       "paths": [
@@ -8820,7 +8856,7 @@
     },
     "lithos.tools.read_search.register": {
       "complexity": 1,
-      "length": 739,
+      "length": 719,
       "module": "lithos.tools.read_search",
       "path": "src/lithos/tools/read_search.py",
       "paths": [
@@ -8829,7 +8865,7 @@
     },
     "lithos.tools.read_search.register.lithos_list": {
       "complexity": 30,
-      "length": 197,
+      "length": 196,
       "module": "lithos.tools.read_search",
       "path": "src/lithos/tools/read_search.py",
       "paths": [
@@ -8838,7 +8874,7 @@
     },
     "lithos.tools.read_search.register.lithos_node_stats": {
       "complexity": 3,
-      "length": 24,
+      "length": 23,
       "module": "lithos.tools.read_search",
       "path": "src/lithos/tools/read_search.py",
       "paths": [
@@ -8847,7 +8883,7 @@
     },
     "lithos.tools.read_search.register.lithos_read": {
       "complexity": 7,
-      "length": 75,
+      "length": 74,
       "module": "lithos.tools.read_search",
       "path": "src/lithos/tools/read_search.py",
       "paths": [
@@ -8856,7 +8892,7 @@
     },
     "lithos.tools.read_search.register.lithos_related": {
       "complexity": 19,
-      "length": 127,
+      "length": 123,
       "module": "lithos.tools.read_search",
       "path": "src/lithos/tools/read_search.py",
       "paths": [
@@ -8865,7 +8901,7 @@
     },
     "lithos.tools.read_search.register.lithos_retrieve": {
       "complexity": 3,
-      "length": 92,
+      "length": 81,
       "module": "lithos.tools.read_search",
       "path": "src/lithos/tools/read_search.py",
       "paths": [
@@ -8874,7 +8910,7 @@
     },
     "lithos.tools.read_search.register.lithos_search": {
       "complexity": 20,
-      "length": 174,
+      "length": 173,
       "module": "lithos.tools.read_search",
       "path": "src/lithos/tools/read_search.py",
       "paths": [
@@ -8892,7 +8928,7 @@
     },
     "lithos.tools.read_search.register.lithos_tags": {
       "complexity": 4,
-      "length": 18,
+      "length": 17,
       "module": "lithos.tools.read_search",
       "path": "src/lithos/tools/read_search.py",
       "paths": [
@@ -8919,7 +8955,7 @@
     },
     "lithos.tools.tasks.register": {
       "complexity": 1,
-      "length": 1098,
+      "length": 1006,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -8928,7 +8964,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_blocked": {
       "complexity": 4,
-      "length": 41,
+      "length": 40,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -8937,7 +8973,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_cancel": {
       "complexity": 2,
-      "length": 49,
+      "length": 46,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -8946,7 +8982,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_children": {
       "complexity": 1,
-      "length": 37,
+      "length": 30,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -8955,7 +8991,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_claim": {
       "complexity": 2,
-      "length": 52,
+      "length": 48,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -8963,8 +8999,8 @@
       ]
     },
     "lithos.tools.tasks.register.lithos_task_complete": {
-      "complexity": 4,
-      "length": 65,
+      "complexity": 2,
+      "length": 51,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -8973,7 +9009,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_create": {
       "complexity": 6,
-      "length": 82,
+      "length": 80,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -8982,7 +9018,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_edge_delete": {
       "complexity": 1,
-      "length": 64,
+      "length": 56,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -8991,7 +9027,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_edge_list": {
       "complexity": 2,
-      "length": 32,
+      "length": 29,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9000,7 +9036,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_edge_upsert": {
       "complexity": 1,
-      "length": 62,
+      "length": 54,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9009,7 +9045,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_get": {
       "complexity": 2,
-      "length": 32,
+      "length": 29,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9017,8 +9053,8 @@
       ]
     },
     "lithos.tools.tasks.register.lithos_task_list": {
-      "complexity": 5,
-      "length": 72,
+      "complexity": 4,
+      "length": 61,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9027,7 +9063,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_ready": {
       "complexity": 4,
-      "length": 50,
+      "length": 43,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9036,7 +9072,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_release": {
       "complexity": 2,
-      "length": 45,
+      "length": 41,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9045,7 +9081,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_renew": {
       "complexity": 2,
-      "length": 43,
+      "length": 39,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9054,7 +9090,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_reopen": {
       "complexity": 2,
-      "length": 62,
+      "length": 59,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9063,7 +9099,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_spawn": {
       "complexity": 1,
-      "length": 77,
+      "length": 70,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9072,7 +9108,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_status": {
       "complexity": 3,
-      "length": 38,
+      "length": 35,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9081,7 +9117,7 @@
     },
     "lithos.tools.tasks.register.lithos_task_update": {
       "complexity": 9,
-      "length": 121,
+      "length": 118,
       "module": "lithos.tools.tasks",
       "path": "src/lithos/tools/tasks.py",
       "paths": [
@@ -9984,7 +10020,7 @@
       "seams": "measured",
       "structure": "measured"
     },
-    "config_hash": "7f33f5e89ef38f65a77a5c344120f02e494a59d7c1cab88f2cfcc44fcc77eeff",
+    "config_hash": "026230479f3c91827e7aa1876ec2ca4d5423feb1f5eeef7e8e2bb2a5ee5681b6",
     "definitions": {
       "complexity": 1,
       "structure": 1,
@@ -10031,7 +10067,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "cd50d9c16be4aecaf78290c47ab7a977ce0b2956b84267a3b7d0f8b2b092f0a3",
+    "source_hash": "8e5f952f390e061456de5ef14ad270227b05e47d6008b4b3e6b6ab307d9ea488",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -10424,59 +10460,59 @@
     },
     "lithos.tools._seam": {
       "component": "Entrypoints",
-      "functions": 5,
-      "lines": 93,
-      "max_complexity": 4,
+      "functions": 9,
+      "lines": 172,
+      "max_complexity": 7,
       "path": "src/lithos/tools/_seam.py",
-      "sloc": 70
+      "sloc": 134
     },
     "lithos.tools.agents": {
       "component": "Entrypoints",
       "functions": 5,
-      "lines": 217,
+      "lines": 210,
       "max_complexity": 6,
       "path": "src/lithos/tools/agents.py",
-      "sloc": 181
+      "sloc": 175
     },
     "lithos.tools.findings_stats": {
       "component": "Entrypoints",
       "functions": 5,
-      "lines": 224,
+      "lines": 214,
       "max_complexity": 5,
       "path": "src/lithos/tools/findings_stats.py",
-      "sloc": 162
+      "sloc": 154
     },
     "lithos.tools.memory_edges": {
       "component": "Entrypoints",
       "functions": 5,
-      "lines": 232,
+      "lines": 226,
       "max_complexity": 6,
       "path": "src/lithos/tools/memory_edges.py",
-      "sloc": 195
+      "sloc": 191
     },
     "lithos.tools.notes": {
       "component": "Entrypoints",
       "functions": 4,
-      "lines": 600,
+      "lines": 594,
       "max_complexity": 70,
       "path": "src/lithos/tools/notes.py",
-      "sloc": 503
+      "sloc": 497
     },
     "lithos.tools.read_search": {
       "component": "Entrypoints",
       "functions": 9,
-      "lines": 772,
+      "lines": 752,
       "max_complexity": 30,
       "path": "src/lithos/tools/read_search.py",
-      "sloc": 634
+      "sloc": 614
     },
     "lithos.tools.tasks": {
       "component": "Entrypoints",
       "functions": 20,
-      "lines": 1157,
+      "lines": 1062,
       "max_complexity": 9,
       "path": "src/lithos/tools/tasks.py",
-      "sloc": 1050
+      "sloc": 956
     },
     "lithos.watch_intake": {
       "component": "Entrypoints",
@@ -10500,7 +10536,7 @@
     "actuals": {
       "component_cycles": 0,
       "cross_component_edges": 74,
-      "cross_module_private_refs": 30,
+      "cross_module_private_refs": 20,
       "max_module_lines": 2866,
       "module_cycles": 1,
       "modules_over_800_lines": 12,
@@ -10509,7 +10545,7 @@
     "budgets": {
       "component_cycles": 0,
       "cross_component_edges": 74,
-      "cross_module_private_refs": 42,
+      "cross_module_private_refs": 20,
       "max_module_lines": 2900,
       "module_cycles": 1,
       "modules_over_800_lines": 12,
@@ -10519,10 +10555,10 @@
     "enforce_worsened": false,
     "exceptions": [
       {
-        "limit": 1250,
+        "limit": 1100,
         "metric": "function_length",
-        "reason": "register is a flat closure factory (complexity 1) over 18 separately measured lithos_task_* handlers: 375 of its 1148 lines are the agent-facing MCP docstrings and 118 are tool signatures, leaving ~32 lines of adapter code per handler. Domain grouping plus the late-binding rule in lithos.tools keep registration together; a lifecycle/task-graph split would yield two registers still far above 75 and reduce, not remove, the finding. Headroom is for wiring edits or one new handler, not orchestration \u2014 that belongs in the service layer (task 3706b7f7).",
-        "review": "Lithos task dcfebfd1; PR #457. Revisit when register gains branching (complexity above 1), when Phase 4 priority/roll-up work touches the lifecycle vs task-graph seam anyway, or when the span exceeds 1250 (the exception then lapses and the finding returns unaccepted).",
+        "reason": "register is a flat closure factory (complexity 1) over 18 separately measured lithos_task_* handlers: 375 of its 1006 lines are the agent-facing MCP docstrings and 118 are tool signatures, leaving ~28 lines of adapter code per handler (the span/log preamble now lives in tool_span, task 8a6c9418). Domain grouping plus the late-binding rule in lithos.tools keep registration together; a lifecycle/task-graph split would yield two registers still far above 75 and reduce, not remove, the finding. Headroom is for wiring edits or one new handler, not orchestration \u2014 that belongs in the service layer (task 3706b7f7).",
+        "review": "Lithos task dcfebfd1; PR #457; ratcheted in task 8a6c9418. Revisit when register gains branching (complexity above 1), when Phase 4 priority/roll-up work touches the lifecycle vs task-graph seam anyway, or when the span exceeds 1100 (the exception then lapses and the finding returns unaccepted).",
         "target": "lithos.tools.tasks.register"
       }
     ],
@@ -10548,8 +10584,6 @@
   "schema": 1,
   "seams": {
     "cross_module_private_detail": [
-      "lithos.tools.tasks -> lithos.server.LithosServer._emit (x7)",
-      "lithos.tools.agents -> lithos.server.LithosServer._emit (x2)",
       "lithos.tools.findings_stats -> lithos.server.LithosServer._config (x2)",
       "lithos.tools.read_search -> lithos.server.LithosServer._config (x2)",
       "lithos.cognitive_memory -> lithos.lcma.retrieve._run_retrieve_impl",
@@ -10566,11 +10600,10 @@
       "lithos.lcma.stats -> lithos.telemetry._LithosMetrics",
       "lithos.tools.findings_stats -> lithos.server.LithosServer._cached_active_claims",
       "lithos.tools.findings_stats -> lithos.server.LithosServer._cached_agent_count",
-      "lithos.tools.findings_stats -> lithos.server.LithosServer._emit",
       "lithos.tools.notes -> lithos.knowledge._UNSET",
       "lithos.tools.notes -> lithos.knowledge._UnsetType"
     ],
-    "cross_module_private_refs": 30,
+    "cross_module_private_refs": 20,
     "tests_private_detail": [
       "tests/test_telemetry.py -> lithos.telemetry._reset_for_testing (x19)",
       "tests/test_telemetry.py -> lithos.telemetry._lcma_metrics_registered (x8)",
@@ -10648,14 +10681,14 @@
         "sloc": 2717
       },
       "Entrypoints": {
-        "classes": 5,
-        "functions": 151,
+        "classes": 7,
+        "functions": 155,
         "largest_module": "lithos.cli",
         "largest_module_lines": 1177,
-        "lines": 6577,
+        "lines": 6512,
         "modules": 13,
-        "public_symbols": 37,
-        "sloc": 5354
+        "public_symbols": 38,
+        "sloc": 5280
       },
       "Errors": {
         "classes": 12,
@@ -10794,13 +10827,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 29230,
+    "total_lines": 29165,
     "total_modules": 56,
-    "total_sloc": 23767
+    "total_sloc": 23693
   },
   "tests": {
-    "ratio": 1.74,
-    "src_lines": 29230,
-    "test_lines": 50847
+    "ratio": 1.75,
+    "src_lines": 29165,
+    "test_lines": 51016
   }
 }

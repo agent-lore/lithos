@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -17,8 +16,6 @@ from lithos.tools._seam import tool_span
 if TYPE_CHECKING:
     from lithos.server import LithosServer
 
-logger = logging.getLogger(__name__)
-
 
 def register(mcp: FastMCP, server: LithosServer) -> None:
     """Register the agent-registry tools. See the late-binding rule in
@@ -26,7 +23,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("id", "type"))
     async def lithos_agent_register(
         id: str,
         name: str | None = None,
@@ -50,7 +47,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with success and created booleans, plus warnings (list)
         """
-        logger.info("lithos_agent_register id=%s type=%s", id, type)
         span = get_current_span()
         span.set_attribute("lithos.agent.id", id)
         success, created = await server.coordination.register_agent(
@@ -62,7 +58,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span.set_attribute("lithos.created", created)
 
         if success:
-            await server._emit(
+            await server.emit(
                 LithosEvent(
                     type=AGENT_REGISTERED,
                     agent=id,
@@ -82,7 +78,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("id",))
     async def lithos_agent_archive(
         id: str,
         agent: str,
@@ -105,7 +101,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             Dict with success, id, archived_at and already_archived; or the
             canonical error envelope with code "agent_not_found"
         """
-        logger.info("lithos_agent_archive id=%s agent=%s", id, agent)
         span = get_current_span()
         span.set_attribute("lithos.agent.id", id)
         # The archiver's activity counts — except when it is archiving
@@ -119,7 +114,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span.set_attribute("lithos.created", newly)
 
         if newly:
-            await server._emit(
+            await server.emit(
                 LithosEvent(
                     type=AGENT_ARCHIVED,
                     agent=agent,
@@ -136,7 +131,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("id",))
     async def lithos_agent_info(
         id: str,
     ) -> dict[str, Any] | None:
@@ -148,7 +143,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Agent info dict or None if not found
         """
-        logger.info("lithos_agent_info id=%s", id)
         span = get_current_span()
         span.set_attribute("lithos.agent.id", id)
         agent = await server.coordination.get_agent(id)
@@ -167,7 +161,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("type",))
     async def lithos_agent_list(
         type: str | None = None,
         active_since: str | None = None,
@@ -186,7 +180,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with agents list
         """
-        logger.info("lithos_agent_list type=%s", type)
         span = get_current_span()
 
         since_dt = None

@@ -16,7 +16,7 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 | `lithos.pipeline` | S | 1 | 1 |
 | `lithos.server` | L | 1 | 2 |
 | `lithos.tools` | XS | 0 | 1 |
-| `lithos.tools._seam` | XS | 0 | 2 |
+| `lithos.tools._seam` | S | 0 | 3 |
 | `lithos.tools.agents` | S | 0 | 1 |
 | `lithos.tools.findings_stats` | S | 0 | 1 |
 | `lithos.tools.memory_edges` | S | 0 | 1 |
@@ -67,6 +67,7 @@ CLI, MCP server, tool handlers, filesystem watcher — the outward-facing surfac
 
 ### `lithos.tools._seam`
 - def `tool_span` — Run the handler inside a ``lithos.tool.<short>`` span.
+- def `resolve_task_id` — Resolve a task id (or prefix) for a handler and re-tag the span.
 - def `resolve_note_id` — Resolve a note id (or prefix) for a handler, mapping the loud failures.
 
 ### `lithos.tools.agents`

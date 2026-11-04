@@ -36,7 +36,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("id", "path"))
     async def lithos_read(
         id: str | None = None,
         path: str | None = None,
@@ -66,7 +66,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             if isinstance(resolved, dict):
                 return resolved
             id, _ = resolved
-        logger.info("lithos_read id=%s path=%s", id, path)
         span = get_current_span()
         if id:
             span.set_attribute("lithos.id", id)
@@ -115,7 +114,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("mode", "limit"))
     async def lithos_search(
         query: str,
         limit: int = 10,
@@ -174,7 +173,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             Dict with results list containing id, title, snippet, score, path,
             source_url, updated_at, is_stale, derived_from_ids
         """
-        logger.info("lithos_search mode=%s query_len=%d limit=%d", mode, len(query), limit)
         span = get_current_span()
         span.set_attribute("lithos.query.length", len(query))
         span.set_attribute(
@@ -293,7 +291,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("limit", "agent_id", "namespace_filter", "surface_conflicts"))
     async def lithos_retrieve(
         query: str,
         limit: int = 10,
@@ -332,17 +330,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             degraded-mode signal ``degraded`` (bool) / ``failed_scouts`` (names
             of any scouts whose backend raised — empty when all scouts ran).
         """
-        logger.info(
-            "lithos_retrieve: called",
-            extra={
-                "query_len": len(query),
-                "limit": limit,
-                "agent_id": agent_id,
-                "task_id": task_id,
-                "namespace_filter": namespace_filter,
-                "surface_conflicts": surface_conflicts,
-            },
-        )
         span = get_current_span()
         span.set_attribute("lithos.query.length", len(query))
         span.set_attribute("lithos.limit", limit)
@@ -389,7 +376,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("limit", "offset"))
     async def lithos_list(
         path_prefix: str | None = None,
         tags: list[str] | None = None,
@@ -438,7 +425,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with items list and total count
         """
-        logger.info("lithos_list limit=%d offset=%d", limit, offset)
         span = get_current_span()
         span.set_attribute("lithos.limit", limit)
 
@@ -592,7 +578,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("id", "include", "depth", "namespace"))
     async def lithos_related(
         id: str,
         include: list[str] | None = None,
@@ -649,10 +635,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         if isinstance(resolved, dict):
             return resolved
         id, _ = resolved
-        logger.info(
-            "lithos_related: called",
-            extra={"id": id, "include": include, "depth": depth, "namespace": namespace},
-        )
         span = get_current_span()
         span.set_attribute("lithos.id", id)
 
@@ -723,7 +705,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("prefix",))
     async def lithos_tags(
         prefix: str | None = None,
     ) -> dict[str, dict[str, int]]:
@@ -735,7 +717,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with tags mapping tag name to count
         """
-        logger.info("lithos_tags prefix=%s", prefix)
         span = get_current_span()
         tags = await server.knowledge.get_all_tags()
         if prefix is not None:
@@ -745,7 +726,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("node_id",))
     async def lithos_node_stats(
         node_id: str,
     ) -> dict[str, Any]:
@@ -764,7 +745,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         if isinstance(resolved, dict):
             return resolved
         node_id, _ = resolved
-        logger.info("lithos_node_stats node_id=%s", node_id)
         span = get_current_span()
         span.set_attribute("lithos.node_id", node_id)
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -21,12 +20,10 @@ from lithos.events import (
 )
 from lithos.frontmatter_codec import validate_metadata_match
 from lithos.telemetry import get_current_span, tool_metrics
-from lithos.tools._seam import tool_span
+from lithos.tools._seam import resolve_task_id, tool_span
 
 if TYPE_CHECKING:
     from lithos.server import LithosServer
-
-logger = logging.getLogger(__name__)
 
 
 def _serialize_task_record(task: Task | TaskStatus) -> dict[str, Any]:
@@ -62,7 +59,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("title",))
     async def lithos_task_create(
         title: str,
         agent: str,
@@ -104,9 +101,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             parent_task_id when supplied; or an error envelope on validation
             failure.
         """
-        logger.info("lithos_task_create agent=%s title=%r", agent, title)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
         if parent_task_id is not None:
             parent_task_id, _ = await server.coordination.resolve_task_id(
                 parent_task_id, field="parent_task_id"
@@ -131,7 +126,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         )
         span.set_attribute("lithos.task_id", task_id)
 
-        await server._emit(
+        await server.emit(
             LithosEvent(
                 type=TASK_CREATED,
                 agent=agent,
@@ -232,11 +227,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 "add_tags, or remove_tags must be provided",
             )
 
-        task_id, task_title = await server.coordination.resolve_task_id(task_id)
-        logger.info("lithos_task_update task=%s agent=%s", task_id, agent)
+        task_id, task_title = await resolve_task_id(server.coordination, task_id)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
-        span.set_attribute("lithos.task_id", task_id)
         # The committed stamp comes back from the coordination layer: under a
         # CAS guard (or a merge-path write) it can advance strictly past the
         # prior stamp (#420), so the wall-clock value here is only an input.
@@ -255,7 +247,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span.set_attribute("lithos.success", updated_at is not None)
 
         if updated_at is not None:
-            await server._emit(
+            await server.emit(
                 LithosEvent(
                     type=TASK_UPDATED,
                     agent=agent,
@@ -291,12 +283,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with success, expires_at, and the resolved task_id + title
         """
-        task_id, task_title = await server.coordination.resolve_task_id(task_id)
-        logger.info("lithos_task_claim task=%s aspect=%s agent=%s", task_id, aspect, agent)
+        task_id, task_title = await resolve_task_id(server.coordination, task_id)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
-        span.set_attribute("lithos.task_id", task_id)
-        span.set_attribute("lithos.aspect", aspect)
         success, expires_at = await server.coordination.claim_task(
             task_id=task_id,
             aspect=aspect,
@@ -312,7 +300,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 "task not found, not open, or aspect already claimed by another agent.",
             )
 
-        await server._emit(
+        await server.emit(
             LithosEvent(
                 type=TASK_CLAIMED,
                 agent=agent,
@@ -347,12 +335,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with success, new_expires_at, and the resolved task_id + title
         """
-        task_id, task_title = await server.coordination.resolve_task_id(task_id)
-        logger.info("lithos_task_renew task=%s aspect=%s agent=%s", task_id, aspect, agent)
+        task_id, task_title = await resolve_task_id(server.coordination, task_id)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
-        span.set_attribute("lithos.task_id", task_id)
-        span.set_attribute("lithos.aspect", aspect)
         success, new_expires = await server.coordination.renew_claim(
             task_id=task_id,
             aspect=aspect,
@@ -393,12 +377,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             Dict with success and the resolved task_id + title, or error
             envelope if no matching claim
         """
-        task_id, task_title = await server.coordination.resolve_task_id(task_id)
-        logger.info("lithos_task_release task=%s aspect=%s agent=%s", task_id, aspect, agent)
+        task_id, task_title = await resolve_task_id(server.coordination, task_id)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
-        span.set_attribute("lithos.task_id", task_id)
-        span.set_attribute("lithos.aspect", aspect)
         success = await server.coordination.release_claim(
             task_id=task_id,
             aspect=aspect,
@@ -413,7 +393,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 f"aspect '{aspect}', agent '{agent}'.",
             )
 
-        await server._emit(
+        await server.emit(
             LithosEvent(
                 type=TASK_RELEASED,
                 agent=agent,
@@ -425,7 +405,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("receipt_id",))
     async def lithos_task_complete(
         task_id: str,
         agent: str,
@@ -451,23 +431,9 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             Dict with success, unblocked, updated_at, and the resolved
             task_id + title; or error envelope if task not found or not open
         """
-        task_id, task_title = await server.coordination.resolve_task_id(task_id)
+        task_id, task_title = await resolve_task_id(server.coordination, task_id)
         outcome_len = len(outcome) if outcome else 0
-        logger.info(
-            "lithos_task_complete: called",
-            extra={
-                "task_id": task_id,
-                "agent": agent,
-                "outcome_provided": outcome is not None,
-                "outcome_len": outcome_len,
-                "cited_count": len(cited_nodes) if cited_nodes is not None else 0,
-                "misleading_count": len(misleading_nodes) if misleading_nodes is not None else 0,
-                "receipt_id": receipt_id,
-            },
-        )
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
-        span.set_attribute("lithos.task_id", task_id)
         span.set_attribute("lithos.outcome_provided", outcome is not None)
         span.set_attribute("lithos.outcome_len", outcome_len)
 
@@ -494,7 +460,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("reason",))
     async def lithos_task_cancel(
         task_id: str,
         agent: str,
@@ -511,10 +477,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             Dict with success, updated_at, and the resolved task_id + title
         """
         task_id, task_title = await server.coordination.resolve_task_id(task_id)
-        logger.info("lithos_task_cancel task=%s agent=%s reason=%s", task_id, agent, reason)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
-        span.set_attribute("lithos.task_id", task_id)
         updated_at = await server.coordination.cancel_task(
             task_id=task_id,
             agent=agent,
@@ -524,7 +487,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         span.set_attribute("lithos.success", updated_at is not None)
 
         if updated_at is not None:
-            await server._emit(
+            await server.emit(
                 LithosEvent(
                     type=TASK_CANCELLED,
                     agent=agent,
@@ -575,10 +538,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             "message": ...}``.
         """
         task_id, task_title = await server.coordination.resolve_task_id(task_id)
-        logger.info("lithos_task_reopen task=%s agent=%s", task_id, agent)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
-        span.set_attribute("lithos.task_id", task_id)
         prior_status, prior_outcome, updated_at = await server.coordination.reopen_task(
             task_id=task_id, agent=agent, now=datetime.now(UTC)
         )
@@ -588,7 +548,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             summary += f"; prior outcome: {prior_outcome}"
         await server.coordination.post_finding(task_id=task_id, agent=agent, summary=summary)
 
-        await server._emit(
+        await server.emit(
             LithosEvent(
                 type=TASK_REOPENED,
                 agent=agent,
@@ -613,7 +573,10 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(
+        map_coordination_error=True,
+        log_args=("status", "tags", "since", "resolved_since", "with_claims"),
+    )
     async def lithos_task_list(
         agent: str | None = None,
         status: str | None = None,
@@ -653,18 +616,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             created_by, created_at, resolved_at, updated_at, tags, metadata,
             outcome, and (when with_claims) claims.
         """
-        logger.info(
-            "lithos_task_list agent=%s status=%s tags=%s since=%s resolved_since=%s with_claims=%s",
-            agent,
-            status,
-            tags,
-            since,
-            resolved_since,
-            with_claims,
-        )
         span = get_current_span()
-        if agent:
-            span.set_attribute("lithos.agent", agent)
         if status:
             span.set_attribute("lithos.status", status)
         span.set_attribute("lithos.with_claims", with_claims)
@@ -689,7 +641,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("from_task_id", "to_task_id", "type"))
     async def lithos_task_edge_upsert(
         from_task_id: str,
         to_task_id: str,
@@ -728,15 +680,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         to_task_id, to_title = await server.coordination.resolve_task_id(
             to_task_id, field="to_task_id"
         )
-        logger.info(
-            "lithos_task_edge_upsert from=%s to=%s type=%s agent=%s",
-            from_task_id,
-            to_task_id,
-            type,
-            agent,
-        )
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.edge_type", type)
         await server.coordination.upsert_task_edge(
             from_task_id=from_task_id,
@@ -755,7 +699,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("from_task_id", "to_task_id", "type"))
     async def lithos_task_edge_delete(
         from_task_id: str,
         to_task_id: str,
@@ -796,15 +740,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         to_task_id, to_title = await server.coordination.resolve_task_id(
             to_task_id, field="to_task_id"
         )
-        logger.info(
-            "lithos_task_edge_delete from=%s to=%s type=%s agent=%s",
-            from_task_id,
-            to_task_id,
-            type,
-            agent,
-        )
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.edge_type", type)
         await server.coordination.delete_task_edge(
             from_task_id=from_task_id,
@@ -823,7 +759,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("direction",))
     async def lithos_task_edge_list(
         task_id: str,
         direction: str = "both",
@@ -841,15 +777,12 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             ``{"edges": [...]}`` — each edge carries from/to/type, its
             ``direction`` relative to ``task_id``, metadata, and provenance.
         """
-        logger.info("lithos_task_edge_list task=%s direction=%s", task_id, direction)
-        span = get_current_span()
-        span.set_attribute("lithos.task_id", task_id)
         if direction not in ("incoming", "outgoing", "both"):
             return error_envelope(
                 "invalid_input",
                 f"direction must be 'incoming', 'outgoing', or 'both', got {direction!r}.",
             )
-        task_id, _ = await server.coordination.resolve_task_id(task_id)
+        task_id, _ = await resolve_task_id(server.coordination, task_id)
         edges = await server.coordination.list_task_edges(
             task_id=task_id,
             direction=direction,
@@ -859,7 +792,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("project", "tags", "limit", "with_claims"))
     async def lithos_task_ready(
         project: str | None = None,
         tags: list[str] | None = None,
@@ -886,13 +819,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with a ``tasks`` list (the feasible frontier).
         """
-        logger.info(
-            "lithos_task_ready project=%s tags=%s limit=%s with_claims=%s",
-            project,
-            tags,
-            limit,
-            with_claims,
-        )
         span = get_current_span()
         if limit < 1:
             return error_envelope("invalid_input", f"limit must be >= 1, got {limit}.")
@@ -913,7 +839,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("project", "tags", "limit"))
     async def lithos_task_blocked(
         project: str | None = None,
         tags: list[str] | None = None,
@@ -938,7 +864,6 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with a ``tasks`` list, each task including its ``blockers``.
         """
-        logger.info("lithos_task_blocked project=%s tags=%s limit=%s", project, tags, limit)
         span = get_current_span()
         if limit < 1:
             return error_envelope("invalid_input", f"limit must be >= 1, got {limit}.")
@@ -958,7 +883,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("recursive", "include_closed"))
     async def lithos_task_children(
         task_id: str,
         recursive: bool = False,
@@ -980,15 +905,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             Dict with a ``tasks`` list (task records, same shape as
             ``lithos_task_list``).
         """
-        logger.info(
-            "lithos_task_children task=%s recursive=%s include_closed=%s",
-            task_id,
-            recursive,
-            include_closed,
-        )
+        task_id, _ = await resolve_task_id(server.coordination, task_id)
         span = get_current_span()
-        task_id, _ = await server.coordination.resolve_task_id(task_id)
-        span.set_attribute("lithos.task_id", task_id)
         tasks = await server.coordination.list_children(
             task_id=task_id,
             recursive=recursive,
@@ -999,7 +917,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span(map_coordination_error=True)
+    @tool_span(map_coordination_error=True, log_args=("source_task_id", "relation_type"))
     async def lithos_task_spawn(
         source_task_id: str,
         title: str,
@@ -1040,14 +958,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         source_task_id, _ = await server.coordination.resolve_task_id(
             source_task_id, field="source_task_id"
         )
-        logger.info(
-            "lithos_task_spawn source=%s agent=%s relation=%s",
-            source_task_id,
-            agent,
-            relation_type,
-        )
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.relation_type", relation_type)
         now = datetime.now(UTC)
         updated_at = now.isoformat()
@@ -1064,7 +975,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             now=now,
         )
         span.set_attribute("lithos.task_id", task_id)
-        await server._emit(
+        await server.emit(
             LithosEvent(
                 type=TASK_CREATED,
                 agent=agent,
@@ -1096,10 +1007,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             outcome, and claims. Returns an empty tasks list if the task does
             not exist (mirrors the historical behaviour).
         """
-        task_id, _ = await server.coordination.resolve_task_id(task_id)
-        logger.info("lithos_task_status task_id=%s", task_id)
-        span = get_current_span()
-        span.set_attribute("lithos.task_id", task_id)
+        task_id, _ = await resolve_task_id(server.coordination, task_id)
 
         statuses = await server.coordination.get_task_status(task_id)
 
@@ -1145,10 +1053,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             ``{status: "error", code: "task_not_found", message: ...}``
             when no task matches.
         """
-        task_id, _ = await server.coordination.resolve_task_id(task_id)
-        logger.info("lithos_task_get task_id=%s", task_id)
-        span = get_current_span()
-        span.set_attribute("lithos.task_id", task_id)
+        task_id, _ = await resolve_task_id(server.coordination, task_id)
 
         task = await server.coordination.get_task(task_id)
         if task is None:
