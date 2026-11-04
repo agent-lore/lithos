@@ -476,7 +476,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         Returns:
             Dict with success, updated_at, and the resolved task_id + title
         """
-        task_id, task_title = await server.coordination.resolve_task_id(task_id)
+        task_id, task_title = await resolve_task_id(server.coordination, task_id)
         span = get_current_span()
         updated_at = await server.coordination.cancel_task(
             task_id=task_id,
@@ -537,7 +537,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             ``{"status": "error", "code": "task_not_found" | "task_not_resolved",
             "message": ...}``.
         """
-        task_id, task_title = await server.coordination.resolve_task_id(task_id)
+        task_id, task_title = await resolve_task_id(server.coordination, task_id)
         span = get_current_span()
         prior_status, prior_outcome, updated_at = await server.coordination.reopen_task(
             task_id=task_id, agent=agent, now=datetime.now(UTC)

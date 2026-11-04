@@ -62,7 +62,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "8e5f952f390e061456de5ef14ad270227b05e47d6008b4b3e6b6ab307d9ea488",
+  "source_hash": "1c398fca2137fe0c555e9f60b6758c3a6ca81d8d4b39dd69ad80963f6bdaac69",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -287,7 +287,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | CognitiveMemory | 1 | 1458 | 1230 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 618 | 424 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 3 | 3217 | 2717 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
-| Entrypoints | 13 | 6512 | 5280 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 14 |
+| Entrypoints | 13 | 6514 | 5282 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 14 |
 | Errors | 2 | 276 | 205 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 351 | 282 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
 | Graph | 2 | 1307 | 1086 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
@@ -303,7 +303,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **56**, lines: **29165**, SLOC: **23693**
+- Modules: **56**, lines: **29167**, SLOC: **23695**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -401,4 +401,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **45** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.75** (51016 test lines / 29165 source lines)
+- Test-to-source line ratio: **1.75** (51057 test lines / 29167 source lines)

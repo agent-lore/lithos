@@ -387,6 +387,47 @@ class TestTelemetryIntegration:
         assert dict(create_span.attributes)["lithos.agent"] == "creator"
         assert dict(create_span.attributes)["lithos.task_id"] == full_id
 
+    async def test_every_prefix_resolving_task_tool_tags_the_full_id(self, otel_server):
+        """Every lifecycle tool that accepts a task prefix ends its span on the
+        full id, so one task keeps one correlation key across its trace
+        (PR #459 review: cancel and reopen had kept the prefix)."""
+        server, exporter = otel_server
+        created = await call_tool(
+            server, "lithos_task_create", {"title": "Prefix tags", "agent": "creator"}
+        )
+        full_id = created["task_id"]
+        prefix = full_id[:8]
+        calls = [
+            ("lithos_task_update", {"task_id": prefix, "agent": "a", "title": "Renamed"}),
+            ("lithos_task_claim", {"task_id": prefix, "aspect": "impl", "agent": "a"}),
+            ("lithos_task_renew", {"task_id": prefix, "aspect": "impl", "agent": "a"}),
+            ("lithos_task_release", {"task_id": prefix, "aspect": "impl", "agent": "a"}),
+            ("lithos_task_status", {"task_id": prefix}),
+            ("lithos_task_get", {"task_id": prefix}),
+            ("lithos_task_edge_list", {"task_id": prefix}),
+            ("lithos_task_children", {"task_id": prefix}),
+            ("lithos_finding_post", {"task_id": prefix, "agent": "a", "summary": "f"}),
+            ("lithos_finding_list", {"task_id": prefix}),
+            ("lithos_task_cancel", {"task_id": prefix, "agent": "a", "reason": "r"}),
+            ("lithos_task_reopen", {"task_id": prefix, "agent": "a"}),
+            ("lithos_task_complete", {"task_id": prefix, "agent": "a", "outcome": "done"}),
+        ]
+        for tool, arguments in calls:
+            result = await call_tool(server, tool, arguments)
+            assert result.get("status") != "error", (tool, result)
+
+        tagged = {
+            s.name: dict(s.attributes).get("lithos.task_id")
+            for s in exporter.get_finished_spans()
+            if s.name.startswith("lithos.tool.")
+        }
+        left_on_prefix = {
+            tool
+            for tool, _ in calls
+            if tagged[f"lithos.tool.{tool.removeprefix('lithos_')}"] != full_id
+        }
+        assert left_on_prefix == set()
+
 
 class TestWriteDurationHistogram:
     """Tests for lithos.knowledge.write_duration_ms histogram (issue #89)."""

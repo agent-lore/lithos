@@ -8631,7 +8631,7 @@
     },
     "lithos.tools._seam._TaskResolver.resolve_task_id": {
       "complexity": 1,
-      "length": 1,
+      "length": 3,
       "module": "lithos.tools._seam",
       "path": "src/lithos/tools/_seam.py",
       "paths": [
@@ -10067,7 +10067,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "8e5f952f390e061456de5ef14ad270227b05e47d6008b4b3e6b6ab307d9ea488",
+    "source_hash": "1c398fca2137fe0c555e9f60b6758c3a6ca81d8d4b39dd69ad80963f6bdaac69",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -10461,10 +10461,10 @@
     "lithos.tools._seam": {
       "component": "Entrypoints",
       "functions": 9,
-      "lines": 172,
+      "lines": 174,
       "max_complexity": 7,
       "path": "src/lithos/tools/_seam.py",
-      "sloc": 134
+      "sloc": 136
     },
     "lithos.tools.agents": {
       "component": "Entrypoints",
@@ -10685,10 +10685,10 @@
         "functions": 155,
         "largest_module": "lithos.cli",
         "largest_module_lines": 1177,
-        "lines": 6512,
+        "lines": 6514,
         "modules": 13,
         "public_symbols": 38,
-        "sloc": 5280
+        "sloc": 5282
       },
       "Errors": {
         "classes": 12,
@@ -10827,13 +10827,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 29165,
+    "total_lines": 29167,
     "total_modules": 56,
-    "total_sloc": 23693
+    "total_sloc": 23695
   },
   "tests": {
     "ratio": 1.75,
-    "src_lines": 29165,
-    "test_lines": 51016
+    "src_lines": 29167,
+    "test_lines": 51057
   }
 }

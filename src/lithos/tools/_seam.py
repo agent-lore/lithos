@@ -36,7 +36,9 @@ class _NoteResolver(Protocol):
 
 
 class _TaskResolver(Protocol):
-    async def resolve_task_id(self, raw: str, *, field: str = ...) -> tuple[str, str | None]: ...
+    async def resolve_task_id(
+        self, raw: str, *, field: str = "task_id"
+    ) -> tuple[str, str | None]: ...
 
 
 @dataclass(frozen=True)
