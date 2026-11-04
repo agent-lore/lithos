@@ -75,7 +75,7 @@ they cannot reconstruct the input (review comment on PR #431).
 
 ### E2 — Golden sets
 
-**Status: schema + synthetic seed set shipped 2026-10** (`evals/edges/README.md`); the production export and Dave's labelled subset are task 4044f201.
+**Status: schema + synthetic seed set shipped 2026-10; production set v1 shaped 2026-10-21** (`evals/edges/README.md`): 271 exported cases + 30 negatives + 6 French-titled, 1,402 slots. Dave's labelled subset is still to do (task 4044f201).
 
 One directory per artefact type under `evals/<artefact>/`, in the repo:
 

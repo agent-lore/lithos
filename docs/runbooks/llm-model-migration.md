@@ -63,14 +63,26 @@ default; task 73b074f8 wants that number recorded after the first week.
 
 ## 2. Export and shape the golden set
 
-Run against the staging data directory. The export is read-only and WAL-safe
-beside the live container; pointing `--data-dir` at a copy is also fine.
+Export from **both** environments once the call log is on in each. The
+export is read-only. Running it inside the container avoids opening the live
+data directory from the host.
 
 ```bash
-uv run lithos --data-dir /home/dns/projects/lithos/data/staging/lithos \
-    eval export --since 14d --model openai/gpt-5-mini \
-    --out /tmp/export.jsonl
+for c in lithos lithos-staging; do
+  docker exec "$c" lithos eval export --since 14d --model openai/gpt-5-mini \
+      > /tmp/export-"$c".jsonl
+done
 ```
+
+Case ids are a prefix of the request digest, so identical requests dedupe
+within one export. Prod and staging ingest the same feeds with separately
+generated summaries, so the same article shows up as two different cases.
+Keep both, but take at most one per article into the labelled subset.
+
+Before shaping, **drop every case whose focus note or any candidate is
+outside the `influx` namespace**: personal, planning and agent notes. This
+repo is public, and the 2026-09-29 decision covers third-party text only. Also
+keep only the latest call per focus note.
 
 Then shape `evals/edges/cases.jsonl`:
 
@@ -86,8 +98,11 @@ Then shape `evals/edges/cases.jsonl`:
    structured fields.
 3. **Add non-English pairs** (about 20) if the corpus has them, tagged
    `lang:<code>`.
-4. Replace the synthetic `seed-*` cases, update `evals/edges/README.md`
-   (sampling window, counts per stratum, who shaped it) and commit.
+4. Write the result to `evals/edges/cases.jsonl`. The synthetic seed set
+   lives in `evals/edges/seed/`, where `make eval-smoke` uses it. Update
+   `evals/edges/README.md` (sampling window, filters, counts per stratum, who
+   shaped it) and commit. The smoke test also replays every exported case's
+   reference, so a malformed export fails `make check`.
 
 Cases may contain snippets of third-party text (decision 2026-09-29).
 
