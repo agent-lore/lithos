@@ -32,7 +32,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("title", "id"))
     async def lithos_write(
         title: str,
         content: str,
@@ -137,9 +137,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
             use the standard error envelope {"status": "error", "code",
             "message"} — validation failures carry code "invalid_input".
         """
-        logger.info("lithos_write agent=%s title=%r update=%s", agent, title, id is not None)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.is_update", id is not None)
 
         if ttl_hours is not None and expires_at is not None:
@@ -402,7 +400,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("id",))
     async def lithos_note_update(
         id: str,
         agent: str,
@@ -463,9 +461,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
                 "(an empty metadata dict makes no change)."
             )
 
-        logger.info("lithos_note_update agent=%s id=%s", agent, id)
         span = get_current_span()
-        span.set_attribute("lithos.agent", agent)
         span.set_attribute("lithos.doc_id", id)
 
         # Validate status enum at the boundary for a fast, clean envelope.
@@ -567,7 +563,7 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
 
     @mcp.tool()
     @tool_metrics()
-    @tool_span()
+    @tool_span(log_args=("id",))
     async def lithos_delete(
         id: str,
         agent: str,
@@ -589,10 +585,8 @@ def register(mcp: FastMCP, server: LithosServer) -> None:
         cached = server.knowledge.get_cached_meta(id)
         path = str(cached.path) if cached is not None else None
 
-        logger.info("lithos_delete id=%s agent=%s", id, agent)
         span = get_current_span()
         span.set_attribute("lithos.id", id)
-        span.set_attribute("lithos.agent", agent)
 
         outcome = await server.intake.delete(agent, DeleteRequest(id=id))
         if outcome.status == "not_found":

@@ -227,8 +227,8 @@ class LithosServer:
         config = uvicorn.Config(app, host=host, port=port, **config_kwargs)
         await uvicorn.Server(config).serve()
 
-    async def _emit(self, event: LithosEvent) -> None:
-        """Emit an event, logging any failure without propagating."""
+    async def emit(self, event: LithosEvent) -> None:
+        """Emit an event (the tool handlers' seam); a failure is logged, never propagated."""
         try:
             await self.event_bus.emit(event)
         except Exception:
