@@ -15,7 +15,7 @@
     "seams": "measured",
     "structure": "measured"
   },
-  "config_hash": "2c6318e559471b7a7b8ee78a8897e3a41589243d7d872b152772813a03213e73",
+  "config_hash": "7f33f5e89ef38f65a77a5c344120f02e494a59d7c1cab88f2cfcc44fcc77eeff",
   "definitions": {
     "complexity": 1,
     "structure": 1,
@@ -231,7 +231,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos.tools.read_search.register.lithos_related | 127 | 127 | review | — |
 | unchanged | function_length | lithos.tools.read_search.register.lithos_retrieve | 92 | 92 | review | — |
 | unchanged | function_length | lithos.tools.read_search.register.lithos_search | 174 | 174 | review | — |
-| unchanged | function_length | lithos.tools.tasks.register | 1148 | 1148 | review | — |
+| unchanged | function_length | lithos.tools.tasks.register | 1148 | 1148 | review | register is a flat closure factory (complexity 1) over 18 separately measured lithos_task_* handlers: 375 of its 1148 lines are the agent-facing MCP docstrings and 118 are tool signatures, leaving ~32 lines of adapter code per handler. Domain grouping plus the late-binding rule in lithos.tools keep registration together; a lifecycle/task-graph split would yield two registers still far above 75 and reduce, not remove, the finding. Headroom is for wiring edits or one new handler, not orchestration — that belongs in the service layer (task 3706b7f7). (Lithos task dcfebfd1; PR #457. Revisit when register gains branching (complexity above 1), when Phase 4 priority/roll-up work touches the lifecycle vs task-graph seam anyway, or when the span exceeds 1250 (the exception then lapses and the finding returns unaccepted).) |
 | unchanged | function_length | lithos.tools.tasks.register.lithos_task_complete | 115 | 115 | review | — |
 | unchanged | function_length | lithos.tools.tasks.register.lithos_task_create | 82 | 82 | review | — |
 | unchanged | function_length | lithos.tools.tasks.register.lithos_task_spawn | 77 | 77 | review | — |
@@ -251,6 +251,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | module_lines | lithos.tools.tasks | 1209 | 1209 | review | — |
 - branch_coverage: missing; value —; scope not recorded; evidence not recorded
 - mutation: missing; value —; scope not recorded; evidence not recorded
+- Review lowering function_length exception for lithos.tools.tasks.register to 1148.
 - Review lowering budget max_module_lines: actual 2866, accepted ceiling 2900.
 - Review lowering budget cross_module_private_refs: actual 31, accepted ceiling 42.
 
