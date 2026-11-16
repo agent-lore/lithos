@@ -75,7 +75,7 @@ they cannot reconstruct the input (review comment on PR #431).
 
 ### E2 — Golden sets
 
-**Status: schema + synthetic seed set shipped 2026-10; production set v1 shaped 2026-10-21** (`evals/edges/README.md`): 271 exported cases + 30 negatives + 6 French-titled, 1,402 slots. Dave's labelled subset is still to do (task 4044f201).
+**Status: production set v1 labelled 2026-11-16** (`evals/edges/README.md`). The set has 307 cases and 1,402 slots: 271 exported and 36 hand-built (25 negatives, 5 near-duplicates, 6 French-titled). Dave reviewed 181 slots across 60 cases under a strict reading of the relation definitions and five recorded conventions, and about 10% of them were double-labelled blind. On these labels, gpt-5-mini's recorded answers agree with 26.7% of relations.
 
 One directory per artefact type under `evals/<artefact>/`, in the repo:
 
@@ -154,12 +154,21 @@ manual or scheduled, never in the PR gate.
 
 ## 4. Open questions
 
-- E1's retention window and blob-store size at ~45 calls/day (the 30-day
-  default is a guess; measure after the first week).
+- ~~E1's retention window and blob-store size at ~45 calls/day.~~
+  **Answered 2026-10-22** from prod, 6.4 days after deploy:
+  - 284 calls, about 44.5 a day;
+  - blobs average 8.4 KB per call, since request blobs dedupe;
+  - `llm_call_log` costs about 0.95 KB per row, including indexes.
+
+  A 30-day window therefore settles at about 12.5 MB, so the 30-day default
+  stays.
 - Whether the confidence floor (0.6) should be tuned per model from E3's
   calibration table rather than fixed.
 - Who labels the later artefact types when they are prose (compiled pages,
   digests): pairwise preference labels are cheaper than absolute scores.
+- Whether the edge vocabulary needs a same-subject relation. The v1 labels
+  map "same subject or venue, no claim relation" to `none`
+  (`evals/edges/README.md`).
 
 ## 5. Sequence
 

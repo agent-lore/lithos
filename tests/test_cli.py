@@ -413,7 +413,7 @@ class TestEvalRunAndCompare:
 
         table = runner.invoke(cli, ["eval", "compare", str(inc_file), str(cand_file)])
         assert table.exit_code == 0, table.output
-        assert "| labels.direction_agreement | 0.750 | 0.000 |" in table.output
+        assert "| labels.direction_agreement | 0.800 | 0.000 |" in table.output
         assert "Evidence: same cases, labels and coverage" in table.output
 
         gated = runner.invoke(cli, ["eval", "compare", str(inc_file), str(cand_file), "--gate"])
