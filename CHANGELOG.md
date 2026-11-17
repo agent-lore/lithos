@@ -66,6 +66,11 @@ probe.
     `supports`, where before they were negatives expecting `none`.
   - **New smoke test:** the labels must point at real slots, and each
     hand-built group must carry its expected relation.
+  - **First decision runs** (`evals/runs/20261117-*`): gpt-6-luna at
+    `reasoning_effort=low` is PROMOTABLE over gpt-5-mini. It costs $0.31 vs
+    $2.76 per 1,000 calls, and its precision is 41% vs 15% at 48% vs 62%
+    recall. At `none` it fails on parse errors. At `medium` it passes too,
+    but its gain over `low` is within chance at 38% more cost.
   - **Direction `either`:** a directed label whose order the prompt text
     does not show scores its relation only. Four near-duplicate slots use it,
     leaving 20 scored directions. seed-005's candidate now says it is a

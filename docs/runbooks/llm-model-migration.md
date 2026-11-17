@@ -204,9 +204,11 @@ verdict means anything.
 
 A PROMOTABLE verdict earns a staging canary, not a prod change.
 
-1. PR: in `docker/.env.staging` set `LITHOS_LCMA__LLM__MODEL` to the
-   candidate and `LITHOS_LCMA__LLM__REASONING_EFFORT=none` (or whatever the
-   winning run used; `--extra-body` becomes `LITHOS_LCMA__LLM__EXTRA_BODY`).
+1. In `docker/.env.staging` set `LITHOS_LCMA__LLM__MODEL` to the
+   candidate and `LITHOS_LCMA__LLM__REASONING_EFFORT` to the winning run's
+   effort (`--extra-body` becomes `LITHOS_LCMA__LLM__EXTRA_BODY`). The env
+   files are not in git, since they hold the API key, so this is an operator
+   change; record it in the canary task.
    Leave `max_output_tokens` generous: reasoning models spend it before they
    emit text.
 2. Deploy: `./docker/run.sh staging restart`, then
