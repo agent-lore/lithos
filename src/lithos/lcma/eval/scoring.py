@@ -16,7 +16,7 @@ from statistics import median
 from typing import Any
 
 from lithos.lcma.edge_inference import SYMMETRIC_RELATIONS, parse_adjudications
-from lithos.lcma.eval.cases import Case, Label, Slot
+from lithos.lcma.eval.cases import EITHER_DIRECTION, Case, Label, Slot
 from lithos.lcma.eval.prices import ModelPrice, cost_per_1k_calls
 
 RESULT_OUTCOMES = ("ok", "partial", "empty", "parse_error", "error")
@@ -90,7 +90,8 @@ def _ratio(hits: int, total: int) -> float | None:
 class _Agreement:
     """Slot tallies. ``directed`` counts the *truth's* directed slots, so a model
     cannot shrink the direction denominator by answering ``none``: a missed
-    relation on a directed slot is also a missed direction (review of PR #451)."""
+    relation on a directed slot is also a missed direction (review of PR #451).
+    A label whose direction is ``either`` scores the relation only (PR #460)."""
 
     slots: int = 0
     relation_hits: int = 0
@@ -116,7 +117,11 @@ def _compare_slot(
 ) -> bool:
     """Score one slot into *agg*; returns whether the relation matched."""
     agg.slots += 1
-    truth_directed = truth_relation != "none" and truth_relation not in SYMMETRIC_RELATIONS
+    truth_directed = (
+        truth_relation != "none"
+        and truth_relation not in SYMMETRIC_RELATIONS
+        and truth_direction != EITHER_DIRECTION
+    )
     if truth_directed:
         agg.directed += 1
     if unusable:

@@ -19,6 +19,10 @@ from lithos.lcma.edge_inference import RELATION_VOCAB, SYMMETRIC_RELATIONS, Neig
 
 LABEL_RELATIONS = RELATION_VOCAB | {"none"}
 LABEL_DIRECTIONS = frozenset({"focus_to_candidate", "candidate_to_focus"})
+#: Direction for a directed label whose order the prompt does not show (two
+#: copies with no date or source in view): the relation is scored, the
+#: direction is not.
+EITHER_DIRECTION = "either"
 LABEL_CONFIDENCES = frozenset({"low", "medium", "high"})
 LABEL_STATUSES = frozenset({"proposed", "reviewed"})
 
@@ -139,7 +143,7 @@ def label_from_dict(data: dict[str, Any]) -> Label:
         raise ValueError(f"label {case_id}: candidate_index must be a positive int")
     direction = data.get("direction")
     directed = relation not in SYMMETRIC_RELATIONS and relation != "none"
-    if directed and direction not in LABEL_DIRECTIONS:
+    if directed and direction not in LABEL_DIRECTIONS | {EITHER_DIRECTION}:
         raise ValueError(f"label {case_id}/{index}: {relation} needs a direction")
     if not directed:
         direction = None

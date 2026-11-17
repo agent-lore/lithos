@@ -14,10 +14,16 @@ them back into ``labels.jsonl`` with the reviewer's name and today's date.
 
 ``label:`` line grammar (one per slot, anything after ``#`` is a note)::
 
-    label: <relation> [focus_to_candidate|candidate_to_focus] [low|medium|high] [rationale_ok=yes|no]
+    label: <relation> [focus_to_candidate|candidate_to_focus|either] [low|medium|high] [rationale_ok=yes|no]
 
-Relation ``none`` and the symmetric relations take no direction. A line
-``label: skip`` leaves the slot unlabelled.
+Relation ``none`` and the symmetric relations take no direction. Direction
+``either`` is for a directed relation whose order the text shown does not
+settle (two copies, neither dated): the relation is scored, the direction is
+not. A line ``label: skip`` leaves the slot unlabelled.
+
+The sheet quotes the focus and candidate text exactly as the prompt sends
+them, cut at the case's ``snippet_chars``, so the reviewer sees what the model
+saw.
 """
 
 from __future__ import annotations
@@ -40,7 +46,7 @@ RELATIONS = {
     "none",
 }
 SYMMETRIC = {"contradicts", "analogy_to"}
-DIRECTIONS = {"focus_to_candidate", "candidate_to_focus"}
+DIRECTIONS = {"focus_to_candidate", "candidate_to_focus", "either"}
 CONFIDENCES = {"low", "medium", "high"}
 
 _HEADER = re.compile(r"^## case (?P<case_id>\S+) · candidate (?P<index>\d+)\s*$")
@@ -56,6 +62,11 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 def _clip(text: str, limit: int = 600) -> str:
     text = " ".join(str(text).split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _quote(text: str, limit: int) -> list[str]:
+    """The first *limit* characters, as the prompt sends them, as a Markdown quote."""
+    return [f"> {line}".rstrip() for line in str(text)[:limit].splitlines()] or [">"]
 
 
 def _label_line(
@@ -86,6 +97,12 @@ def write_sheet(
             + "[direction] [low|medium|high] [rationale_ok=yes|no]`; `label: skip` leaves it out."
         ),
         "",
+        (
+            "Direction is `focus_to_candidate`, `candidate_to_focus`, or `either` when the "
+            + "quoted text does not show which note came first. The quotes are exactly "
+            + "what the model sees."
+        ),
+        "",
     ]
     slots = 0
     for case in cases:
@@ -100,15 +117,16 @@ def write_sheet(
             slots += 1
             ref = ref_by_index.get(index)
             prop = proposed.get((case["case_id"], index))
+            shown = int(case.get("snippet_chars") or 700)
             lines += [
                 f"## case {case['case_id']} · candidate {index}",
                 "",
                 f"**Focus:** {case['focus'].get('title', '')}",
-                f"> {_clip(case['focus'].get('content', ''))}",
+                *_quote(case["focus"].get("content", ""), shown),
                 "",
                 f"**Candidate [{index}]:** {candidate.get('title', '')} "
                 f"(similarity {float(candidate.get('similarity', 0.0)):.2f})",
-                f"> {_clip(candidate.get('snippet', ''))}",
+                *_quote(candidate.get("snippet", ""), shown),
                 "",
             ]
             if ref is not None:

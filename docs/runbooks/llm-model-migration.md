@@ -91,11 +91,12 @@ Then shape `evals/edges/cases.jsonl`:
    bucket and namespace. The reference judgements are in each case's
    `reference.judgements`; a case with none is a "none" case and should be a
    large minority, not the majority.
-2. **Add deliberate negatives** (about 30): near-duplicate pairs, unrelated
-   pairs, same-source pairs, written by hand in the same case format with
-   `messages: null`, `prompt_version: null` and a `tags` entry such as
-   `negative:near_duplicate`. The runner rebuilds the prompt from the
-   structured fields.
+2. **Add deliberate hard cases** (about 30): unrelated pairs and same-source
+   pairs (tagged `negative:unrelated` and `negative:same_source`, expected
+   `none`), plus near-duplicate pairs (tagged `positive:near_duplicate`,
+   expected `supports` under the v1 conventions). Write them by hand in the
+   same case format, with `messages: null` and `prompt_version: null`; the
+   runner rebuilds the prompt from the structured fields.
 3. **Add non-English pairs** (about 20) if the corpus has them, tagged
    `lang:<code>`.
 4. Write the result to `evals/edges/cases.jsonl`. The synthetic seed set
@@ -118,24 +119,44 @@ python scripts/eval_labels.py sheet evals/edges/cases.jsonl \
 ```
 
 The sheet shows the focus, each candidate, the incumbent's judgement and a
-pre-filled `label:` line. Edit the lines in place:
+pre-filled `label:` line. The focus and candidate text are quoted exactly as
+the prompt sends them. Edit the lines in place:
 
 ```
-label: <relation> [focus_to_candidate|candidate_to_focus] [low|medium|high] [rationale_ok=yes|no]  # note
+label: <relation> [focus_to_candidate|candidate_to_focus|either] [low|medium|high] [rationale_ok=yes|no]  # note
 label: skip
 ```
 
-`none`, `contradicts` and `analogy_to` take no direction. `rationale_ok`
-says whether the *incumbent's* rationale was acceptable. Then:
+`none`, `contradicts` and `analogy_to` take no direction. Judge the
+direction from the quoted text only, never from what you know about the
+notes: when the text does not show which note came first (two copies with no
+date or source in view), write `either`, and only the relation is scored.
+`rationale_ok` says whether the *incumbent's* rationale was acceptable.
+Then:
 
 ```bash
 python scripts/eval_labels.py import /tmp/review.md --labeller dave \
     --out evals/edges/labels.jsonl --merge-into evals/edges/labels.jsonl
 ```
 
-Double-label about 10% of the slots (a second sheet over the same ids) and
-record the agreement in `evals/edges/README.md`. Commit `labels.jsonl`.
-Only rows with `status: reviewed` are scored.
+Order matters. This is what v1 did (`evals/edges/README.md`, Labels v1):
+
+1. **Settle the standard first.** Agree how literally to read the
+   definitions, and the conventions for recurring cases (duplicates, release
+   series, reviews), on two or three calibration cases. The labeller and the
+   proposer then apply the same rules.
+2. **Double-label about 10% blind, before the main review.** Make a sheet over
+   one slot per case with the reference and the proposed labels removed.
+   Import it with a different `--labeller` into a file that is never merged
+   into `labels.jsonl`.
+3. **Review the main sheet.** Every untouched `label:` line imports as the
+   reviewer's agreement, so import only once every slot has been seen. A
+   `label:` line takes only the grammar above: pasting the reference line
+   into it makes the import warn.
+
+Record both agreements in `evals/edges/README.md`: the labeller's blind vs
+reviewed labels, and the blind labels vs the proposals. Commit
+`labels.jsonl`. Only rows with `status: reviewed` are scored.
 
 ## 4. Run and gate
 

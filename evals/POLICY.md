@@ -19,7 +19,11 @@ All of the following, measured on the same cases:
    incumbent's. The denominator is the ground truth's directed slots (a
    missed relation on a directed slot is a missed direction too), so a
    candidate cannot empty the measurement by answering `none`; the check is
-   skipped only when the truth has no directed slots at all.
+   skipped only when the truth has no directed slots at all. A label whose
+   direction is `either` (the prompt does not show the order) scores its
+   relation only and is left out of this denominator.
+
+A drop of exactly a maximum passes, whatever the float rounding.
 3. **Every failure rate** in `failure_outcomes` (`partial`, `empty`,
    `parse_error`, `error`) is at or below the incumbent's.
 4. **Cost per 1,000 calls** (from `evals/prices.toml` at the run's mean token

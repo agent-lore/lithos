@@ -53,8 +53,29 @@ probe.
   of prod and staging traffic (influx notes only), 30 hand-built negatives
   (near-duplicates, same-source, unrelated) and 6 French-titled cases.
   Sampling, filters and known skews are in `evals/edges/README.md`. The
-  human labels are still to come. The smoke test replays every exported
-  case's reference.
+  smoke test replays every exported case's reference.
+- `evals/edges/labels.jsonl`: the first human labels (task 4044f201).
+  - **Coverage:** 181 slots across 60 cases, reviewed by Dave under a strict
+    reading of the relation definitions and five recorded conventions. About
+    10% of the slots were double-labelled blind, and the agreement is in the
+    README.
+  - **Incumbent preview:** gpt-5-mini's recorded answers agree with 26.7% of
+    the relations; it names a relation on most pairs labelled `none`.
+  - **Near-duplicates are now positives:** the five hand-built near-duplicate
+    cases and seed-005 are tagged `positive:near_duplicate` and expected
+    `supports`, where before they were negatives expecting `none`.
+  - **New smoke test:** the labels must point at real slots, and each
+    hand-built group must carry its expected relation.
+  - **Direction `either`:** a directed label whose order the prompt text
+    does not show scores its relation only. Four near-duplicate slots use it,
+    leaving 20 scored directions. seed-005's candidate now says it is a
+    repost, so its direction follows from the text.
+  - **Gate rounding:** an agreement drop of exactly the policy maximum now
+    passes; with 20 directed slots, one slot is exactly 5 points and float
+    rounding used to fail it at some scores.
+  - **Review sheet:** `scripts/eval_labels.py sheet` quotes the focus and
+    candidate text exactly as the prompt sends them, instead of cutting at
+    600 characters.
 - `evals/edges/`: the case and label schema (`README.md`), a synthetic seed
   set (`evals/edges/seed/`) covering every relation plus deliberate
   negatives, and recorded completions that reproduce the constant-direction

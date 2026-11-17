@@ -121,6 +121,10 @@ class TestLabel:
         assert label_from_dict(_label(relation="contradicts")).direction is None
         assert label_from_dict(_label(relation="none", direction=None)).direction is None
 
+    def test_either_direction_is_kept(self) -> None:
+        assert label_from_dict(_label(direction="either")).direction == "either"
+        assert label_from_dict(_label(relation="analogy_to", direction="either")).direction is None
+
     @pytest.mark.parametrize(
         "bad, match",
         [
@@ -128,6 +132,7 @@ class TestLabel:
             ({"candidate_index": 0}, "candidate_index"),
             ({"candidate_index": True}, "candidate_index"),
             ({"direction": None}, "needs a direction"),
+            ({"direction": "both"}, "needs a direction"),
             ({"confidence": "sure"}, "confidence"),
             ({"status": "maybe"}, "status"),
             ({"reference_rationale_ok": "yes"}, "reference_rationale_ok"),

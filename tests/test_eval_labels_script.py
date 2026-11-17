@@ -119,6 +119,27 @@ def test_proposed_labels_and_merge(tmp_path: Path) -> None:
     assert {r["case_id"] for r in rows} == {"seed-002", "zzz"}
 
 
+def test_sheet_quotes_exactly_what_the_model_sees(tmp_path: Path) -> None:
+    case = json.loads(SEED.read_text().splitlines()[0])
+    long_text = "line one\n\n" + "x" * 900
+    case["focus"]["content"] = long_text
+    case["snippet_chars"] = 700
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(json.dumps(case) + "\n")
+    sheet = tmp_path / "review.md"
+    eval_labels.main(["sheet", str(cases), "--out", str(sheet), "--limit", "1"])
+    text = sheet.read_text()
+    assert "> line one\n>\n> " + "x" * (700 - len("line one\n\n")) + "\n" in text
+
+
+def test_either_direction_imports() -> None:
+    labels, problems = eval_labels.parse_sheet(
+        "## case a · candidate 1\nlabel: supports either medium  # two undated copies\n"
+    )
+    assert problems == []
+    assert labels[0]["direction"] == "either"
+
+
 def test_bad_lines_are_warnings_and_nonzero_exit(tmp_path: Path) -> None:
     sheet = tmp_path / "review.md"
     sheet.write_text(

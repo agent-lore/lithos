@@ -23,6 +23,7 @@ from lithos.lcma.eval.scoring import compute_metrics
 
 EDGES = Path("evals/edges/seed")
 PRODUCTION = Path("evals/edges/cases.jsonl")
+PRODUCTION_LABELS = Path("evals/edges/labels.jsonl")
 CASES = load_cases(EDGES / "cases.jsonl")
 LABELS = load_labels(EDGES / "labels.jsonl")
 
@@ -66,9 +67,9 @@ def test_incumbent_recording_scores_as_expected() -> None:
     assert m["contract_violation_rate"] == 0.0
     # one deliberate miss out of the labelled slots (seed-004 candidate 1)
     assert m["labels"]["relation_agreement"] == pytest.approx((len(LABELS) - 1) / len(LABELS))
-    # the missed depends_on slot is directed, so it is a direction miss too (4 directed truth slots)
-    assert m["labels"]["n_directed"] == 4
-    assert m["labels"]["direction_agreement"] == pytest.approx(3 / 4)
+    # the missed depends_on slot is directed, so it is a direction miss too (5 directed truth slots)
+    assert m["labels"]["n_directed"] == 5
+    assert m["labels"]["direction_agreement"] == pytest.approx(4 / 5)
     assert m["labels"]["by_relation"]["depends_on"]["relation_agreement"] == 0.0
     assert m["labels"]["calibration"]["<0.6"]["n"] == 1  # the miss was the low-confidence answer
     assert m["reference"]["relation_agreement"] == 1.0  # it *is* the reference
@@ -125,7 +126,7 @@ def test_production_set_replays_its_reference() -> None:
         )
         assert case.messages == [{"role": m.role, "content": m.content} for m in rebuilt]
     assert all(
-        any(tag.startswith(("negative:", "lang:")) for tag in case.tags)
+        any(tag.startswith(("negative:", "positive:", "lang:")) for tag in case.tags)
         for case in cases
         if case.reference is None
     )
@@ -135,3 +136,17 @@ def test_production_set_replays_its_reference() -> None:
     )
     assert m["outcomes"].get("parse_error", 0) == 0
     assert m["reference"]["relation_agreement"] == 1.0
+
+
+def test_production_labels_match_the_set() -> None:
+    """Reviewed labels point at real slots; hand-built cases carry their expected relation."""
+    cases = {case.case_id: case for case in load_cases(PRODUCTION)}
+    labels = load_labels(PRODUCTION_LABELS)
+    assert labels
+    assert check_labels_cover_cases(labels, list(cases.values())) == []
+    for (case_id, index), label in labels.items():
+        tags = cases[case_id].tags
+        if any(tag.startswith("negative:") for tag in tags):
+            assert label.relation == "none", (case_id, index, label.relation)
+        if "positive:near_duplicate" in tags:
+            assert label.relation == "supports", (case_id, index, label.relation)

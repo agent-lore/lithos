@@ -74,6 +74,12 @@ class TestGate:
             c.detail for c in result.checks if c.name == "direction_agreement"
         )
 
+    def test_drop_of_exactly_the_tolerance_passes_despite_rounding(self) -> None:
+        # 20 directed slots: 4/20 - 0.05 rounds above 3/20 in floating point.
+        assert 4 / 20 - 0.05 > 3 / 20
+        assert gate(_metrics(direction=4 / 20), _metrics(direction=3 / 20, cost=0.1)).promotable
+        assert not gate(_metrics(direction=4 / 20), _metrics(direction=2 / 20, cost=0.1)).promotable
+
     def test_direction_measured_on_one_run_only_fails(self) -> None:
         """PR #451 review: a candidate without a direction score cannot pass the check."""
         for inc_dir, cand_dir in ((0.9, None), (None, 0.9)):
