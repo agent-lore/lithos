@@ -98,6 +98,18 @@ items (K4), priming briefs (K5).
 
 **Status: shipped 2026-10 (task 70610498).** `lithos eval run|compare`, `lithos.lcma.eval.{cases,scoring,runner,compare,prices}`, `evals/prices.toml`. Reference agreement is scored on every candidate slot; label agreement on reviewed slots only.
 
+**First decision run, 2026-11-17** (`evals/runs/20261117-edges-model-decision.md`). On the production set and labels v1, gpt-6-luna at `reasoning_effort=low` is PROMOTABLE over gpt-5-mini:
+
+| | gpt-5-mini | gpt-6-luna `low` |
+|---|---|---|
+| Precision of named relations | 15% | 41% |
+| Recall of named relations | 62% | 48% |
+| Edges per call | 3.16 | 0.83 |
+| Cost per 1k calls | $2.76 | $0.31 |
+
+- Luna at `none` fails on parse errors: 1.0%, from reasoning prose leaking into the reply.
+- The gemini sanity check fails the gate, but on failure rates, not on its constant direction: the labels' directions lean `focus_to_candidate`.
+
 `lithos eval run --artefact edges --model <name> --base-url <url> [--cases N]
 [--json]`, implemented in `lithos/eval/` behind the `lithos.lcma` seam
 (reuses `LlmClient`, `build_adjudication_prompt`, `parse_adjudications`;
@@ -162,8 +174,10 @@ manual or scheduled, never in the PR gate.
 
   A 30-day window therefore settles at about 12.5 MB, so the 30-day default
   stays.
-- Whether the confidence floor (0.6) should be tuned per model from E3's
-  calibration table rather than fixed.
+- ~~Whether the confidence floor (0.6) should be tuned per model from E3's
+  calibration table rather than fixed.~~ Not on current evidence (2026-11-17
+  runs). No model returned a named relation below 0.6, and Luna's agreement
+  is flat across the 0.6–0.8 and ≥0.8 buckets, so the floor stays 0.6.
 - Who labels the later artefact types when they are prose (compiled pages,
   digests): pairwise preference labels are cheaper than absolute scores.
 - Whether the edge vocabulary needs a same-subject relation. The v1 labels
