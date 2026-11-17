@@ -23,6 +23,11 @@ DEFAULT_POLICY: dict[str, Any] = {
     "failure_outcomes": list(FAILURE_OUTCOMES),
 }
 
+#: Agreement values are ratios of small counts, so a drop of exactly the
+#: allowed size must pass whatever the float rounding (with 20 directed
+#: slots, 4/20 - 3/20 computes as 0.05000000000000002).
+_ROUNDING = 1e-9
+
 _TOML_BLOCK = re.compile(r"```toml\s*\n(.*?)\n```", re.S)
 
 
@@ -85,7 +90,7 @@ def gate(
     rel_ok = (
         inc_rel is not None
         and cand_rel is not None
-        and cand_rel >= inc_rel - rule["relation_agreement_max_drop"]
+        and cand_rel >= inc_rel - rule["relation_agreement_max_drop"] - _ROUNDING
     )
     checks.append(
         Check(
@@ -107,7 +112,7 @@ def gate(
         dir_ok = False
         detail = f"{pct(cand_dir)} vs {pct(inc_dir)} (direction measured on one run only)"
     else:
-        dir_ok = cand_dir >= inc_dir - rule["direction_agreement_max_drop"]
+        dir_ok = cand_dir >= inc_dir - rule["direction_agreement_max_drop"] - _ROUNDING
         detail = f"{pct(cand_dir)} vs {pct(inc_dir)} (max drop {rule['direction_agreement_max_drop']:.0%})"
     checks.append(Check("direction_agreement", dir_ok, detail))
 

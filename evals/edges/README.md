@@ -9,7 +9,7 @@ Procedure: `docs/runbooks/llm-model-migration.md` steps 2–3.
 | File | What |
 |---|---|
 | `cases.jsonl` | The production set: one case per line with the focus note, its numbered candidates (snippets exactly as sent), the verbatim messages when exported from the call log, and the incumbent's judgements as `reference`. |
-| `labels.jsonl` | Human labels, one per `(case_id, candidate_index)`: `relation` (or `none`), `direction` for directed relations only, labeller `confidence`, whether the incumbent's rationale was acceptable, labeller and date. Only `status: reviewed` rows are scored. v1 covers 181 slots (see [Labels v1](#labels-v1-2026-11-16)). |
+| `labels.jsonl` | Human labels, one per `(case_id, candidate_index)`: `relation` (or `none`), `direction` for directed relations only (`either` when the prompt text does not show which note came first), labeller `confidence`, whether the incumbent's rationale was acceptable, labeller and date. Only `status: reviewed` rows are scored. v1 covers 181 slots (see [Labels v1](#labels-v1-2026-11-16)). |
 | `seed/` | The synthetic seed set (`cases.jsonl`, `labels.jsonl`, `recorded/`) that `make eval-smoke` gates the parser and scorer on. |
 
 Symmetric relations (`contradicts`, `analogy_to`) carry no direction.
@@ -150,6 +150,28 @@ the same museum. `analogy_to` needs different domains. Whether the
 vocabulary should gain a same-subject relation is an open question; it is not
 a labelling question.
 
+**Directions come from the prompt text only.** The model sees each
+candidate's title and one search chunk of at most 700 characters, not its
+summary, and only 143 of the 1,402 candidates show their date or source. A
+direction is scored only when the prompt itself shows the order: dates on
+both notes, an issue number, a `Re:`, "relayed by", "review of", or the
+content (one note is evidence for, or an instance of, the other). Four
+near-duplicate slots fail that test, so their direction is `either`: the
+relation must still be `supports`, and the direction is not scored (PR #460
+review).
+
+- `fr-06/1`, `neg-dup-01/1`, `neg-dup-05/1`: the candidate shows neither its
+  date nor its source.
+- `neg-dup-03/1`: both copies are dated the same day.
+
+`b97304a3/1` stays scored: the focus title says "New alpha version".
+
+The v1 review sheets cut each text at 600 characters, so on 47 of the 60
+focus notes and 68 of the 181 candidates the labeller saw up to about 100
+fewer characters than the model did; the missing text was the tail of the
+Result or Relevance section. The sheet now quotes exactly what the model
+sees.
+
 **The labels.**
 
 | Stratum | Slots | none | supports | refines | analogy_to | is_example_of | contradicts |
@@ -161,7 +183,8 @@ a labelling question.
 | `lang:fr` (`fr-*`) | 12 | 6 | 2 | 4 | 0 | 0 | 0 |
 | **Total** | **181** | **152** | **16** | **6** | **3** | **2** | **2** |
 
-- 24 slots take a direction.
+- 24 slots name a directed relation: 20 have a scored direction and 4 are
+  `either`.
 - Confidence: high 106, medium 50, low 25.
 - Two slots record `rationale_ok`.
 - No slot is labelled `depends_on`, so this set cannot score that relation.
@@ -211,9 +234,9 @@ show large disagreements, not fine ones.
   incumbent's own relation agreement is low, so a candidate that links less
   passes it easily.
 - **Answering `none` everywhere still fails.** Direction agreement is
-  measured over the 24 directed truth slots, and such a candidate gets every
-  one of them wrong.
-- **The direction check is coarse.** Each directed slot is worth about 4
-  points of direction agreement, so the 5-point tolerance is about one slot.
+  measured over the 20 truth slots with a scored direction, and such a
+  candidate gets every one of them wrong.
+- **The direction check is coarse.** Each scored direction is worth 5 points
+  of direction agreement, so the 5-point tolerance is exactly one slot.
   Read a narrow direction failure from the per-slot results before acting on
   it.

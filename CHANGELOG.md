@@ -66,6 +66,16 @@ probe.
     `supports`, where before they were negatives expecting `none`.
   - **New smoke test:** the labels must point at real slots, and each
     hand-built group must carry its expected relation.
+  - **Direction `either`:** a directed label whose order the prompt text
+    does not show scores its relation only. Four near-duplicate slots use it,
+    leaving 20 scored directions. seed-005's candidate now says it is a
+    repost, so its direction follows from the text.
+  - **Gate rounding:** an agreement drop of exactly the policy maximum now
+    passes; with 20 directed slots, one slot is exactly 5 points and float
+    rounding used to fail it at some scores.
+  - **Review sheet:** `scripts/eval_labels.py sheet` quotes the focus and
+    candidate text exactly as the prompt sends them, instead of cutting at
+    600 characters.
 - `evals/edges/`: the case and label schema (`README.md`), a synthetic seed
   set (`evals/edges/seed/`) covering every relation plus deliberate
   negatives, and recorded completions that reproduce the constant-direction

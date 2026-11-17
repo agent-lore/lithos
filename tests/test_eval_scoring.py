@@ -253,6 +253,32 @@ class TestMetrics:
         m2 = compute_metrics(cases, garbage, labels=labels, confidence_floor=0.6)
         assert m2["labels"]["direction_agreement"] == 0.0
 
+    def test_either_direction_scores_the_relation_only(self) -> None:
+        """PR #460 review: a label whose order the prompt does not show is out of
+        the direction denominator; its relation still counts."""
+        case = _case("c1", n=2)
+        labels = {
+            (case.case_id, index): label_from_dict(
+                {
+                    "case_id": case.case_id,
+                    "candidate_index": index,
+                    "relation": "supports",
+                    "direction": direction,
+                    "labeller": "d",
+                    "labelled_at": "x",
+                }
+            )
+            for index, direction in ((1, "either"), (2, "focus_to_candidate"))
+        }
+        answers = _completion(
+            _judgement(1, "supports", "candidate_to_focus"),
+            _judgement(2, "supports", "focus_to_candidate"),
+        )
+        m = compute_metrics([case], [_result(case, answers)], labels=labels, confidence_floor=0.6)
+        assert m["labels"]["relation_agreement"] == 1.0
+        assert m["labels"]["n_directed"] == 1
+        assert m["labels"]["direction_agreement"] == 1.0
+
     def test_no_labels_and_empty_reference(self) -> None:
         c1 = _case("c1")
         m = compute_metrics([c1], [_result(c1, _completion())], confidence_floor=0.6)

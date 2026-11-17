@@ -119,15 +119,20 @@ python scripts/eval_labels.py sheet evals/edges/cases.jsonl \
 ```
 
 The sheet shows the focus, each candidate, the incumbent's judgement and a
-pre-filled `label:` line. Edit the lines in place:
+pre-filled `label:` line. The focus and candidate text are quoted exactly as
+the prompt sends them. Edit the lines in place:
 
 ```
-label: <relation> [focus_to_candidate|candidate_to_focus] [low|medium|high] [rationale_ok=yes|no]  # note
+label: <relation> [focus_to_candidate|candidate_to_focus|either] [low|medium|high] [rationale_ok=yes|no]  # note
 label: skip
 ```
 
-`none`, `contradicts` and `analogy_to` take no direction. `rationale_ok`
-says whether the *incumbent's* rationale was acceptable. Then:
+`none`, `contradicts` and `analogy_to` take no direction. Judge the
+direction from the quoted text only, never from what you know about the
+notes: when the text does not show which note came first (two copies with no
+date or source in view), write `either`, and only the relation is scored.
+`rationale_ok` says whether the *incumbent's* rationale was acceptable.
+Then:
 
 ```bash
 python scripts/eval_labels.py import /tmp/review.md --labeller dave \
