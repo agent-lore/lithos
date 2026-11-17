@@ -176,7 +176,8 @@ manual or scheduled, never in the PR gate.
   stays.
 - ~~Whether the confidence floor (0.6) should be tuned per model from E3's
   calibration table rather than fixed.~~ Not on current evidence (2026-11-17
-  runs). No model returned a named relation below 0.6, and Luna's agreement
+  runs). On the labelled slots no model returned a named relation below 0.6
+  (elsewhere the floor drops 1 to 9 answers per run), and Luna's agreement
   is flat across the 0.6–0.8 and ≥0.8 buckets, so the floor stays 0.6.
 - Who labels the later artefact types when they are prose (compiled pages,
   digests): pairwise preference labels are cheaper than absolute scores.

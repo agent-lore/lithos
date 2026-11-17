@@ -88,7 +88,10 @@ The four runs together cost about $1.10 of OpenRouter credit.
    incumbent's p95 of 143 s comes from its stalls.
 
 7. **Confidence floor: keep 0.6.**
-   - No model returned a named relation below 0.6.
+   - On the labelled slots, no model returned a named relation below 0.6.
+     Across all slots the floor does drop a few answers: 9 for gpt-5-mini,
+     5 for gemini and 1 for each Luna run. None of them is on a labelled
+     slot, which is why the below-0.6 calibration bucket is empty.
    - Luna at `low` agrees 40% of the time in the 0.6–0.8 bucket and 42% at
      0.8 and above (n = 10 and 24), so its confidence does not separate right
      from wrong at this sample size.
