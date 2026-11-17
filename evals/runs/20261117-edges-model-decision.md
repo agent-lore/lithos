@@ -1,7 +1,7 @@
 # Typed-edge adjudicator: model decision runs, 2026-11-17
 
 Runbook step 4 (`docs/runbooks/llm-model-migration.md`), task 70610498. All
-four runs scored the same evidence on main 79d0aa0:
+five runs scored the same evidence on main 79d0aa0:
 
 - **Cases:** the production golden set, 307 cases.
 - **Labels:** labels v1, 181 reviewed slots, of which 29 are positive and 20
@@ -9,14 +9,17 @@ four runs scored the same evidence on main 79d0aa0:
 - **Settings:** each model ran at its default settings, the incumbent's being
   production's, apart from the reasoning effort named in the table.
 
-The three gate reports are in the `20261117-compare-*.md` files beside this
-one.
+The four gate reports, and a plain comparison of Luna at `low` and
+`medium`, are in the `20261117-compare-*.md` files beside this one. Luna at
+`medium` was run after the first review, to see whether more reasoning helps
+(finding 9).
 
 | Run | Gate vs incumbent | Relation agreement | Precision | Recall | Direction | Failures | Edges/call | $ per 1k calls | Latency p50 / p95 |
 |---|---|---|---|---|---|---|---|---|---|
 | gpt-5-mini (incumbent, prod settings) | — | 42.0% | 15% (18/122) | 62% (18/29) | 10% (2/20) | partial 0.7% | 3.16 | 2.76 | 16.5 s / 143 s |
 | gpt-6-luna, effort `none` | NOT PROMOTABLE: parse_error | 84.5% | 45% (10/22) | 34% (10/29) | 5% (1/20) | parse_error 1.0% | 0.47 | 0.21 | 2.8 s / 4.0 s |
 | **gpt-6-luna, effort `low`** | **PROMOTABLE** | 85.1% | 41% (14/34) | 48% (14/29) | 20% (4/20) | none | 0.83 | 0.31 | 5.4 s / 8.1 s |
+| gpt-6-luna, effort `medium` | PROMOTABLE | 85.1% | 44% (18/41) | 62% (18/29) | 15% (3/20) | none | 0.95 | 0.43 | 7.7 s / 15.6 s |
 | gemini-2.5-flash-lite (sanity check) | NOT PROMOTABLE: error, parse_error, partial | 73.5% | 20% (10/50) | 34% (10/29) | 25% (5/20) | error 7.2%, parse_error 1.0%, partial 1.0% | 1.17 | 0.22 | 1.2 s / 1.5 s |
 
 How to read the columns:
@@ -29,7 +32,7 @@ How to read the columns:
 - **Direction** is over the 20 scored directions; a miss on the relation is a
   miss on the direction too.
 
-The four runs together cost about $1.10 of OpenRouter credit.
+The five runs together cost about $1.25 of OpenRouter credit.
 
 ## Findings
 
@@ -82,16 +85,19 @@ The four runs together cost about $1.10 of OpenRouter credit.
    | gpt-5-mini | 28 (9%) |
    | Luna at `none` | 4 |
    | Luna at `low` | 8 |
+   | Luna at `medium` | 12 |
    | gemini | 0 |
 
-   The Luna stalls came in simultaneous bursts across the parallel runs. The
+   The `none` and `low` stalls came in simultaneous bursts across the
+   parallel runs; `medium` ran on its own and still stalled 12 times. The
    incumbent's p95 of 143 s comes from its stalls.
 
 7. **Confidence floor: keep 0.6.**
-   - On the labelled slots, no model returned a named relation below 0.6.
-     Across all slots the floor does drop a few answers: 9 for gpt-5-mini,
-     5 for gemini and 1 for each Luna run. None of them is on a labelled
-     slot, which is why the below-0.6 calibration bucket is empty.
+   - The floor drops few named relations: 9 for gpt-5-mini, 5 for gemini,
+     1 each for Luna at `none` and `low`, and 2 at `medium`. Only one is on
+     a labelled slot: `medium`'s `supports` at 0.55 on a slot labelled
+     `none`, which the floor rightly drops. The other runs' below-0.6
+     calibration buckets are empty.
    - Luna at `low` agrees 40% of the time in the 0.6–0.8 bucket and 42% at
      0.8 and above (n = 10 and 24), so its confidence does not separate right
      from wrong at this sample size.
@@ -99,6 +105,24 @@ The four runs together cost about $1.10 of OpenRouter credit.
 
 8. **Small sample.** There are 29 positive labels and 20 scored directions,
    so differences of one or two slots are noise. The precision gap is not.
+
+9. **Effort `medium` is no clear gain over `low`.**
+   - **On the totals it looks better:** it finds 18 of the 29 positives, as
+     many as the incumbent, at 44% precision. `low` finds 14 at 41%.
+   - **Slot by slot it is mostly churn.** Against `low` it gains 7
+     positives and loses 3. On slots labelled `none` it names 11 relations
+     that `low` did not, and drops 7 that `low` named. Relation agreement is
+     identical, 154 of 181. A 7-to-3 split is well within chance (sign test,
+     p ≈ 0.34).
+   - **Some gains are not discrimination.** Two come from one case (fr-05),
+     and on case 0bfb6a29 it gains a positive by answering `supports` for
+     all five candidates.
+   - **It costs more:** $0.43 vs $0.31 per 1,000 calls (38% more), p50
+     7.7 s vs 5.4 s, p95 15.6 s vs 8.1 s, and 12 stalls vs 8.
+   - **Direction** is 3/20 vs 4/20, one slot.
+   - `low` stays the choice. Effort is worth running again with prompt v2
+     (a06c08c0), whose fuller candidate text gives reasoning more to work
+     with.
 
 ## Recommendation
 
@@ -112,3 +136,6 @@ and watch for:
 Effort `none` is cheaper still ($0.21 per 1,000 calls), but it would need the
 JSON contract enforced (structured outputs) or a parser that tolerates text
 before the JSON, and both are prompt or parser changes for another day.
+
+Effort `medium` also passes the gate, but its gain over `low` is within
+chance at 38% more cost (finding 9).

@@ -108,6 +108,7 @@ items (K4), priming briefs (K5).
 | Cost per 1k calls | $2.76 | $0.31 |
 
 - Luna at `none` fails on parse errors: 1.0%, from reasoning prose leaking into the reply.
+- Luna at `medium` passes too and finds 18 of the 29 positives at 44% precision, but slot by slot its gain over `low` is within chance, at 38% more cost. `low` stays the choice.
 - The gemini sanity check fails the gate, but on failure rates, not on its constant direction: the labels' directions lean `focus_to_candidate`.
 
 `lithos eval run --artefact edges --model <name> --base-url <url> [--cases N]
@@ -176,9 +177,9 @@ manual or scheduled, never in the PR gate.
   stays.
 - ~~Whether the confidence floor (0.6) should be tuned per model from E3's
   calibration table rather than fixed.~~ Not on current evidence (2026-11-17
-  runs). On the labelled slots no model returned a named relation below 0.6
-  (elsewhere the floor drops 1 to 9 answers per run), and Luna's agreement
-  is flat across the 0.6–0.8 and ≥0.8 buckets, so the floor stays 0.6.
+  runs). The floor drops 1 to 9 named relations per run, and only one of
+  them is on a labelled slot (a wrong `supports` at 0.55). Luna at `low`
+  agrees as often at 0.6–0.8 as at ≥0.8, so the floor stays 0.6.
 - Who labels the later artefact types when they are prose (compiled pages,
   digests): pairwise preference labels are cheaper than absolute scores.
 - Whether the edge vocabulary needs a same-subject relation. The v1 labels
