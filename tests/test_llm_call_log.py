@@ -24,8 +24,10 @@ from lithos.lcma.edge_inference import (
     build_adjudication_prompt,
     request_payload,
 )
+from lithos.lcma.eval.cases import case_from_dict
 from lithos.lcma.eval.export import case_from_call, export_cases
 from lithos.lcma.eval.report import format_report, summarize_calls
+from lithos.lcma.note_view import NoteView
 from lithos.lcma.stats import StatsStore
 
 
@@ -43,14 +45,18 @@ def _neighbour(node_id: str, similarity: float = 0.6) -> NeighbourInfo:
 
 def _payload(focus: str = "focus", *, snippet_chars: int = 100) -> dict[str, Any]:
     candidates = [_neighbour("c1"), _neighbour("c2", 0.5)]
-    messages = build_adjudication_prompt(
-        "Focus title", "focus content " * 50, candidates, snippet_chars=snippet_chars
+    view = NoteView(
+        title="Focus title",
+        content="focus content " * 50,
+        created_at="2026-10-15T00:00:00+00:00",
+        source_url="https://example.org/a",
+        feed="example",
     )
+    messages = build_adjudication_prompt(view, candidates, snippet_chars=snippet_chars)
     return request_payload(
         messages,
         focus_id=focus,
-        focus_title="Focus title",
-        focus_content="focus content " * 50,
+        focus=view,
         candidates=candidates,
         snippet_chars=snippet_chars,
     )
@@ -303,22 +309,9 @@ class TestExport:
         assert case["case_id"] == str((await store.list_llm_calls())[0]["request_sha"])[:16]
         assert case["messages"] == call.request["messages"]
         # Rebuilding the prompt from the structured inputs reproduces the messages byte-for-byte.
+        parsed = case_from_dict(case)
         rebuilt = build_adjudication_prompt(
-            case["focus"]["title"],
-            case["focus"]["content"],
-            [
-                NeighbourInfo(
-                    node_id=c["node_id"],
-                    title=c["title"],
-                    snippet=c["snippet"],
-                    similarity=c["similarity"],
-                    namespace=c["namespace"],
-                    entities=frozenset(),
-                    tags=frozenset(),
-                )
-                for c in case["candidates"]
-            ],
-            snippet_chars=case["snippet_chars"],
+            parsed.focus_view(), parsed.neighbours(), snippet_chars=parsed.snippet_chars
         )
         assert [{"role": m.role, "content": m.content} for m in rebuilt] == case["messages"]
         assert isinstance(rebuilt[0], ChatMessage)

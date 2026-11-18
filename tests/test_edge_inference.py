@@ -29,6 +29,7 @@ from lithos.frontmatter_codec import KnowledgeDocument, KnowledgeMetadata
 from lithos.intake import CorpusIntake
 from lithos.lcma.call_log import BLOB_SUBDIR, CallLogWriter, encode_request
 from lithos.lcma.edge_inference import (
+    INFERENCE_VERSION,
     Adjudication,
     EdgeInferenceEngine,
     NeighbourInfo,
@@ -38,6 +39,7 @@ from lithos.lcma.edge_inference import (
     prefilter_candidates,
 )
 from lithos.lcma.llm import LlmClient
+from lithos.lcma.note_view import NoteView
 from lithos.lcma.stats import StatsStore
 from lithos.search import SemanticResult
 
@@ -117,20 +119,47 @@ class TestPrefilterCandidates:
 
 
 class TestBuildAdjudicationPrompt:
-    def test_numbers_candidates_and_truncates(self) -> None:
+    def test_numbers_candidates_and_bounds_each_note(self) -> None:
         messages = build_adjudication_prompt(
-            "Focus title",
-            "X" * 2000,
+            NoteView(title="Focus title", content="X" * 2000),
             [_neighbour("a", snippet="Y" * 2000), _neighbour("b")],
-            snippet_chars=100,
+            snippet_chars=150,
         )
         assert messages[0].role == "system"
         user = messages[1].content
-        assert "Focus title" in user
-        assert "X" * 100 in user and "X" * 101 not in user
+        assert "Title: Focus title" in user
+        assert "X" * 150 in user and "X" * 151 not in user
         assert "[1] Title: Note a" in user
         assert "[2] Title: Note b" in user
-        assert "Y" * 100 in user and "Y" * 101 not in user
+        # No note attached: the matching chunk stands alone, inside the limit.
+        assert "    Matching passage: " + "Y" * 100 in user
+        assert "Y" * 150 not in user
+
+    def test_candidate_shows_date_source_and_summary_before_its_chunk(self) -> None:
+        note = NoteView(
+            title="Note a",
+            content="## Summary\n### Contributions\n- A new idea\n### Result\nIt works.\n",
+            created_at="2026-10-15T16:39:16+00:00",
+            source_url="https://www.example.org/p/1",
+            feed="example-feed",
+        )
+        chunk = "A passage from the body that the focus matched, long enough to be worth showing."
+        user = build_adjudication_prompt(
+            NoteView(title="F", content="body"),
+            [_neighbour("a", snippet=chunk, note=note)],
+            snippet_chars=1200,
+        )[1].content
+        assert "    Added 2026-10-15 · Source: example.org (example-feed)\n" in user
+        assert "    Contributions:\n    - A new idea\n    Result:\n    It works.\n" in user
+        assert user.index("It works.") < user.index("    Matching passage: A passage")
+
+    def test_system_prompt_states_the_direction_conventions(self) -> None:
+        system = build_adjudication_prompt(
+            NoteView(title="F", content=""), [_neighbour("a")], snippet_chars=100
+        )[0].content
+        assert "Use the Added dates" in system
+        assert "refines, focus_to_candidate" in system
+        assert "refines, candidate_to_focus" in system
 
 
 class TestParseAdjudications:
@@ -303,10 +332,25 @@ def _cached_meta(namespace: str = "default") -> CachedMeta:
     )
 
 
+def _reads(*focus_versions: KnowledgeDocument, missing: frozenset[str] = frozenset()) -> AsyncMock:
+    """``read`` for the engine: the focus note's versions in turn, the last one
+    repeating; any other id (a candidate) reads as a plain note unless *missing*."""
+    queue = list(focus_versions)
+
+    async def read(id: str | None = None, **_: Any) -> tuple[KnowledgeDocument, bool]:
+        if id == queue[0].id:
+            return (queue.pop(0) if len(queue) > 1 else queue[0]), False
+        if id in missing:
+            raise FileNotFoundError(id)
+        return _doc(str(id)), False
+
+    return AsyncMock(side_effect=read)
+
+
 def _mock_knowledge(doc: KnowledgeDocument) -> MagicMock:
     km = MagicMock()
     km.has_document = MagicMock(return_value=True)
-    km.read = AsyncMock(return_value=(doc, False))
+    km.read = _reads(doc)
     km.get_cached_meta = MagicMock(return_value=_cached_meta())
     return km
 
@@ -452,7 +496,7 @@ class TestEdgeInferenceEngine:
         assert evidence["model"] == "test-model"
         assert evidence["rationale"] == "focus provides evidence"
 
-        assert await stats_store.has_edge_inference("focus", 1, 1)
+        assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
         day = datetime.now(UTC).strftime("%Y-%m-%d")
         assert await stats_store.get_llm_spend(day) == (250, 1)
 
@@ -487,7 +531,7 @@ class TestEdgeInferenceEngine:
         finally:
             await harness.close()
         assert harness.calls["n"] == 0
-        assert not await stats_store.has_edge_inference("focus", 1, 1)
+        assert not await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
 
     async def test_budget_exhausted_skips_without_op_log(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
@@ -506,7 +550,7 @@ class TestEdgeInferenceEngine:
             await harness.close()
         assert harness.calls["n"] == 0
         # No op-log: the node retries once budget frees up (next create/update).
-        assert not await stats_store.has_edge_inference("focus", 1, 1)
+        assert not await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
 
     async def test_call_cap_skips_and_reset_reopens(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
@@ -535,7 +579,7 @@ class TestEdgeInferenceEngine:
             await harness.engine.maybe_infer("focus", [NOTE_CREATED])  # must not raise
         finally:
             await harness.close()
-        assert not await stats_store.has_edge_inference("focus", 1, 1)
+        assert not await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
         assert await edge_store.list_edges(from_id="focus") == []
 
     async def test_parse_failure_records_op_log(
@@ -553,10 +597,40 @@ class TestEdgeInferenceEngine:
         finally:
             await harness.close()
         # Tokens were spent -> op-log recorded so the budget can't be re-burned.
-        assert await stats_store.has_edge_inference("focus", 1, 1)
+        assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
         day = datetime.now(UTC).strftime("%Y-%m-%d")
         assert (await stats_store.get_llm_spend(day))[0] == 110
         assert await edge_store.list_edges(from_id="focus") == []
+
+    @pytest.mark.parametrize("readable", [True, False])
+    async def test_candidate_shown_by_its_note_or_else_its_chunk(
+        self,
+        test_config: LithosConfig,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        readable: bool,
+    ) -> None:
+        prompts: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            prompts.append(json.loads(request.content)["messages"][1]["content"])
+            return httpx.Response(200, json=_adjudication_body([_GOOD_JUDGEMENT]))
+
+        harness = _EngineHarness(test_config, stats_store, edge_store, handler=handler)
+        harness.knowledge.read = _reads(
+            _doc("focus"), missing=frozenset() if readable else frozenset({"cand"})
+        )
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+        candidate = prompts[0].split("[1] Title: ")[1]
+        if readable:
+            assert "    Added 2026-07-25\n    Some content about caching strategies." in candidate
+        else:
+            assert candidate.splitlines()[1] == "    Matching passage: neighbour snippet"
+        # Either way the call went through and the judgement was written.
+        assert len(await edge_store.list_edges(from_id="focus", to_id="cand")) == 1
 
     async def test_no_candidates_records_op_log_without_call(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
@@ -573,7 +647,7 @@ class TestEdgeInferenceEngine:
         finally:
             await harness.close()
         assert harness.calls["n"] == 0
-        assert await stats_store.has_edge_inference("focus", 1, 1)
+        assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
 
     async def test_confidence_floor_filters_judgements(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
@@ -590,7 +664,7 @@ class TestEdgeInferenceEngine:
         finally:
             await harness.close()
         assert await edge_store.list_edges(from_id="focus") == []
-        assert await stats_store.has_edge_inference("focus", 1, 1)
+        assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
 
 
 class TestAuthorityBoundary:
@@ -635,7 +709,7 @@ class TestAuthorityBoundary:
         assert edge["evidence"] == "manual"
         assert edge["weight"] == pytest.approx(1.0)
         # The run itself completed: op-log recorded with nothing written.
-        assert await stats_store.has_edge_inference("focus", 1, 1)
+        assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
 
     async def test_resolved_conflict_survives_reinference(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
@@ -702,7 +776,7 @@ class TestReinference:
             assert harness.calls["n"] == 1
 
             # The note changes: version 2, and the model now judges differently.
-            harness.knowledge.read = AsyncMock(return_value=(_doc("focus", version=2), False))
+            harness.knowledge.read = _reads(_doc("focus", version=2))
             judgement["confidence"] = 0.9
             judgement["rationale"] = "updated evidence"
             await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
@@ -714,8 +788,8 @@ class TestReinference:
         assert len(edges) == 1  # refreshed in place, not duplicated
         assert edges[0]["weight"] == pytest.approx(0.9)
         assert json.loads(str(edges[0]["evidence"]))["rationale"] == "updated evidence"
-        assert await stats_store.has_edge_inference("focus", 1, 1)
-        assert await stats_store.has_edge_inference("focus", 2, 1)
+        assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
+        assert await stats_store.has_edge_inference("focus", 2, INFERENCE_VERSION)
 
     async def test_ledger_purge_enables_actual_readjudication(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
@@ -754,13 +828,15 @@ class TestReinference:
         try:
             await harness.engine.maybe_infer("focus", [NOTE_CREATED])
             assert harness.calls["n"] == 1
-            monkeypatch.setattr("lithos.lcma.edge_inference.INFERENCE_VERSION", 2)
+            monkeypatch.setattr(
+                "lithos.lcma.edge_inference.INFERENCE_VERSION", INFERENCE_VERSION + 1
+            )
             await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
             assert harness.calls["n"] == 2  # policy bump re-adjudicates
         finally:
             await harness.close()
-        assert await stats_store.has_edge_inference("focus", 1, 1)
-        assert await stats_store.has_edge_inference("focus", 1, 2)
+        assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
+        assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION + 1)
 
     async def test_changed_relation_accumulates_new_edge(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
@@ -774,7 +850,7 @@ class TestReinference:
         )
         try:
             await harness.engine.maybe_infer("focus", [NOTE_CREATED])
-            harness.knowledge.read = AsyncMock(return_value=(_doc("focus", version=2), False))
+            harness.knowledge.read = _reads(_doc("focus", version=2))
             judgement["relation"] = "refines"
             await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
         finally:
@@ -795,9 +871,7 @@ class TestReinference:
         )
         # First read (prompt build) sees v1; the post-call staleness re-read
         # sees v2 — the note changed while the LLM call was in flight.
-        harness.knowledge.read = AsyncMock(
-            side_effect=[(_doc("focus", version=1), False), (_doc("focus", version=2), False)]
-        )
+        harness.knowledge.read = _reads(_doc("focus", version=1), _doc("focus", version=2))
         try:
             await harness.engine.maybe_infer("focus", [NOTE_CREATED])
         finally:
@@ -808,8 +882,8 @@ class TestReinference:
         assert (await stats_store.get_llm_spend(day))[0] == 250  # ...and recorded
         assert await edge_store.list_edges(from_id="focus") == []  # no stale edges
         # No completion marker for either version: the queued v2 drain re-runs.
-        assert not await stats_store.has_edge_inference("focus", 1, 1)
-        assert not await stats_store.has_edge_inference("focus", 2, 1)
+        assert not await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
+        assert not await stats_store.has_edge_inference("focus", 2, INFERENCE_VERSION)
 
 
 class TestCallLogIntegration:
@@ -838,20 +912,30 @@ class TestCallLogIntegration:
             await harness.close()
         row = await self._only_row(stats_store)
         assert (row["outcome"], row["edges_written"]) == ("ok", 1)
-        assert (row["node_id"], row["doc_version"], row["inference_version"]) == ("focus", 1, 1)
+        assert (row["node_id"], row["doc_version"], row["inference_version"]) == (
+            "focus",
+            1,
+            INFERENCE_VERSION,
+        )
         assert (row["model"], row["reasoning_effort"]) == ("test-model", "none")
         assert (row["prompt_tokens"], row["completion_tokens"]) == (200, 50)
         assert row["latency_ms"] >= 0
         assert json.loads(str(row["candidates_json"])) == [{"node_id": "cand", "similarity": 0.6}]
         assert harness.call_log is not None
         request = json.loads(harness.call_log.blobs.get(str(row["request_sha"])) or b"")
-        assert request["prompt_version"] == 1
+        assert request["prompt_version"] == INFERENCE_VERSION
         assert request["focus"] == {
             "id": "focus",
             "title": "Note focus",
-            "content": "Some content about caching strategies.",
+            "note": {
+                "title": "Note focus",
+                "content": "Some content about caching strategies.",
+                "created_at": NOW.isoformat(),
+            },
         }
         assert request["candidates"][0]["node_id"] == "cand"
+        assert request["candidates"][0]["note"]["title"] == "Note cand"
+        assert request["candidates"][0]["snippet"] == "neighbour snippet"
         assert request["messages"][0]["role"] == "system"
         assert "CANDIDATES" in request["messages"][1]["content"]
         assert encode_request(request) == harness.call_log.blobs.get(str(row["request_sha"]))
@@ -927,9 +1011,7 @@ class TestCallLogIntegration:
             handler=lambda req: httpx.Response(200, json=_adjudication_body([_GOOD_JUDGEMENT])),
             call_log=True,
         )
-        harness.knowledge.read = AsyncMock(
-            side_effect=[(_doc("focus", version=1), False), (_doc("focus", version=2), False)]
-        )
+        harness.knowledge.read = _reads(_doc("focus", version=1), _doc("focus", version=2))
         try:
             await harness.engine.maybe_infer("focus", [NOTE_CREATED])
         finally:
@@ -1147,4 +1229,4 @@ class TestDrainPathWiring:
 
         edges = await edge_store.list_edges(from_id="focus", to_id="cand")
         assert len(edges) == 1 and edges[0]["provenance_type"] == "inferred"
-        assert await stats_store.has_edge_inference("focus", 1, 1)
+        assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)

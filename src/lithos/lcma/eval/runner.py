@@ -37,10 +37,7 @@ def messages_for(case: Case) -> list[ChatMessage]:
     if case.messages and case.prompt_version == INFERENCE_VERSION:
         return [ChatMessage(str(m["role"]), str(m["content"])) for m in case.messages]
     return build_adjudication_prompt(
-        str(case.focus["title"]),
-        str(case.focus["content"]),
-        case.neighbours(),
-        snippet_chars=case.snippet_chars,
+        case.focus_view(), case.neighbours(), snippet_chars=case.snippet_chars
     )
 
 

@@ -14,6 +14,7 @@ from lithos.lcma.eval.cases import (
     load_cases,
     load_labels,
 )
+from lithos.lcma.note_view import NoteView
 
 
 def _case(**overrides):
@@ -90,6 +91,21 @@ class TestCase:
             1: ("supports", "candidate_to_focus"),
             2: ("contradicts", None),
         }
+
+    def test_v1_case_shows_its_text_as_sent(self) -> None:
+        case = case_from_dict(_case())
+        assert case.focus_view() == NoteView(title="Focus", content="body")
+        assert all(n.note is None for n in case.neighbours())
+
+    def test_notes_carry_date_source_and_text(self) -> None:
+        note = {"title": "A", "content": "summary", "created_at": "2026-10-15T00:00:00+00:00"}
+        data = _case()
+        data["focus"] = {"id": "f", "title": "Focus", "note": {"title": "Focus", "content": "f"}}
+        data["candidates"][0]["note"] = note
+        case = case_from_dict(data)
+        assert case.focus_view() == NoteView(title="Focus", content="f")
+        assert case.neighbours()[0].note == NoteView.from_dict(note)
+        assert case.neighbours()[1].note is None
 
     def test_tags_and_defaults(self) -> None:
         case = case_from_dict(_case(tags=["negative:unrelated"], snippet_chars=None))

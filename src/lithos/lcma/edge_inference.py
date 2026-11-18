@@ -49,7 +49,7 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -58,6 +58,7 @@ from lithos.events import EVENT_ORIGIN_ENRICH, NOTE_CREATED, NOTE_UPDATED
 from lithos.intake import EdgeRequest
 from lithos.lcma.call_log import CallLogWriter, LlmCall
 from lithos.lcma.llm import ChatMessage, LlmClient, LlmResult
+from lithos.lcma.note_view import NoteView, render_note, view_of
 
 if TYPE_CHECKING:
     from lithos.config import LlmConfig
@@ -85,7 +86,10 @@ logger = logging.getLogger(__name__)
 #: A *model/config* switch deliberately does NOT invalidate (it must not
 #: silently re-burn the corpus budget); the operator reset for that is
 #: ``StatsStore.purge_edge_inference_log(model=...)``.
-INFERENCE_VERSION = 1
+#: v2 (2026-11): each note is shown as date and source plus its summary head
+#: (:mod:`lithos.lcma.note_view`), and the system prompt states the direction
+#: conventions for versions of the same item.
+INFERENCE_VERSION = 2
 
 #: Relation types the adjudicator may assign (design doc WS2). ``none`` is a valid
 #: model answer but never a written edge — the parser drops it with the invalid.
@@ -116,18 +120,37 @@ shared knowledge base. For each candidate, choose exactly one relation:
 - analogy_to: A and B are structurally parallel solutions in different domains
 - none: no relation clearly holds (use this freely; most pairs are unrelated)
 
+Name a relation only when its definition literally holds. A shared topic, \
+venue, source or series alone is none.
+
+Two notes about the same item:
+- Near-duplicates, reposts and relays of the same content: supports, with the \
+later or derivative copy as A.
+- Successive releases or issues of the same thing: refines, with the newer as A.
+- A review, interview or write-up about an item: refines, with the review as A.
+- Different items in the same series or changelog: none.
+Use the Added dates and sources to tell which note is newer or derivative.
+
 Reply with ONLY a JSON object, no prose:
 {"judgements": [{"candidate": <number>, "relation": "<relation>", \
 "direction": "focus_to_candidate" | "candidate_to_focus", \
 "confidence": <0.0-1.0>, "rationale": "<max 25 words>"}]}
 
 direction reads left-to-right through the relation: focus_to_candidate means \
-"FOCUS <relation> CANDIDATE". Include every candidate exactly once."""
+"FOCUS <relation> CANDIDATE". For example, if FOCUS is "Tool X 2.1 released" \
+(Added 2026-10-12) and CANDIDATE is "Tool X 2.0 released" (Added 2026-09-01), \
+the answer is refines, focus_to_candidate; swap the two notes and it is \
+refines, candidate_to_focus. Include every candidate exactly once."""
 
 
 @dataclass(frozen=True)
 class NeighbourInfo:
-    """A semantic-search hit enriched with the metadata the pre-filter needs."""
+    """A semantic-search hit enriched with the metadata the pre-filter needs.
+
+    *snippet* is the search chunk that matched the focus; *note* is the
+    candidate's own view, attached after the pre-filter (``None`` when the
+    note could not be read, in which case the prompt shows the chunk alone).
+    """
 
     node_id: str
     title: str
@@ -136,6 +159,10 @@ class NeighbourInfo:
     namespace: str
     entities: frozenset[str]
     tags: frozenset[str]
+    note: NoteView | None = None
+
+    def view(self) -> NoteView:
+        return self.note if self.note is not None else NoteView(title=self.title, content="")
 
 
 @dataclass(frozen=True)
@@ -191,23 +218,27 @@ def prefilter_candidates(
 
 
 def build_adjudication_prompt(
-    focus_title: str,
-    focus_content: str,
+    focus: NoteView,
     candidates: list[NeighbourInfo],
     *,
     snippet_chars: int,
 ) -> list[ChatMessage]:
-    """Build the two-message prompt: fixed system instruction + numbered candidates."""
+    """Build the two-message prompt: fixed system instruction + numbered candidates.
+
+    *snippet_chars* bounds each note's text (title excluded); see
+    :func:`~lithos.lcma.note_view.render_note` for what fills it.
+    """
     lines = [
         "FOCUS NOTE",
-        f"Title: {focus_title}",
-        f"Content: {focus_content[:snippet_chars]}",
+        f"Title: {focus.title}",
+        render_note(focus, limit=snippet_chars),
         "",
         "CANDIDATES",
     ]
     for i, c in enumerate(candidates, start=1):
         lines.append(f"[{i}] Title: {c.title}")
-        lines.append(f"    Snippet: {c.snippet[:snippet_chars]}")
+        text = render_note(c.view(), limit=snippet_chars, chunk=c.snippet)
+        lines.extend(f"    {line}".rstrip() for line in text.splitlines())
     return [
         ChatMessage("system", _SYSTEM_PROMPT),
         ChatMessage("user", "\n".join(lines)),
@@ -218,35 +249,32 @@ def request_payload(
     messages: list[ChatMessage],
     *,
     focus_id: str,
-    focus_title: str,
-    focus_content: str,
+    focus: NoteView,
     candidates: list[NeighbourInfo],
     snippet_chars: int,
 ) -> dict[str, object]:
     """What the model saw, as one JSON-able record for the replayable call log.
 
     Carries the verbatim messages *and* the structured inputs they were
-    rendered from (already truncated to ``snippet_chars``, exactly as sent),
-    so an eval can replay this prompt version byte-for-byte or rebuild a
-    newer prompt version from the same focus/candidate pairs.
+    rendered from: each note's view (its usable text, date, source and feed)
+    and each candidate's matching chunk. An eval can replay this prompt
+    version byte-for-byte or render a later version, or another
+    ``snippet_chars``, from the same pairs.
     """
     return {
         "prompt_version": INFERENCE_VERSION,
         "snippet_chars": snippet_chars,
         "messages": [{"role": m.role, "content": m.content} for m in messages],
-        "focus": {
-            "id": focus_id,
-            "title": focus_title,
-            "content": focus_content[:snippet_chars],
-        },
+        "focus": {"id": focus_id, "title": focus.title, "note": focus.to_dict()},
         "candidates": [
             {
                 "index": i,
                 "node_id": c.node_id,
                 "title": c.title,
-                "snippet": c.snippet[:snippet_chars],
+                "snippet": c.snippet,
                 "similarity": c.similarity,
                 "namespace": c.namespace,
+                "note": c.view().to_dict(),
             }
             for i, c in enumerate(candidates, start=1)
         ],
@@ -439,14 +467,14 @@ class EdgeInferenceEngine:
             return
 
         self._calls_this_drain += 1
+        focus = view_of(doc)
         messages = build_adjudication_prompt(
-            doc.title, doc.content, candidates, snippet_chars=self._config.snippet_chars
+            focus, candidates, snippet_chars=self._config.snippet_chars
         )
         payload = request_payload(
             messages,
             focus_id=node_id,
-            focus_title=doc.title,
-            focus_content=doc.content,
+            focus=focus,
             candidates=candidates,
             snippet_chars=self._config.snippet_chars,
         )
@@ -601,7 +629,7 @@ class EdgeInferenceEngine:
                 )
             )
 
-        return prefilter_candidates(
+        survivors = prefilter_candidates(
             neighbours,
             focus_id=node_id,
             focus_namespace=focus_meta.namespace,
@@ -611,6 +639,15 @@ class EdgeInferenceEngine:
             max_similarity=self._config.max_similarity,
             k=self._config.neighbour_k,
         )
+        return [await self._with_note(c) for c in survivors]
+
+    async def _with_note(self, candidate: NeighbourInfo) -> NeighbourInfo:
+        """Attach the candidate's own view; a note that can't be read keeps its chunk only."""
+        try:
+            doc, _ = await self._knowledge.read(id=candidate.node_id)
+        except FileNotFoundError:
+            return candidate
+        return replace(candidate, note=view_of(doc))
 
     async def _current_version(self, node_id: str) -> int | None:
         """Fresh read of the focus document's version; ``None`` if it vanished."""

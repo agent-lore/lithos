@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from lithos.lcma.edge_inference import RELATION_VOCAB, SYMMETRIC_RELATIONS, NeighbourInfo
+from lithos.lcma.note_view import NoteView
 
 LABEL_RELATIONS = RELATION_VOCAB | {"none"}
 LABEL_DIRECTIONS = frozenset({"focus_to_candidate", "candidate_to_focus"})
@@ -46,6 +47,17 @@ class Case:
     def n_candidates(self) -> int:
         return len(self.candidates)
 
+    def focus_view(self) -> NoteView:
+        """The focus note as the prompt shows it.
+
+        A case recorded under prompt v1 has only the focus text as sent; it
+        stands in as the note's body, without date or source.
+        """
+        note = self.focus.get("note")
+        if isinstance(note, dict):
+            return NoteView.from_dict({**note, "title": self.focus["title"]})
+        return NoteView(title=str(self.focus["title"]), content=str(self.focus["content"]))
+
     def neighbours(self) -> list[NeighbourInfo]:
         """Rebuild the prompt inputs so a new prompt version can be rendered."""
         return [
@@ -57,6 +69,7 @@ class Case:
                 namespace=str(c.get("namespace", "default")),
                 entities=frozenset(),
                 tags=frozenset(),
+                note=NoteView.from_dict(c["note"]) if isinstance(c.get("note"), dict) else None,
             )
             for i, c in enumerate(self.candidates, start=1)
         ]
@@ -107,8 +120,12 @@ def case_from_dict(data: dict[str, Any]) -> Case:
     if not isinstance(candidates, list) or not candidates:
         raise ValueError(f"case {case_id}: candidates must be a non-empty list")
     focus = data.get("focus")
-    if not isinstance(focus, dict) or "title" not in focus or "content" not in focus:
-        raise ValueError(f"case {case_id}: focus needs title and content")
+    if (
+        not isinstance(focus, dict)
+        or "title" not in focus
+        or not ({"content", "note"} & set(focus))
+    ):
+        raise ValueError(f"case {case_id}: focus needs a title and its content or note")
     messages = data.get("messages")
     if messages is not None and not (
         isinstance(messages, list)

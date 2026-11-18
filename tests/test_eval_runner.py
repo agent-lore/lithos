@@ -69,7 +69,7 @@ class TestMessages:
         )
         rebuilt = messages_for(case)
         expected = build_adjudication_prompt(
-            "Focus", "x" * 900, case.neighbours(), snippet_chars=100
+            case.focus_view(), case.neighbours(), snippet_chars=100
         )
         assert rebuilt == expected
         assert "x" * 100 in rebuilt[1].content and "x" * 101 not in rebuilt[1].content

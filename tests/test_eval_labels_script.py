@@ -132,6 +132,25 @@ def test_sheet_quotes_exactly_what_the_model_sees(tmp_path: Path) -> None:
     assert "> line one\n>\n> " + "x" * (700 - len("line one\n\n")) + "\n" in text
 
 
+def test_sheet_shows_the_v2_view_of_each_note(tmp_path: Path) -> None:
+    case = json.loads(SEED.read_text().splitlines()[0])
+    case["candidates"] = case["candidates"][:1]
+    case["candidates"][0]["note"] = {
+        "title": case["candidates"][0]["title"],
+        "content": "## Summary\n### Contributions\n- Distinct finding\n",
+        "created_at": "2026-09-01T00:00:00+00:00",
+        "source_url": "https://example.org/x",
+    }
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text(json.dumps(case) + "\n")
+    sheet = tmp_path / "review.md"
+    eval_labels.main(["sheet", str(cases), "--out", str(sheet), "--limit", "1"])
+    text = sheet.read_text()
+    assert (
+        "> Added 2026-09-01 · Source: example.org\n> Contributions:\n> - Distinct finding\n" in text
+    )
+
+
 def test_either_direction_imports() -> None:
     labels, problems = eval_labels.parse_sheet(
         "## case a · candidate 1\nlabel: supports either medium  # two undated copies\n"
