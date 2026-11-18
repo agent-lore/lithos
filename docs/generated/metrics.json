@@ -150,7 +150,7 @@
         "qualname": "lithos.tools.notes.register.lithos_note_update"
       }
     ],
-    "total_functions": 932
+    "total_functions": 950
   },
   "components": {
     "Codec": {
@@ -4886,8 +4886,8 @@
       ]
     },
     "lithos.lcma.edge_inference.EdgeInferenceEngine._gather_candidates": {
-      "complexity": 4,
-      "length": 45,
+      "complexity": 5,
+      "length": 46,
       "module": "lithos.lcma.edge_inference",
       "path": "src/lithos/lcma/edge_inference.py",
       "paths": [
@@ -4924,6 +4924,15 @@
     "lithos.lcma.edge_inference.EdgeInferenceEngine._skip": {
       "complexity": 3,
       "length": 4,
+      "module": "lithos.lcma.edge_inference",
+      "path": "src/lithos/lcma/edge_inference.py",
+      "paths": [
+        "src/lithos/lcma/edge_inference.py"
+      ]
+    },
+    "lithos.lcma.edge_inference.EdgeInferenceEngine._with_note": {
+      "complexity": 2,
+      "length": 7,
       "module": "lithos.lcma.edge_inference",
       "path": "src/lithos/lcma/edge_inference.py",
       "paths": [
@@ -4975,9 +4984,18 @@
         "src/lithos/lcma/edge_inference.py"
       ]
     },
-    "lithos.lcma.edge_inference.build_adjudication_prompt": {
+    "lithos.lcma.edge_inference.NeighbourInfo.view": {
       "complexity": 2,
-      "length": 22,
+      "length": 2,
+      "module": "lithos.lcma.edge_inference",
+      "path": "src/lithos/lcma/edge_inference.py",
+      "paths": [
+        "src/lithos/lcma/edge_inference.py"
+      ]
+    },
+    "lithos.lcma.edge_inference.build_adjudication_prompt": {
+      "complexity": 3,
+      "length": 26,
       "module": "lithos.lcma.edge_inference",
       "path": "src/lithos/lcma/edge_inference.py",
       "paths": [
@@ -5013,7 +5031,7 @@
     },
     "lithos.lcma.edge_inference.request_payload": {
       "complexity": 3,
-      "length": 37,
+      "length": 34,
       "module": "lithos.lcma.edge_inference",
       "path": "src/lithos/lcma/edge_inference.py",
       "paths": [
@@ -5335,6 +5353,15 @@
         "src/lithos/lcma/entities.py"
       ]
     },
+    "lithos.lcma.eval.cases.Case.focus_view": {
+      "complexity": 2,
+      "length": 10,
+      "module": "lithos.lcma.eval.cases",
+      "path": "src/lithos/lcma/eval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/cases.py"
+      ]
+    },
     "lithos.lcma.eval.cases.Case.n_candidates": {
       "complexity": 1,
       "length": 2,
@@ -5345,8 +5372,8 @@
       ]
     },
     "lithos.lcma.eval.cases.Case.neighbours": {
-      "complexity": 2,
-      "length": 14,
+      "complexity": 3,
+      "length": 15,
       "module": "lithos.lcma.eval.cases",
       "path": "src/lithos/lcma/eval/cases.py",
       "paths": [
@@ -5400,7 +5427,7 @@
     },
     "lithos.lcma.eval.cases.case_from_dict": {
       "complexity": 15,
-      "length": 30,
+      "length": 34,
       "module": "lithos.lcma.eval.cases",
       "path": "src/lithos/lcma/eval/cases.py",
       "paths": [
@@ -5652,7 +5679,7 @@
     },
     "lithos.lcma.eval.runner.messages_for": {
       "complexity": 4,
-      "length": 14,
+      "length": 11,
       "module": "lithos.lcma.eval.runner",
       "path": "src/lithos/lcma/eval/runner.py",
       "paths": [
@@ -5981,6 +6008,141 @@
       "path": "src/lithos/lcma/migrations.py",
       "paths": [
         "src/lithos/lcma/migrations.py"
+      ]
+    },
+    "lithos.lcma.note_view.NoteView.from_dict": {
+      "complexity": 1,
+      "length": 8,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view.NoteView.to_dict": {
+      "complexity": 3,
+      "length": 2,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view._already_shown": {
+      "complexity": 2,
+      "length": 4,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view._body": {
+      "complexity": 6,
+      "length": 10,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view._domain": {
+      "complexity": 1,
+      "length": 3,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view._join": {
+      "complexity": 3,
+      "length": 2,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view._optional": {
+      "complexity": 3,
+      "length": 2,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view._plain": {
+      "complexity": 4,
+      "length": 7,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view._prose": {
+      "complexity": 5,
+      "length": 5,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view._section": {
+      "complexity": 4,
+      "length": 11,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view._subsection": {
+      "complexity": 3,
+      "length": 4,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view.provenance_line": {
+      "complexity": 8,
+      "length": 11,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view.render_note": {
+      "complexity": 7,
+      "length": 18,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view.usable_content": {
+      "complexity": 2,
+      "length": 11,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
+    "lithos.lcma.note_view.view_of": {
+      "complexity": 5,
+      "length": 10,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
       ]
     },
     "lithos.lcma.retrieve._days_since": {
@@ -9359,7 +9521,7 @@
       }
     },
     "cross_component_edges": 74,
-    "cross_component_module_edges": 178,
+    "cross_component_module_edges": 179,
     "edges": [
       {
         "imports": [
@@ -9810,7 +9972,8 @@
       {
         "imports": [
           "lithos.lcma.edge_inference -> lithos.frontmatter_codec",
-          "lithos.lcma.enrich -> lithos.frontmatter_codec"
+          "lithos.lcma.enrich -> lithos.frontmatter_codec",
+          "lithos.lcma.note_view -> lithos.frontmatter_codec"
         ],
         "source": "LCMA",
         "target": "Codec"
@@ -10067,7 +10230,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "5fc21bed74d80d95b12976e11b0c635eb6e27c1b8184befdbb9752b4d4b108f4",
+    "source_hash": "83328936dae2c6747f0a75dd545eb345f9a8dc4d9d75d293850270cc12ce6d8f",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -10133,7 +10296,7 @@
     "lithos.config": {
       "component": "Config",
       "functions": 27,
-      "lines": 618,
+      "lines": 620,
       "max_complexity": 14,
       "path": "src/lithos/config.py",
       "sloc": 424
@@ -10244,11 +10407,11 @@
     },
     "lithos.lcma.edge_inference": {
       "component": "LCMA",
-      "functions": 18,
-      "lines": 672,
+      "functions": 20,
+      "lines": 709,
       "max_complexity": 23,
       "path": "src/lithos/lcma/edge_inference.py",
-      "sloc": 572
+      "sloc": 600
     },
     "lithos.lcma.edge_reinforce": {
       "component": "LCMA",
@@ -10284,11 +10447,11 @@
     },
     "lithos.lcma.eval.cases": {
       "component": "LCMA",
-      "functions": 14,
-      "lines": 255,
+      "functions": 15,
+      "lines": 272,
       "max_complexity": 15,
       "path": "src/lithos/lcma/eval/cases.py",
-      "sloc": 216
+      "sloc": 231
     },
     "lithos.lcma.eval.compare": {
       "component": "LCMA",
@@ -10325,10 +10488,10 @@
     "lithos.lcma.eval.runner": {
       "component": "LCMA",
       "functions": 10,
-      "lines": 206,
+      "lines": 203,
       "max_complexity": 5,
       "path": "src/lithos/lcma/eval/runner.py",
-      "sloc": 178
+      "sloc": 175
     },
     "lithos.lcma.eval.scoring": {
       "component": "LCMA",
@@ -10353,6 +10516,14 @@
       "max_complexity": 4,
       "path": "src/lithos/lcma/migrations.py",
       "sloc": 104
+    },
+    "lithos.lcma.note_view": {
+      "component": "LCMA",
+      "functions": 15,
+      "lines": 191,
+      "max_complexity": 8,
+      "path": "src/lithos/lcma/note_view.py",
+      "sloc": 141
     },
     "lithos.lcma.retrieve": {
       "component": "LCMA",
@@ -10664,8 +10835,8 @@
         "classes": 10,
         "functions": 27,
         "largest_module": "lithos.config",
-        "largest_module_lines": 618,
-        "lines": 618,
+        "largest_module_lines": 620,
+        "lines": 620,
         "modules": 1,
         "public_symbols": 13,
         "sloc": 424
@@ -10751,14 +10922,14 @@
         "sloc": 1752
       },
       "LCMA": {
-        "classes": 23,
-        "functions": 235,
+        "classes": 24,
+        "functions": 253,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1386,
-        "lines": 7329,
-        "modules": 21,
-        "public_symbols": 82,
-        "sloc": 6003
+        "lines": 7571,
+        "modules": 22,
+        "public_symbols": 87,
+        "sloc": 6184
       },
       "Logging": {
         "classes": 1,
@@ -10827,13 +10998,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 29181,
-    "total_modules": 56,
-    "total_sloc": 23702
+    "total_lines": 29425,
+    "total_modules": 57,
+    "total_sloc": 23883
   },
   "tests": {
     "ratio": 1.75,
-    "src_lines": 29181,
-    "test_lines": 51130
+    "src_lines": 29425,
+    "test_lines": 51517
   }
 }

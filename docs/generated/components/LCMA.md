@@ -13,7 +13,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 |---|---|---:|---:|
 | `lithos.lcma` | XS | 0 | 0 |
 | `lithos.lcma.call_log` | S | 3 | 1 |
-| `lithos.lcma.edge_inference` | M | 3 | 5 |
+| `lithos.lcma.edge_inference` | L | 3 | 5 |
 | `lithos.lcma.edge_reinforce` | XS | 0 | 1 |
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
@@ -27,6 +27,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.eval.scoring` | S | 1 | 6 |
 | `lithos.lcma.llm` | S | 3 | 0 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
+| `lithos.lcma.note_view` | S | 1 | 4 |
 | `lithos.lcma.retrieve` | L | 0 | 1 |
 | `lithos.lcma.salience` | S | 0 | 3 |
 | `lithos.lcma.scouts` | L | 2 | 11 |
@@ -123,6 +124,13 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 ### `lithos.lcma.migrations`
 - class `MigrationRegistry` — Persistent registry tracking applied schema migrations.
 - def `run_migrations` — Run all pending migrations in order.
+
+### `lithos.lcma.note_view`
+- class `NoteView` — The parts of a note the adjudication prompt can show.
+- def `view_of` — The view of a stored note: its usable text plus date, source and feed.
+- def `usable_content` — The part of a note's body a view can show.
+- def `provenance_line` — ``Added 2026-10-15 · Source: example.org (feed)``, or ``""`` when unknown.
+- def `render_note` — The text shown for *view*, at most *limit* characters (title excluded).
 
 ### `lithos.lcma.retrieve`
 - def `compute_temperature` — Return the MVP 1 retrieval temperature.

@@ -16,7 +16,13 @@ model that answers one direction regardless fails on the labels.
     python scripts/eval_cases.py attach-notes evals/edges/cases.jsonl \\
         --vault prod=~/projects/lithos/data/prod/lithos/knowledge \\
         --vault staging=~/projects/lithos/data/staging/lithos/knowledge
-    python scripts/eval_cases.py mirror evals/edges/cases.jsonl evals/edges/labels.jsonl
+    python scripts/eval_cases.py mirror evals/edges/cases.jsonl evals/edges/labels.jsonl \
+        --exclude evals/edges/mirror-exclude.txt
+
+A mirror only works when the swapped prompt still shows what the label rests
+on. A focus never shows a matching passage, so a slot whose evidence was in the
+candidate's passage cannot be mirrored; ``--exclude`` lists those slots, one
+``case_id/index`` per line (``#`` starts a comment).
 """
 
 from __future__ import annotations
@@ -106,14 +112,24 @@ def attach_notes(
 
 
 def mirror_cases(
-    cases: list[dict[str, Any]], labels: list[dict[str, Any]], today: str
+    cases: list[dict[str, Any]],
+    labels: list[dict[str, Any]],
+    today: str,
+    exclude: frozenset[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Cases and labels with the mirrors regenerated (any earlier mirrors dropped)."""
+    """Cases and labels with the mirrors regenerated (any earlier mirrors dropped).
+
+    *exclude* holds ``case_id/index`` slots not to mirror.
+    """
     cases = [c for c in cases if not str(c["case_id"]).startswith(MIRROR_PREFIX)]
     labels = [lab for lab in labels if not str(lab["case_id"]).startswith(MIRROR_PREFIX)]
     by_id = {c["case_id"]: c for c in cases}
     sources = sorted(
-        (lab for lab in labels if _mirrorable(lab)),
+        (
+            lab
+            for lab in labels
+            if _mirrorable(lab) and f"{lab['case_id']}/{lab['candidate_index']}" not in exclude
+        ),
         key=lambda lab: (lab["case_id"], lab["candidate_index"]),
     )
     new_cases: list[dict[str, Any]] = []
@@ -138,6 +154,14 @@ def mirror_cases(
             }
         )
     return cases + new_cases, labels + new_labels
+
+
+def read_exclusions(path: Path | None) -> frozenset[str]:
+    """``case_id/index`` slots from an exclusion file; comments and blanks ignored."""
+    if path is None:
+        return frozenset()
+    lines = (line.split("#", 1)[0].strip() for line in path.read_text().splitlines())
+    return frozenset(line for line in lines if line)
 
 
 def _mirrorable(label: dict[str, Any]) -> bool:
@@ -186,7 +210,9 @@ def _mirror(case: dict[str, Any], index: int, mirror_id: str) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     att = sub.add_parser("attach-notes", help="attach prompt-v2 note views from vaults")
     att.add_argument("cases", type=Path)
@@ -195,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     mir = sub.add_parser("mirror", help="regenerate the mirrored candidate_to_focus cases")
     mir.add_argument("cases", type=Path)
     mir.add_argument("labels", type=Path)
+    mir.add_argument("--exclude", type=Path, help="file of case_id/index slots not to mirror")
     args = parser.parse_args(argv)
 
     if args.cmd == "attach-notes":
@@ -211,7 +238,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if missing else 0
 
     cases, labels = mirror_cases(
-        _read_jsonl(args.cases), _read_jsonl(args.labels), datetime.now(UTC).date().isoformat()
+        _read_jsonl(args.cases),
+        _read_jsonl(args.labels),
+        datetime.now(UTC).date().isoformat(),
+        read_exclusions(args.exclude),
     )
     _write_jsonl(args.cases, cases)
     _write_jsonl(args.labels, labels)

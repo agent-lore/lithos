@@ -121,6 +121,19 @@ def test_mirror_swaps_notes_and_flips_scored_directions_only() -> None:
     )
 
 
+def test_mirror_skips_excluded_slots(tmp_path: Path) -> None:
+    exclude = tmp_path / "exclude.txt"
+    exclude.write_text("# evidence only in the candidate's passage\nc1/1  # reason\n\n")
+    labels = [
+        _label(1, "supports", "focus_to_candidate"),
+        _label(2, "refines", "focus_to_candidate"),
+    ]
+    cases, _ = eval_cases.mirror_cases(
+        [_case()], labels, "2026-11-18", eval_cases.read_exclusions(exclude)
+    )
+    assert [c["tags"][1] for c in cases if c["case_id"].startswith("mirror-")] == ["mirror-of:c1/2"]
+
+
 def test_mirror_regenerates_rather_than_appends() -> None:
     labels = [_label(1, "supports", "focus_to_candidate")]
     cases, labels = eval_cases.mirror_cases([_case()], labels, "2026-11-18")
