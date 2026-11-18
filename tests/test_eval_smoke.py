@@ -14,11 +14,10 @@ from pathlib import Path
 import pytest
 
 from lithos.config import LlmConfig
-from lithos.lcma.edge_inference import build_adjudication_prompt
 from lithos.lcma.eval.cases import check_labels_cover_cases, load_cases, load_labels
 from lithos.lcma.eval.compare import gate, load_policy
 from lithos.lcma.eval.prices import load_prices
-from lithos.lcma.eval.runner import build_run_document, results_from_recorded
+from lithos.lcma.eval.runner import build_run_document, messages_for, results_from_recorded
 from lithos.lcma.eval.scoring import compute_metrics
 
 EDGES = Path("evals/edges/seed")
@@ -115,16 +114,10 @@ def test_production_set_replays_its_reference() -> None:
     cases = load_cases(PRODUCTION)
     assert len({case.case_id for case in cases}) == len(cases)
     exported = [case for case in cases if case.reference is not None]
-    for case in exported:
-        # Hand-built cases can only be rebuilt; this pins that a rebuild is
-        # what the incumbent saw for the exported ones.
-        rebuilt = build_adjudication_prompt(
-            str(case.focus["title"]),
-            str(case.focus["content"]),
-            case.neighbours(),
-            snippet_chars=case.snippet_chars,
-        )
-        assert case.messages == [{"role": m.role, "content": m.content} for m in rebuilt]
+    for case in cases:
+        # Every case renders under the current prompt, every candidate numbered.
+        user = messages_for(case)[1].content
+        assert all(f"[{i}] Title: " in user for i in range(1, case.n_candidates + 1))
     assert all(
         any(tag.startswith(("negative:", "positive:", "lang:")) for tag in case.tags)
         for case in cases

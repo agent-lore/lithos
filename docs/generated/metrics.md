@@ -62,7 +62,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "5fc21bed74d80d95b12976e11b0c635eb6e27c1b8184befdbb9752b4d4b108f4",
+  "source_hash": "6c8bff466e91925e05102d62a64edf0fb8add0b5c1aaf2364ac2640bb99b5fce",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -140,13 +140,14 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_complexity | lithos.lcma.enrich._resolve_node_id | 15 | 15 | review | — |
 | unchanged | function_complexity | lithos.lcma.entities._clean_candidate | 15 | 15 | review | — |
 | unchanged | function_complexity | lithos.lcma.entities._heuristic_entities | 14 | 14 | review | — |
-| unchanged | function_complexity | lithos.lcma.eval.cases.case_from_dict | 15 | 15 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.cases.case_from_dict | 20 | 20 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.cases.label_from_dict | 14 | 14 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.compare.evidence_mismatch | 13 | 13 | review | — |
-| unchanged | function_complexity | lithos.lcma.eval.compare.gate | 22 | 22 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.compare.gate | 26 | 26 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.report.summarize_calls | 26 | 26 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.scoring.compute_metrics | 36 | 36 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.scoring.score_against_labels | 13 | 13 | review | — |
+| unchanged | function_complexity | lithos.lcma.note_view._without_excluded | 15 | 15 | review | — |
 | unchanged | function_complexity | lithos.lcma.retrieve._rerank_fast | 12 | 12 | review | — |
 | unchanged | function_complexity | lithos.lcma.retrieve._run_retrieve_impl | 41 | 41 | review | — |
 | unchanged | function_complexity | lithos.lcma.scouts._gate | 13 | 13 | review | — |
@@ -198,10 +199,11 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos.knowledge.KnowledgeManager.create | 194 | 194 | review | — |
 | unchanged | function_length | lithos.knowledge.KnowledgeManager.list_all | 97 | 97 | review | — |
 | unchanged | function_length | lithos.knowledge.KnowledgeManager.update | 281 | 281 | review | — |
-| unchanged | function_length | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 163 | 163 | review | — |
+| unchanged | function_length | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 161 | 161 | review | — |
 | unchanged | function_length | lithos.lcma.edge_inference.parse_adjudications | 77 | 77 | review | — |
 | unchanged | function_length | lithos.lcma.enrich.EnrichWorker._consolidate_task | 78 | 78 | review | — |
 | unchanged | function_length | lithos.lcma.enrich.EnrichWorker.drain | 78 | 78 | review | — |
+| unchanged | function_length | lithos.lcma.eval.compare.gate | 77 | 77 | review | — |
 | unchanged | function_length | lithos.lcma.retrieve._rerank_fast | 128 | 128 | review | — |
 | unchanged | function_length | lithos.lcma.retrieve._run_retrieve_impl | 363 | 363 | review | — |
 | unchanged | function_length | lithos.lcma.scouts.scout_graph | 85 | 85 | review | — |
@@ -270,7 +272,7 @@ Optional measurements are source-bound; missing or stale evidence is not a score
 
 ## Import graph
 
-- Cross-component edges: **74** (178 module-level)
+- Cross-component edges: **74** (179 module-level)
 - Component cycles: none
 - Module cycles: lithos.server ↔ lithos.tools ↔ lithos.tools.agents ↔ lithos.tools.findings_stats ↔ lithos.tools.memory_edges ↔ lithos.tools.notes ↔ lithos.tools.read_search ↔ lithos.tools.tasks
 - Tier-skipping edges (Entrypoints → Foundation): 5 (Entrypoints -> Config, Entrypoints -> Errors, Entrypoints -> Events, Entrypoints -> Logging, Entrypoints -> Telemetry)
@@ -285,7 +287,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 |---|---:|---:|---:|---:|---:|---:|---|---:|
 | Codec | 1 | 806 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
 | CognitiveMemory | 1 | 1458 | 1230 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
-| Config | 1 | 618 | 424 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
+| Config | 1 | 620 | 424 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 3 | 3217 | 2717 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
 | Entrypoints | 13 | 6514 | 5282 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 14 |
 | Errors | 2 | 276 | 205 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
@@ -294,7 +296,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | IdResolution | 1 | 127 | 100 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
 | Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 2169 | 1752 | 5 | 8 | 0.62 | 63 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
-| LCMA | 21 | 7329 | 6003 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 25 |
+| LCMA | 22 | 7667 | 6269 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 26 |
 | Logging | 1 | 164 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 2102 | 1717 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 7 |
@@ -303,7 +305,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **56**, lines: **29181**, SLOC: **23702**
+- Modules: **57**, lines: **29521**, SLOC: **23968**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -321,9 +323,9 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **932**, cyclomatic > 10: **72**
+- Functions: **952**, cyclomatic > 10: **73**
 - Cyclomatic distribution: median **2**, p90 **9**, max **70**
-- Function length (lines): median 14, p90 62, max 1006 (`lithos.tools.tasks.register`); over 75: **62**
+- Function length (lines): median 14, p90 62, max 1006 (`lithos.tools.tasks.register`); over 75: **63**
 
 Top 10 most complex functions:
 
@@ -336,9 +338,9 @@ Top 10 most complex functions:
 | 33 | 207 | `lithos.search.SearchEngine.graph_search` |
 | 30 | 196 | `lithos.tools.read_search.register.lithos_list` |
 | 26 | 82 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
+| 26 | 77 | `lithos.lcma.eval.compare.gate` |
 | 26 | 50 | `lithos.lcma.eval.report.summarize_calls` |
 | 26 | 103 | `lithos.search.TantivyIndex.search` |
-| 26 | 159 | `lithos.tools.notes.register.lithos_note_update` |
 
 ## Seams
 
@@ -401,4 +403,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **45** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.75** (51130 test lines / 29181 source lines)
+- Test-to-source line ratio: **1.75** (51628 test lines / 29521 source lines)

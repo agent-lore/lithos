@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from lithos.lcma.edge_inference import RELATION_VOCAB, SYMMETRIC_RELATIONS, NeighbourInfo
+from lithos.lcma.note_view import NoteView
 
 LABEL_RELATIONS = RELATION_VOCAB | {"none"}
 LABEL_DIRECTIONS = frozenset({"focus_to_candidate", "candidate_to_focus"})
@@ -37,7 +38,7 @@ class Case:
     candidates: list[dict[str, Any]]
     messages: list[dict[str, str]] | None
     prompt_version: int | None
-    snippet_chars: int
+    note_chars: int
     reference: dict[str, Any] | None = None
     tags: tuple[str, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -45,6 +46,10 @@ class Case:
     @property
     def n_candidates(self) -> int:
         return len(self.candidates)
+
+    def focus_view(self) -> NoteView:
+        """The focus note as the prompt shows it."""
+        return NoteView.from_dict({**self.focus["note"], "title": self.focus["title"]})
 
     def neighbours(self) -> list[NeighbourInfo]:
         """Rebuild the prompt inputs so a new prompt version can be rendered."""
@@ -57,6 +62,7 @@ class Case:
                 namespace=str(c.get("namespace", "default")),
                 entities=frozenset(),
                 tags=frozenset(),
+                note=NoteView.from_dict(c["note"]),
             )
             for i, c in enumerate(self.candidates, start=1)
         ]
@@ -107,8 +113,17 @@ def case_from_dict(data: dict[str, Any]) -> Case:
     if not isinstance(candidates, list) or not candidates:
         raise ValueError(f"case {case_id}: candidates must be a non-empty list")
     focus = data.get("focus")
-    if not isinstance(focus, dict) or "title" not in focus or "content" not in focus:
-        raise ValueError(f"case {case_id}: focus needs title and content")
+    if (
+        not isinstance(focus, dict)
+        or "title" not in focus
+        or not isinstance(focus.get("note"), dict)
+    ):
+        raise ValueError(f"case {case_id}: focus needs a title and a note")
+    if not all(isinstance(c, dict) and isinstance(c.get("note"), dict) for c in candidates):
+        raise ValueError(f"case {case_id}: every candidate needs a note")
+    note_chars = data.get("note_chars")
+    if isinstance(note_chars, bool) or not isinstance(note_chars, int) or note_chars < 1:
+        raise ValueError(f"case {case_id}: note_chars must be a positive int")
     messages = data.get("messages")
     if messages is not None and not (
         isinstance(messages, list)
@@ -116,7 +131,6 @@ def case_from_dict(data: dict[str, Any]) -> Case:
     ):
         raise ValueError(f"case {case_id}: messages must be role/content objects")
     prompt_version = data.get("prompt_version")
-    snippet_chars = int(data.get("snippet_chars") or 700)
     tags = tuple(str(t) for t in data.get("tags", []))
     return Case(
         case_id=case_id,
@@ -124,7 +138,7 @@ def case_from_dict(data: dict[str, Any]) -> Case:
         candidates=candidates,
         messages=messages,
         prompt_version=None if prompt_version is None else int(prompt_version),
-        snippet_chars=snippet_chars,
+        note_chars=note_chars,
         reference=data.get("reference"),
         tags=tags,
         raw=data,
@@ -188,7 +202,7 @@ def cases_fingerprint(cases: list[Case]) -> str:
                 "case_id": c.case_id,
                 "focus": c.focus,
                 "candidates": c.candidates,
-                "snippet_chars": c.snippet_chars,
+                "note_chars": c.note_chars,
                 "reference": (c.reference or {}).get("judgements"),
             }
             for c in sorted(cases, key=lambda c: c.case_id)

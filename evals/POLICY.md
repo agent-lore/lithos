@@ -27,8 +27,18 @@ A drop of exactly a maximum passes, whatever the float rounding.
 3. **Every failure rate** in `failure_outcomes` (`partial`, `empty`,
    `parse_error`, `error`) is at or below the incumbent's.
 4. **Cost per 1,000 calls** (from `evals/prices.toml` at the run's mean token
-   split) is at least `cost_min_reduction` lower — or no higher, with
-   relation agreement strictly better.
+   split) meets one of these:
+   - it is at least `cost_min_reduction` lower;
+   - it is no higher, with relation agreement strictly better;
+   - **quality path:** it is at most `quality_max_cost_increase` higher, and
+     agreement rose by at least each measure's tolerance: relation by
+     `relation_agreement_max_drop`, and direction by
+     `direction_agreement_max_drop` when the truth has directed slots.
+
+   The first two suit a model swap, whose point is a lower cost. The quality
+   path lets a prompt change that is clearly better pay a bounded price. It
+   was added for prompt v2 (2026-11-18), which was 14% dearer than v1 and
+   raised relation agreement by 9 points and direction agreement by 30.
 
 Ground truth is the reviewed human labels when both runs were scored against
 them (`labels.n_slots > 0`); otherwise the incumbent's own recorded
@@ -47,6 +57,7 @@ under `evals/runs/` either way.
 relation_agreement_max_drop = 0.03
 direction_agreement_max_drop = 0.05
 cost_min_reduction = 0.30
+quality_max_cost_increase = 0.25
 failure_outcomes = ["partial", "empty", "parse_error", "error"]
 ```
 

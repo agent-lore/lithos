@@ -14,12 +14,13 @@ from lithos.lcma.eval.cases import (
     load_cases,
     load_labels,
 )
+from lithos.lcma.note_view import NoteView
 
 
 def _case(**overrides):
     base = {
         "case_id": "c1",
-        "focus": {"id": "f", "title": "Focus", "content": "body"},
+        "focus": {"id": "f", "title": "Focus", "note": {"title": "Focus", "content": "body"}},
         "candidates": [
             {
                 "index": 1,
@@ -28,6 +29,7 @@ def _case(**overrides):
                 "snippet": "sa",
                 "similarity": 0.6,
                 "namespace": "default",
+                "note": {"title": "A", "content": "a"},
             },
             {
                 "index": 2,
@@ -36,11 +38,12 @@ def _case(**overrides):
                 "snippet": "sb",
                 "similarity": 0.5,
                 "namespace": "default",
+                "note": {"title": "B", "content": "b"},
             },
         ],
         "messages": None,
         "prompt_version": None,
-        "snippet_chars": 700,
+        "note_chars": 700,
         "reference": {
             "model": "ref",
             "judgements": [
@@ -91,10 +94,19 @@ class TestCase:
             2: ("contradicts", None),
         }
 
-    def test_tags_and_defaults(self) -> None:
-        case = case_from_dict(_case(tags=["negative:unrelated"], snippet_chars=None))
+    def test_notes_carry_date_source_and_text(self) -> None:
+        note = {"title": "A", "content": "summary", "created_at": "2026-10-15T00:00:00+00:00"}
+        data = _case()
+        data["candidates"][0]["note"] = note
+        case = case_from_dict(data)
+        assert case.focus_view() == NoteView(title="Focus", content="body")
+        assert case.neighbours()[0].note == NoteView.from_dict(note)
+        assert case.neighbours()[0].snippet == "sa"
+
+    def test_tags_and_budget(self) -> None:
+        case = case_from_dict(_case(tags=["negative:unrelated"]))
         assert case.tags == ("negative:unrelated",)
-        assert case.snippet_chars == 700
+        assert case.note_chars == 700
 
     @pytest.mark.parametrize(
         "bad, match",
@@ -102,6 +114,13 @@ class TestCase:
             ({"case_id": ""}, "case_id"),
             ({"candidates": []}, "candidates"),
             ({"focus": {"title": "x"}}, "focus"),
+            ({"focus": {"title": "x", "content": "v1 text only"}}, "focus"),
+            (
+                {"candidates": [{"index": 1, "title": "A", "snippet": "s"}]},
+                "candidate needs a note",
+            ),
+            ({"note_chars": None}, "note_chars"),
+            ({"note_chars": 0}, "note_chars"),
             ({"messages": [{"role": "user"}]}, "messages"),
         ],
     )

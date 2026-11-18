@@ -22,7 +22,7 @@ settle (two copies, neither dated): the relation is scored, the direction is
 not. A line ``label: skip`` leaves the slot unlabelled.
 
 The sheet quotes the focus and candidate text exactly as the prompt sends
-them, cut at the case's ``snippet_chars``, so the reviewer sees what the model
+them, cut at the case's ``note_chars``, so the reviewer sees what the model
 saw.
 """
 
@@ -35,6 +35,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from lithos.lcma.eval.cases import case_from_dict
+from lithos.lcma.note_view import render_note
 
 RELATIONS = {
     "supports",
@@ -64,9 +67,9 @@ def _clip(text: str, limit: int = 600) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _quote(text: str, limit: int) -> list[str]:
-    """The first *limit* characters, as the prompt sends them, as a Markdown quote."""
-    return [f"> {line}".rstrip() for line in str(text)[:limit].splitlines()] or [">"]
+def _quote(text: str) -> list[str]:
+    """Text exactly as the prompt sends it, as a Markdown quote."""
+    return [f"> {line}".rstrip() for line in str(text).splitlines()] or [">"]
 
 
 def _label_line(
@@ -117,16 +120,18 @@ def write_sheet(
             slots += 1
             ref = ref_by_index.get(index)
             prop = proposed.get((case["case_id"], index))
-            shown = int(case.get("snippet_chars") or 700)
+            parsed = case_from_dict(case)
+            shown = parsed.note_chars
+            neighbour = parsed.neighbours()[index - 1]
             lines += [
                 f"## case {case['case_id']} · candidate {index}",
                 "",
                 f"**Focus:** {case['focus'].get('title', '')}",
-                *_quote(case["focus"].get("content", ""), shown),
+                *_quote(render_note(parsed.focus_view(), limit=shown)),
                 "",
                 f"**Candidate [{index}]:** {candidate.get('title', '')} "
                 f"(similarity {float(candidate.get('similarity', 0.0)):.2f})",
-                *_quote(candidate.get("snippet", ""), shown),
+                *_quote(render_note(neighbour.view(), limit=shown, chunk=neighbour.snippet)),
                 "",
             ]
             if ref is not None:

@@ -41,7 +41,7 @@ reused until the prompt version or the corpus changes materially.
   `lcma.llm.call_log_retention_days` (default 30) is non-zero.
 - **The incumbent's exact configuration**, from `docker/.env.<env>`:
   `LITHOS_LCMA__LLM__MODEL`, `…REASONING_EFFORT` (unset = provider default),
-  `…MAX_OUTPUT_TOKENS`, `…CONFIDENCE_FLOOR`, `…SNIPPET_CHARS`. The baseline
+  `…MAX_OUTPUT_TOKENS`, `…CONFIDENCE_FLOOR`, `…NOTE_CHARS`. The baseline
   run must use the same values or it is not the incumbent.
 
 ## 1. Let the call log fill

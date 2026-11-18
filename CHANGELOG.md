@@ -22,8 +22,55 @@ Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
   nearest note is unrelated is now a clean miss instead of a hit.
 - **Two new response keys.** `match` (`"source_url"` / `"semantic"` / `null`)
   and `score` appear on every non-error `lithos_cache_lookup` response.
+- **Typed-edge adjudication uses prompt v2** (`INFERENCE_VERSION` 2). Each
+  call sends about 700 more prompt tokens. Notes are re-adjudicated under v2
+  only when they next change; nothing re-runs the whole corpus.
+- **`lcma.llm.snippet_chars` is renamed `note_chars`**
+  (`LITHOS_LCMA__LLM__NOTE_CHARS`). It now caps each note's whole text and
+  defaults to 1200; the old setting defaulted to 700. Golden-set cases and
+  call-log requests use the new key.
 
 ### Added — LLM synthesis
+
+#### Adjudication prompt v2: date, source and summary head per note (task a06c08c0)
+
+Prompt v1 showed each candidate one search chunk that often held only
+Influx's relevance blurb, and only one candidate in ten showed a date or
+source. v2 (`lithos.lcma.note_view`) shows every note as:
+
+- an `Added <date> · Source: <domain> (<feed>)` line;
+- its summary's Contributions and Result, then Method when it fits whole;
+- for a candidate, what the matching chunk adds when room remains: the
+  lines the summary doesn't already show, without Influx's archive path or
+  profile-relevance sections.
+
+The system prompt states the strict labelling standard and the direction
+conventions for versions of the same item. The call log records each note's
+view, so later prompt versions can be rendered from exported cases.
+
+Golden set and labels v2 (`evals/edges/README.md`):
+
+- **Note views:** every case now carries the v2 view of each note, attached
+  by the new `scripts/eval_cases.py attach-notes`.
+- **Mirrors:** 21 mirrored cases, made by `scripts/eval_cases.py mirror`,
+  balance the scored directions at 23 `focus_to_candidate` and 21
+  `candidate_to_focus`.
+- **Re-check:** all labelled slots were re-checked in the v2 text, and 5
+  labels changed.
+
+Decision runs (`evals/runs/20261118-edges-prompt-v2.md`), all on Luna `low`:
+
+- **Precision:** prompt v2 names a relation correctly 84% of the time,
+  against 44% for v1.
+- **Recall:** it finds 61% of the labelled relations, against 51%.
+- **Direction:** it gets 24 of 26 directions right where the relation is
+  right, against 11 of 21.
+- **Cost:** 14% more per call.
+
+`evals/POLICY.md` gained a **quality path** in the cost rule
+(`quality_max_cost_increase = 0.25`): a candidate may cost up to 25% more
+when relation agreement rises by at least 3 points and direction agreement by
+at least 5. Prompt v2 passes on it.
 
 #### `lithos eval run` / `compare --gate`, golden-set schema, promotion policy, smoke gate (eval suite E2/E3/E5/E7; tasks 70610498, 9ad0a592)
 

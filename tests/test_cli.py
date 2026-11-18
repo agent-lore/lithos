@@ -244,6 +244,7 @@ class TestEvalCommands:
             build_adjudication_prompt,
             request_payload,
         )
+        from lithos.lcma.note_view import NoteView
 
         store = StatsStore(test_config)
         await store.open()
@@ -251,14 +252,14 @@ class TestEvalCommands:
             candidates = [
                 NeighbourInfo("c1", "Note c1", "snippet", 0.6, "default", frozenset(), frozenset())
             ]
-            messages = build_adjudication_prompt("Focus", "body", candidates, snippet_chars=700)
+            focus = NoteView(title="Focus", content="body")
+            messages = build_adjudication_prompt(focus, candidates, note_chars=700)
             payload = request_payload(
                 messages,
                 focus_id="focus",
-                focus_title="Focus",
-                focus_content="body",
+                focus=focus,
                 candidates=candidates,
-                snippet_chars=700,
+                note_chars=700,
             )
             writer = CallLogWriter(store, test_config.storage.lithos_store_path / BLOB_SUBDIR)
             await writer.record(

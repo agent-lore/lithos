@@ -1,0 +1,5 @@
+# Labelled slots that scripts/eval_cases.py mirror must not mirror: swapping
+# the notes hides what the label rests on, because a focus never shows a
+# matching passage (prompt v2 re-review, 2026-11-18).
+2fee8107dbe960cb/2  # "We published prover-estimator debate" is only in the candidate's passage
+neg-dup-02/1        # the 2026-10-19 archive path that orders the pair is only in the candidate's passage

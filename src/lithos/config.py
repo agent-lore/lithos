@@ -227,7 +227,9 @@ class LlmConfig(BaseModel):
     # far-off pairs both waste adjudication tokens.
     min_similarity: float = Field(default=0.35, ge=0.0, le=1.0)
     max_similarity: float = Field(default=0.92, ge=0.0, le=1.0)
-    snippet_chars: int = Field(default=700, gt=0)
+    # Characters of each note's text the adjudicator sees (title excluded): its
+    # date/source line, summary head and, room permitting, the matching chunk.
+    note_chars: int = Field(default=1200, gt=0)
     # OpenRouter app attribution, sent as HTTP-Referer / X-OpenRouter-Title.
     # OpenRouter keys an app on the referer URL, so each deployment needs its
     # own app_url (not just its own title) for its spend to be reported

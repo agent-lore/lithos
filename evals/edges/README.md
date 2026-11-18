@@ -1,15 +1,17 @@
 # Typed-edge adjudication golden set
 
 Artefact: the relation/direction/confidence judgements the enrich worker
-asks the LLM for in `lithos.lcma.edge_inference` (prompt version 1).
+asks the LLM for in `lithos.lcma.edge_inference` (prompt version 2 since
+2026-11-18; see [Prompt v2 and labels v2](#prompt-v2-and-labels-v2-2026-11-18)).
 Procedure: `docs/runbooks/llm-model-migration.md` steps 2–3.
 
 ## Files
 
 | File | What |
 |---|---|
-| `cases.jsonl` | The production set: one case per line with the focus note, its numbered candidates (snippets exactly as sent), the verbatim messages when exported from the call log, and the incumbent's judgements as `reference`. |
-| `labels.jsonl` | Human labels, one per `(case_id, candidate_index)`: `relation` (or `none`), `direction` for directed relations only (`either` when the prompt text does not show which note came first), labeller `confidence`, whether the incumbent's rationale was acceptable, labeller and date. Only `status: reviewed` rows are scored. v1 covers 181 slots (see [Labels v1](#labels-v1-2026-11-16)). |
+| `cases.jsonl` | The production set: one case per line with the focus note, its numbered candidates (each with its matching search chunk as `snippet`), every note's `note` view (date, source, feed and summary text, since prompt v2), the text budget `note_chars`, the verbatim messages when exported from the call log, and the incumbent's judgements as `reference`. |
+| `labels.jsonl` | Human labels, one per `(case_id, candidate_index)`: `relation` (or `none`), `direction` for directed relations only (`either` when the prompt text does not show which note came first), labeller `confidence`, whether the incumbent's rationale was acceptable, labeller and date. Only `status: reviewed` rows are scored. v2 covers 202 slots: the 181 of [Labels v1](#labels-v1-2026-11-16), re-checked, and 21 mirrors. |
+| `mirror-exclude.txt` | Labelled slots that `scripts/eval_cases.py mirror` must not mirror, each with its reason. |
 | `seed/` | The synthetic seed set (`cases.jsonl`, `labels.jsonl`, `recorded/`) that `make eval-smoke` gates the parser and scorer on. |
 
 Symmetric relations (`contradicts`, `analogy_to`) carry no direction.
@@ -240,3 +242,98 @@ show large disagreements, not fine ones.
   of direction agreement, so the 5-point tolerance is exactly one slot.
   Read a narrow direction failure from the per-slot results before acting on
   it.
+
+## Prompt v2 and labels v2 (2026-11-18)
+
+Task a06c08c0. Prompt v2 (`INFERENCE_VERSION` 2,
+`lithos.lcma.note_view`) shows every note the same way: an
+`Added <date> · Source: <domain> (<feed>)` line, the summary's Contributions
+and Result, and Method when it fits whole. For a candidate it then adds what
+the matching search chunk adds, when room remains: the chunk's lines the
+summary doesn't already show, without Influx's archive path or
+profile-relevance sections. Each note gets up to 1,200 characters
+(`note_chars`, called `snippet_chars` under v1). The system prompt now states
+the strict standard and conventions 1, 2, 3 and 5 below, with one worked
+example per direction.
+
+The PR #462 review found that chunks had brought relevance and archive text
+back in: 436 of the 1,423 candidate views showed it. After the fix none do,
+and 345 views keep a passage of new material.
+
+**Cases.** `scripts/eval_cases.py attach-notes` read every focus and
+candidate note from the vault its case was exported from (prod 178 cases,
+staging 129) and stored its view as `note`. All 1,709 notes were found. Two
+of the 271 exported focus notes have changed since export; `note_versions`
+records the version read. Exported cases keep the fields they were recorded
+with (`focus.content`, the v1 `messages`): the incumbent's reference
+judgements were made from them. A candidate's `snippet` is also the matching
+chunk v2 shows after the summary. Every case's `note_chars` is 1200, and every
+case must carry note views: the runner no longer renders the v1 fields.
+
+**Mirrors.** The labels' scored directions leaned `focus_to_candidate` (16 of
+20), because the focus is usually the newer note, so a model that always
+answers that way scored well. `scripts/eval_cases.py mirror` adds one case per
+label with a scored direction: the two notes swapped, the direction flipped,
+the same relation and confidence (`mirror-*`, tagged `positive:mirror`). A
+mirror shows each note's view only. The search chunk that would match in the
+swapped direction is unknown, so a mirrored candidate has none. Two slots are
+not mirrored (`mirror-exclude.txt`): their evidence is only in the
+candidate's chunk, which the swap loses.
+
+**Labels re-checked.** Every v1 label rested on what v1 showed, so all 201
+labelled slots (181 plus the first 20 mirrors) were re-read in the v2 text:
+
+1. Four reviewers (Claude subagents, one per quarter of the sheet, read-only)
+   proposed a change only where the v2 text changes the answer: 6 changes and
+   14 doubts.
+2. Claude checked each against the sheet.
+3. Dave decided:
+
+| Slot | v1 | v2 | Why |
+|---|---|---|---|
+| `neg-dup-01/1` | `supports either` | `supports focus_to_candidate` | Dates now shown: the LessWrong crosspost was added a day after the Alignment Forum original |
+| `9391c1906304d239/1` | `none` | `supports candidate_to_focus` | The summary shows toy-model evidence for the focus's "dependence on strong initialization" |
+| `0bfb6a29b244d3f0/5` | `none` | `supports focus_to_candidate` | The summary shows the same filler-token finding as candidate 4 |
+| `9391c1906304d239/2` | `supports focus_to_candidate` | `supports candidate_to_focus` | The focus is "a hypothesis—not an empirical test"; the candidate presents evidence |
+| `f58eaca71093f324/5` | `analogy_to` | `none` | The summary shows a coding-tools note, so only the topic is shared |
+| `neg-dup-03/1` | `supports either` | unchanged | The Added dates reflect ingestion; the forum thread relays the video |
+| `neg-dup-02/1` | `supports focus_to_candidate` | `supports either` | PR #462 review: the forum note's archive path (2026-10-19) was the only order evidence, and chunks no longer show archive paths. Both notes are added 2026-10-20 |
+
+The two mirrors the reviewers rejected are the excluded ones above. Two of
+the doubts became the last two changes in the table. Claude kept the other 12
+doubts as labelled. In most of them the reviewer judged that the label still
+holds, or questioned only its confidence, which is not scored. Two remain open
+for a later pass:
+
+- `9d829de53d5096ac/3`: Bryan Cantrill's blog post reflecting on the Solaris
+  layoffs. It could be `supports` as labelled, or `refines` under convention 3.
+- `fr-03/1`: the shown text links the French relay to the datagubbe.se
+  primer only by topic and "relayed by OSNews".
+
+**Labels v2.**
+
+| | Original slots | Mirrors | Total |
+|---|---|---|---|
+| Slots | 181 | 21 | 202 |
+| Positive | 30 | 21 | 51 |
+| Scored `focus_to_candidate` | 16 | 6 | 22 |
+| Scored `candidate_to_focus` | 6 | 15 | 21 |
+| `either` | 4 | 0 | 4 |
+
+Each scored direction is now worth about 2.3 points of direction agreement,
+so the gate's 5-point tolerance is two slots, and a constant-direction model
+gets about half of them wrong.
+
+**Comparing prompts.** The v1-vs-v2 comparison
+(`evals/runs/20261118-edges-prompt-v2.md`) ran v1 from main at f9b884d and v2
+from the prompt-v2 code, both on this set as of commit 8509b5a. On Luna `low`,
+v2 names a relation correctly 84% of the time against 44% for v1. It gets the
+direction right on 24 of 26 slots against 11 of 21, and passes the gate on the
+quality path.
+
+That version of the set still let v1 load the mirrors: they carried v1 text,
+which v2 also showed as a fake matching chunk on 17 mirrored candidates. The
+set was then cleaned up so every case is v2-only, and v2 was re-run on it as
+the baseline for the next prompt or model change (see the write-up). To
+compare a later prompt, run the current and the candidate code on the set as
+it stands, so the case and label fingerprints match.

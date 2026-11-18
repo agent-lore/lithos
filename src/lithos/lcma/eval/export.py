@@ -45,7 +45,7 @@ def case_from_call(
             "request_sha": request_sha,
         },
         "prompt_version": request.get("prompt_version"),
-        "snippet_chars": request.get("snippet_chars"),
+        "note_chars": request.get("note_chars"),
         "focus": request.get("focus"),
         "candidates": candidates,
         "messages": request.get("messages"),
