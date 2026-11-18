@@ -19,7 +19,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.entities` | M | 0 | 1 |
 | `lithos.lcma.eval` | XS | 0 | 0 |
 | `lithos.lcma.eval.cases` | S | 2 | 7 |
-| `lithos.lcma.eval.compare` | S | 2 | 7 |
+| `lithos.lcma.eval.compare` | M | 2 | 7 |
 | `lithos.lcma.eval.export` | S | 0 | 2 |
 | `lithos.lcma.eval.prices` | XS | 1 | 2 |
 | `lithos.lcma.eval.report` | XS | 0 | 2 |

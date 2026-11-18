@@ -62,7 +62,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "83328936dae2c6747f0a75dd545eb345f9a8dc4d9d75d293850270cc12ce6d8f",
+  "source_hash": "8b45ac5dfa7c53372f85601c0ac83391b30df45f19b23b09c23ed581097051e4",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -143,7 +143,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_complexity | lithos.lcma.eval.cases.case_from_dict | 15 | 15 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.cases.label_from_dict | 14 | 14 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.compare.evidence_mismatch | 13 | 13 | review | — |
-| unchanged | function_complexity | lithos.lcma.eval.compare.gate | 22 | 22 | review | — |
+| unchanged | function_complexity | lithos.lcma.eval.compare.gate | 26 | 26 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.report.summarize_calls | 26 | 26 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.scoring.compute_metrics | 36 | 36 | review | — |
 | unchanged | function_complexity | lithos.lcma.eval.scoring.score_against_labels | 13 | 13 | review | — |
@@ -202,6 +202,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos.lcma.edge_inference.parse_adjudications | 77 | 77 | review | — |
 | unchanged | function_length | lithos.lcma.enrich.EnrichWorker._consolidate_task | 78 | 78 | review | — |
 | unchanged | function_length | lithos.lcma.enrich.EnrichWorker.drain | 78 | 78 | review | — |
+| unchanged | function_length | lithos.lcma.eval.compare.gate | 77 | 77 | review | — |
 | unchanged | function_length | lithos.lcma.retrieve._rerank_fast | 128 | 128 | review | — |
 | unchanged | function_length | lithos.lcma.retrieve._run_retrieve_impl | 363 | 363 | review | — |
 | unchanged | function_length | lithos.lcma.scouts.scout_graph | 85 | 85 | review | — |
@@ -294,7 +295,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | IdResolution | 1 | 127 | 100 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
 | Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 2169 | 1752 | 5 | 8 | 0.62 | 63 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
-| LCMA | 22 | 7571 | 6184 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 25 |
+| LCMA | 22 | 7605 | 6215 | 1 | 12 | 0.92 | 41 (`lithos.lcma.retrieve._run_retrieve_impl`) | 25 |
 | Logging | 1 | 164 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 2102 | 1717 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 7 |
@@ -303,7 +304,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **57**, lines: **29425**, SLOC: **23883**
+- Modules: **57**, lines: **29459**, SLOC: **23914**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -321,9 +322,9 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **950**, cyclomatic > 10: **72**
+- Functions: **951**, cyclomatic > 10: **72**
 - Cyclomatic distribution: median **2**, p90 **9**, max **70**
-- Function length (lines): median 14, p90 62, max 1006 (`lithos.tools.tasks.register`); over 75: **62**
+- Function length (lines): median 14, p90 62, max 1006 (`lithos.tools.tasks.register`); over 75: **63**
 
 Top 10 most complex functions:
 
@@ -336,9 +337,9 @@ Top 10 most complex functions:
 | 33 | 207 | `lithos.search.SearchEngine.graph_search` |
 | 30 | 196 | `lithos.tools.read_search.register.lithos_list` |
 | 26 | 82 | `lithos.cognitive_memory.CognitiveMemory.validate_task_feedback` |
+| 26 | 77 | `lithos.lcma.eval.compare.gate` |
 | 26 | 50 | `lithos.lcma.eval.report.summarize_calls` |
 | 26 | 103 | `lithos.search.TantivyIndex.search` |
-| 26 | 159 | `lithos.tools.notes.register.lithos_note_update` |
 
 ## Seams
 
@@ -401,4 +402,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **45** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.75** (51517 test lines / 29425 source lines)
+- Test-to-source line ratio: **1.75** (51557 test lines / 29459 source lines)
