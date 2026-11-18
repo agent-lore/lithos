@@ -22,10 +22,13 @@ Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
   nearest note is unrelated is now a clean miss instead of a hit.
 - **Two new response keys.** `match` (`"source_url"` / `"semantic"` / `null`)
   and `score` appear on every non-error `lithos_cache_lookup` response.
-- **Typed-edge adjudication uses prompt v2** (`INFERENCE_VERSION` 2), and
-  `lcma.llm.snippet_chars` defaults to 1200 instead of 700. Each call sends
-  about 700 more prompt tokens. Notes are re-adjudicated under v2 only when
-  they next change; nothing re-runs the whole corpus.
+- **Typed-edge adjudication uses prompt v2** (`INFERENCE_VERSION` 2). Each
+  call sends about 700 more prompt tokens. Notes are re-adjudicated under v2
+  only when they next change; nothing re-runs the whole corpus.
+- **`lcma.llm.snippet_chars` is renamed `note_chars`**
+  (`LITHOS_LCMA__LLM__NOTE_CHARS`). It now caps each note's whole text and
+  defaults to 1200; the old setting defaulted to 700. Golden-set cases and
+  call-log requests use the new key.
 
 ### Added — LLM synthesis
 

@@ -9,7 +9,7 @@ Procedure: `docs/runbooks/llm-model-migration.md` steps 2–3.
 
 | File | What |
 |---|---|
-| `cases.jsonl` | The production set: one case per line with the focus note, its numbered candidates (v1 text exactly as sent, and since v2 each note's `note` view: date, source, feed and summary text), the verbatim messages when exported from the call log, and the incumbent's judgements as `reference`. |
+| `cases.jsonl` | The production set: one case per line with the focus note, its numbered candidates (each with its matching search chunk as `snippet`), every note's `note` view (date, source, feed and summary text, since prompt v2), the text budget `note_chars`, the verbatim messages when exported from the call log, and the incumbent's judgements as `reference`. |
 | `labels.jsonl` | Human labels, one per `(case_id, candidate_index)`: `relation` (or `none`), `direction` for directed relations only (`either` when the prompt text does not show which note came first), labeller `confidence`, whether the incumbent's rationale was acceptable, labeller and date. Only `status: reviewed` rows are scored. v2 covers 202 slots: the 181 of [Labels v1](#labels-v1-2026-11-16), re-checked, and 21 mirrors. |
 | `mirror-exclude.txt` | Labelled slots that `scripts/eval_cases.py mirror` must not mirror, each with its reason. |
 | `seed/` | The synthetic seed set (`cases.jsonl`, `labels.jsonl`, `recorded/`) that `make eval-smoke` gates the parser and scorer on. |
@@ -250,28 +250,28 @@ Task a06c08c0. Prompt v2 (`INFERENCE_VERSION` 2,
 `Added <date> · Source: <domain> (<feed>)` line, the summary's Contributions
 and Result, Method when it fits whole, and for a candidate the matching search
 chunk when room remains. Each note gets up to 1,200 characters
-(`snippet_chars`). The system prompt now states the strict standard and
+(`note_chars`, called `snippet_chars` under v1). The system prompt now states the strict standard and
 conventions 1, 2, 3 and 5 below, with one worked example per direction.
 
 **Cases.** `scripts/eval_cases.py attach-notes` read every focus and
 candidate note from the vault its case was exported from (prod 178 cases,
 staging 129) and stored its view as `note`. All 1,709 notes were found. Two
 of the 271 exported focus notes have changed since export; `note_versions`
-records the version read. The v1 fields (`focus.content`,
-`candidates[].snippet`) stay exactly as sent, so a v1 run of the same file
-still renders what v1 saw: exported cases replay their recorded messages, and
-hand-built ones were always rebuilt from those fields. `snippet_chars` is 1200
-in every case; v1 text was already cut at 700, so the budget only changes v2.
+records the version read. Exported cases keep the fields they were recorded
+with (`focus.content`, the v1 `messages`): the incumbent's reference
+judgements were made from them. A candidate's `snippet` is also the matching
+chunk v2 shows after the summary. Every case's `note_chars` is 1200, and every
+case must carry note views: the runner no longer renders the v1 fields.
 
 **Mirrors.** The labels' scored directions leaned `focus_to_candidate` (16 of
 20), because the focus is usually the newer note, so a model that always
 answers that way scored well. `scripts/eval_cases.py mirror` adds one case per
 label with a scored direction: the two notes swapped, the direction flipped,
 the same relation and confidence (`mirror-*`, tagged `positive:mirror`). A
-mirrored focus shows the note's first 700 characters to v1, and the mirrored
-candidate's chunk is the original focus text v1 showed. Two slots are not
-mirrored (`mirror-exclude.txt`): their evidence is only in the candidate's
-passage, and a focus never shows one.
+mirror shows each note's view only. The search chunk that would match in the
+swapped direction is unknown, so a mirrored candidate has none. Two slots are
+not mirrored (`mirror-exclude.txt`): their evidence is only in the
+candidate's chunk, which the swap loses.
 
 **Labels re-checked.** Every v1 label rested on what v1 showed, so all 201
 labelled slots (181 plus the first 20 mirrors) were re-read in the v2 text:
@@ -316,10 +316,16 @@ Each scored direction is now worth about 2.3 points of direction agreement,
 so the gate's 5-point tolerance is two slots, and a constant-direction model
 gets about half of them wrong.
 
-**Comparing prompts.** Run v1 with the code before this change (main at
-f9b884d) and v2 with the current code, both on this `cases.jsonl` and
-`labels.jsonl`, so the case and label fingerprints match. The first such
-comparison is `evals/runs/20261118-edges-prompt-v2.md`. On Luna `low`, v2
-names a relation correctly 84% of the time against 44% for v1, and gets the
-direction right on 24 of 26 slots against 11 of 21. It passes the gate on the
+**Comparing prompts.** The v1-vs-v2 comparison
+(`evals/runs/20261118-edges-prompt-v2.md`) ran v1 from main at f9b884d and v2
+from the prompt-v2 code, both on this set as of commit 8509b5a. On Luna `low`,
+v2 names a relation correctly 84% of the time against 44% for v1. It gets the
+direction right on 24 of 26 slots against 11 of 21, and passes the gate on the
 quality path.
+
+That version of the set still let v1 load the mirrors: they carried v1 text,
+which v2 also showed as a fake matching chunk on 17 mirrored candidates. The
+set was then cleaned up so every case is v2-only, and v2 was re-run on it as
+the baseline for the next prompt or model change (see the write-up). To
+compare a later prompt, run the current and the candidate code on the set as
+it stands, so the case and label fingerprints match.

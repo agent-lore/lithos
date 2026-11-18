@@ -13,6 +13,9 @@ All three runs scored the same evidence:
   directions (23 `focus_to_candidate`, 21 `candidate_to_focus`).
 - **Code:** v1 ran from main at f9b884d, whose prompt is v1, and v2 from the
   prompt-v2 branch. Their case and label fingerprints match.
+- **Set version:** the golden set as of commit 8509b5a. It was then cleaned
+  up to be v2-only; see [the cleaned set](#the-cleaned-set-baseline-from-here)
+  at the end.
 
 `evals/edges/README.md` describes the golden set and labels v2. The gate
 reports are `20261118-compare-luna-low-prompt-v1-vs-v2.md` and
@@ -111,3 +114,46 @@ will go to prod (Dave, 2026-11-18). The readout should show:
 - no `parse_error` rows;
 - edges per call near 0.6 at staging's traffic;
 - prompt tokens near 1,650 per call.
+
+## The cleaned set: baseline from here
+
+After the review, the golden set was made v2-only (commit f71e331):
+
+- **Mirrors** lost the v1 text they had carried so the v1 run could load
+  them. v2 had also shown that text as a fake matching chunk on 17 of the 21
+  mirrored candidates. A mirror now has no chunk, because the swapped
+  direction's chunk is unknown.
+- **Cases** now need note views, and `snippet_chars` is renamed `note_chars`.
+
+v1 cannot load this set, so the v1-vs-v2 decision above stands on the
+8509b5a version. v2 and the sanity check were re-run on the cleaned set as
+the baseline for the next prompt or model change:
+
+| Run | Relation agreement | Precision | Recall | Direction | Failures | Edges/call | $ per 1k calls | Latency p50 / p95 |
+|---|---|---|---|---|---|---|---|---|
+| **Luna `low`, prompt v2** (`20261118T163856Z`) | 86.1% | 78% (32/41) | 63% (32/51) | 52.3% (23/44) | none | 0.62 | 0.35 | 4.6 s / 7.6 s |
+| gemini-2.5-flash-lite (`20261118T164907Z`) | 64.4% | — | — | 13.6% (6/44) | error 25.3% (all provider 429s), partial 0.6%, parse_error 0.3% | 0.88 | 0.29 | 1.1 s / 1.5 s |
+
+- **Run-to-run variation.** The 181 original slots have identical inputs in
+  both v2 runs, yet the results differ:
+
+  | | First v2 run | Cleaned-set v2 run |
+  |---|---|---|
+  | Recall on the 30 positives | 18 | 20 |
+  | Precision | 75% | 69% |
+  | Relations named on `none` slots | 5 | 9 |
+  | Directions right | 13 of 13 | 13 of 15 |
+
+  Differences of this size between two runs are noise. The v1-vs-v2 gap is
+  many times larger.
+- **Mirrors without the fake chunk:** v2 finds 12 of the 21 mirrored
+  relations (13 before), names none wrongly, and gets 10 of 12 directions
+  right. So the fake chunk was not doing the work.
+- **Gemini on this set** fails the gate (`20261118-compare-luna-low-v2-vs-
+  gemini-2.5-flash-lite-cleaned-set.md`). Its numbers are dragged down by
+  rate limiting: 83 of 328 calls got HTTP 429 from the provider, even one
+  call at a time. The throttle-free evidence of its quality is the first v2
+  run above.
+
+The re-runs cost about $0.27. Including the throttled gemini attempt, the day's
+runs cost about $0.60 in all.
