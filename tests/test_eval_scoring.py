@@ -22,7 +22,7 @@ def _case(case_id="c1", n=2, reference=None):
     return case_from_dict(
         {
             "case_id": case_id,
-            "focus": {"id": case_id, "title": "F", "content": "body"},
+            "focus": {"id": case_id, "title": "F", "note": {"title": "F", "content": "body"}},
             "candidates": [
                 {
                     "index": i,
@@ -31,9 +31,11 @@ def _case(case_id="c1", n=2, reference=None):
                     "snippet": "s",
                     "similarity": 0.6,
                     "namespace": "default",
+                    "note": {"title": "T", "content": ""},
                 }
                 for i in range(1, n + 1)
             ],
+            "note_chars": 1200,
             "reference": reference,
         }
     )
