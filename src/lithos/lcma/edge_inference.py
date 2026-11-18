@@ -221,23 +221,23 @@ def build_adjudication_prompt(
     focus: NoteView,
     candidates: list[NeighbourInfo],
     *,
-    snippet_chars: int,
+    note_chars: int,
 ) -> list[ChatMessage]:
     """Build the two-message prompt: fixed system instruction + numbered candidates.
 
-    *snippet_chars* bounds each note's text (title excluded); see
+    *note_chars* bounds each note's text (title excluded); see
     :func:`~lithos.lcma.note_view.render_note` for what fills it.
     """
     lines = [
         "FOCUS NOTE",
         f"Title: {focus.title}",
-        render_note(focus, limit=snippet_chars),
+        render_note(focus, limit=note_chars),
         "",
         "CANDIDATES",
     ]
     for i, c in enumerate(candidates, start=1):
         lines.append(f"[{i}] Title: {c.title}")
-        text = render_note(c.view(), limit=snippet_chars, chunk=c.snippet)
+        text = render_note(c.view(), limit=note_chars, chunk=c.snippet)
         lines.extend(f"    {line}".rstrip() for line in text.splitlines())
     return [
         ChatMessage("system", _SYSTEM_PROMPT),
@@ -251,7 +251,7 @@ def request_payload(
     focus_id: str,
     focus: NoteView,
     candidates: list[NeighbourInfo],
-    snippet_chars: int,
+    note_chars: int,
 ) -> dict[str, object]:
     """What the model saw, as one JSON-able record for the replayable call log.
 
@@ -259,11 +259,11 @@ def request_payload(
     rendered from: each note's view (its usable text, date, source and feed)
     and each candidate's matching chunk. An eval can replay this prompt
     version byte-for-byte or render a later version, or another
-    ``snippet_chars``, from the same pairs.
+    ``note_chars``, from the same pairs.
     """
     return {
         "prompt_version": INFERENCE_VERSION,
-        "snippet_chars": snippet_chars,
+        "note_chars": note_chars,
         "messages": [{"role": m.role, "content": m.content} for m in messages],
         "focus": {"id": focus_id, "title": focus.title, "note": focus.to_dict()},
         "candidates": [
@@ -468,15 +468,13 @@ class EdgeInferenceEngine:
 
         self._calls_this_drain += 1
         focus = view_of(doc)
-        messages = build_adjudication_prompt(
-            focus, candidates, snippet_chars=self._config.snippet_chars
-        )
+        messages = build_adjudication_prompt(focus, candidates, note_chars=self._config.note_chars)
         payload = request_payload(
             messages,
             focus_id=node_id,
             focus=focus,
             candidates=candidates,
-            snippet_chars=self._config.snippet_chars,
+            note_chars=self._config.note_chars,
         )
         started = time.monotonic()
         try:

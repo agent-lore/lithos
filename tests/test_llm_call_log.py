@@ -43,7 +43,7 @@ def _neighbour(node_id: str, similarity: float = 0.6) -> NeighbourInfo:
     )
 
 
-def _payload(focus: str = "focus", *, snippet_chars: int = 100) -> dict[str, Any]:
+def _payload(focus: str = "focus", *, note_chars: int = 100) -> dict[str, Any]:
     candidates = [_neighbour("c1"), _neighbour("c2", 0.5)]
     view = NoteView(
         title="Focus title",
@@ -52,13 +52,13 @@ def _payload(focus: str = "focus", *, snippet_chars: int = 100) -> dict[str, Any
         source_url="https://example.org/a",
         feed="example",
     )
-    messages = build_adjudication_prompt(view, candidates, snippet_chars=snippet_chars)
+    messages = build_adjudication_prompt(view, candidates, note_chars=note_chars)
     return request_payload(
         messages,
         focus_id=focus,
         focus=view,
         candidates=candidates,
-        snippet_chars=snippet_chars,
+        note_chars=note_chars,
     )
 
 
@@ -311,7 +311,7 @@ class TestExport:
         # Rebuilding the prompt from the structured inputs reproduces the messages byte-for-byte.
         parsed = case_from_dict(case)
         rebuilt = build_adjudication_prompt(
-            parsed.focus_view(), parsed.neighbours(), snippet_chars=parsed.snippet_chars
+            parsed.focus_view(), parsed.neighbours(), note_chars=parsed.note_chars
         )
         assert [{"role": m.role, "content": m.content} for m in rebuilt] == case["messages"]
         assert isinstance(rebuilt[0], ChatMessage)

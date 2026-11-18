@@ -122,8 +122,8 @@ def test_proposed_labels_and_merge(tmp_path: Path) -> None:
 def test_sheet_quotes_exactly_what_the_model_sees(tmp_path: Path) -> None:
     case = json.loads(SEED.read_text().splitlines()[0])
     long_text = "line one\n\n" + "x" * 900
-    case["focus"]["content"] = long_text
-    case["snippet_chars"] = 700
+    case["focus"]["note"]["content"] = long_text
+    case["note_chars"] = 700
     cases = tmp_path / "cases.jsonl"
     cases.write_text(json.dumps(case) + "\n")
     sheet = tmp_path / "review.md"

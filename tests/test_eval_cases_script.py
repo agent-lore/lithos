@@ -52,9 +52,18 @@ def _case(case_id: str = "c1") -> dict:
         ],
         "messages": None,
         "prompt_version": None,
-        "snippet_chars": 700,
+        "note_chars": 700,
         "reference": None,
     }
+
+
+def _noted_case() -> dict:
+    """A case whose notes are attached, as mirror needs."""
+    case = _case()
+    case["focus"]["note"] = {"title": "Focus", "content": "focus summary"}
+    for cand in case["candidates"]:
+        cand["note"] = {"title": cand["title"], "content": f"{cand['title']} summary"}
+    return case
 
 
 def _label(index: int, relation: str, direction: str | None) -> dict:
@@ -80,12 +89,12 @@ def test_attach_notes_adds_views_and_keeps_v1_text(tmp_path: Path) -> None:
         },
     )
     cases = [_case()]
-    attached, missing = eval_cases.attach_notes(cases, [("prod", vault)], snippet_chars=1200)
+    attached, missing = eval_cases.attach_notes(cases, [("prod", vault)], note_chars=1200)
     assert (attached, missing) == (3, [])
     case = cases[0]
     assert case["focus"]["content"] == "# Focus\n\nas sent"  # v1 text untouched
     assert case["candidates"][0]["snippet"] == "chunk a"
-    assert (case["snippet_chars"], case["note_vault"]) == (1200, "prod")
+    assert (case["note_chars"], case["note_vault"]) == (1200, "prod")
     assert case["note_versions"] == {"f": 3, "a": 3, "b": 3}
     note = case["candidates"][0]["note"]
     assert note["created_at"].startswith("2026-09-01") and note["feed"] == "example-feed"
@@ -95,7 +104,7 @@ def test_attach_notes_adds_views_and_keeps_v1_text(tmp_path: Path) -> None:
 
 def test_attach_notes_reports_missing_notes(tmp_path: Path) -> None:
     vault = _vault(tmp_path, {"f": ("Focus", "2026-10-15T00:00:00+00:00")})
-    _, missing = eval_cases.attach_notes([_case()], [("prod", vault)], snippet_chars=1200)
+    _, missing = eval_cases.attach_notes([_case()], [("prod", vault)], note_chars=1200)
     assert sorted(missing) == ["a", "b"]
 
 
@@ -104,13 +113,15 @@ def test_mirror_swaps_notes_and_flips_scored_directions_only() -> None:
         _label(1, "supports", "focus_to_candidate"),
         _label(2, "refines", "either"),  # direction unscored: not mirrored
     ]
-    cases, out_labels = eval_cases.mirror_cases([_case()], labels, "2026-11-18")
+    cases, out_labels = eval_cases.mirror_cases([_noted_case()], labels, "2026-11-18")
     mirrors = [c for c in cases if c["case_id"].startswith("mirror-")]
     assert [c["case_id"] for c in mirrors] == ["mirror-01"]
     mirror = case_from_dict(mirrors[0])
     assert (mirror.focus["id"], mirror.focus["title"]) == ("a", "A")
-    assert [(n.node_id, n.title, n.snippet) for n in mirror.neighbours()] == [
-        ("f", "Focus", "# Focus\n\nas sent")
+    assert mirror.focus_view().content == "A summary"
+    # The swapped direction's search chunk is unknown, so the candidate has none.
+    assert [(n.node_id, n.title, n.snippet, n.view().content) for n in mirror.neighbours()] == [
+        ("f", "Focus", "", "focus summary")
     ]
     assert "positive:mirror" in mirror.tags
     label = label_from_dict(out_labels[-1])
@@ -129,14 +140,14 @@ def test_mirror_skips_excluded_slots(tmp_path: Path) -> None:
         _label(2, "refines", "focus_to_candidate"),
     ]
     cases, _ = eval_cases.mirror_cases(
-        [_case()], labels, "2026-11-18", eval_cases.read_exclusions(exclude)
+        [_noted_case()], labels, "2026-11-18", eval_cases.read_exclusions(exclude)
     )
     assert [c["tags"][1] for c in cases if c["case_id"].startswith("mirror-")] == ["mirror-of:c1/2"]
 
 
 def test_mirror_regenerates_rather_than_appends() -> None:
     labels = [_label(1, "supports", "focus_to_candidate")]
-    cases, labels = eval_cases.mirror_cases([_case()], labels, "2026-11-18")
+    cases, labels = eval_cases.mirror_cases([_noted_case()], labels, "2026-11-18")
     cases, labels = eval_cases.mirror_cases(cases, labels, "2026-11-18")
     assert sum(c["case_id"].startswith("mirror-") for c in cases) == 1
     assert sum(lab["case_id"].startswith("mirror-") for lab in labels) == 1

@@ -253,13 +253,13 @@ class TestEvalCommands:
                 NeighbourInfo("c1", "Note c1", "snippet", 0.6, "default", frozenset(), frozenset())
             ]
             focus = NoteView(title="Focus", content="body")
-            messages = build_adjudication_prompt(focus, candidates, snippet_chars=700)
+            messages = build_adjudication_prompt(focus, candidates, note_chars=700)
             payload = request_payload(
                 messages,
                 focus_id="focus",
                 focus=focus,
                 candidates=candidates,
-                snippet_chars=700,
+                note_chars=700,
             )
             writer = CallLogWriter(store, test_config.storage.lithos_store_path / BLOB_SUBDIR)
             await writer.record(

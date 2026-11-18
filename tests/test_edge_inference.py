@@ -123,7 +123,7 @@ class TestBuildAdjudicationPrompt:
         messages = build_adjudication_prompt(
             NoteView(title="Focus title", content="X" * 2000),
             [_neighbour("a", snippet="Y" * 2000), _neighbour("b")],
-            snippet_chars=150,
+            note_chars=150,
         )
         assert messages[0].role == "system"
         user = messages[1].content
@@ -147,7 +147,7 @@ class TestBuildAdjudicationPrompt:
         user = build_adjudication_prompt(
             NoteView(title="F", content="body"),
             [_neighbour("a", snippet=chunk, note=note)],
-            snippet_chars=1200,
+            note_chars=1200,
         )[1].content
         assert "    Added 2026-10-15 · Source: example.org (example-feed)\n" in user
         assert "    Contributions:\n    - A new idea\n    Result:\n    It works.\n" in user
@@ -155,7 +155,7 @@ class TestBuildAdjudicationPrompt:
 
     def test_system_prompt_states_the_direction_conventions(self) -> None:
         system = build_adjudication_prompt(
-            NoteView(title="F", content=""), [_neighbour("a")], snippet_chars=100
+            NoteView(title="F", content=""), [_neighbour("a")], note_chars=100
         )[0].content
         assert "Use the Added dates" in system
         assert "refines, focus_to_candidate" in system

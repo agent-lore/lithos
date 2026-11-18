@@ -22,7 +22,7 @@ settle (two copies, neither dated): the relation is scored, the direction is
 not. A line ``label: skip`` leaves the slot unlabelled.
 
 The sheet quotes the focus and candidate text exactly as the prompt sends
-them, cut at the case's ``snippet_chars``, so the reviewer sees what the model
+them, cut at the case's ``note_chars``, so the reviewer sees what the model
 saw.
 """
 
@@ -121,7 +121,7 @@ def write_sheet(
             ref = ref_by_index.get(index)
             prop = proposed.get((case["case_id"], index))
             parsed = case_from_dict(case)
-            shown = parsed.snippet_chars
+            shown = parsed.note_chars
             neighbour = parsed.neighbours()[index - 1]
             lines += [
                 f"## case {case['case_id']} · candidate {index}",

@@ -32,7 +32,7 @@ SEED_LABELS = Path("evals/edges/seed/labels.jsonl")
 def _case(**overrides: Any):
     base = {
         "case_id": "c1",
-        "focus": {"id": "f", "title": "Focus", "content": "x" * 900},
+        "focus": {"id": "f", "title": "Focus", "note": {"title": "Focus", "content": "x" * 900}},
         "candidates": [
             {
                 "index": 1,
@@ -41,9 +41,10 @@ def _case(**overrides: Any):
                 "snippet": "y" * 900,
                 "similarity": 0.6,
                 "namespace": "default",
+                "note": {"title": "A", "content": ""},
             }
         ],
-        "snippet_chars": 100,
+        "note_chars": 100,
     }
     base.update(overrides)
     return case_from_dict(base)
@@ -68,9 +69,7 @@ class TestMessages:
             messages=[{"role": "user", "content": "old"}], prompt_version=INFERENCE_VERSION + 1
         )
         rebuilt = messages_for(case)
-        expected = build_adjudication_prompt(
-            case.focus_view(), case.neighbours(), snippet_chars=100
-        )
+        expected = build_adjudication_prompt(case.focus_view(), case.neighbours(), note_chars=100)
         assert rebuilt == expected
         assert "x" * 100 in rebuilt[1].content and "x" * 101 not in rebuilt[1].content
 
@@ -111,7 +110,10 @@ class TestRunCases:
         client = LlmClient(cfg, transport=httpx.MockTransport(handler))
         cases = [
             _case(case_id="ok"),
-            _case(case_id="bad", focus={"id": "f", "title": "fail", "content": "fail"}),
+            _case(
+                case_id="bad",
+                focus={"id": "f", "title": "fail", "note": {"title": "fail", "content": "fail"}},
+            ),
         ]
         seen_progress: list[str] = []
         results = await run_cases(

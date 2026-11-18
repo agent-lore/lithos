@@ -3,9 +3,10 @@
 
 ``attach-notes`` gives every focus and candidate its prompt-v2 view (date,
 source and summary head, :mod:`lithos.lcma.note_view`) read from the vault
-data dirs the cases were exported from, and sets the case's text budget. The
-prompt-v1 fields (``focus.content``, ``candidates[].snippet``) stay as they
-were sent, so a v1 run on the same file still renders what v1 saw.
+data dirs the cases were exported from, and sets the case's text budget
+(``note_chars``). The fields an exported case was recorded with stay as they
+were: the reference judgements were made from them, and a candidate's
+``snippet`` is the matching chunk v2 shows after the summary.
 
 ``mirror`` adds one hand-built case per reviewed label with a scored
 direction: the two notes swapped and the direction flipped. The production
@@ -16,13 +17,14 @@ model that answers one direction regardless fails on the labels.
     python scripts/eval_cases.py attach-notes evals/edges/cases.jsonl \\
         --vault prod=~/projects/lithos/data/prod/lithos/knowledge \\
         --vault staging=~/projects/lithos/data/staging/lithos/knowledge
-    python scripts/eval_cases.py mirror evals/edges/cases.jsonl evals/edges/labels.jsonl \
+    python scripts/eval_cases.py mirror evals/edges/cases.jsonl evals/edges/labels.jsonl \\
         --exclude evals/edges/mirror-exclude.txt
 
-A mirror only works when the swapped prompt still shows what the label rests
-on. A focus never shows a matching passage, so a slot whose evidence was in the
-candidate's passage cannot be mirrored; ``--exclude`` lists those slots, one
-``case_id/index`` per line (``#`` starts a comment).
+A mirror shows each note's view only. The search chunk that would match in
+the swapped direction is unknown, so a mirrored candidate has none. A slot
+whose evidence was in the original candidate's chunk therefore cannot be
+mirrored; ``--exclude`` lists those slots, one ``case_id/index`` per line
+(``#`` starts a comment).
 """
 
 from __future__ import annotations
@@ -42,8 +44,6 @@ from lithos.lcma.note_view import view_of
 _ID_LINE = re.compile(r"^id: *['\"]?([^'\"\s]+)", re.MULTILINE)
 _FLIPPED = {"focus_to_candidate": "candidate_to_focus", "candidate_to_focus": "focus_to_candidate"}
 MIRROR_PREFIX = "mirror-"
-#: Prompt v1 showed the focus's first characters; a mirrored focus gets the same.
-_V1_CHARS = 700
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -79,7 +79,7 @@ def _note(root: Path, path: Path) -> tuple[dict[str, Any], int]:
 
 
 def attach_notes(
-    cases: list[dict[str, Any]], vaults: list[tuple[str, Path]], snippet_chars: int
+    cases: list[dict[str, Any]], vaults: list[tuple[str, Path]], note_chars: int
 ) -> tuple[int, list[str]]:
     """Attach note views in place; returns ``(notes attached, missing note ids)``."""
     wanted = {str(c["focus"].get("id")) for c in cases}
@@ -104,7 +104,7 @@ def attach_notes(
                 continue
             item["note"], versions[node_id] = _note(*source)
             attached += 1
-        case["snippet_chars"] = snippet_chars
+        case["note_chars"] = note_chars
         case["note_versions"] = versions
         if holders:
             case["note_vault"] = holders[0][0]
@@ -177,35 +177,24 @@ def _mirror(case: dict[str, Any], index: int, mirror_id: str) -> dict[str, Any]:
     """*case*'s candidate *index* as the focus, and its focus as the only candidate."""
     focus = case["focus"]
     cand = case["candidates"][index - 1]
-    cand_note = cand.get("note")
-    new_focus: dict[str, Any] = {
-        "id": cand["node_id"],
-        "title": cand["title"],
-        # What prompt v1 would have sent: the note's first characters.
-        "content": (cand_note or {}).get("content", cand.get("snippet", ""))[:_V1_CHARS],
-    }
-    new_cand: dict[str, Any] = {
-        "index": 1,
-        "node_id": focus.get("id"),
-        "title": focus["title"],
-        # The search chunk is unknown in this direction; v1 showed this text of it.
-        "snippet": str(focus.get("content", ""))[:_V1_CHARS],
-        "similarity": cand.get("similarity", 0.0),
-        "namespace": cand.get("namespace", "default"),
-    }
-    if cand_note is not None:
-        new_focus["note"] = cand_note
-    if focus.get("note") is not None:
-        new_cand["note"] = focus["note"]
     return {
         "case_id": mirror_id,
         "tags": ["positive:mirror", f"mirror-of:{case['case_id']}/{index}"],
-        "focus": new_focus,
-        "candidates": [new_cand],
+        "focus": {"id": cand["node_id"], "title": cand["title"], "note": cand["note"]},
+        "candidates": [
+            {
+                "index": 1,
+                "node_id": focus.get("id"),
+                "title": focus["title"],
+                "similarity": cand.get("similarity", 0.0),
+                "namespace": cand.get("namespace", "default"),
+                "note": focus["note"],
+            }
+        ],
         "messages": None,
         "prompt_version": None,
         "reference": None,
-        "snippet_chars": case.get("snippet_chars"),
+        "note_chars": case["note_chars"],
     }
 
 
@@ -217,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     att = sub.add_parser("attach-notes", help="attach prompt-v2 note views from vaults")
     att.add_argument("cases", type=Path)
     att.add_argument("--vault", action="append", required=True, help="NAME=knowledge dir")
-    att.add_argument("--snippet-chars", type=int, default=1200)
+    att.add_argument("--note-chars", type=int, default=1200)
     mir = sub.add_parser("mirror", help="regenerate the mirrored candidate_to_focus cases")
     mir.add_argument("cases", type=Path)
     mir.add_argument("labels", type=Path)
@@ -230,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
             name, _, root = spec.partition("=")
             vaults.append((name, Path(root).expanduser()))
         cases = _read_jsonl(args.cases)
-        attached, missing = attach_notes(cases, vaults, args.snippet_chars)
+        attached, missing = attach_notes(cases, vaults, args.note_chars)
         _write_jsonl(args.cases, cases)
         print(f"{attached} notes attached across {len(cases)} cases; {len(missing)} missing")
         for node_id in sorted(set(missing)):

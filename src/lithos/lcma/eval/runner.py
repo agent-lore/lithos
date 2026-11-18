@@ -37,7 +37,7 @@ def messages_for(case: Case) -> list[ChatMessage]:
     if case.messages and case.prompt_version == INFERENCE_VERSION:
         return [ChatMessage(str(m["role"]), str(m["content"])) for m in case.messages]
     return build_adjudication_prompt(
-        case.focus_view(), case.neighbours(), snippet_chars=case.snippet_chars
+        case.focus_view(), case.neighbours(), note_chars=case.note_chars
     )
 
 
@@ -148,7 +148,7 @@ def config_summary(llm_config: LlmConfig) -> dict[str, Any]:
         "max_output_tokens": llm_config.max_output_tokens,
         "extra_body": llm_config.extra_body,
         "confidence_floor": llm_config.confidence_floor,
-        "snippet_chars": llm_config.snippet_chars,
+        "note_chars": llm_config.note_chars,
         "prompt_version": INFERENCE_VERSION,
     }
 
