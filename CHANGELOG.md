@@ -22,8 +22,36 @@ Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
   nearest note is unrelated is now a clean miss instead of a hit.
 - **Two new response keys.** `match` (`"source_url"` / `"semantic"` / `null`)
   and `score` appear on every non-error `lithos_cache_lookup` response.
+- **Typed-edge adjudication uses prompt v2** (`INFERENCE_VERSION` 2), and
+  `lcma.llm.snippet_chars` defaults to 1200 instead of 700. Each call sends
+  about 700 more prompt tokens. Notes are re-adjudicated under v2 only when
+  they next change; nothing re-runs the whole corpus.
 
 ### Added — LLM synthesis
+
+#### Adjudication prompt v2: date, source and summary head per note (task a06c08c0)
+
+Prompt v1 showed each candidate one search chunk that often held only
+Influx's relevance blurb, and only one candidate in ten showed a date or
+source. v2 (`lithos.lcma.note_view`) shows every note as:
+
+- an `Added <date> · Source: <domain> (<feed>)` line;
+- its summary's Contributions and Result, then Method when it fits whole;
+- for a candidate, the matching chunk when room remains.
+
+The system prompt states the strict labelling standard and the direction
+conventions for versions of the same item. The call log records each note's
+view, so later prompt versions can be rendered from exported cases.
+
+Golden set and labels v2 (`evals/edges/README.md`):
+
+- **Note views:** every case now carries the v2 view of each note, attached
+  by the new `scripts/eval_cases.py attach-notes`.
+- **Mirrors:** 21 mirrored cases, made by `scripts/eval_cases.py mirror`,
+  balance the scored directions at 23 `focus_to_candidate` and 21
+  `candidate_to_focus`.
+- **Re-check:** all labelled slots were re-checked in the v2 text, and 5
+  labels changed.
 
 #### `lithos eval run` / `compare --gate`, golden-set schema, promotion policy, smoke gate (eval suite E2/E3/E5/E7; tasks 70610498, 9ad0a592)
 
