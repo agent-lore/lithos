@@ -20,6 +20,7 @@ DEFAULT_POLICY: dict[str, Any] = {
     "relation_agreement_max_drop": 0.03,
     "direction_agreement_max_drop": 0.05,
     "cost_min_reduction": 0.30,
+    "quality_max_cost_increase": 0.25,
     "failure_outcomes": list(FAILURE_OUTCOMES),
 }
 
@@ -41,6 +42,7 @@ def load_policy(path: Path) -> dict[str, Any]:
         "relation_agreement_max_drop",
         "direction_agreement_max_drop",
         "cost_min_reduction",
+        "quality_max_cost_increase",
     ):
         value = policy[key]
         if isinstance(value, bool) or not isinstance(value, int | float) or not 0 <= value <= 1:
@@ -136,15 +138,47 @@ def gate(
             and cand_rel > inc_rel
             and cand_cost <= inc_cost
         )
-        cost_ok = reduction >= rule["cost_min_reduction"] or better_agreement
-        change = f"{reduction:.0%} cheaper" if reduction >= 0 else f"{-reduction:.0%} dearer"
-        detail = (
-            f"${cand_cost:.4f} vs ${inc_cost:.4f} per 1k calls ({change}; "
-            f"need ≥{rule['cost_min_reduction']:.0%} cheaper, or no dearer with higher agreement)"
+        quality = -reduction <= rule["quality_max_cost_increase"] + _ROUNDING and _clear_gains(
+            inc_rel, cand_rel, inc_dir, cand_dir, rule
         )
+        cost_ok = reduction >= rule["cost_min_reduction"] or better_agreement or quality
+        change = f"{reduction:.0%} cheaper" if reduction >= 0 else f"{-reduction:.0%} dearer"
+        need = (
+            f"need ≥{rule['cost_min_reduction']:.0%} cheaper, no dearer with higher "
+            f"agreement, or ≤{rule['quality_max_cost_increase']:.0%} dearer with relation "
+            f"+{rule['relation_agreement_max_drop'] * 100:.0f} and direction "
+            f"+{rule['direction_agreement_max_drop'] * 100:.0f} points"
+        )
+        path = "; passes on the quality path" if quality and reduction < 0 else ""
+        detail = f"${cand_cost:.4f} vs ${inc_cost:.4f} per 1k calls ({change}; {need}{path})"
     checks.append(Check("cost_per_1k_calls", cost_ok, detail))
 
     return GateResult(all(c.passed for c in checks), basis, checks)
+
+
+def _clear_gains(
+    inc_rel: float | None,
+    cand_rel: float | None,
+    inc_dir: float | None,
+    cand_dir: float | None,
+    rule: dict[str, Any],
+) -> bool:
+    """Whether agreement rose by at least each measure's tolerance.
+
+    The quality path: a candidate may cost up to ``quality_max_cost_increase``
+    more only when it is clearly better, meaning relation agreement rises by at
+    least ``relation_agreement_max_drop`` and direction agreement by at least
+    ``direction_agreement_max_drop`` (when the truth has directed slots).
+    """
+    if inc_rel is None or cand_rel is None:
+        return False
+    if cand_rel < inc_rel + rule["relation_agreement_max_drop"] - _ROUNDING:
+        return False
+    if inc_dir is None and cand_dir is None:
+        return True
+    if inc_dir is None or cand_dir is None:
+        return False
+    return cand_dir >= inc_dir + rule["direction_agreement_max_drop"] - _ROUNDING
 
 
 def evidence_mismatch(run_a: dict[str, Any], run_b: dict[str, Any]) -> list[str]:

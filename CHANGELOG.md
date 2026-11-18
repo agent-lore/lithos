@@ -53,6 +53,20 @@ Golden set and labels v2 (`evals/edges/README.md`):
 - **Re-check:** all labelled slots were re-checked in the v2 text, and 5
   labels changed.
 
+Decision runs (`evals/runs/20261118-edges-prompt-v2.md`), all on Luna `low`:
+
+- **Precision:** prompt v2 names a relation correctly 84% of the time,
+  against 44% for v1.
+- **Recall:** it finds 61% of the labelled relations, against 51%.
+- **Direction:** it gets 24 of 26 directions right where the relation is
+  right, against 11 of 21.
+- **Cost:** 14% more per call.
+
+`evals/POLICY.md` gained a **quality path** in the cost rule
+(`quality_max_cost_increase = 0.25`): a candidate may cost up to 25% more
+when relation agreement rises by at least 3 points and direction agreement by
+at least 5. Prompt v2 passes on it.
+
 #### `lithos eval run` / `compare --gate`, golden-set schema, promotion policy, smoke gate (eval suite E2/E3/E5/E7; tasks 70610498, 9ad0a592)
 
 A model, reasoning setting, provider or prompt change can now be scored on a

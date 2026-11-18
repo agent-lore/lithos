@@ -109,6 +109,29 @@ class TestGate:
         # free local model vs free incumbent
         assert gate(_metrics(cost=0.0), _metrics(cost=0.0)).promotable
 
+    def test_quality_path_allows_bounded_extra_cost(self) -> None:
+        """Prompt v2 vs v1 (2026-11-18): 14% dearer, relation +8.9 and direction +29.5 points."""
+        inc = _metrics(relation=0.787, direction=0.250, cost=0.3024)
+        cand = _metrics(relation=0.876, direction=0.545, cost=0.3442)
+        result = gate(inc, cand)
+        assert result.promotable
+        assert "quality path" in result.checks[-1].detail
+        # More than 25% dearer fails however large the gain.
+        assert not gate(inc, _metrics(relation=0.876, direction=0.545, cost=0.38)).promotable
+
+    def test_quality_path_needs_both_gains_at_least_their_tolerance(self) -> None:
+        inc = _metrics(relation=0.80, direction=0.50, cost=1.0)
+        # Exactly +3 and +5 points pass, whatever the float rounding.
+        assert gate(inc, _metrics(relation=0.83, direction=0.55, cost=1.2)).promotable
+        # A smaller gain on either measure fails.
+        assert not gate(inc, _metrics(relation=0.82, direction=0.60, cost=1.2)).promotable
+        assert not gate(inc, _metrics(relation=0.90, direction=0.54, cost=1.2)).promotable
+
+    def test_quality_path_with_no_directed_slots_needs_the_relation_gain(self) -> None:
+        inc = _metrics(relation=0.80, direction=None, cost=1.0)
+        assert gate(inc, _metrics(relation=0.85, direction=None, cost=1.1)).promotable
+        assert not gate(inc, _metrics(relation=0.81, direction=None, cost=1.1)).promotable
+
     def test_reference_basis_when_labels_missing(self) -> None:
         inc = _metrics(basis="reference")
         cand = _metrics(basis="reference", cost=0.1)
@@ -135,6 +158,7 @@ class TestPolicyFile:
         assert policy["relation_agreement_max_drop"] == 0.03
         assert policy["direction_agreement_max_drop"] == 0.05
         assert policy["cost_min_reduction"] == 0.30
+        assert policy["quality_max_cost_increase"] == 0.25
         assert policy["failure_outcomes"] == ["partial", "empty", "parse_error", "error"]
 
     def test_missing_block_and_bad_values(self, tmp_path: Path) -> None:
@@ -144,6 +168,9 @@ class TestPolicyFile:
             load_policy(path)
         path.write_text("```toml\nrelation_agreement_max_drop = 3\n```\n")
         with pytest.raises(ValueError, match="relation_agreement_max_drop"):
+            load_policy(path)
+        path.write_text("```toml\nquality_max_cost_increase = -0.1\n```\n")
+        with pytest.raises(ValueError, match="quality_max_cost_increase"):
             load_policy(path)
         path.write_text("```toml\nfailure_outcomes = 'x'\n```\n")
         with pytest.raises(ValueError, match="failure_outcomes"):

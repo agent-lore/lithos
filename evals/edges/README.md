@@ -318,4 +318,8 @@ gets about half of them wrong.
 
 **Comparing prompts.** Run v1 with the code before this change (main at
 f9b884d) and v2 with the current code, both on this `cases.jsonl` and
-`labels.jsonl`, so the case and label fingerprints match.
+`labels.jsonl`, so the case and label fingerprints match. The first such
+comparison is `evals/runs/20261118-edges-prompt-v2.md`. On Luna `low`, v2
+names a relation correctly 84% of the time against 44% for v1, and gets the
+direction right on 24 of 26 slots against 11 of 21. It passes the gate on the
+quality path.

@@ -111,6 +111,18 @@ items (K4), priming briefs (K5).
 - Luna at `medium` passes too and finds 18 of the 29 positives at 44% precision, but slot by slot its gain over `low` is within chance, at 38% more cost. `low` stays the choice.
 - The gemini sanity check fails the gate, but on failure rates, not on its constant direction: the labels' directions lean `focus_to_candidate`.
 
+**Prompt v2, 2026-11-18** (`evals/runs/20261118-edges-prompt-v2.md`, task a06c08c0). On golden set and labels v2 (328 cases, 202 slots, 44 scored directions balanced by 21 mirrored cases), Luna `low` with prompt v2 is PROMOTABLE over prompt v1 on the new quality path:
+
+| | Prompt v1 | Prompt v2 |
+|---|---|---|
+| Precision of named relations | 44% | 84% |
+| Recall of named relations | 51% | 61% |
+| Direction agreement | 25.0% | 54.5% |
+| Edges per call | 0.83 | 0.61 |
+| Cost per 1k calls | $0.30 | $0.34 |
+
+- The gemini sanity check now fails on relation and direction too: the mirrors balance the labels' directions.
+
 `lithos eval run --artefact edges --model <name> --base-url <url> [--cases N]
 [--json]`, implemented in `lithos/eval/` behind the `lithos.lcma` seam
 (reuses `LlmClient`, `build_adjudication_prompt`, `parse_adjudications`;
@@ -147,6 +159,11 @@ rate at or below the incumbent's, and cost per 1,000 calls at least 30%
 lower (or equal cost with agreement higher). Anything else is a documented
 "no" with the numbers. The rule is the deliverable; the thresholds are the
 first values, revisable in the same file.
+
+**Revised 2026-11-18 (prompt v2):** the cost rule gained a quality path. A
+candidate may cost up to 25% more when relation agreement rises by at least
+3 points and direction agreement by at least 5. The first two cost paths suit
+a model swap; this one lets a clearly better prompt pay a bounded price.
 
 ### E6 — Judge hygiene
 
