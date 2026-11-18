@@ -110,7 +110,7 @@ class TestRenderNote:
         )
 
     def test_relevance_archive_and_title_are_never_shown(self) -> None:
-        text = render_note(_view(), limit=1200)
+        text = render_note(_view(), limit=1200, chunk=INFLUX_BODY)
         assert "8/10" not in text and "rss/2026" not in text and "# A paper" not in text
 
     def test_method_only_when_it_fits_whole(self) -> None:
@@ -122,9 +122,62 @@ class TestRenderNote:
         chunk = "## Summary\n### Contributions\n- First contribution\n- Second contribution"
         assert "Matching passage" not in render_note(_view(), limit=1200, chunk=chunk)
 
+    def test_chunk_drops_lines_already_shown_whatever_their_order(self) -> None:
+        """PR #462 review follow-up: a chunk holding the summary in the note's own
+        order (Method before Result) is no new material."""
+        chunk = (
+            "## Summary\n### Contributions\n- First contribution\n- Second contribution\n\n"
+            "### Method\nA short method.\n\n### Result\nIt worked.\n\n## User Notes"
+        )
+        assert "Matching passage" not in render_note(_view(), limit=1200, chunk=chunk)
+        with_new = chunk.replace("## User Notes", "## Full Text\nA new finding.")
+        assert render_note(_view(), limit=1200, chunk=with_new).endswith(
+            "Matching passage: ## Full Text\nA new finding."
+        )
+
     def test_chunk_left_out_without_room(self) -> None:
         body = render_note(_view(), limit=1200)
         assert render_note(_view(), limit=len(body) + 60, chunk=CHUNK) == body
+
+    def test_excluded_sections_never_reach_the_prompt_through_the_chunk(self) -> None:
+        """PR #462 review: a relevance-only chunk (397f893f3a105217/5) leaked the
+        robotics profile score into the prompt as a matching passage."""
+        relevance_chunk = (
+            "### Relevance\n"
+            "Highly relevant to robot learning from demonstration and sim-to-real transfer.\n"
+            "\n"
+            "## Profile Relevance\n"
+            "### robotics\n"
+            "Score: 7/10\n"
+            "The interactive world simulator is relevant to robot learning."
+        )
+        text = render_note(_view(), limit=1200, chunk=relevance_chunk)
+        assert "Matching passage" not in text
+        assert "Score: 7/10" not in text and "Highly relevant" not in text
+
+    def test_a_profile_section_without_its_parent_heading_is_excluded(self) -> None:
+        """A chunk can start at a later per-profile section (0fb7fe512b9666c4/3)."""
+        chunk = (
+            "### ai-agents\nScore: 9/10\nHighly relevant to agentic frameworks and tool use.\n\n"
+            "### knowledge-systems\nScore: 6.5/10\nSome relevance to shared memory."
+        )
+        assert "Matching passage" not in render_note(_view(), limit=1200, chunk=chunk)
+
+    def test_chunk_keeps_its_content_without_title_archive_or_relevance(self) -> None:
+        first_chunk = (
+            "A paper\n\n# A paper\n\n## Archive\npath: rss/2026/10/feed-2026-10-15-abc.html\n\n"
+            "## Full Text\nThe article's first paragraph.\n\n"
+            "## Profile Relevance\n### robotics\nScore: 7/10\n\n## User Notes"
+        )
+        text = render_note(_view(content=""), limit=1200, chunk=first_chunk)
+        assert text == "Matching passage: ## Full Text\nThe article's first paragraph."
+
+    def test_chunk_is_shown_alone_within_a_small_limit(self) -> None:
+        """PR #462 review: with no body, the chunk is the fallback whatever the room."""
+        view = NoteView(title="Candidate", content="")
+        chunk = "Concrete evidence from the candidate note."
+        assert render_note(view, limit=100, chunk=chunk) == f"Matching passage: {chunk}"
+        assert len(render_note(view, limit=40, chunk=chunk)) == 40
 
     def test_text_is_cut_at_the_limit(self) -> None:
         assert len(render_note(_view(content="word " * 1000), limit=300)) == 300

@@ -40,7 +40,9 @@ source. v2 (`lithos.lcma.note_view`) shows every note as:
 
 - an `Added <date> · Source: <domain> (<feed>)` line;
 - its summary's Contributions and Result, then Method when it fits whole;
-- for a candidate, the matching chunk when room remains.
+- for a candidate, what the matching chunk adds when room remains: the
+  lines the summary doesn't already show, without Influx's archive path or
+  profile-relevance sections.
 
 The system prompt states the strict labelling standard and the direction
 conventions for versions of the same item. The call log records each note's

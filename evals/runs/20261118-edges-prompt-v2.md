@@ -14,8 +14,8 @@ All three runs scored the same evidence:
 - **Code:** v1 ran from main at f9b884d, whose prompt is v1, and v2 from the
   prompt-v2 branch. Their case and label fingerprints match.
 - **Set version:** the golden set as of commit 8509b5a. It was then cleaned
-  up to be v2-only; see [the cleaned set](#the-cleaned-set-baseline-from-here)
-  at the end.
+  up to be v2-only, and the review fixed what chunks show; see the last two
+  sections.
 
 `evals/edges/README.md` describes the golden set and labels v2. The gate
 reports are `20261118-compare-luna-low-prompt-v1-vs-v2.md` and
@@ -115,7 +115,7 @@ will go to prod (Dave, 2026-11-18). The readout should show:
 - edges per call near 0.6 at staging's traffic;
 - prompt tokens near 1,650 per call.
 
-## The cleaned set: baseline from here
+## The cleaned set
 
 After the review, the golden set was made v2-only (commit f71e331):
 
@@ -126,8 +126,7 @@ After the review, the golden set was made v2-only (commit f71e331):
 - **Cases** now need note views, and `snippet_chars` is renamed `note_chars`.
 
 v1 cannot load this set, so the v1-vs-v2 decision above stands on the
-8509b5a version. v2 and the sanity check were re-run on the cleaned set as
-the baseline for the next prompt or model change:
+8509b5a version. v2 and the sanity check were re-run on the cleaned set:
 
 | Run | Relation agreement | Precision | Recall | Direction | Failures | Edges/call | $ per 1k calls | Latency p50 / p95 |
 |---|---|---|---|---|---|---|---|---|
@@ -157,3 +156,58 @@ the baseline for the next prompt or model change:
 
 The re-runs cost about $0.27. Including the throttled gemini attempt, the day's
 runs cost about $0.60 in all.
+
+## Review fix: what a matching chunk may show (baseline from here)
+
+The PR #462 review found that a candidate's matching chunk was appended raw.
+That brought back what the summary path leaves out:
+
+- **Relevance text:** Influx's `### Relevance` and `## Profile Relevance`
+  sections, including `Score: N/10` lines.
+- **Archive paths:** `## Archive` sections, with their dated paths.
+
+436 of the 1,423 candidate views showed some of it.
+
+What a chunk may now show:
+
+- **Excluded sections are removed** whatever their position. Chunks split at
+  blank lines, so a section always arrives with its heading. A per-profile
+  section that has lost its parent heading is recognised by its `Score:`
+  line.
+- **Repeated text is removed:** lines the summary already shows, and headings
+  left with nothing under them.
+- **Fallback:** when a candidate has no other text, its chunk is shown
+  within any budget.
+
+After the fix, no view shows excluded material, and 345 views keep a passage
+of new material.
+
+**One label changed.** `neg-dup-02/1` was the only labelled slot whose label
+rested on the removed text. Its direction came from the forum note's archive
+path (2026-10-19), and both notes show "Added 2026-10-20", so it is now
+`supports either` (Dave). Labels v2 now hold 43 scored directions: 22
+`focus_to_candidate` and 21 `candidate_to_focus`.
+
+**Luna `low`, prompt v2 with the fix** (`20261118T172443Z`), on the cleaned
+set and the revised labels:
+
+| | Before the fix (`20261118T163856Z`) | After the fix (`20261118T172443Z`) |
+|---|---|---|
+| Relation agreement | 86.1% | 88.1% |
+| Precision | 78% (32/41) | 78% (35/45) |
+| Recall | 63% (32/51) | 69% (35/51) |
+| Direction agreement | 52.3% (23/44) | 58.1% (25/43) |
+| Directions right where the relation is right | 23 of 27 | 25 of 28 |
+| Relations named on `none` slots | 9 | 8 |
+| Prompt tokens per call | 1,648 | 1,535 |
+| Edges per call | 0.62 | 0.65 |
+| $ per 1k calls | 0.35 | 0.33 |
+| Latency p50 / p95 | 4.6 s / 7.6 s | 4.2 s / 7.9 s |
+
+The label change means the two runs scored different label sets, so they are
+not gated against each other. The differences are within run-to-run noise.
+The fix removes text that should never have been shown, and it shortens the
+prompt by about 110 tokens; v2 now costs 10% more than v1 rather than 14%.
+
+This run is the baseline for the next prompt or model change. It cost about
+$0.11.

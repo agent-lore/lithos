@@ -248,10 +248,17 @@ show large disagreements, not fine ones.
 Task a06c08c0. Prompt v2 (`INFERENCE_VERSION` 2,
 `lithos.lcma.note_view`) shows every note the same way: an
 `Added <date> · Source: <domain> (<feed>)` line, the summary's Contributions
-and Result, Method when it fits whole, and for a candidate the matching search
-chunk when room remains. Each note gets up to 1,200 characters
-(`note_chars`, called `snippet_chars` under v1). The system prompt now states the strict standard and
-conventions 1, 2, 3 and 5 below, with one worked example per direction.
+and Result, and Method when it fits whole. For a candidate it then adds what
+the matching search chunk adds, when room remains: the chunk's lines the
+summary doesn't already show, without Influx's archive path or
+profile-relevance sections. Each note gets up to 1,200 characters
+(`note_chars`, called `snippet_chars` under v1). The system prompt now states
+the strict standard and conventions 1, 2, 3 and 5 below, with one worked
+example per direction.
+
+The PR #462 review found that chunks had brought relevance and archive text
+back in: 436 of the 1,423 candidate views showed it. After the fix none do,
+and 345 views keep a passage of new material.
 
 **Cases.** `scripts/eval_cases.py attach-notes` read every focus and
 candidate note from the vault its case was exported from (prod 178 cases,
@@ -290,6 +297,7 @@ labelled slots (181 plus the first 20 mirrors) were re-read in the v2 text:
 | `9391c1906304d239/2` | `supports focus_to_candidate` | `supports candidate_to_focus` | The focus is "a hypothesis—not an empirical test"; the candidate presents evidence |
 | `f58eaca71093f324/5` | `analogy_to` | `none` | The summary shows a coding-tools note, so only the topic is shared |
 | `neg-dup-03/1` | `supports either` | unchanged | The Added dates reflect ingestion; the forum thread relays the video |
+| `neg-dup-02/1` | `supports focus_to_candidate` | `supports either` | PR #462 review: the forum note's archive path (2026-10-19) was the only order evidence, and chunks no longer show archive paths. Both notes are added 2026-10-20 |
 
 The two mirrors the reviewers rejected are the excluded ones above. Two of
 the doubts became the last two changes in the table. Claude kept the other 12
@@ -308,9 +316,9 @@ for a later pass:
 |---|---|---|---|
 | Slots | 181 | 21 | 202 |
 | Positive | 30 | 21 | 51 |
-| Scored `focus_to_candidate` | 17 | 6 | 23 |
+| Scored `focus_to_candidate` | 16 | 6 | 22 |
 | Scored `candidate_to_focus` | 6 | 15 | 21 |
-| `either` | 3 | 0 | 3 |
+| `either` | 4 | 0 | 4 |
 
 Each scored direction is now worth about 2.3 points of direction agreement,
 so the gate's 5-point tolerance is two slots, and a constant-direction model
