@@ -62,7 +62,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "4a6d4efd124b1383a503ab4c472ba9e68e85a02d99ffb00d8352c24f8f9f324c",
+  "source_hash": "a729caf7d246a554b8b560c985b42cbc8cdc13a74b8f34bb9ff69d7b8007433d",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -237,7 +237,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos.tools.tasks.register.lithos_task_update | 118 | 118 | review | — |
 | unchanged | function_length | lithos.watch_intake.WatchIntake.rename_on_disk | 82 | 82 | review | — |
 | unchanged | module_lines | lithos.cli | 1303 | 1303 | review | — |
-| unchanged | module_lines | lithos.cognitive_memory | 1572 | 1572 | review | — |
+| unchanged | module_lines | lithos.cognitive_memory | 1576 | 1576 | review | — |
 | unchanged | module_lines | lithos.coordination | 2866 | 2866 | review | — |
 | unchanged | module_lines | lithos.frontmatter_codec | 806 | 806 | review | — |
 | unchanged | module_lines | lithos.graph | 877 | 877 | review | — |
@@ -286,7 +286,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Component | Modules | Lines | SLOC | Fan-in | Fan-out | Instability | Max complexity | Functions > 10 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
 | Codec | 1 | 806 | 609 | 7 | 0 | 0.00 | 14 (`lithos.frontmatter_codec.KnowledgeMetadata.from_dict`) | 3 |
-| CognitiveMemory | 1 | 1572 | 1327 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
+| CognitiveMemory | 1 | 1576 | 1331 | 1 | 12 | 0.92 | 26 (`lithos.cognitive_memory.CognitiveMemory.validate_task_feedback`) | 3 |
 | Config | 1 | 620 | 424 | 11 | 1 | 0.08 | 14 (`lithos.config.LithosConfig._apply_backward_compat_env_overrides`) | 1 |
 | Coordination | 3 | 3217 | 2717 | 4 | 5 | 0.56 | 21 (`lithos.coordination.CoordinationService.create_task`) | 7 |
 | Entrypoints | 13 | 6640 | 5398 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 14 |
@@ -296,7 +296,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | IdResolution | 1 | 127 | 100 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
 | Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 2169 | 1752 | 5 | 8 | 0.62 | 63 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
-| LCMA | 27 | 8613 | 7077 | 1 | 12 | 0.92 | 43 (`lithos.lcma.retrieve._run_retrieve_impl`) | 26 |
+| LCMA | 27 | 8624 | 7087 | 1 | 12 | 0.92 | 43 (`lithos.lcma.retrieve._run_retrieve_impl`) | 26 |
 | Logging | 1 | 164 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 2102 | 1717 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 7 |
@@ -305,7 +305,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **62**, lines: **30707**, SLOC: **24989**
+- Modules: **62**, lines: **30722**, SLOC: **25003**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -403,4 +403,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **45** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.71** (52417 test lines / 30707 source lines)
+- Test-to-source line ratio: **1.71** (52510 test lines / 30722 source lines)

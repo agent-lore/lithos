@@ -4,7 +4,9 @@ Methods are run interleaved (a different first method per query) so that
 cache warmth and host load fall evenly across them, and each call is timed
 on its own. The retrieve callable must be the facade's ``retrieve`` with
 ``record=False`` bound: pooling must not write receipts or coactivation into
-the snapshot it reads.
+the snapshot it reads. Retrieve runs as the query's ``caller``, because its
+scouts gate ``agent_private`` notes on the caller's identity and search does
+not: an anonymous replay would charge those misses to retrieve's ranking.
 """
 
 from __future__ import annotations
@@ -38,7 +40,10 @@ class Retriever(Protocol):
         namespace_filter: list[str] | None,
         tags: list[str] | None,
         path_prefix: str | None,
-    ) -> Awaitable[dict[str, object]]: ...
+        agent_id: str | None,
+    ) -> Awaitable[dict[str, object]]:
+        """The ``lithos_retrieve`` envelope for *query*, run as *agent_id*."""
+        raise NotImplementedError
 
 
 def vector_similarity(reasons: Sequence[object]) -> float | None:
@@ -120,6 +125,7 @@ async def run_methods(
             namespace_filter=query.namespace_filter,
             tags=query.tags,
             path_prefix=query.path_prefix,
+            agent_id=query.caller,
         )
         results = envelope.get("results")
         return _ranked_retrieve(list(results) if isinstance(results, list) else [])

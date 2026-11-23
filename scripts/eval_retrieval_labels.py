@@ -88,6 +88,17 @@ def select_slots(
     return slots
 
 
+_SHEET_HOW_TO = (
+    "Edit the `label:` line under each pair: `relevant`, `superseded`, `not`, or `skip`. "
+    "Anything after `#` is kept as a note."
+)
+_SHEET_GRADES = (
+    "`relevant`: the note answers or directly bears on the query. `superseded`: it did, "
+    "but a newer note replaces it. `not`: anything else, including a shared topic "
+    "without bearing on the query."
+)
+
+
 def write_sheet(
     slots: list[tuple[RetrievalCase, str]],
     out: Path,
@@ -95,17 +106,7 @@ def write_sheet(
     proposed: dict[Slot, dict[str, Any]],
     blind: bool,
 ) -> int:
-    lines = [
-        "# Retrieval golden-set review sheet",
-        "",
-        "Edit the `label:` line under each pair: `relevant`, `superseded`, `not`, or `skip`. "
-        "Anything after `#` is kept as a note.",
-        "",
-        "`relevant`: the note answers or directly bears on the query. `superseded`: it did, "
-        "but a newer note replaces it. `not`: anything else, including a shared topic "
-        "without bearing on the query.",
-        "",
-    ]
+    lines = ["# Retrieval golden-set review sheet", "", _SHEET_HOW_TO, "", _SHEET_GRADES, ""]
     for case, note_id in slots:
         note = case.notes.get(note_id) or {}
         lines += [

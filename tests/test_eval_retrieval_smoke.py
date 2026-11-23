@@ -6,6 +6,7 @@ changed value rather than as "it still runs".
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -76,3 +77,24 @@ def test_labels_outside_pool_refuse_to_score(tmp_path: Path) -> None:
         score_retrieval_eval(
             cases_paths=[SEED / "cases.jsonl"], labels_paths=[bad], runs_dir=tmp_path
         )
+
+
+def test_partial_labels_still_score(tmp_path: Path) -> None:
+    """A sampled or incremental label set leaves top results unlabelled; scoring must not abort."""
+    rows = [json.loads(line) for line in (SEED / "labels.jsonl").read_text().splitlines()]
+    # seed-note-2 is retrieve's top result for seed-001; drop its label, keep the relevant one.
+    kept = [r for r in rows if not (r["case_id"] == "seed-001" and r["note_id"] == "seed-note-2")]
+    partial = tmp_path / "labels.jsonl"
+    partial.write_text("".join(json.dumps(r) + "\n" for r in kept))
+
+    _, doc, text = score_retrieval_eval(
+        cases_paths=[SEED / "cases.jsonl"], labels_paths=[partial], runs_dir=tmp_path
+    )
+    assert doc["evidence"]["n_labels"] == 7
+    assert doc["evidence"]["n_unlabelled_slots"] == 1
+    assert doc["metrics"]["overall"]["retrieve"]["unlabelled_share"] > 0
+    floor = doc["floor"]
+    assert floor["n_with_relevant"] == 2
+    assert floor["signals"]["retrieve"]["at_floor"]["hit_rate"] == 0.0  # unlabelled top = miss
+    assert floor["signals"]["semantic"]["at_floor"]["hit_rate"] == 1.0
+    assert "1 pooled pairs still unlabelled" in text

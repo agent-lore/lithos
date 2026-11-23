@@ -1502,8 +1502,10 @@ async def pool_retrieval_eval(
     """Run every query through hybrid, semantic and retrieve and write the pooled cases.
 
     *memory* must be started; retrieval runs with ``record=False`` so the
-    snapshot's stats store is left as it was. Returns the number of cases
-    written. See ``lithos.lcma.eval.retrieval.pool``.
+    snapshot's stats store is left as it was, and as each query's ``caller``
+    so agent-private notes are visible to retrieve exactly as they were to
+    the caller. Returns the number of cases written. See
+    ``lithos.lcma.eval.retrieval.pool``.
     """
     queries = retrieval_cases.load_queries(queries_path)
     _, note_count = await knowledge.list_all(limit=0)
@@ -1518,6 +1520,7 @@ async def pool_retrieval_eval(
         namespace_filter: list[str] | None,
         tags: list[str] | None,
         path_prefix: str | None,
+        agent_id: str | None,
     ) -> dict[str, object]:
         return await memory.retrieve(
             query,
@@ -1525,6 +1528,7 @@ async def pool_retrieval_eval(
             namespace_filter=namespace_filter,
             tags=tags,
             path_prefix=path_prefix,
+            agent_id=agent_id,
             record=False,
         )
 

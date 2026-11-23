@@ -160,3 +160,22 @@ class TestFloorSweep:
         # the sweep is monotone: higher floors never supply more
         rates = sweep["signals"]["semantic"]["false_supply_rate"]
         assert all(a >= b for a, b in itertools.pairwise(rates))
+
+    def test_unlabelled_top_result_is_a_miss_not_a_crash(self) -> None:
+        cases = [
+            # a relevant note is known, but the semantic top result was never labelled
+            _case("c1", semantic=_run("x", "a", scores=[0.9, 0.6]), retrieve=_run("a")),
+            # nothing relevant known; the unlabelled top still counts as a false supply
+            _case("c2", semantic=_run("y", scores=[0.9]), retrieve=_run("b", scores=[0.9])),
+        ]
+        labels = {
+            ("c1", "a"): _label("c1", "a", "relevant"),
+            ("c2", "b"): _label("c2", "b", "not"),
+        }
+        sweep = floor_sweep(cases, labels, floor=0.35)
+        assert sweep["signals"]["semantic"]["at_floor"] == {
+            "floor": 0.35,
+            "hit_rate": 0.0,
+            "false_supply_rate": 1.0,
+        }
+        assert sweep["signals"]["retrieve"]["at_floor"]["hit_rate"] == 1.0

@@ -217,7 +217,8 @@ def _rates(
         1
         for case in with_relevant
         if (top := _supplied(signal, case, threshold)) is not None
-        and labels[(case.case_id, top[0])].gain >= RELEVANT
+        and (label := labels.get((case.case_id, top[0]))) is not None
+        and label.gain >= RELEVANT
     )
     false = sum(1 for case in without_relevant if _supplied(signal, case, threshold) is not None)
     return (
@@ -240,6 +241,10 @@ def floor_sweep(
     relevant (``hit_rate``); among queries whose labelled pool holds nothing
     relevant, the share where something clears the floor anyway
     (``false_supply_rate``). ``at_floor`` reads both at the caller's floor.
+
+    As in the ranking metrics, a top result without a label counts as not
+    relevant (a miss, or a false supply); ``unlabelled_share`` in the method
+    metrics says how much of that there was.
     """
     with_relevant, without_relevant = _split_by_relevance(cases, labels)
     groups = {

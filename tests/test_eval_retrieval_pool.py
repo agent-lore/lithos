@@ -109,3 +109,55 @@ async def test_pool_writes_cases_and_leaves_no_receipt(
     raw = [json.loads(line) for line in out.read_text().splitlines()]
     assert raw[1]["scope"] == {"tags": ["eval-seed"]}
     assert raw[0]["methods"]["semantic"]["results"][0]["rank"] == 1
+
+
+@pytest.mark.asyncio
+async def test_pool_runs_retrieve_as_the_caller(server: LithosServer, tmp_path: Path) -> None:
+    """An owner's agent-private note reaches pooled retrieve exactly as it reaches direct retrieve."""
+    await _seed(server)
+    private = await call_tool(
+        server,
+        "lithos_write",
+        {
+            "title": "Owner's private delta notes",
+            "content": "Private delta notes on the delta experiment kept by eval-owner.",
+            "agent": "eval-owner",
+            "access_scope": "agent_private",
+        },
+    )
+    queries = tmp_path / "queries.jsonl"
+    write_jsonl(
+        queries,
+        [
+            {
+                "query_id": "owner",
+                "query": "delta experiment",
+                "caller": "eval-owner",
+                "slice": "s",
+            },
+            {"query_id": "other", "query": "delta experiment", "caller": "someone", "slice": "s"},
+        ],
+    )
+    out = tmp_path / "cases.jsonl"
+    await pool_retrieval_eval(
+        memory=server.memory,
+        search=server.search,
+        knowledge=server.knowledge,
+        queries_path=queries,
+        out_path=out,
+        data_dir=server.config.storage.data_dir,
+        depth=5,
+    )
+    direct = await server.memory.retrieve(
+        "delta experiment", limit=5, agent_id="eval-owner", record=False
+    )
+    direct_ids = [str(r["id"]) for r in direct["results"]]  # type: ignore[index]
+    assert private["id"] in direct_ids
+
+    owner, other = load_retrieval_cases([out])
+    assert owner.methods["retrieve"].ids == direct_ids
+    assert private["id"] in owner.methods["semantic"].ids
+    # The gate is retrieve's, not search's: another caller sees the note in search only.
+    assert private["id"] not in other.methods["retrieve"].ids
+    assert private["id"] in other.methods["semantic"].ids
+    assert await _receipts(server) == 0
