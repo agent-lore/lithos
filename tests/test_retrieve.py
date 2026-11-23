@@ -2114,3 +2114,70 @@ class TestFinallyBlockRobustness:
         assert len(rows) == 1
         assert rows[0][0] == 0
         assert rows[0][1] == LcmaConfig().temperature_default
+
+
+class TestRecordFalseLeavesStatsUntouched:
+    """``record=False`` (offline evaluation) must not write a receipt, node_stats
+    row or coactivation pair; ``record=True`` (the default) must, so the check
+    is known to see writes."""
+
+    async def _counts(self, config: LithosConfig) -> tuple[int, int, int]:
+        import aiosqlite
+
+        async with aiosqlite.connect(config.storage.stats_db_path) as db:
+            counts = []
+            for table in ("receipts", "node_stats", "coactivation"):
+                cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")
+                row = await cursor.fetchone()
+                counts.append(int(row[0]) if row else 0)
+        return counts[0], counts[1], counts[2]
+
+    @pytest.mark.asyncio
+    async def test_record_flag_controls_every_stats_write(
+        self,
+        seeded_config: LithosConfig,
+        seeded_km: KnowledgeManager,
+        seeded_search: SearchEngine,
+        seeded_graph: KnowledgeGraph,
+        mock_coordination: AsyncMock,
+        edge_store: EdgeStore,
+        projection: ProvenanceProjection,
+        stats_store: StatsStore,
+    ) -> None:
+        from lithos.search import SearchResult
+
+        hits = [
+            SearchResult(
+                id=_ID1, score=0.9, title="Alpha Note", snippet="alpha", path="alpha-note.md"
+            ),
+            SearchResult(
+                id=_ID2, score=0.8, title="Beta Note", snippet="beta", path="beta-note.md"
+            ),
+        ]
+        kwargs = dict(
+            query="testing",
+            search=seeded_search,
+            knowledge=seeded_km,
+            graph=seeded_graph,
+            coordination=mock_coordination,
+            edge_store=edge_store,
+            projection=projection,
+            stats_store=stats_store,
+            lcma_config=LcmaConfig(),
+            limit=10,
+        )
+        with (
+            patch.object(seeded_search, "semantic_search", return_value=hits),
+            patch.object(seeded_search, "full_text_search", return_value=hits),
+        ):
+            quiet = await _run_retrieve_impl(**kwargs, record=False)
+            assert [r["id"] for r in quiet["results"][:2]] and quiet["receipt_id"].startswith(
+                "rcpt_"
+            )
+            assert await self._counts(seeded_config) == (0, 0, 0)
+
+            loud = await _run_retrieve_impl(**kwargs)
+            receipts, node_rows, pairs = await self._counts(seeded_config)
+            assert receipts == 1
+            assert node_rows == len(loud["results"])
+            assert pairs >= 1

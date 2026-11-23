@@ -63,6 +63,15 @@ Issues and PRDs live as GitHub issues on `agent-lore/lithos` (use `gh`). See `do
 
 Five canonical roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) using default label strings. See `docs/agents/triage-labels.md`.
 
+### Evals
+
+Golden sets and run documents live under `evals/` (`evals/POLICY.md` is the
+promotion rule; `evals/edges/` the typed-edge set; `evals/retrieval/` the
+search-vs-retrieve set). Slices that hold personal data are not in this repo:
+they live in the private `agent-lore/lithos-evals` repo, checked out beside
+this one at `../lithos-evals`, and `lithos eval retrieve-score` takes both
+roots with repeated `--cases`/`--labels`.
+
 ### Runbooks
 
 Operator procedures live in `docs/runbooks/` (e.g. evaluating and migrating the adjudication LLM: `docs/runbooks/llm-model-migration.md`).

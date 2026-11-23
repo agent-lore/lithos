@@ -11,7 +11,7 @@ Agent-facing facade of LCMA: retrieval, learning, and asserted state.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.cognitive_memory` | L | 3 | 5 |
+| `lithos.cognitive_memory` | XL | 3 | 7 |
 
 ## Public API
 
@@ -24,6 +24,8 @@ Agent-facing facade of LCMA: retrieval, learning, and asserted state.
 - def `llm_call_log_report` — Per-model summary of the call log plus its text rendering (the canary readout).
 - def `run_llm_eval` — Run (or score recorded completions for) a golden set; see ``lithos.lcma.eval.runner``.
 - def `compare_llm_eval_runs` — Markdown comparison of two run files, plus the gate verdict when asked (None otherwise).
+- def `pool_retrieval_eval` — Run every query through hybrid, semantic and retrieve and write the pooled cases.
+- def `score_retrieval_eval` — Score one or more pooled case files against their labels; write the run document.
 
 ## Dependencies
 

@@ -58,7 +58,7 @@
       },
       "LCMA": {
         "functions_over_10": 26,
-        "max_complexity": 41,
+        "max_complexity": 43,
         "max_function": "lithos.lcma.retrieve._run_retrieve_impl"
       },
       "Logging": {
@@ -110,8 +110,8 @@
         "qualname": "lithos.knowledge.KnowledgeManager.update"
       },
       {
-        "complexity": 41,
-        "length": 363,
+        "complexity": 43,
+        "length": 371,
         "qualname": "lithos.lcma.retrieve._run_retrieve_impl"
       },
       {
@@ -150,7 +150,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 952
+    "total_functions": 1011
   },
   "components": {
     "Codec": {
@@ -1222,6 +1222,33 @@
         "src/lithos/cli.py"
       ]
     },
+    "lithos.cli.eval_retrieve_pool": {
+      "complexity": 3,
+      "length": 41,
+      "module": "lithos.cli",
+      "path": "src/lithos/cli.py",
+      "paths": [
+        "src/lithos/cli.py"
+      ]
+    },
+    "lithos.cli.eval_retrieve_pool.run": {
+      "complexity": 1,
+      "length": 19,
+      "module": "lithos.cli",
+      "path": "src/lithos/cli.py",
+      "paths": [
+        "src/lithos/cli.py"
+      ]
+    },
+    "lithos.cli.eval_retrieve_score": {
+      "complexity": 3,
+      "length": 25,
+      "module": "lithos.cli",
+      "path": "src/lithos/cli.py",
+      "paths": [
+        "src/lithos/cli.py"
+      ]
+    },
     "lithos.cli.eval_run": {
       "complexity": 9,
       "length": 70,
@@ -1827,7 +1854,7 @@
     },
     "lithos.cognitive_memory.CognitiveMemory.retrieve": {
       "complexity": 3,
-      "length": 70,
+      "length": 75,
       "module": "lithos.cognitive_memory",
       "path": "src/lithos/cognitive_memory.py",
       "paths": [
@@ -1844,8 +1871,8 @@
       ]
     },
     "lithos.cognitive_memory.CognitiveMemory.start": {
-      "complexity": 4,
-      "length": 31,
+      "complexity": 7,
+      "length": 39,
       "module": "lithos.cognitive_memory",
       "path": "src/lithos/cognitive_memory.py",
       "paths": [
@@ -1915,6 +1942,15 @@
         "src/lithos/cognitive_memory.py"
       ]
     },
+    "lithos.cognitive_memory._lithos_version": {
+      "complexity": 2,
+      "length": 5,
+      "module": "lithos.cognitive_memory",
+      "path": "src/lithos/cognitive_memory.py",
+      "paths": [
+        "src/lithos/cognitive_memory.py"
+      ]
+    },
     "lithos.cognitive_memory._record_cache_lookup": {
       "complexity": 2,
       "length": 3,
@@ -1960,6 +1996,24 @@
         "src/lithos/cognitive_memory.py"
       ]
     },
+    "lithos.cognitive_memory.pool_retrieval_eval": {
+      "complexity": 3,
+      "length": 53,
+      "module": "lithos.cognitive_memory",
+      "path": "src/lithos/cognitive_memory.py",
+      "paths": [
+        "src/lithos/cognitive_memory.py"
+      ]
+    },
+    "lithos.cognitive_memory.pool_retrieval_eval.retrieve": {
+      "complexity": 1,
+      "length": 16,
+      "module": "lithos.cognitive_memory",
+      "path": "src/lithos/cognitive_memory.py",
+      "paths": [
+        "src/lithos/cognitive_memory.py"
+      ]
+    },
     "lithos.cognitive_memory.recalibrate_salience": {
       "complexity": 2,
       "length": 30,
@@ -1972,6 +2026,15 @@
     "lithos.cognitive_memory.run_llm_eval": {
       "complexity": 13,
       "length": 62,
+      "module": "lithos.cognitive_memory",
+      "path": "src/lithos/cognitive_memory.py",
+      "paths": [
+        "src/lithos/cognitive_memory.py"
+      ]
+    },
+    "lithos.cognitive_memory.score_retrieval_eval": {
+      "complexity": 2,
+      "length": 28,
       "module": "lithos.cognitive_memory",
       "path": "src/lithos/cognitive_memory.py",
       "paths": [
@@ -5659,6 +5722,474 @@
         "src/lithos/lcma/eval/report.py"
       ]
     },
+    "lithos.lcma.eval.retrieval.cases.MethodRun.ids": {
+      "complexity": 2,
+      "length": 2,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.Query.namespace_filter": {
+      "complexity": 2,
+      "length": 3,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.Query.path_prefix": {
+      "complexity": 2,
+      "length": 3,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.Query.tags": {
+      "complexity": 2,
+      "length": 3,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.RetrievalCase.pooled_ids": {
+      "complexity": 5,
+      "length": 9,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.RetrievalLabel.gain": {
+      "complexity": 1,
+      "length": 2,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases._digest": {
+      "complexity": 1,
+      "length": 4,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases._ranked_from_dict": {
+      "complexity": 3,
+      "length": 10,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.case_from_dict": {
+      "complexity": 9,
+      "length": 26,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.case_to_dict": {
+      "complexity": 6,
+      "length": 20,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.cases_fingerprint": {
+      "complexity": 4,
+      "length": 17,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.check_labels_cover_cases": {
+      "complexity": 5,
+      "length": 12,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.label_from_dict": {
+      "complexity": 6,
+      "length": 16,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.labels_fingerprint": {
+      "complexity": 3,
+      "length": 4,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.load_queries": {
+      "complexity": 4,
+      "length": 8,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.load_retrieval_cases": {
+      "complexity": 4,
+      "length": 14,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.load_retrieval_labels": {
+      "complexity": 6,
+      "length": 14,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.query_from_dict": {
+      "complexity": 5,
+      "length": 12,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.read_jsonl": {
+      "complexity": 4,
+      "length": 10,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.unlabelled_slots": {
+      "complexity": 4,
+      "length": 10,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.cases.write_jsonl": {
+      "complexity": 2,
+      "length": 5,
+      "module": "lithos.lcma.eval.retrieval.cases",
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/cases.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool.Retriever.__call__": {
+      "complexity": 1,
+      "length": 9,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool._ranked": {
+      "complexity": 2,
+      "length": 5,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool._ranked_retrieve": {
+      "complexity": 5,
+      "length": 11,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool._timed": {
+      "complexity": 1,
+      "length": 4,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool.note_views": {
+      "complexity": 4,
+      "length": 19,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool.pool_queries": {
+      "complexity": 8,
+      "length": 45,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool.run_methods": {
+      "complexity": 4,
+      "length": 54,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool.run_methods.hybrid": {
+      "complexity": 2,
+      "length": 7,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool.run_methods.retrieve_": {
+      "complexity": 2,
+      "length": 10,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool.run_methods.semantic": {
+      "complexity": 2,
+      "length": 11,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool.snapshot_info": {
+      "complexity": 1,
+      "length": 7,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.pool.vector_similarity": {
+      "complexity": 3,
+      "length": 7,
+      "module": "lithos.lcma.eval.retrieval.pool",
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/pool.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.report._fmt": {
+      "complexity": 4,
+      "length": 6,
+      "module": "lithos.lcma.eval.retrieval.report",
+      "path": "src/lithos/lcma/eval/retrieval/report.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/report.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.report._metrics_table": {
+      "complexity": 5,
+      "length": 21,
+      "module": "lithos.lcma.eval.retrieval.report",
+      "path": "src/lithos/lcma/eval/retrieval/report.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/report.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.report.build_run_document": {
+      "complexity": 8,
+      "length": 39,
+      "module": "lithos.lcma.eval.retrieval.report",
+      "path": "src/lithos/lcma/eval/retrieval/report.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/report.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.report.format_report": {
+      "complexity": 3,
+      "length": 32,
+      "module": "lithos.lcma.eval.retrieval.report",
+      "path": "src/lithos/lcma/eval/retrieval/report.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/report.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.report.write_run": {
+      "complexity": 1,
+      "length": 5,
+      "module": "lithos.lcma.eval.retrieval.report",
+      "path": "src/lithos/lcma/eval/retrieval/report.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/report.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring._rates": {
+      "complexity": 8,
+      "length": 19,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring._split_by_relevance": {
+      "complexity": 5,
+      "length": 15,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring._supplied": {
+      "complexity": 3,
+      "length": 3,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring._top": {
+      "complexity": 4,
+      "length": 7,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.dcg": {
+      "complexity": 2,
+      "length": 2,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.floor_sweep": {
+      "complexity": 7,
+      "length": 38,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.grades_for": {
+      "complexity": 3,
+      "length": 6,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.mean": {
+      "complexity": 2,
+      "length": 2,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.ndcg_at_k": {
+      "complexity": 5,
+      "length": 7,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.percentile": {
+      "complexity": 2,
+      "length": 6,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.precision_at_k": {
+      "complexity": 4,
+      "length": 5,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.reciprocal_rank": {
+      "complexity": 5,
+      "length": 8,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.score_cases": {
+      "complexity": 10,
+      "length": 19,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
+    "lithos.lcma.eval.retrieval.scoring.score_method": {
+      "complexity": 8,
+      "length": 46,
+      "module": "lithos.lcma.eval.retrieval.scoring",
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "paths": [
+        "src/lithos/lcma/eval/retrieval/scoring.py"
+      ]
+    },
     "lithos.lcma.eval.runner.build_run_document": {
       "complexity": 5,
       "length": 34,
@@ -6227,8 +6758,8 @@
       ]
     },
     "lithos.lcma.retrieve._run_retrieve_impl": {
-      "complexity": 41,
-      "length": 363,
+      "complexity": 43,
+      "length": 371,
       "module": "lithos.lcma.retrieve",
       "path": "src/lithos/lcma/retrieve.py",
       "paths": [
@@ -9539,7 +10070,7 @@
       }
     },
     "cross_component_edges": 74,
-    "cross_component_module_edges": 179,
+    "cross_component_module_edges": 184,
     "edges": [
       {
         "imports": [
@@ -9609,6 +10140,9 @@
           "lithos.cognitive_memory -> lithos.lcma.eval.export",
           "lithos.cognitive_memory -> lithos.lcma.eval.prices",
           "lithos.cognitive_memory -> lithos.lcma.eval.report",
+          "lithos.cognitive_memory -> lithos.lcma.eval.retrieval.cases",
+          "lithos.cognitive_memory -> lithos.lcma.eval.retrieval.pool",
+          "lithos.cognitive_memory -> lithos.lcma.eval.retrieval.report",
           "lithos.cognitive_memory -> lithos.lcma.eval.runner",
           "lithos.cognitive_memory -> lithos.lcma.migrations",
           "lithos.cognitive_memory -> lithos.lcma.retrieve",
@@ -10057,6 +10591,7 @@
         "imports": [
           "lithos.lcma.edge_inference -> lithos.knowledge",
           "lithos.lcma.enrich -> lithos.knowledge",
+          "lithos.lcma.eval.retrieval.pool -> lithos.knowledge",
           "lithos.lcma.migrations -> lithos.knowledge",
           "lithos.lcma.retrieve -> lithos.knowledge",
           "lithos.lcma.scouts -> lithos.corpus_index",
@@ -10078,6 +10613,7 @@
         "imports": [
           "lithos.lcma.edge_inference -> lithos.search",
           "lithos.lcma.enrich -> lithos.search",
+          "lithos.lcma.eval.retrieval.pool -> lithos.search",
           "lithos.lcma.retrieve -> lithos.search",
           "lithos.lcma.scouts -> lithos.search"
         ],
@@ -10248,7 +10784,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "6c8bff466e91925e05102d62a64edf0fb8add0b5c1aaf2364ac2640bb99b5fce",
+    "source_hash": "4a6d4efd124b1383a503ab4c472ba9e68e85a02d99ffb00d8352c24f8f9f324c",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -10289,11 +10825,11 @@
     },
     "lithos.cli": {
       "component": "Entrypoints",
-      "functions": 40,
-      "lines": 1177,
+      "functions": 43,
+      "lines": 1303,
       "max_complexity": 17,
       "path": "src/lithos/cli.py",
-      "sloc": 940
+      "sloc": 1056
     },
     "lithos.cli_reconcile": {
       "component": "Entrypoints",
@@ -10305,11 +10841,11 @@
     },
     "lithos.cognitive_memory": {
       "component": "CognitiveMemory",
-      "functions": 42,
-      "lines": 1458,
+      "functions": 46,
+      "lines": 1572,
       "max_complexity": 26,
       "path": "src/lithos/cognitive_memory.py",
-      "sloc": 1230
+      "sloc": 1327
     },
     "lithos.config": {
       "component": "Config",
@@ -10503,6 +11039,46 @@
       "path": "src/lithos/lcma/eval/report.py",
       "sloc": 84
     },
+    "lithos.lcma.eval.retrieval": {
+      "component": "LCMA",
+      "functions": 0,
+      "lines": 9,
+      "max_complexity": 0,
+      "path": "src/lithos/lcma/eval/retrieval/__init__.py",
+      "sloc": 8
+    },
+    "lithos.lcma.eval.retrieval.cases": {
+      "component": "LCMA",
+      "functions": 21,
+      "lines": 322,
+      "max_complexity": 9,
+      "path": "src/lithos/lcma/eval/retrieval/cases.py",
+      "sloc": 270
+    },
+    "lithos.lcma.eval.retrieval.pool": {
+      "component": "LCMA",
+      "functions": 12,
+      "lines": 209,
+      "max_complexity": 8,
+      "path": "src/lithos/lcma/eval/retrieval/pool.py",
+      "sloc": 181
+    },
+    "lithos.lcma.eval.retrieval.report": {
+      "component": "LCMA",
+      "functions": 5,
+      "lines": 132,
+      "max_complexity": 8,
+      "path": "src/lithos/lcma/eval/retrieval/report.py",
+      "sloc": 119
+    },
+    "lithos.lcma.eval.retrieval.scoring": {
+      "component": "LCMA",
+      "functions": 14,
+      "lines": 266,
+      "max_complexity": 10,
+      "path": "src/lithos/lcma/eval/retrieval/scoring.py",
+      "sloc": 223
+    },
     "lithos.lcma.eval.runner": {
       "component": "LCMA",
       "functions": 10,
@@ -10546,10 +11122,10 @@
     "lithos.lcma.retrieve": {
       "component": "LCMA",
       "functions": 11,
-      "lines": 772,
-      "max_complexity": 41,
+      "lines": 780,
+      "max_complexity": 43,
       "path": "src/lithos/lcma/retrieve.py",
-      "sloc": 620
+      "sloc": 627
     },
     "lithos.lcma.salience": {
       "component": "LCMA",
@@ -10841,13 +11417,13 @@
       },
       "CognitiveMemory": {
         "classes": 3,
-        "functions": 42,
+        "functions": 46,
         "largest_module": "lithos.cognitive_memory",
-        "largest_module_lines": 1458,
-        "lines": 1458,
+        "largest_module_lines": 1572,
+        "lines": 1572,
         "modules": 1,
-        "public_symbols": 8,
-        "sloc": 1230
+        "public_symbols": 10,
+        "sloc": 1327
       },
       "Config": {
         "classes": 10,
@@ -10871,13 +11447,13 @@
       },
       "Entrypoints": {
         "classes": 7,
-        "functions": 155,
+        "functions": 158,
         "largest_module": "lithos.cli",
-        "largest_module_lines": 1177,
-        "lines": 6514,
+        "largest_module_lines": 1303,
+        "lines": 6640,
         "modules": 13,
-        "public_symbols": 38,
-        "sloc": 5282
+        "public_symbols": 40,
+        "sloc": 5398
       },
       "Errors": {
         "classes": 12,
@@ -10940,14 +11516,14 @@
         "sloc": 1752
       },
       "LCMA": {
-        "classes": 24,
-        "functions": 255,
+        "classes": 31,
+        "functions": 307,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1386,
-        "lines": 7667,
-        "modules": 22,
-        "public_symbols": 87,
-        "sloc": 6269
+        "lines": 8613,
+        "modules": 27,
+        "public_symbols": 125,
+        "sloc": 7077
       },
       "Logging": {
         "classes": 1,
@@ -11016,13 +11592,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 29521,
-    "total_modules": 57,
-    "total_sloc": 23968
+    "total_lines": 30707,
+    "total_modules": 62,
+    "total_sloc": 24989
   },
   "tests": {
-    "ratio": 1.75,
-    "src_lines": 29521,
-    "test_lines": 51628
+    "ratio": 1.71,
+    "src_lines": 30707,
+    "test_lines": 52417
   }
 }

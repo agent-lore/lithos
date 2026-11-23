@@ -1168,6 +1168,132 @@ def eval_compare(incumbent: Path, candidate: Path, gate: bool, policy: Path) -> 
         sys.exit(1)
 
 
+@eval_group.command(name="retrieve-pool")
+@click.option(
+    "--queries",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="queries.jsonl: {query_id, query, caller, slice, scope?, source?} per line.",
+)
+@click.option(
+    "--out",
+    type=click.Path(dir_okay=False, path_type=Path),
+    required=True,
+    help="cases.jsonl to write (overwritten).",
+)
+@click.option("--depth", type=click.IntRange(min=1), default=10, show_default=True)
+@click.option(
+    "--text-chars",
+    type=click.IntRange(min=50),
+    default=600,
+    show_default=True,
+    help="Head of each pooled note's text kept for the labeller.",
+)
+@click.pass_context
+def eval_retrieve_pool(
+    ctx: click.Context, queries: Path, out: Path, depth: int, text_chars: int
+) -> None:
+    """Run a query set through hybrid, semantic and retrieve; write the pooled cases.
+
+    Point --data-dir at a COPY of a data directory, never one a server has
+    open. Retrieval runs without writing receipts or coactivation, and no
+    enrich worker is started, so the copy is left as it was.
+    """
+    from lithos.cognitive_memory import pool_retrieval_eval
+    from lithos.pipeline import build_pipeline
+
+    config: LithosConfig = ctx.obj["config"]
+    if not config.lcma.enabled:
+        raise click.ClickException("LCMA is disabled in this config; retrieve cannot run")
+
+    async def run() -> int:
+        pipeline = await build_pipeline(config)
+        pipeline.graph.load_cache()
+        await pipeline.memory.start(enrich=False)
+        try:
+            return await pool_retrieval_eval(
+                memory=pipeline.memory,
+                search=pipeline.search,
+                knowledge=pipeline.knowledge,
+                queries_path=queries,
+                out_path=out,
+                data_dir=config.storage.data_dir,
+                depth=depth,
+                text_chars=text_chars,
+                progress=lambda case_id: click.echo(f"pooled {case_id}", err=True),
+            )
+        finally:
+            await pipeline.memory.stop()
+            await pipeline.aclose()
+
+    try:
+        n = asyncio.run(run())
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"wrote {n} cases to {out}")
+
+
+@eval_group.command(name="retrieve-score")
+@click.option(
+    "--cases",
+    "cases_paths",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    multiple=True,
+    required=True,
+    help="cases.jsonl; repeat for the public and private roots.",
+)
+@click.option(
+    "--labels",
+    "labels_paths",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    multiple=True,
+    required=True,
+    help="labels.jsonl; repeat per root.",
+)
+@click.option(
+    "--runs-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("evals/runs"),
+    show_default=True,
+)
+@click.option("--k", type=click.IntRange(min=1), default=10, show_default=True)
+@click.option(
+    "--floor",
+    type=click.FloatRange(0.0, 1.0),
+    default=0.35,
+    show_default=True,
+    help="The caller's relevance floor to read the sweep at (robot recall uses 0.35).",
+)
+@click.option(
+    "--json", "as_json", is_flag=True, default=False, help="Print the run document as JSON."
+)
+def eval_retrieve_score(
+    cases_paths: tuple[Path, ...],
+    labels_paths: tuple[Path, ...],
+    runs_dir: Path,
+    k: int,
+    floor: float,
+    as_json: bool,
+) -> None:
+    """Score pooled cases against their labels; write evals/runs/<ts>-retrieval.json."""
+    import json
+
+    from lithos.cognitive_memory import score_retrieval_eval
+
+    try:
+        path, document, text = score_retrieval_eval(
+            cases_paths=list(cases_paths),
+            labels_paths=list(labels_paths),
+            runs_dir=runs_dir,
+            k=k,
+            floor=floor,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(document, indent=1) if as_json else text)
+    click.echo(f"run written to {path}", err=True)
+
+
 def main() -> None:
     """Main entry point."""
     cli()
