@@ -247,6 +247,39 @@ CREATE INDEX IF NOT EXISTS idx_edges_namespace ON edges(namespace);
             )
             return edge_id
 
+    async def retract_inferred(
+        self,
+        *,
+        node_a: str,
+        node_b: str,
+        namespace: str,
+        keep: tuple[str, str, str] | None = None,
+    ) -> int:
+        """Delete the inferred edges between two nodes, except *keep*.
+
+        *keep* is ``(from_id, to_id, edge_type)``: the edge the latest
+        judgement of the pair supports, if any. Only rows
+        :meth:`upsert_inferred` may itself overwrite are deleted —
+        ``provenance_type='inferred'`` with no ``conflict_state`` — in either
+        direction within *namespace*. Returns the number deleted. Both
+        lookups use the ``(from_id, to_id, …)`` unique index.
+        """
+        async with self._session(transactional=True) as db:
+            cursor = await db.execute(
+                "SELECT edge_id, from_id, to_id, type FROM edges "
+                "WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)) "
+                "AND namespace = ? AND provenance_type = 'inferred' "
+                "AND conflict_state IS NULL",
+                (node_a, node_b, node_b, node_a, namespace),
+            )
+            doomed = [row[0] for row in await cursor.fetchall() if tuple(row[1:]) != keep]
+            if doomed:
+                await db.execute(
+                    f"DELETE FROM edges WHERE edge_id IN ({','.join('?' * len(doomed))})",
+                    doomed,
+                )
+        return len(doomed)
+
     async def get_edge(self, edge_id: str) -> dict[str, object] | None:
         """Return a single edge by its ID, or ``None`` if not found."""
         async with self._session() as db:

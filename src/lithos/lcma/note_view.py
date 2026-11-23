@@ -16,6 +16,7 @@ sheet render identical text from the same :class:`NoteView`.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
@@ -113,6 +114,20 @@ def provenance_line(view: NoteView) -> str:
     elif source or view.feed:
         parts.append(f"Source: {source or view.feed}")
     return " · ".join(parts)
+
+
+def view_sha(view: NoteView) -> str:
+    """sha256 of everything :func:`render_note` can show of *view* as the focus.
+
+    That is the title, the provenance line, the summary head and ``Method``,
+    before the prompt's length limit, so a ``note_chars`` change doesn't alter
+    it. An edit the prompt never shows (Influx's archive path or relevance,
+    the full text, most tags) leaves it unchanged. The edge-inference gate
+    keys on it, so such edits don't re-run adjudication.
+    """
+    core, optional = _body(view)
+    shown = "\n".join((view.title, provenance_line(view), core, optional))
+    return hashlib.sha256(shown.encode("utf-8")).hexdigest()
 
 
 def render_note(view: NoteView, *, limit: int, chunk: str | None = None) -> str:

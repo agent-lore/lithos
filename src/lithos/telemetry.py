@@ -1059,7 +1059,8 @@ class _LithosMetrics:
 
     @property
     def lcma_edge_inference_skips(self) -> Any:
-        """Counter: inference skipped, attr reason=budget|call_cap|op_log|no_candidates."""
+        """Counter: inference skipped, attr reason=budget|call_cap|op_log|unchanged_view|
+        no_candidates|stale_version|asserted_exists."""
         if self._lcma_edge_inference_skips is None:
             self._lcma_edge_inference_skips = get_meter().create_counter(
                 "lithos.lcma.edge_inference.skips",

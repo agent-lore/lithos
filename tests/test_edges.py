@@ -339,6 +339,45 @@ class TestUpsertInferred:
         assert edge["evidence"] == "manual"
 
 
+class TestRetractInferred:
+    """retract_inferred (6129a834): a re-judged pair loses the edges it no longer supports."""
+
+    @staticmethod
+    async def _edge(edge_store, from_id, to_id, edge_type, *, namespace="default", **kw):
+        return await edge_store.upsert(
+            from_id=from_id,
+            to_id=to_id,
+            edge_type=edge_type,
+            weight=0.7,
+            namespace=namespace,
+            provenance_actor=kw.pop("provenance_actor", "lithos-enrich"),
+            provenance_type=kw.pop("provenance_type", "inferred"),
+            **kw,
+        )
+
+    async def test_retracts_both_directions_except_keep(self, edge_store) -> None:
+        kept = await self._edge(edge_store, "a", "b", "supports")
+        await self._edge(edge_store, "a", "b", "refines")
+        await self._edge(edge_store, "b", "a", "supports")
+        n = await edge_store.retract_inferred(
+            node_a="a", node_b="b", namespace="default", keep=("a", "b", "supports")
+        )
+        assert n == 2
+        assert [e["edge_id"] for e in await edge_store.list_edges_between(["a", "b"])] == [kept]
+
+    async def test_only_unconflicted_inferred_rows_in_the_namespace(self, edge_store) -> None:
+        survivors = {
+            await self._edge(edge_store, "a", "b", "supports", provenance_type="asserted"),
+            await self._edge(edge_store, "a", "b", "refines", provenance_type=None),
+            await self._edge(edge_store, "b", "a", "contradicts", conflict_state="resolved"),
+            await self._edge(edge_store, "a", "b", "depends_on", namespace="other"),
+            await self._edge(edge_store, "a", "c", "supports"),
+        }
+        assert await edge_store.retract_inferred(node_a="a", node_b="b", namespace="default") == 0
+        remaining = await edge_store.list_edges_between(["a", "b", "c"])
+        assert {e["edge_id"] for e in remaining} == survivors
+
+
 class TestUpdateConflictResolution:
     """update_conflict_resolution: targeted update for conflict state."""
 

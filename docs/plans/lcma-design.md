@@ -1577,11 +1577,14 @@ local Ollama/llama.cpp/vLLM `/v1` shims keep privacy-first deployments whole; ho
 identically). Query-independent, background, budget-bounded (daily token ceiling + per-drain
 call cap in stats.db `llm_budget`); never on the retrieve hot path. Emits provenance-stamped,
 idempotent artifacts (`edge_inference_log` keyed on the identity triple `(node_id, doc_version,
-inference_version)` — a doc update or an `INFERENCE_VERSION` bump in `edge_inference.py`
-re-adjudicates; a model switch deliberately does not, with `purge_edge_inference_log` as the
-operator reset. Inferred-edge writes flow through `intake.assert_inferred_edge` with
-`origin=enrich` — the worker drops its own events, and the underlying `upsert_inferred`
-atomically refuses to displace asserted, legacy, or manually-resolved rows). Enables
+inference_version)` — a doc update that changes what the prompt shows of the note (its
+`view_sha`, 2026-11) or an `INFERENCE_VERSION` bump in `edge_inference.py` re-adjudicates; a
+rewrite that changes nothing shown does not, and neither does a model switch, with
+`purge_edge_inference_log` as the operator reset. Inferred-edge writes flow through
+`intake.assert_inferred_edge` with `origin=enrich` — the worker drops its own events, and the
+underlying `upsert_inferred` atomically refuses to displace asserted, legacy, or
+manually-resolved rows. Re-adjudication reconciles each judged pair: the latest judgement wins,
+and `intake.retract_inferred_edges` removes the pair's other unconflicted inferred edges). Enables
 WS2/WS4/WS5. *Shipped 2026-07 as slice 1 together with the thin WS2 consumer below.*
 
 **WS2 — Typed-edge inference (top lever + Lens enabler).** For each node, take its top semantic

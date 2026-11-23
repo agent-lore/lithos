@@ -15,7 +15,8 @@ consolidation_salience_ops — idempotency ledgers for task consolidation.
 
 Tables (MVP 3 WS1 LLM synthesis):
   llm_budget          — UTC-day token/call spend ledger (soft daily ceiling)
-  edge_inference_log  — (node_id, doc_version, inference_version) idempotency
+  edge_inference_log  — (node_id, doc_version, inference_version) idempotency,
+                        plus the view_sha that skips unchanged views
   llm_call_log        — replayable per-call record (eval suite E1); payloads are
                         content-addressed blobs, see lithos.lcma.call_log
 """
@@ -144,6 +145,7 @@ CREATE TABLE IF NOT EXISTS edge_inference_log (
     model TEXT NOT NULL,
     edges_written INTEGER NOT NULL DEFAULT 0,
     inferred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    view_sha TEXT,
     PRIMARY KEY (node_id, doc_version, inference_version)
 );
 
@@ -247,6 +249,7 @@ class StatsStore(AsyncSqliteStore):
         await self._migrate_add_cited_count(db)
         await self._migrate_add_last_decay_applied_at(db)
         await self._migrate_add_enrich_queue_attempts(db)
+        await self._migrate_add_edge_inference_view_sha(db)
 
     # ------------------------------------------------------------------
     # Receipt operations
@@ -1155,6 +1158,23 @@ class StatsStore(AsyncSqliteStore):
             )
             return await cursor.fetchone() is not None
 
+    async def has_inferred_view(self, node_id: str, view_sha: str, inference_version: int) -> bool:
+        """Return ``True`` if this exact view of the note was already adjudicated.
+
+        *view_sha* is :func:`lithos.lcma.note_view.view_sha` of the focus: a
+        new doc version that shows the model the same thing needs no new call.
+        Only rows recorded with a view satisfy it — runs that judged nothing
+        (parse failure, no valid judgement) and rows from before the column
+        existed carry ``NULL``. The lookup is by primary-key prefix (node_id).
+        """
+        async with self._session() as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM edge_inference_log "
+                "WHERE node_id = ? AND view_sha = ? AND inference_version = ? LIMIT 1",
+                (node_id, view_sha, inference_version),
+            )
+            return await cursor.fetchone() is not None
+
     async def record_edge_inference(
         self,
         node_id: str,
@@ -1163,14 +1183,19 @@ class StatsStore(AsyncSqliteStore):
         *,
         model: str,
         edges_written: int,
+        view_sha: str | None = None,
     ) -> None:
-        """Record an inference run for the identity triple (INSERT OR IGNORE)."""
+        """Record an inference run for the identity triple (INSERT OR IGNORE).
+
+        Pass *view_sha* only when the run settled the view (see
+        :meth:`has_inferred_view`).
+        """
         async with self._session() as db:
             await db.execute(
                 """INSERT OR IGNORE INTO edge_inference_log
-                   (node_id, doc_version, inference_version, model, edges_written)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (node_id, doc_version, inference_version, model, edges_written),
+                   (node_id, doc_version, inference_version, model, edges_written, view_sha)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (node_id, doc_version, inference_version, model, edges_written, view_sha),
             )
 
     # ------------------------------------------------------------------
@@ -1262,15 +1287,11 @@ class StatsStore(AsyncSqliteStore):
         deciding a superseded model's adjudications should be redone); with
         ``None``, the whole ledger is cleared. Returns rows deleted.
 
-        This clears *execution markers only* — re-inference is additive.
-        Previously inferred edges are untouched: a rerun upserts over an
-        exact ``(from_id, to_id, edge_type, namespace)`` match but does not
-        remove edges the new model no longer asserts (a changed relation
-        type or direction keys a *new* edge alongside the old one).
-        Reconciliation of superseded inferred edges is deliberately out of
-        scope here and belongs to the WS2 sweep/backfill policy (slice 2),
-        which can diff ``provenance_type="inferred"`` edges against a fresh
-        adjudication before deciding what to retire.
+        This clears *execution markers only*; edges are untouched until a
+        note is judged again. A rerun then reconciles each pair it judges —
+        the latest judgement wins, retracting the pair's unconflicted
+        inferred edges it no longer supports — but pairs outside the new
+        candidate set keep their edges.
         """
         async with self._session() as db:
             if model is None:
@@ -1384,3 +1405,16 @@ class StatsStore(AsyncSqliteStore):
                 "ALTER TABLE enrich_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
             )
             logger.info("stats.db migration applied: added enrich_queue.attempts")
+
+    @staticmethod
+    async def _migrate_add_edge_inference_view_sha(db: aiosqlite.Connection) -> None:
+        """Add view_sha to existing edge_inference_log tables (6129a834).
+
+        Existing rows keep ``NULL``, so each note is re-adjudicated at most once
+        more, on its next change, before the view gate applies to it.
+        """
+        cursor = await db.execute("PRAGMA table_info(edge_inference_log)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "view_sha" not in columns:
+            await db.execute("ALTER TABLE edge_inference_log ADD COLUMN view_sha TEXT")
+            logger.info("stats.db migration applied: added edge_inference_log.view_sha")

@@ -13,6 +13,7 @@ from lithos.lcma.note_view import (
     render_note,
     usable_content,
     view_of,
+    view_sha,
 )
 
 INFLUX_BODY = """# A paper
@@ -185,3 +186,42 @@ class TestRenderNote:
     def test_a_note_without_summary_shows_its_body_without_title_or_archive(self) -> None:
         content = "# A paper\n\n## Archive\npath: x.html\n\n## Notes\nPlain body text.\n"
         assert render_note(_view(content=content), limit=1200) == "## Notes\nPlain body text."
+
+
+class TestViewSha:
+    """The edge-inference gate's key: what the prompt can show of a focus note."""
+
+    def test_an_identical_view_hashes_the_same(self) -> None:
+        assert view_sha(_view()) == view_sha(_view())
+
+    def test_what_the_prompt_shows_changes_the_hash(self) -> None:
+        base = view_sha(_view(created_at="2026-10-15T00:00:00+00:00"))
+        changed = [
+            _view(INFLUX_BODY.replace("First contribution", "A new contribution")),
+            _view(INFLUX_BODY.replace("It worked.", "It failed.")),
+            _view(INFLUX_BODY.replace("A short method.", "A longer method.")),
+            NoteView(title="Another title", content=INFLUX_BODY),
+            _view(created_at="2026-10-16T00:00:00+00:00"),
+            _view(source_url="https://example.org/post"),
+            _view(feed="robot-news"),
+        ]
+        for view in changed:
+            assert view_sha(view) != base, view
+
+    def test_what_the_prompt_never_shows_leaves_the_hash(self) -> None:
+        """Influx's archive path and relevance, and the full text, aren't shown."""
+        base = view_sha(_view())
+        unchanged = [
+            INFLUX_BODY.replace("path: rss/2026/10/feed-2026-10-15-abc.html", "path: x.html"),
+            INFLUX_BODY.replace("8/10 for the robotics profile.", "3/10 for robotics."),
+            INFLUX_BODY.replace("which the view never keeps", "rewritten"),
+            INFLUX_BODY + "\n## Profile Relevance\n### robotics\nScore: 9/10\n",
+        ]
+        for content in unchanged:
+            assert view_sha(_view(content)) == base, content
+
+    def test_independent_of_the_prompt_length_limit(self) -> None:
+        """A view longer than any ``note_chars`` still hashes its whole text."""
+        long_result = INFLUX_BODY.replace("It worked.", "It worked. " + "x" * 2000)
+        tail_edit = long_result.replace("x" * 2000, "x" * 1999 + "y")
+        assert view_sha(_view(long_result)) != view_sha(_view(tail_edit))

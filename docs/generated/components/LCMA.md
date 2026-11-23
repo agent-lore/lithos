@@ -32,7 +32,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.eval.scoring` | S | 1 | 6 |
 | `lithos.lcma.llm` | S | 3 | 0 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
-| `lithos.lcma.note_view` | S | 1 | 4 |
+| `lithos.lcma.note_view` | S | 1 | 5 |
 | `lithos.lcma.retrieve` | L | 0 | 1 |
 | `lithos.lcma.salience` | S | 0 | 3 |
 | `lithos.lcma.scouts` | L | 2 | 11 |
@@ -181,6 +181,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 - def `view_of` — The view of a stored note: its usable text plus date, source and feed.
 - def `usable_content` — The part of a note's body a view can show.
 - def `provenance_line` — ``Added 2026-10-15 · Source: example.org (feed)``, or ``""`` when unknown.
+- def `view_sha` — sha256 of everything :func:`render_note` can show of *view* as the focus.
 - def `render_note` — The text shown for *view*, at most *limit* characters (title excluded).
 
 ### `lithos.lcma.retrieve`
