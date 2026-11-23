@@ -78,5 +78,11 @@ relevant or not regardless of who ranked it where.
 
 ## Status
 
-Harness only (PR 1). The public `cases.jsonl` and `labels.jsonl` land with
-the first pooled set.
+First pooled set, 2026-11-23: 115 queries (Dave 27, garuda 16,
+codex-agent-foundations 20, ai-agents-briefing 6, hema-events-scout 6, robot
+40) pooled at depth 10 on copies of the production vault (7772 notes) and of
+staging (robot slice). Only one query (`codex-agent-foundations-019`) pooled
+nothing but `influx` notes, so the public `cases.jsonl` holds that one case
+and the other 114 are in the private repo: the vault is mixed enough that
+almost every top-10 touches a personal namespace. The queries that
+produced the public case are in `queries.jsonl` beside it.
