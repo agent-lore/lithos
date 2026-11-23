@@ -18,6 +18,7 @@ cache + conflict resolve).
 from __future__ import annotations
 
 import asyncio
+import importlib.metadata
 import itertools
 import json
 import logging
@@ -56,6 +57,9 @@ from lithos.lcma.eval.compare import (
 from lithos.lcma.eval.export import export_cases
 from lithos.lcma.eval.prices import load_prices
 from lithos.lcma.eval.report import format_report, summarize_calls
+from lithos.lcma.eval.retrieval import cases as retrieval_cases
+from lithos.lcma.eval.retrieval import pool as retrieval_pool
+from lithos.lcma.eval.retrieval import report as retrieval_report
 from lithos.lcma.eval.runner import (
     build_run_document,
     load_run,
@@ -320,7 +324,7 @@ class CognitiveMemory:
         """
         self._coordination = coordination
 
-    async def start(self) -> None:
+    async def start(self, *, enrich: bool = True) -> None:
         """Open the StatsStore and start the EnrichWorker.
 
         Raises ``RuntimeError`` if called twice without an intervening
@@ -329,16 +333,24 @@ class CognitiveMemory:
         StatsStore is still opened (its receipts / working-memory tables
         are read by un-migrated handlers) but no ``EnrichWorker`` is
         constructed.
+
+        ``enrich=False`` opens the stores and marks the module started
+        without constructing the EnrichWorker. Offline tooling that opens a
+        copy of a data directory to replay queries (``lithos eval
+        retrieve-pool``) uses it: the worker's drain and sweep loops would
+        otherwise run decay, consolidation and LLM edge inference against
+        the copy.
         """
         if self._started:
             raise RuntimeError("CognitiveMemory.start() called twice")
         await self._stats_store.open()
-        if self._config.lcma.enabled:
-            if self._coordination is None:
-                raise RuntimeError(
-                    "CognitiveMemory.start(): coordination not attached. "
-                    "Call attach_coordination(...) before start() when LCMA is enabled."
-                )
+        if self._config.lcma.enabled and self._coordination is None:
+            raise RuntimeError(
+                "CognitiveMemory.start(): coordination not attached. "
+                "Call attach_coordination(...) before start() when LCMA is enabled."
+            )
+        if self._config.lcma.enabled and enrich:
+            assert self._coordination is not None
             self._enrich_worker = EnrichWorker(
                 config=self._config.lcma,
                 event_bus=self._event_bus,
@@ -617,6 +629,7 @@ class CognitiveMemory:
         max_context_nodes: int | None = None,
         tags: list[str] | None = None,
         path_prefix: str | None = None,
+        record: bool = True,
     ) -> dict[str, object]:
         """Run the parallel-terraced-scan retrieve pipeline.
 
@@ -643,6 +656,9 @@ class CognitiveMemory:
             short-circuit lives in the MCP handler envelope; this method
             asserts ``self._coordination is not None`` (which ``start()``
             enforces when LCMA is enabled).
+
+        ``record=False`` (offline evaluation only) leaves the stats store
+        untouched; see ``_run_retrieve_impl``.
         """
         if not self._started:
             raise RuntimeError("CognitiveMemory.retrieve called before start()")
@@ -674,6 +690,7 @@ class CognitiveMemory:
             max_context_nodes=max_context_nodes,
             tags=tags,
             path_prefix=path_prefix,
+            record=record,
         )
 
     # ------------------------------------------------------------------
@@ -1456,3 +1473,104 @@ def compare_llm_eval_runs(
         verdict = gate(incumbent["metrics"], candidate["metrics"], policy)
     text = format_comparison(incumbent, candidate, verdict)
     return text, (verdict.promotable if verdict is not None else None)
+
+
+# ----------------------------------------------------------------------
+# Retrieval eval (task b8a3f918): pool a query set, score a labelled pool
+# ----------------------------------------------------------------------
+
+
+def _lithos_version() -> str:
+    try:
+        return importlib.metadata.version("lithos-mcp")
+    except importlib.metadata.PackageNotFoundError:  # source checkout without dist metadata
+        return "unknown"
+
+
+async def pool_retrieval_eval(
+    *,
+    memory: CognitiveMemory,
+    search: SearchEngine,
+    knowledge: KnowledgeManager,
+    queries_path: Path,
+    out_path: Path,
+    data_dir: Path,
+    depth: int = 10,
+    text_chars: int = 600,
+    progress: Callable[[str], None] | None = None,
+) -> int:
+    """Run every query through hybrid, semantic and retrieve and write the pooled cases.
+
+    *memory* must be started; retrieval runs with ``record=False`` so the
+    snapshot's stats store is left as it was, and as each query's ``caller``
+    so agent-private notes are visible to retrieve exactly as they were to
+    the caller. Returns the number of cases written. See
+    ``lithos.lcma.eval.retrieval.pool``.
+    """
+    queries = retrieval_cases.load_queries(queries_path)
+    _, note_count = await knowledge.list_all(limit=0)
+    snapshot = retrieval_pool.snapshot_info(
+        data_dir=str(data_dir), note_count=note_count, lithos_version=_lithos_version()
+    )
+
+    async def retrieve(
+        query: str,
+        *,
+        limit: int,
+        namespace_filter: list[str] | None,
+        tags: list[str] | None,
+        path_prefix: str | None,
+        agent_id: str | None,
+    ) -> dict[str, object]:
+        return await memory.retrieve(
+            query,
+            limit=limit,
+            namespace_filter=namespace_filter,
+            tags=tags,
+            path_prefix=path_prefix,
+            agent_id=agent_id,
+            record=False,
+        )
+
+    cases = await retrieval_pool.pool_queries(
+        queries,
+        search=search,
+        knowledge=knowledge,
+        retrieve=retrieve,
+        snapshot=snapshot,
+        depth=depth,
+        text_chars=text_chars,
+        progress=(lambda c: progress(c.case_id)) if progress else None,
+    )
+    retrieval_cases.write_jsonl(out_path, (retrieval_cases.case_to_dict(c) for c in cases))
+    return len(cases)
+
+
+def score_retrieval_eval(
+    *,
+    cases_paths: list[Path],
+    labels_paths: list[Path],
+    runs_dir: Path,
+    k: int = 10,
+    floor: float = 0.35,
+) -> tuple[Path, dict[str, Any], str]:
+    """Score one or more pooled case files against their labels; write the run document.
+
+    Returns the run file, the document and its text report. Raises
+    ``ValueError`` when a label points outside the loaded pools.
+    """
+    cases = retrieval_cases.load_retrieval_cases(cases_paths)
+    labels = retrieval_cases.load_retrieval_labels(labels_paths)
+    problems = retrieval_cases.check_labels_cover_cases(labels, cases)
+    if problems:
+        raise ValueError("labels do not match cases: " + "; ".join(problems[:5]))
+    document = retrieval_report.build_run_document(
+        cases=cases,
+        labels=labels,
+        cases_paths=cases_paths,
+        labels_paths=labels_paths,
+        k=k,
+        floor=floor,
+    )
+    path = retrieval_report.write_run(document, runs_dir)
+    return path, document, retrieval_report.format_report(document)

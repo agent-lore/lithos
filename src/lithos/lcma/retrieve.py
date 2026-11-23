@@ -426,6 +426,7 @@ async def _run_retrieve_impl(
     max_context_nodes: int | None = None,
     tags: list[str] | None = None,
     path_prefix: str | None = None,
+    record: bool = True,
 ) -> dict[str, object]:
     """Execute the full LCMA retrieval pipeline (module-private).
 
@@ -437,6 +438,12 @@ async def _run_retrieve_impl(
     Returns the response envelope with results, temperature, terrace_reached,
     receipt_id, and the degraded-mode signal ``degraded`` (bool) / ``failed_scouts``
     (canonical names of scouts that ran and raised).
+
+    ``record=False`` runs the same pipeline but leaves no trace in the stats
+    store: no receipt row, no working-memory upsert, no node_stats or
+    coactivation increment. Offline evaluation uses it so that replaying a
+    query set does not feed the popularity signals the replay measures. The
+    ``receipt_id`` in the envelope then names the call in the logs only.
 
     Errors:
         - Per-scout backend failures are wrapped in :class:`ScoutFailure` and
@@ -685,7 +692,7 @@ async def _run_retrieve_impl(
         )
 
         # ── Working memory upserts ────────────────────────────────
-        if task_id is not None:
+        if record and task_id is not None:
             for r in results:
                 try:
                     await stats_store.upsert_working_memory(
@@ -726,47 +733,48 @@ async def _run_retrieve_impl(
             except Exception:
                 logger.debug("run_retrieve: failed to record OTEL metrics", exc_info=True)
 
-        # ── Receipt — always written (even on error) ──────────────
-        try:
-            await stats_store.insert_receipt(
-                receipt_id=receipt_id,
-                query=query,
-                limit=limit,
-                namespace_filter=namespace_filter,
-                scouts_fired=scouts_fired,
-                candidates_considered=candidates_considered,
-                final_nodes=final_nodes,
-                conflicts_surfaced=conflicts_found,
-                surface_conflicts=surface_conflicts,
-                temperature=temperature,
-                terrace_reached=terrace_reached,
-                agent_id=agent_id,
-                task_id=task_id,
-            )
-        except Exception:
-            logger.error("Failed to write receipt %s", receipt_id, exc_info=True)
-
-        # ── Coactivation + node_stats (after receipt) ─────────────
-        if final_node_ids:
+        # ── Receipt, coactivation, node_stats — all skipped when record=False ──
+        if record:
             try:
-                dom_ns = _dominant_namespace(final_node_ids, knowledge)
-
-                await stats_store.increment_node_stats_batch(final_node_ids)
-
-                pairs = list(itertools.combinations(final_node_ids, 2))
-                await stats_store.increment_coactivation_batch(pairs, namespace=dom_ns)
-                logger.debug(
-                    "run_retrieve: coactivation updated",
-                    extra={
-                        "receipt_id": receipt_id,
-                        "node_count": len(final_node_ids),
-                        "pair_count": len(pairs),
-                        "namespace": dom_ns,
-                    },
+                await stats_store.insert_receipt(
+                    receipt_id=receipt_id,
+                    query=query,
+                    limit=limit,
+                    namespace_filter=namespace_filter,
+                    scouts_fired=scouts_fired,
+                    candidates_considered=candidates_considered,
+                    final_nodes=final_nodes,
+                    conflicts_surfaced=conflicts_found,
+                    surface_conflicts=surface_conflicts,
+                    temperature=temperature,
+                    terrace_reached=terrace_reached,
+                    agent_id=agent_id,
+                    task_id=task_id,
                 )
             except Exception:
-                logger.warning(
-                    "run_retrieve: coactivation/node_stats update failed",
-                    extra={"receipt_id": receipt_id},
-                    exc_info=True,
-                )
+                logger.error("Failed to write receipt %s", receipt_id, exc_info=True)
+
+            # ── Coactivation + node_stats (after receipt) ─────────────
+            if final_node_ids:
+                try:
+                    dom_ns = _dominant_namespace(final_node_ids, knowledge)
+
+                    await stats_store.increment_node_stats_batch(final_node_ids)
+
+                    pairs = list(itertools.combinations(final_node_ids, 2))
+                    await stats_store.increment_coactivation_batch(pairs, namespace=dom_ns)
+                    logger.debug(
+                        "run_retrieve: coactivation updated",
+                        extra={
+                            "receipt_id": receipt_id,
+                            "node_count": len(final_node_ids),
+                            "pair_count": len(pairs),
+                            "namespace": dom_ns,
+                        },
+                    )
+                except Exception:
+                    logger.warning(
+                        "run_retrieve: coactivation/node_stats update failed",
+                        extra={"receipt_id": receipt_id},
+                        exc_info=True,
+                    )

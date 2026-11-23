@@ -23,6 +23,11 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.eval.export` | S | 0 | 2 |
 | `lithos.lcma.eval.prices` | XS | 1 | 2 |
 | `lithos.lcma.eval.report` | XS | 0 | 2 |
+| `lithos.lcma.eval.retrieval` | XS | 0 | 0 |
+| `lithos.lcma.eval.retrieval.cases` | M | 5 | 13 |
+| `lithos.lcma.eval.retrieval.pool` | S | 1 | 5 |
+| `lithos.lcma.eval.retrieval.report` | S | 0 | 3 |
+| `lithos.lcma.eval.retrieval.scoring` | S | 1 | 10 |
 | `lithos.lcma.eval.runner` | S | 0 | 9 |
 | `lithos.lcma.eval.scoring` | S | 1 | 6 |
 | `lithos.lcma.llm` | S | 3 | 0 |
@@ -95,6 +100,52 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 ### `lithos.lcma.eval.report`
 - def `summarize_calls` — Group rows by ``(model, reasoning_effort)`` and summarise each group.
 - def `format_report` — Plain-text rendering, one block per model.
+
+### `lithos.lcma.eval.retrieval.cases`
+- class `Query`
+- class `Ranked`
+- class `MethodRun`
+- class `RetrievalCase`
+- class `RetrievalLabel`
+- def `query_from_dict`
+- def `case_from_dict`
+- def `case_to_dict`
+- def `label_from_dict`
+- def `read_jsonl`
+- def `write_jsonl`
+- def `load_queries`
+- def `load_retrieval_cases` — Cases from every file, in file order; a case id seen twice is an error.
+- def `load_retrieval_labels`
+- def `check_labels_cover_cases` — Labels that point at no loaded case, or at a note outside that case's pool.
+- def `unlabelled_slots` — Pooled pairs with no label yet: what an incremental labelling pass must cover.
+- def `cases_fingerprint` — Digest of what is scored: each case's query, scope and every method's ranked ids and scores.
+- def `labels_fingerprint`
+
+### `lithos.lcma.eval.retrieval.pool`
+- class `Retriever`
+- def `vector_similarity` — The vector scout's similarity, as ``lithos_retrieve`` states it in ``reasons``.
+- def `run_methods` — Every method on one query at *depth*, starting from METHODS[first].
+- def `note_views` — Title, path, namespace and a text head per pooled note, for the labeller.
+- def `snapshot_info`
+- def `pool_queries` — Pool every query; with *warmup*, run the first query once untimed first.
+
+### `lithos.lcma.eval.retrieval.report`
+- def `build_run_document`
+- def `write_run`
+- def `format_report`
+
+### `lithos.lcma.eval.retrieval.scoring`
+- def `dcg`
+- def `ndcg_at_k` — Graded nDCG@k; ``None`` when the case has no note with a positive gain.
+- def `precision_at_k`
+- def `reciprocal_rank` — 1/rank of the first ``relevant`` note; ``None`` when the case has none in its pool.
+- def `mean`
+- def `percentile`
+- def `grades_for`
+- class `MethodMetrics`
+- def `score_method`
+- def `score_cases` — Per-method metrics overall and per slice, as plain dicts for the run document.
+- def `floor_sweep` — How each score signal behaves as a 'supply only if relevant' floor.
 
 ### `lithos.lcma.eval.runner`
 - def `messages_for` — Replay the verbatim prompt when it is the current prompt version, else rebuild.
