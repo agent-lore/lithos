@@ -13,7 +13,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 |---|---|---:|---:|
 | `lithos.lcma` | XS | 0 | 0 |
 | `lithos.lcma.call_log` | S | 3 | 1 |
-| `lithos.lcma.edge_inference` | L | 3 | 5 |
+| `lithos.lcma.edge_inference` | L | 4 | 5 |
 | `lithos.lcma.edge_reinforce` | XS | 0 | 1 |
 | `lithos.lcma.enrich` | L | 1 | 0 |
 | `lithos.lcma.entities` | M | 0 | 1 |
@@ -32,7 +32,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 | `lithos.lcma.eval.scoring` | S | 1 | 6 |
 | `lithos.lcma.llm` | S | 3 | 0 |
 | `lithos.lcma.migrations` | S | 1 | 1 |
-| `lithos.lcma.note_view` | S | 1 | 4 |
+| `lithos.lcma.note_view` | S | 1 | 5 |
 | `lithos.lcma.retrieve` | L | 0 | 1 |
 | `lithos.lcma.salience` | S | 0 | 3 |
 | `lithos.lcma.scouts` | L | 2 | 11 |
@@ -50,6 +50,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 ### `lithos.lcma.edge_inference`
 - class `NeighbourInfo` — A semantic-search hit enriched with the metadata the pre-filter needs.
 - class `Adjudication` — One validated judgement from the LLM response.
+- class `ParsedResponse` — What :func:`parse_adjudications` could use of one model response.
 - def `prefilter_candidates` — Cheap, token-free candidate filter + ranking.
 - def `build_adjudication_prompt` — Build the two-message prompt: fixed system instruction + numbered candidates.
 - def `request_payload` — What the model saw, as one JSON-able record for the replayable call log.
@@ -181,6 +182,7 @@ Lithos Cognitive Memory Architecture internals — scouts, retrieval, enrichment
 - def `view_of` — The view of a stored note: its usable text plus date, source and feed.
 - def `usable_content` — The part of a note's body a view can show.
 - def `provenance_line` — ``Added 2026-10-15 · Source: example.org (feed)``, or ``""`` when unknown.
+- def `view_sha` — sha256 of everything :func:`render_note` can show of *view* as the focus.
 - def `render_note` — The text shown for *view*, at most *limit* characters (title excluded).
 
 ### `lithos.lcma.retrieve`

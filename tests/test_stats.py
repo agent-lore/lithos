@@ -649,6 +649,46 @@ class TestCitedCountMigration:
             await store.close()
 
 
+class TestEdgeInferenceViewShaMigration:
+    """ALTER TABLE migration adds view_sha to an existing edge_inference_log."""
+
+    async def test_old_rows_survive_without_a_view(self, test_config: LithosConfig) -> None:
+        import aiosqlite
+
+        path = test_config.storage.stats_db_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        async with aiosqlite.connect(path) as db:
+            await db.execute(
+                """CREATE TABLE edge_inference_log (
+                    node_id TEXT NOT NULL,
+                    doc_version INTEGER NOT NULL,
+                    inference_version INTEGER NOT NULL,
+                    model TEXT NOT NULL,
+                    edges_written INTEGER NOT NULL DEFAULT 0,
+                    inferred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (node_id, doc_version, inference_version)
+                )"""
+            )
+            await db.execute(
+                "INSERT INTO edge_inference_log (node_id, doc_version, inference_version, model) "
+                "VALUES ('old', 3, 2, 'gpt-5-mini')"
+            )
+            await db.commit()
+
+        store = StatsStore(test_config)
+        await store.open()
+        try:
+            assert await store.has_edge_inference("old", 3, 2)
+            # Its view is unknown, so the note re-runs once on its next change.
+            assert await store.latest_inferred_view("old", 2) is None
+            await store.record_edge_inference(
+                "old", 4, 2, model="luna", edges_written=1, view_sha="any"
+            )
+            assert await store.latest_inferred_view("old", 2) == "any"
+        finally:
+            await store.close()
+
+
 class TestGetWorkingMemory:
     """get_working_memory returns rows ordered by activation_count descending."""
 
@@ -1349,6 +1389,32 @@ class TestEdgeInferenceLog:
         assert row[0] == "qwen3"  # first write wins
         assert row[1] == 3
         assert row[2] is not None
+
+    async def test_view_gate_reads_the_latest_settled_view(self, stats_store: StatsStore) -> None:
+        """6129a834: the gate compares with the view the note's latest run judged."""
+        assert await stats_store.latest_inferred_view("n1", 1) is None
+        await stats_store.record_edge_inference(
+            "n1", 1, 1, model="qwen3", edges_written=2, view_sha="sha-a"
+        )
+        assert await stats_store.latest_inferred_view("n1", 1) == "sha-a"
+        await stats_store.record_edge_inference(
+            "n1", 2, 1, model="qwen3", edges_written=0, view_sha="sha-b"
+        )
+        # B's judgement replaced A's edges, so a return to A is a new view again.
+        assert await stats_store.latest_inferred_view("n1", 1) == "sha-b"
+        assert await stats_store.latest_inferred_view("n1", 2) is None  # policy bump
+        assert await stats_store.latest_inferred_view("n2", 1) is None
+
+    async def test_a_row_without_a_view_is_passed_over(self, stats_store: StatsStore) -> None:
+        """Failed calls changed no edges; rows from before the column carry no view."""
+        await stats_store.record_edge_inference("n1", 1, 1, model="qwen3", edges_written=0)
+        assert await stats_store.has_edge_inference("n1", 1, 1)
+        assert await stats_store.latest_inferred_view("n1", 1) is None
+        await stats_store.record_edge_inference(
+            "n1", 2, 1, model="qwen3", edges_written=1, view_sha="sha-a"
+        )
+        await stats_store.record_edge_inference("n1", 3, 1, model="qwen3", edges_written=0)
+        assert await stats_store.latest_inferred_view("n1", 1) == "sha-a"
 
     async def test_purge_all_and_by_model(self, stats_store: StatsStore) -> None:
         """purge_edge_inference_log is the supported operator reset for

@@ -11,7 +11,7 @@ The controlled mutation entry point: validates and applies writes to the corpus.
 
 | Module | Size | Classes | Functions |
 |---|---|---:|---:|
-| `lithos.intake` | M | 8 | 0 |
+| `lithos.intake` | L | 8 | 0 |
 
 ## Public API
 

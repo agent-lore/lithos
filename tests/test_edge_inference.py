@@ -33,6 +33,7 @@ from lithos.lcma.edge_inference import (
     Adjudication,
     EdgeInferenceEngine,
     NeighbourInfo,
+    ParsedResponse,
     build_adjudication_prompt,
     edge_endpoints,
     parse_adjudications,
@@ -178,7 +179,9 @@ class TestParseAdjudications:
             }
         )
         parsed = parse_adjudications(text, 1)
-        assert parsed == ([Adjudication(1, "supports", "candidate_to_focus", 0.8, "because")], 0)
+        assert parsed == ParsedResponse(
+            [Adjudication(1, "supports", "candidate_to_focus", 0.8, "because")], 0, frozenset({1})
+        )
 
     def test_fenced_and_bare_list_accepted(self) -> None:
         entry = {
@@ -192,9 +195,8 @@ class TestParseAdjudications:
         bare = json.dumps([entry])
         parsed = parse_adjudications(bare, 1)
         assert parsed is not None
-        adjudications, problems = parsed
-        assert adjudications[0].relation == "refines"
-        assert problems == 0
+        assert parsed.adjudications[0].relation == "refines"
+        assert parsed.problems == 0
 
     def test_directional_relation_without_direction_is_dropped(self) -> None:
         """Round-1 review: direction is never invented — an inverted supports/
@@ -204,15 +206,14 @@ class TestParseAdjudications:
             {"candidate": 2, "relation": "supports", "direction": "sideways", "confidence": 0.8},
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 2)
-        assert parsed == ([], 4)  # 2 dropped entries + 2 uncovered candidates
+        assert parsed == ParsedResponse([], 4, frozenset())  # 2 dropped + 2 uncovered
 
     def test_symmetric_relation_ignores_direction(self) -> None:
         entries = [{"candidate": 1, "relation": "contradicts", "confidence": 0.9}]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 1)
         assert parsed is not None
-        adjudications, problems = parsed
-        assert adjudications[0].relation == "contradicts"
-        assert problems == 0
+        assert parsed.adjudications[0].relation == "contradicts"
+        assert parsed.problems == 0
 
     def test_fractional_and_boolean_indexes_rejected(self) -> None:
         """1.9 must not silently become candidate 1; True must not become 1."""
@@ -231,7 +232,7 @@ class TestParseAdjudications:
             },
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 2)
-        assert parsed == ([], 4)  # 2 bad indexes + 2 uncovered candidates
+        assert parsed == ParsedResponse([], 4, frozenset())  # 2 bad indexes + 2 uncovered
 
     def test_duplicate_candidate_keeps_first_and_counts_problem(self) -> None:
         entries = [
@@ -245,9 +246,10 @@ class TestParseAdjudications:
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 1)
         assert parsed is not None
-        adjudications, problems = parsed
-        assert len(adjudications) == 1 and adjudications[0].relation == "supports"
-        assert problems == 1
+        assert len(parsed.adjudications) == 1
+        assert parsed.adjudications[0].relation == "supports"
+        assert parsed.problems == 1
+        assert parsed.covered == {1}  # the duplicate is a problem, not a lost answer
 
     def test_missing_coverage_counts_problems(self) -> None:
         """The prompt demands every candidate exactly once; silence is a
@@ -256,7 +258,7 @@ class TestParseAdjudications:
             {"candidate": 1, "relation": "none", "confidence": 0.9},
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 3)
-        assert parsed == ([], 2)  # candidates 2 and 3 never covered
+        assert parsed == ParsedResponse([], 2, frozenset({1}))  # 2 and 3 never covered
 
     def test_invalid_entries_dropped_individually(self) -> None:
         entries = [
@@ -273,10 +275,10 @@ class TestParseAdjudications:
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 3)
         assert parsed is not None
-        adjudications, problems = parsed
-        assert len(adjudications) == 1
-        assert adjudications[0].relation == "depends_on"
-        assert problems == 4  # made_up + bad index + bad confidence + candidate 2 uncovered
+        assert len(parsed.adjudications) == 1
+        assert parsed.adjudications[0].relation == "depends_on"
+        assert parsed.problems == 4  # made_up + bad index + bad confidence + candidate 2 uncovered
+        assert parsed.covered == {1, 3}  # candidate 1's none and candidate 3
 
     def test_garbage_returns_none(self) -> None:
         assert parse_adjudications("I think these notes are related!", 2) is None
@@ -303,10 +305,16 @@ class TestEdgeEndpoints:
 NOW = datetime(2026, 7, 25, tzinfo=UTC)
 
 
-def _doc(node_id: str, *, version: int = 1) -> KnowledgeDocument:
+def _doc(
+    node_id: str,
+    *,
+    version: int = 1,
+    content: str = "Some content about caching strategies.",
+    title: str | None = None,
+) -> KnowledgeDocument:
     metadata = KnowledgeMetadata(
         id=node_id,
-        title=f"Note {node_id}",
+        title=title or f"Note {node_id}",
         author="tester",
         created_at=NOW,
         updated_at=NOW,
@@ -315,7 +323,7 @@ def _doc(node_id: str, *, version: int = 1) -> KnowledgeDocument:
     return KnowledgeDocument(
         id=node_id,
         title=metadata.title,
-        content="Some content about caching strategies.",
+        content=content,
         metadata=metadata,
         path=Path(f"{node_id}.md"),
     )
@@ -419,6 +427,9 @@ class _EngineHarness:
         )
         self.edge_store = edge_store
         self.stats_store = stats_store
+        self.search = _mock_search(
+            search_results if search_results is not None else [_semantic_hit("cand")]
+        )
         self.call_log = (
             CallLogWriter(stats_store, test_config.storage.lithos_store_path / BLOB_SUBDIR)
             if call_log
@@ -429,9 +440,7 @@ class _EngineHarness:
             client=LlmClient(llm_config, transport=httpx.MockTransport(counting_handler)),
             stats_store=stats_store,
             knowledge=self.knowledge,
-            search=_mock_search(
-                search_results if search_results is not None else [_semantic_hit("cand")]
-            ),
+            search=self.search,
             intake=self.intake,
             agent="lithos-enrich",
             call_log=self.call_log,
@@ -495,6 +504,7 @@ class TestEdgeInferenceEngine:
         evidence = json.loads(str(edge["evidence"]))
         assert evidence["model"] == "test-model"
         assert evidence["rationale"] == "focus provides evidence"
+        assert evidence["inference_version"] == INFERENCE_VERSION
 
         assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
         day = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -776,7 +786,7 @@ class TestReinference:
             assert harness.calls["n"] == 1
 
             # The note changes: version 2, and the model now judges differently.
-            harness.knowledge.read = _reads(_doc("focus", version=2))
+            harness.knowledge.read = _reads(_doc("focus", version=2, content="New findings."))
             judgement["confidence"] = 0.9
             judgement["rationale"] = "updated evidence"
             await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
@@ -838,25 +848,24 @@ class TestReinference:
         assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
         assert await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION + 1)
 
-    async def test_changed_relation_accumulates_new_edge(
+    async def test_changed_relation_replaces_the_old_edge(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
     ) -> None:
-        """A re-adjudication that changes relation type keys a NEW edge; the
-        old one remains (additive semantics — reconciliation of superseded
-        inferred edges is slice-2 sweep scope, per the PR1 review record)."""
+        """A re-adjudication that changes relation type keys a new edge and
+        retracts the old one: the latest judgement of a pair wins (6129a834)."""
         judgement = dict(_GOOD_JUDGEMENT)
         harness = _EngineHarness(
             test_config, stats_store, edge_store, handler=self._mutable_handler(judgement)
         )
         try:
             await harness.engine.maybe_infer("focus", [NOTE_CREATED])
-            harness.knowledge.read = _reads(_doc("focus", version=2))
+            harness.knowledge.read = _reads(_doc("focus", version=2, content="New findings."))
             judgement["relation"] = "refines"
             await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
         finally:
             await harness.close()
         edges = await edge_store.list_edges(from_id="focus", to_id="cand")
-        assert {e["type"] for e in edges} == {"supports", "refines"}
+        assert {e["type"] for e in edges} == {"refines"}
 
     async def test_stale_version_discards_results(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
@@ -884,6 +893,310 @@ class TestReinference:
         # No completion marker for either version: the queued v2 drain re-runs.
         assert not await stats_store.has_edge_inference("focus", 1, INFERENCE_VERSION)
         assert not await stats_store.has_edge_inference("focus", 2, INFERENCE_VERSION)
+
+
+def _respond(judgements: list[dict[str, Any]]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_adjudication_body([dict(j) for j in judgements]))
+
+    return handler
+
+
+def _respond_in_turn(*responses: list[dict[str, Any]]):
+    """Answer each call with the next response."""
+    queue = list(responses)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_adjudication_body([dict(j) for j in queue.pop(0)]))
+
+    return handler
+
+
+class TestViewGate:
+    """6129a834: re-adjudicate a note only when what the prompt shows of it changed.
+
+    Influx's repair sweep rewrote some notes unchanged every day; each rewrite
+    bumped the version, and each version was judged again — 26% of staging's
+    calls over 30 days were byte-identical repeats.
+    """
+
+    async def _run(self, harness: _EngineHarness, *versions: KnowledgeDocument) -> None:
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+            for doc in versions:
+                harness.knowledge.read = _reads(doc)
+                await harness.engine.maybe_infer("focus", [NOTE_UPDATED])
+        finally:
+            await harness.close()
+
+    async def test_version_bump_with_the_same_view_makes_no_call(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config, stats_store, edge_store, handler=_respond([_GOOD_JUDGEMENT])
+        )
+        await self._run(harness, _doc("focus", version=2), _doc("focus", version=3))
+        assert harness.calls["n"] == 1
+        assert harness.search.semantic_search.call_count == 1
+
+    async def test_body_change_readjudicates(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config, stats_store, edge_store, handler=_respond([_GOOD_JUDGEMENT])
+        )
+        await self._run(harness, _doc("focus", version=2, content="Different findings."))
+        assert harness.calls["n"] == 2
+
+    async def test_title_change_readjudicates(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config, stats_store, edge_store, handler=_respond([_GOOD_JUDGEMENT])
+        )
+        await self._run(harness, _doc("focus", version=2, title="A renamed note"))
+        assert harness.calls["n"] == 2
+
+    async def test_returning_to_an_earlier_view_readjudicates(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """View A, then B, then A again. B's judgement replaced A's edges, so the
+        return to A is judged again rather than skipped as already seen."""
+        none = {"candidate": 1, "relation": "none", "confidence": 0.9}
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=_respond_in_turn([_GOOD_JUDGEMENT], [none], [_GOOD_JUDGEMENT]),
+            doc=_doc("focus", content="Caching cuts tail latency."),
+        )
+        await self._run(
+            harness,
+            _doc("focus", version=2, content="Caching made no difference to latency."),
+            _doc("focus", version=3, content="Caching cuts tail latency."),
+        )
+        assert harness.calls["n"] == 3
+        edges = await edge_store.list_edges_between(["focus", "cand"])
+        assert {(e["from_id"], e["to_id"], e["type"]) for e in edges} == {
+            ("focus", "cand", "supports")
+        }
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {**_GOOD_JUDGEMENT, "relation": "refines"},  # a duplicate for candidate 1
+            {**_GOOD_JUDGEMENT, "candidate": 7},  # an index outside the candidates
+        ],
+        ids=["duplicate", "bad-index"],
+    )
+    async def test_valid_judgement_with_an_extra_entry_settles_the_view(
+        self,
+        test_config: LithosConfig,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        extra: dict[str, Any],
+    ) -> None:
+        """The extra entry is a contract problem, but the response still judged
+        its one candidate, so the same view isn't judged again."""
+        harness = _EngineHarness(
+            test_config, stats_store, edge_store, handler=_respond([_GOOD_JUDGEMENT, extra])
+        )
+        await self._run(harness, _doc("focus", version=2))
+        assert harness.calls["n"] == 1
+
+    async def test_unparseable_response_does_not_satisfy_the_gate(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=lambda req: httpx.Response(
+                200, json={"choices": [{"message": {"content": "not json"}}], "usage": {}}
+            ),
+        )
+        await self._run(harness, _doc("focus", version=2))
+        assert harness.calls["n"] == 2
+
+    async def test_response_with_no_valid_judgement_does_not_satisfy_the_gate(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        bogus = {"candidate": 1, "relation": "loves", "confidence": 0.9}
+        harness = _EngineHarness(test_config, stats_store, edge_store, handler=_respond([bogus]))
+        await self._run(harness, _doc("focus", version=2))
+        assert harness.calls["n"] == 2
+
+    async def test_no_candidates_is_remembered_for_the_view(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=_respond([_GOOD_JUDGEMENT]),
+            search_results=[],
+        )
+        await self._run(harness, _doc("focus", version=2))
+        assert harness.calls["n"] == 0
+        assert harness.search.semantic_search.call_count == 1
+
+    async def test_legacy_row_without_a_view_reruns_once(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """A row from before the gate carries no view: the next version re-runs once."""
+        await stats_store.record_edge_inference(
+            "focus", 1, INFERENCE_VERSION, model="old-model", edges_written=1
+        )
+        harness = _EngineHarness(
+            test_config, stats_store, edge_store, handler=_respond([_GOOD_JUDGEMENT])
+        )
+        await self._run(harness, _doc("focus", version=2), _doc("focus", version=3))
+        assert harness.calls["n"] == 1
+
+
+class TestLatestJudgementWins:
+    """6129a834: re-adjudication reconciles the pair's inferred edges.
+
+    Before, edges only accumulated: a later ``none`` left the old edge in place
+    and a changed type or direction added a second one. On staging the notes
+    Influx rewrote daily held 11 to 49 inferred edges each, while their latest
+    call wrote 0 or 1.
+    """
+
+    @staticmethod
+    async def _seed(edge_store: EdgeStore, from_id: str, to_id: str, edge_type: str) -> None:
+        await edge_store.upsert_inferred(
+            from_id=from_id,
+            to_id=to_id,
+            edge_type=edge_type,
+            weight=0.7,
+            namespace="default",
+            provenance_actor="lithos-enrich",
+            evidence='{"model": "openai/gpt-5-mini"}',
+        )
+
+    @staticmethod
+    async def _infer(harness: _EngineHarness) -> None:
+        try:
+            await harness.engine.maybe_infer("focus", [NOTE_CREATED])
+        finally:
+            await harness.close()
+
+    @staticmethod
+    async def _types_between(edge_store: EdgeStore, a: str, b: str) -> set[tuple[str, str, str]]:
+        edges = await edge_store.list_edges_between([a, b])
+        return {(str(e["from_id"]), str(e["to_id"]), str(e["type"])) for e in edges}
+
+    async def test_none_retracts_the_pairs_inferred_edges(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        await self._seed(edge_store, "focus", "cand", "supports")
+        await self._seed(edge_store, "cand", "focus", "refines")  # the candidate's own call
+        none = {"candidate": 1, "relation": "none", "confidence": 0.9}
+        await self._infer(
+            _EngineHarness(test_config, stats_store, edge_store, handler=_respond([none]))
+        )
+        assert await self._types_between(edge_store, "focus", "cand") == set()
+
+    async def test_below_floor_retracts(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        await self._seed(edge_store, "focus", "cand", "supports")
+        weak = {**_GOOD_JUDGEMENT, "confidence": 0.3}
+        await self._infer(
+            _EngineHarness(test_config, stats_store, edge_store, handler=_respond([weak]))
+        )
+        assert await self._types_between(edge_store, "focus", "cand") == set()
+
+    async def test_flipped_direction_keeps_only_the_new_edge(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        await self._seed(edge_store, "focus", "cand", "supports")
+        flipped = {**_GOOD_JUDGEMENT, "direction": "candidate_to_focus"}
+        await self._infer(
+            _EngineHarness(test_config, stats_store, edge_store, handler=_respond([flipped]))
+        )
+        assert await self._types_between(edge_store, "focus", "cand") == {
+            ("cand", "focus", "supports")
+        }
+
+    async def test_authoritative_rows_survive(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """Asserted rows and conflicted inferred rows are never retracted."""
+        await edge_store.upsert(
+            from_id="focus",
+            to_id="cand",
+            edge_type="depends_on",
+            weight=1.0,
+            namespace="default",
+            provenance_actor="human-reviewer",
+            provenance_type="asserted",
+        )
+        await edge_store.upsert(
+            from_id="cand",
+            to_id="focus",
+            edge_type="contradicts",
+            weight=0.9,
+            namespace="default",
+            provenance_actor="lithos-enrich",
+            provenance_type="inferred",
+            conflict_state="resolved",
+        )
+        none = {"candidate": 1, "relation": "none", "confidence": 0.9}
+        await self._infer(
+            _EngineHarness(test_config, stats_store, edge_store, handler=_respond([none]))
+        )
+        assert await self._types_between(edge_store, "focus", "cand") == {
+            ("focus", "cand", "depends_on"),
+            ("cand", "focus", "contradicts"),
+        }
+
+    async def test_unjudged_candidate_keeps_its_edges(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """A partial response doesn't say what it skipped: leave that pair alone."""
+        await self._seed(edge_store, "focus", "c2", "supports")
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=_respond([_GOOD_JUDGEMENT]),  # covers candidate 1 only
+            search_results=[_semantic_hit("c1", 0.7), _semantic_hit("c2", 0.6)],
+        )
+        await self._infer(harness)
+        assert await self._types_between(edge_store, "focus", "c2") == {("focus", "c2", "supports")}
+
+    async def test_explicit_none_in_a_partial_response_retracts(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """Review of #463: a partial response's valid ``none`` is still a judgement
+        of its pair. Candidate 2's edge goes; candidate 1, omitted, keeps its own."""
+        await self._seed(edge_store, "focus", "c1", "supports")
+        await self._seed(edge_store, "focus", "c2", "supports")
+        none_for_c2 = {"candidate": 2, "relation": "none", "confidence": 0.9}
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=_respond([none_for_c2]),
+            search_results=[_semantic_hit("c1", 0.7), _semantic_hit("c2", 0.6)],
+        )
+        await self._infer(harness)
+        assert await self._types_between(edge_store, "focus", "c2") == set()
+        assert await self._types_between(edge_store, "focus", "c1") == {("focus", "c1", "supports")}
+
+    async def test_pairs_outside_the_candidate_set_are_untouched(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        await self._seed(edge_store, "focus", "elsewhere", "supports")
+        none = {"candidate": 1, "relation": "none", "confidence": 0.9}
+        await self._infer(
+            _EngineHarness(test_config, stats_store, edge_store, handler=_respond([none]))
+        )
+        assert await self._types_between(edge_store, "focus", "elsewhere") == {
+            ("focus", "elsewhere", "supports")
+        }
 
 
 class TestCallLogIntegration:

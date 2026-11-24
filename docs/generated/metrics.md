@@ -62,7 +62,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "a729caf7d246a554b8b560c985b42cbc8cdc13a74b8f34bb9ff69d7b8007433d",
+  "source_hash": "f4576abfc213ca02cb8599e1920912d32839b89227c7b75dcb4999dbd7096d40",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -130,7 +130,7 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_complexity | lithos.knowledge.KnowledgeManager.create | 25 | 25 | review | — |
 | unchanged | function_complexity | lithos.knowledge.KnowledgeManager.list_all | 19 | 19 | review | — |
 | unchanged | function_complexity | lithos.knowledge.KnowledgeManager.update | 63 | 63 | review | — |
-| unchanged | function_complexity | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 23 | 23 | review | — |
+| unchanged | function_complexity | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 20 | 20 | review | — |
 | unchanged | function_complexity | lithos.lcma.edge_inference.parse_adjudications | 18 | 18 | review | — |
 | unchanged | function_complexity | lithos.lcma.enrich.EnrichWorker._apply_decay | 13 | 13 | review | — |
 | unchanged | function_complexity | lithos.lcma.enrich.EnrichWorker._consolidate_task | 19 | 19 | review | — |
@@ -199,8 +199,8 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | function_length | lithos.knowledge.KnowledgeManager.create | 194 | 194 | review | — |
 | unchanged | function_length | lithos.knowledge.KnowledgeManager.list_all | 97 | 97 | review | — |
 | unchanged | function_length | lithos.knowledge.KnowledgeManager.update | 281 | 281 | review | — |
-| unchanged | function_length | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 161 | 161 | review | — |
-| unchanged | function_length | lithos.lcma.edge_inference.parse_adjudications | 77 | 77 | review | — |
+| unchanged | function_length | lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer | 145 | 145 | review | — |
+| unchanged | function_length | lithos.lcma.edge_inference.parse_adjudications | 79 | 79 | review | — |
 | unchanged | function_length | lithos.lcma.enrich.EnrichWorker._consolidate_task | 78 | 78 | review | — |
 | unchanged | function_length | lithos.lcma.enrich.EnrichWorker.drain | 78 | 78 | review | — |
 | unchanged | function_length | lithos.lcma.eval.compare.gate | 77 | 77 | review | — |
@@ -243,10 +243,10 @@ in the same PR. Lower thresholds when that protects useful improvements.
 | unchanged | module_lines | lithos.graph | 877 | 877 | review | — |
 | unchanged | module_lines | lithos.knowledge | 1339 | 1339 | review | — |
 | unchanged | module_lines | lithos.lcma.scouts | 1036 | 1036 | review | — |
-| unchanged | module_lines | lithos.lcma.stats | 1386 | 1386 | review | — |
+| unchanged | module_lines | lithos.lcma.stats | 1424 | 1424 | review | — |
 | unchanged | module_lines | lithos.search | 2102 | 2102 | review | — |
 | unchanged | module_lines | lithos.server | 894 | 894 | review | — |
-| unchanged | module_lines | lithos.telemetry | 1311 | 1311 | review | — |
+| unchanged | module_lines | lithos.telemetry | 1312 | 1312 | review | — |
 | unchanged | module_lines | lithos.tools.tasks | 1062 | 1062 | review | — |
 - branch_coverage: missing; value —; scope not recorded; evidence not recorded
 - mutation: missing; value —; scope not recorded; evidence not recorded
@@ -292,20 +292,20 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | Entrypoints | 13 | 6640 | 5398 | 0 | 13 | 1.00 | 70 (`lithos.tools.notes.register.lithos_write`) | 14 |
 | Errors | 2 | 276 | 205 | 8 | 0 | 0.00 | 2 (`lithos.envelopes.error_envelope`) | 0 |
 | Events | 1 | 351 | 282 | 4 | 2 | 0.33 | 7 (`lithos.events.EventBus.emit`) | 0 |
-| Graph | 2 | 1307 | 1086 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
+| Graph | 2 | 1340 | 1117 | 7 | 4 | 0.36 | 12 (`lithos.graph.KnowledgeGraph._plan_reconcile_to`) | 3 |
 | IdResolution | 1 | 127 | 100 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
-| Intake | 1 | 686 | 582 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
+| Intake | 1 | 715 | 609 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 2169 | 1752 | 5 | 8 | 0.62 | 63 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
-| LCMA | 27 | 8624 | 7087 | 1 | 12 | 0.92 | 43 (`lithos.lcma.retrieve._run_retrieve_impl`) | 26 |
+| LCMA | 27 | 8763 | 7207 | 1 | 12 | 0.92 | 43 (`lithos.lcma.retrieve._run_retrieve_impl`) | 26 |
 | Logging | 1 | 164 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 2102 | 1717 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 7 |
 | SqliteStore | 1 | 279 | 226 | 2 | 1 | 0.33 | 10 (`lithos.async_sqlite_store.AsyncSqliteStore._session`) | 0 |
-| Telemetry | 1 | 1311 | 1021 | 9 | 1 | 0.10 | 19 (`lithos.telemetry.setup_telemetry`) | 1 |
+| Telemetry | 1 | 1312 | 1022 | 9 | 1 | 0.10 | 19 (`lithos.telemetry.setup_telemetry`) | 1 |
 
 ## Size
 
-- Modules: **62**, lines: **30722**, SLOC: **25003**
+- Modules: **62**, lines: **30924**, SLOC: **25182**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -323,7 +323,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Complexity
 
-- Functions: **1011**, cyclomatic > 10: **73**
+- Functions: **1018**, cyclomatic > 10: **73**
 - Cyclomatic distribution: median **2**, p90 **9**, max **70**
 - Function length (lines): median 14, p90 62, max 1006 (`lithos.tools.tasks.register`); over 75: **63**
 
@@ -403,4 +403,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **45** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.71** (52510 test lines / 30722 source lines)
+- Test-to-source line ratio: **1.71** (52968 test lines / 30924 source lines)

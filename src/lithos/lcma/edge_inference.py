@@ -21,15 +21,22 @@ Safety properties (see the WS1 plan):
 - **Idempotent & re-inferable** — ``edge_inference_log`` keyed on ``(node_id,
   doc_version, inference_version)``; edges are written before the log row
   (inferred upserts are idempotent by natural key, so at-least-once is safe).
-  A document update, an :data:`INFERENCE_VERSION` bump, or an operator ledger
-  purge each genuinely re-adjudicates: candidate pairs already carrying an
-  inferred edge are NOT excluded — re-adjudication refreshes their weight,
-  rationale, and model attribution in place.
-- **Non-destructive** — inferred writes go through
-  ``CorpusIntake.assert_inferred_edge`` → ``EdgeStore.upsert_inferred``, which
-  atomically refuses to displace any row that is not itself an unconflicted
-  inferred edge. Asserted edges, legacy rows, and manually resolved conflicts
-  always win; a blocked write is counted, not silently absorbed.
+  A new doc version is judged only when its view — what the prompt shows of
+  the note (:func:`~lithos.lcma.note_view.view_sha`) — differs from the view
+  its latest judgement saw, so a rewrite that changes nothing shown makes no
+  call. A changed view (a return to an older one included), an
+  :data:`INFERENCE_VERSION` bump, or an operator ledger purge each genuinely
+  re-adjudicates.
+- **Latest judgement wins** — re-adjudication reconciles each judged pair: the
+  supported edge is upserted in place (weight, rationale, model, prompt
+  version), and the pair's other inferred edges — another type, the other
+  direction, or any edge when the answer is ``none`` or below the floor — are
+  retracted.
+- **Authority-preserving** — inferred writes and retractions go through
+  ``CorpusIntake`` → ``EdgeStore.upsert_inferred`` / ``retract_inferred``, which
+  only ever touch unconflicted inferred rows. Asserted edges, legacy rows, and
+  manually resolved conflicts always win; a blocked write is counted, not
+  silently absorbed.
 - **Stale-proof** — after the LLM call returns, the focus document's version is
   re-read; if the note changed mid-flight, neither edges nor the op-log row are
   written (spend is still recorded), so the queued newer version re-runs
@@ -58,7 +65,7 @@ from lithos.events import EVENT_ORIGIN_ENRICH, NOTE_CREATED, NOTE_UPDATED
 from lithos.intake import EdgeRequest
 from lithos.lcma.call_log import CallLogWriter, LlmCall
 from lithos.lcma.llm import ChatMessage, LlmClient, LlmResult
-from lithos.lcma.note_view import NoteView, render_note, view_of
+from lithos.lcma.note_view import NoteView, render_note, view_of, view_sha
 
 if TYPE_CHECKING:
     from lithos.config import LlmConfig
@@ -80,7 +87,8 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 #: Policy fingerprint for the ``edge_inference_log`` identity triple
-#: ``(node_id, doc_version, inference_version)``. BUMP THIS when the prompt
+#: ``(node_id, doc_version, inference_version)`` and its view gate
+#: ``(node_id, view_sha, inference_version)``. BUMP THIS when the prompt
 #: schema, relation vocabulary, or parse semantics change — a bump invalidates
 #: every prior run so unchanged notes are reprocessed under the new policy.
 #: A *model/config* switch deliberately does NOT invalidate (it must not
@@ -176,6 +184,15 @@ class Adjudication:
     rationale: str
 
 
+@dataclass(frozen=True)
+class ParsedResponse:
+    """What :func:`parse_adjudications` could use of one model response."""
+
+    adjudications: list[Adjudication]  # the valid judgements that name a relation
+    problems: int  # response-contract violations, uncovered candidates included
+    covered: frozenset[int]  # indexes of candidates with a valid answer, ``none`` included
+
+
 def prefilter_candidates(
     neighbours: list[NeighbourInfo],
     *,
@@ -192,10 +209,10 @@ def prefilter_candidates(
     Drops self, cross-namespace hits, and pairs outside the similarity band
     (too-similar ≈ near-duplicate — ``related_to``'s job; too-distant wastes
     adjudication tokens). Pairs that already carry edges — ``related_to`` or
-    previously inferred — are deliberately NOT excluded: typed relations are
-    additive semantics, and re-adjudication is the mechanism by which a
-    document/policy-version change refreshes existing inferred edges (the
-    protected inferred-only upsert makes rewrites safe). Survivors are ranked
+    previously inferred — are deliberately NOT excluded: re-adjudication is
+    the mechanism by which a changed view or policy version refreshes or
+    retracts existing inferred edges (the protected inferred-only upsert and
+    retract make that safe). Survivors are ranked
     by similarity plus a small entity/tag-overlap boost; the top *k* go to
     the LLM.
     """
@@ -281,16 +298,18 @@ def request_payload(
     }
 
 
-def parse_adjudications(text: str, n_candidates: int) -> tuple[list[Adjudication], int] | None:
+def parse_adjudications(text: str, n_candidates: int) -> ParsedResponse | None:
     """Defensively parse the model's JSON; ``None`` means wholesale failure.
 
-    Returns ``(adjudications, problems)``. *problems* counts response-contract
-    violations that still allowed partial use: invalid entries, duplicate
-    candidate indexes (first judgement wins), and candidates the response
-    never covered — the prompt demands every candidate exactly once, and a
-    ``none`` answer covers its candidate without producing an edge. The caller
-    reports ``problems > 0`` observably (a "partial" outcome) instead of
-    silently treating malformed output as success.
+    *problems* counts response-contract violations that still allowed partial
+    use: invalid entries, duplicate candidate indexes (first judgement wins),
+    and candidates the response never covered — the prompt demands every
+    candidate exactly once, and a ``none`` answer covers its candidate without
+    producing an edge. The caller reports ``problems > 0`` observably (a
+    "partial" outcome) instead of silently treating malformed output as
+    success. *covered* holds the candidates with a valid answer, so it says
+    which pairs the response judged; *problems* can't, since an invalid extra
+    entry counts as one too.
 
     Strictness rules (review round 1):
 
@@ -357,7 +376,7 @@ def parse_adjudications(text: str, n_candidates: int) -> tuple[list[Adjudication
         rationale = str(entry.get("rationale", ""))[:300]
         out.append(Adjudication(index, str(relation), str(direction), confidence, rationale))
     problems += n_candidates - len(covered)
-    return out, problems
+    return ParsedResponse(out, problems, frozenset(covered))
 
 
 def edge_endpoints(focus_id: str, candidate_id: str, adjudication: Adjudication) -> tuple[str, str]:
@@ -427,7 +446,7 @@ class EdgeInferenceEngine:
         try:
             await self._maybe_infer(node_id, trigger_types)
         except Exception:
-            # Inference is strictly additive; never let it fail the enrich item.
+            # Inference is best-effort; never let it fail the enrich item.
             logger.exception("Edge inference failed unexpectedly for %s", node_id)
 
     async def _maybe_infer(self, node_id: str, trigger_types: object) -> None:
@@ -447,6 +466,14 @@ class EdgeInferenceEngine:
         if await self._stats_store.has_edge_inference(node_id, version, INFERENCE_VERSION):
             self._skip("op_log")
             return
+        focus = view_of(doc)
+        focus_sha = view_sha(focus)
+        if await self._stats_store.latest_inferred_view(node_id, INFERENCE_VERSION) == focus_sha:
+            # A new version that shows the model nothing new since its latest
+            # judgement — e.g. Influx's repair sweep rewriting a note unchanged.
+            # Judging it again only re-rolls the model's borderline answers.
+            self._skip("unchanged_view")
+            return
         if self._calls_this_drain >= self._config.max_calls_per_drain:
             self._skip("call_cap")
             return
@@ -458,16 +485,20 @@ class EdgeInferenceEngine:
 
         candidates = await self._gather_candidates(node_id, doc)
         if not candidates:
-            # Neighbourhood evaluated and found empty at this content version —
-            # no token spend, no re-check until the note changes.
+            # Neighbourhood evaluated and found empty for this view of the note —
+            # no token spend, no re-check until what the prompt would show changes.
             await self._stats_store.record_edge_inference(
-                node_id, version, INFERENCE_VERSION, model=self._config.model, edges_written=0
+                node_id,
+                version,
+                INFERENCE_VERSION,
+                model=self._config.model,
+                edges_written=0,
+                view_sha=focus_sha,
             )
             self._skip("no_candidates")
             return
 
         self._calls_this_drain += 1
-        focus = view_of(doc)
         messages = build_adjudication_prompt(focus, candidates, note_chars=self._config.note_chars)
         payload = request_payload(
             messages,
@@ -510,7 +541,7 @@ class EdgeInferenceEngine:
                 node_id, version, payload, "parse_error", latency_ms, result=result
             )
             return
-        adjudications, problems = parsed
+        adjudications, problems = parsed.adjudications, parsed.problems
         if problems:
             logger.warning(
                 "LLM adjudication for %s violated the response contract "
@@ -530,48 +561,18 @@ class EdgeInferenceEngine:
             await self._log_call(node_id, version, payload, "stale", latency_ms, result=result)
             return
 
-        namespace = self._namespace_of(node_id)
-        written = 0
-        blocked = 0
-        for adjudication in adjudications:
-            if adjudication.confidence < self._config.confidence_floor:
-                continue
-            candidate = candidates[adjudication.candidate_index - 1]
-            from_id, to_id = edge_endpoints(node_id, candidate.node_id, adjudication)
-            outcome = await self._intake.assert_inferred_edge(
-                self._agent,
-                EdgeRequest(
-                    from_id=from_id,
-                    to_id=to_id,
-                    edge_type=adjudication.relation,
-                    weight=adjudication.confidence,
-                    namespace=namespace,
-                    provenance_actor=self._agent,
-                    provenance_type="inferred",
-                    evidence=json.dumps(
-                        {
-                            "rationale": adjudication.rationale,
-                            "model": self._config.model,
-                            "confidence": adjudication.confidence,
-                        }
-                    ),
-                ),
-                origin=EVENT_ORIGIN_ENRICH,
-            )
-            if outcome is None:
-                # An asserted / resolved / legacy row holds this key — the
-                # judgement is discarded, observably. Inferred never wins.
-                blocked += 1
-                self._skip("asserted_exists")
-                continue
-            written += 1
-            if _HAS_TELEMETRY and _lithos_metrics is not None:
-                _lithos_metrics.lcma_inferred_edges_written.add(
-                    1, {"relation": adjudication.relation}
-                )
-
+        written, blocked, retracted = await self._reconcile_pairs(
+            node_id, candidates, adjudications, covered=parsed.covered
+        )
+        # A response that judged no candidate validly changed no edges, so it
+        # doesn't settle the view.
         await self._stats_store.record_edge_inference(
-            node_id, version, INFERENCE_VERSION, model=self._config.model, edges_written=written
+            node_id,
+            version,
+            INFERENCE_VERSION,
+            model=self._config.model,
+            edges_written=written,
+            view_sha=focus_sha if parsed.covered else None,
         )
         self._count_call("partial" if problems else "ok", started)
         await self._log_call(
@@ -584,13 +585,98 @@ class EdgeInferenceEngine:
             edges_written=written,
         )
         logger.info(
-            "Edge inference for %s: %d/%d judgements written, %d blocked (version=%d)",
+            "Edge inference for %s: %d/%d judgements written, %d blocked, "
+            "%d retracted (version=%d)",
             node_id,
             written,
             len(adjudications),
             blocked,
+            retracted,
             version,
         )
+
+    async def _reconcile_pairs(
+        self,
+        node_id: str,
+        candidates: list[NeighbourInfo],
+        adjudications: list[Adjudication],
+        *,
+        covered: frozenset[int],
+    ) -> tuple[int, int, int]:
+        """Make each judged pair's inferred edges match this judgement.
+
+        The latest judgement of a pair wins: the edge it supports is written,
+        and the pair's other inferred edges — from an earlier call on either
+        note, of another type or direction — are retracted. ``none`` and a
+        confidence below the floor support no edge. Only the *covered*
+        candidates, those with a valid answer, are reconciled: one the
+        response omitted or answered invalidly keeps its edges. Returns
+        ``(written, blocked, retracted)``.
+        """
+        namespace = self._namespace_of(node_id)
+        by_index = {a.candidate_index: a for a in adjudications}
+        written = blocked = retracted = 0
+        for index, candidate in enumerate(candidates, start=1):
+            if index not in covered:
+                continue
+            adjudication = by_index.get(index)  # None: a valid ``none``
+            keep = None
+            if (
+                adjudication is not None
+                and adjudication.confidence >= self._config.confidence_floor
+            ):
+                keep = await self._write_edge(node_id, candidate, adjudication, namespace)
+                if keep is None:
+                    blocked += 1
+                else:
+                    written += 1
+            retracted += await self._intake.retract_inferred_edges(
+                self._agent,
+                node_a=node_id,
+                node_b=candidate.node_id,
+                namespace=namespace,
+                keep=keep,
+            )
+        return written, blocked, retracted
+
+    async def _write_edge(
+        self,
+        node_id: str,
+        candidate: NeighbourInfo,
+        adjudication: Adjudication,
+        namespace: str,
+    ) -> tuple[str, str, str] | None:
+        """Upsert the judged edge; its ``(from_id, to_id, type)``, or ``None`` if blocked."""
+        from_id, to_id = edge_endpoints(node_id, candidate.node_id, adjudication)
+        outcome = await self._intake.assert_inferred_edge(
+            self._agent,
+            EdgeRequest(
+                from_id=from_id,
+                to_id=to_id,
+                edge_type=adjudication.relation,
+                weight=adjudication.confidence,
+                namespace=namespace,
+                provenance_actor=self._agent,
+                provenance_type="inferred",
+                evidence=json.dumps(
+                    {
+                        "rationale": adjudication.rationale,
+                        "model": self._config.model,
+                        "inference_version": INFERENCE_VERSION,
+                        "confidence": adjudication.confidence,
+                    }
+                ),
+            ),
+            origin=EVENT_ORIGIN_ENRICH,
+        )
+        if outcome is None:
+            # An asserted / resolved / legacy row holds this key — the
+            # judgement is discarded, observably. Inferred never wins.
+            self._skip("asserted_exists")
+            return None
+        if _HAS_TELEMETRY and _lithos_metrics is not None:
+            _lithos_metrics.lcma_inferred_edges_written.add(1, {"relation": adjudication.relation})
+        return from_id, to_id, adjudication.relation
 
     async def _gather_candidates(self, node_id: str, doc: KnowledgeDocument) -> list[NeighbourInfo]:
         """Semantic k-NN → NeighbourInfo (cached meta) → pre-filter.

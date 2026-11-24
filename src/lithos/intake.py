@@ -674,6 +674,35 @@ class CorpusIntake:
 
             return EdgeOutcome(edge_id=edge_id, status="ok")
 
+    async def retract_inferred_edges(
+        self,
+        agent: str,
+        *,
+        node_a: str,
+        node_b: str,
+        namespace: str,
+        keep: tuple[str, str, str] | None = None,
+    ) -> int:
+        """Delete the pair's inferred edges a newer judgement no longer supports.
+
+        The counterpart of :meth:`assert_inferred_edge` for re-adjudication:
+        :meth:`EdgeStore.retract_inferred` removes every unconflicted inferred
+        edge between *node_a* and *node_b* except *keep*. Asserted, legacy,
+        projection-owned and conflicted rows are never touched. No event is
+        emitted: there is no edge-deleted event, and an inferred-edge event
+        carries the enrich origin, which the enrich worker drops anyway.
+        """
+        tracer = get_tracer()
+        with tracer.start_as_current_span("lithos.intake.retract_inferred_edges") as span:
+            span.set_attribute("lithos.intake.op", "retract_inferred_edges")
+            span.set_attribute("lithos.agent", agent)
+            span.set_attribute("lithos.edge.namespace", namespace)
+            retracted = await self._edge_store.retract_inferred(
+                node_a=node_a, node_b=node_b, namespace=namespace, keep=keep
+            )
+            span.set_attribute("lithos.edge.retracted", retracted)
+            return retracted
+
     async def _emit(self, event: LithosEvent) -> None:
         """Emit an event, logging any failure without propagating.
 
