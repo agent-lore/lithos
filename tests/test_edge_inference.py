@@ -33,6 +33,7 @@ from lithos.lcma.edge_inference import (
     Adjudication,
     EdgeInferenceEngine,
     NeighbourInfo,
+    ParsedResponse,
     build_adjudication_prompt,
     edge_endpoints,
     parse_adjudications,
@@ -178,7 +179,9 @@ class TestParseAdjudications:
             }
         )
         parsed = parse_adjudications(text, 1)
-        assert parsed == ([Adjudication(1, "supports", "candidate_to_focus", 0.8, "because")], 0)
+        assert parsed == ParsedResponse(
+            [Adjudication(1, "supports", "candidate_to_focus", 0.8, "because")], 0, 1
+        )
 
     def test_fenced_and_bare_list_accepted(self) -> None:
         entry = {
@@ -192,9 +195,8 @@ class TestParseAdjudications:
         bare = json.dumps([entry])
         parsed = parse_adjudications(bare, 1)
         assert parsed is not None
-        adjudications, problems = parsed
-        assert adjudications[0].relation == "refines"
-        assert problems == 0
+        assert parsed.adjudications[0].relation == "refines"
+        assert parsed.problems == 0
 
     def test_directional_relation_without_direction_is_dropped(self) -> None:
         """Round-1 review: direction is never invented — an inverted supports/
@@ -204,15 +206,14 @@ class TestParseAdjudications:
             {"candidate": 2, "relation": "supports", "direction": "sideways", "confidence": 0.8},
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 2)
-        assert parsed == ([], 4)  # 2 dropped entries + 2 uncovered candidates
+        assert parsed == ParsedResponse([], 4, 0)  # 2 dropped entries + 2 uncovered candidates
 
     def test_symmetric_relation_ignores_direction(self) -> None:
         entries = [{"candidate": 1, "relation": "contradicts", "confidence": 0.9}]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 1)
         assert parsed is not None
-        adjudications, problems = parsed
-        assert adjudications[0].relation == "contradicts"
-        assert problems == 0
+        assert parsed.adjudications[0].relation == "contradicts"
+        assert parsed.problems == 0
 
     def test_fractional_and_boolean_indexes_rejected(self) -> None:
         """1.9 must not silently become candidate 1; True must not become 1."""
@@ -231,7 +232,7 @@ class TestParseAdjudications:
             },
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 2)
-        assert parsed == ([], 4)  # 2 bad indexes + 2 uncovered candidates
+        assert parsed == ParsedResponse([], 4, 0)  # 2 bad indexes + 2 uncovered candidates
 
     def test_duplicate_candidate_keeps_first_and_counts_problem(self) -> None:
         entries = [
@@ -245,9 +246,10 @@ class TestParseAdjudications:
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 1)
         assert parsed is not None
-        adjudications, problems = parsed
-        assert len(adjudications) == 1 and adjudications[0].relation == "supports"
-        assert problems == 1
+        assert len(parsed.adjudications) == 1
+        assert parsed.adjudications[0].relation == "supports"
+        assert parsed.problems == 1
+        assert parsed.covered == 1  # the duplicate is a problem, not a lost answer
 
     def test_missing_coverage_counts_problems(self) -> None:
         """The prompt demands every candidate exactly once; silence is a
@@ -256,7 +258,7 @@ class TestParseAdjudications:
             {"candidate": 1, "relation": "none", "confidence": 0.9},
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 3)
-        assert parsed == ([], 2)  # candidates 2 and 3 never covered
+        assert parsed == ParsedResponse([], 2, 1)  # candidates 2 and 3 never covered
 
     def test_invalid_entries_dropped_individually(self) -> None:
         entries = [
@@ -273,10 +275,10 @@ class TestParseAdjudications:
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 3)
         assert parsed is not None
-        adjudications, problems = parsed
-        assert len(adjudications) == 1
-        assert adjudications[0].relation == "depends_on"
-        assert problems == 4  # made_up + bad index + bad confidence + candidate 2 uncovered
+        assert len(parsed.adjudications) == 1
+        assert parsed.adjudications[0].relation == "depends_on"
+        assert parsed.problems == 4  # made_up + bad index + bad confidence + candidate 2 uncovered
+        assert parsed.covered == 2  # candidate 1's none and candidate 3
 
     def test_garbage_returns_none(self) -> None:
         assert parse_adjudications("I think these notes are related!", 2) is None
@@ -900,6 +902,16 @@ def _respond(judgements: list[dict[str, Any]]):
     return handler
 
 
+def _respond_in_turn(*responses: list[dict[str, Any]]):
+    """Answer each call with the next response."""
+    queue = list(responses)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_adjudication_body([dict(j) for j in queue.pop(0)]))
+
+    return handler
+
+
 class TestViewGate:
     """6129a834: re-adjudicate a note only when what the prompt shows of it changed.
 
@@ -944,6 +956,53 @@ class TestViewGate:
         )
         await self._run(harness, _doc("focus", version=2, title="A renamed note"))
         assert harness.calls["n"] == 2
+
+    async def test_returning_to_an_earlier_view_readjudicates(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """View A, then B, then A again. B's judgement replaced A's edges, so the
+        return to A is judged again rather than skipped as already seen."""
+        none = {"candidate": 1, "relation": "none", "confidence": 0.9}
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=_respond_in_turn([_GOOD_JUDGEMENT], [none], [_GOOD_JUDGEMENT]),
+            doc=_doc("focus", content="Caching cuts tail latency."),
+        )
+        await self._run(
+            harness,
+            _doc("focus", version=2, content="Caching made no difference to latency."),
+            _doc("focus", version=3, content="Caching cuts tail latency."),
+        )
+        assert harness.calls["n"] == 3
+        edges = await edge_store.list_edges_between(["focus", "cand"])
+        assert {(e["from_id"], e["to_id"], e["type"]) for e in edges} == {
+            ("focus", "cand", "supports")
+        }
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {**_GOOD_JUDGEMENT, "relation": "refines"},  # a duplicate for candidate 1
+            {**_GOOD_JUDGEMENT, "candidate": 7},  # an index outside the candidates
+        ],
+        ids=["duplicate", "bad-index"],
+    )
+    async def test_valid_judgement_with_an_extra_entry_settles_the_view(
+        self,
+        test_config: LithosConfig,
+        stats_store: StatsStore,
+        edge_store: EdgeStore,
+        extra: dict[str, Any],
+    ) -> None:
+        """The extra entry is a contract problem, but the response still judged
+        its one candidate, so the same view isn't judged again."""
+        harness = _EngineHarness(
+            test_config, stats_store, edge_store, handler=_respond([_GOOD_JUDGEMENT, extra])
+        )
+        await self._run(harness, _doc("focus", version=2))
+        assert harness.calls["n"] == 1
 
     async def test_unparseable_response_does_not_satisfy_the_gate(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore

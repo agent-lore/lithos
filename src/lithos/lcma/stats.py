@@ -1158,22 +1158,26 @@ class StatsStore(AsyncSqliteStore):
             )
             return await cursor.fetchone() is not None
 
-    async def has_inferred_view(self, node_id: str, view_sha: str, inference_version: int) -> bool:
-        """Return ``True`` if this exact view of the note was already adjudicated.
+    async def latest_inferred_view(self, node_id: str, inference_version: int) -> str | None:
+        """The view the note's latest settled run judged, or ``None``.
 
-        *view_sha* is :func:`lithos.lcma.note_view.view_sha` of the focus: a
-        new doc version that shows the model the same thing needs no new call.
-        Only rows recorded with a view satisfy it — runs that judged nothing
-        (parse failure, no valid judgement) and rows from before the column
-        existed carry ``NULL``. The lookup is by primary-key prefix (node_id).
+        The value is :func:`lithos.lcma.note_view.view_sha` of the focus. A new
+        doc version showing that same view needs no new call. Any other view
+        does, including an older one the note returns to: the latest run's
+        judgements have since replaced that view's edges. Runs that judged
+        nothing (parse failure, no valid judgement) record ``NULL`` and changed
+        no edges, so they are passed over, as are rows from before the column
+        existed. The lookup is by primary-key prefix (node_id).
         """
         async with self._session() as db:
             cursor = await db.execute(
-                "SELECT 1 FROM edge_inference_log "
-                "WHERE node_id = ? AND view_sha = ? AND inference_version = ? LIMIT 1",
-                (node_id, view_sha, inference_version),
+                "SELECT view_sha FROM edge_inference_log "
+                "WHERE node_id = ? AND inference_version = ? AND view_sha IS NOT NULL "
+                "ORDER BY doc_version DESC LIMIT 1",
+                (node_id, inference_version),
             )
-            return await cursor.fetchone() is not None
+            row = await cursor.fetchone()
+            return None if row is None else str(row[0])
 
     async def record_edge_inference(
         self,
@@ -1188,7 +1192,7 @@ class StatsStore(AsyncSqliteStore):
         """Record an inference run for the identity triple (INSERT OR IGNORE).
 
         Pass *view_sha* only when the run settled the view (see
-        :meth:`has_inferred_view`).
+        :meth:`latest_inferred_view`).
         """
         async with self._session() as db:
             await db.execute(

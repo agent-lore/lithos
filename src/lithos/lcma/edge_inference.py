@@ -22,10 +22,11 @@ Safety properties (see the WS1 plan):
   doc_version, inference_version)``; edges are written before the log row
   (inferred upserts are idempotent by natural key, so at-least-once is safe).
   A new doc version is judged only when its view — what the prompt shows of
-  the note (:func:`~lithos.lcma.note_view.view_sha`) — has not been judged
-  before, so a rewrite that changes nothing shown makes no call. A changed
-  view, an :data:`INFERENCE_VERSION` bump, or an operator ledger purge each
-  genuinely re-adjudicates.
+  the note (:func:`~lithos.lcma.note_view.view_sha`) — differs from the view
+  its latest judgement saw, so a rewrite that changes nothing shown makes no
+  call. A changed view (a return to an older one included), an
+  :data:`INFERENCE_VERSION` bump, or an operator ledger purge each genuinely
+  re-adjudicates.
 - **Latest judgement wins** — re-adjudication reconciles each judged pair: the
   supported edge is upserted in place (weight, rationale, model, prompt
   version), and the pair's other inferred edges — another type, the other
@@ -183,6 +184,15 @@ class Adjudication:
     rationale: str
 
 
+@dataclass(frozen=True)
+class ParsedResponse:
+    """What :func:`parse_adjudications` could use of one model response."""
+
+    adjudications: list[Adjudication]  # the valid judgements that name a relation
+    problems: int  # response-contract violations, uncovered candidates included
+    covered: int  # candidates with a valid answer, ``none`` included
+
+
 def prefilter_candidates(
     neighbours: list[NeighbourInfo],
     *,
@@ -288,16 +298,18 @@ def request_payload(
     }
 
 
-def parse_adjudications(text: str, n_candidates: int) -> tuple[list[Adjudication], int] | None:
+def parse_adjudications(text: str, n_candidates: int) -> ParsedResponse | None:
     """Defensively parse the model's JSON; ``None`` means wholesale failure.
 
-    Returns ``(adjudications, problems)``. *problems* counts response-contract
-    violations that still allowed partial use: invalid entries, duplicate
-    candidate indexes (first judgement wins), and candidates the response
-    never covered — the prompt demands every candidate exactly once, and a
-    ``none`` answer covers its candidate without producing an edge. The caller
-    reports ``problems > 0`` observably (a "partial" outcome) instead of
-    silently treating malformed output as success.
+    *problems* counts response-contract violations that still allowed partial
+    use: invalid entries, duplicate candidate indexes (first judgement wins),
+    and candidates the response never covered — the prompt demands every
+    candidate exactly once, and a ``none`` answer covers its candidate without
+    producing an edge. The caller reports ``problems > 0`` observably (a
+    "partial" outcome) instead of silently treating malformed output as
+    success. *covered* counts the candidates with a valid answer, so it says
+    whether the response judged anything; *problems* can't, since an invalid
+    extra entry counts as one too.
 
     Strictness rules (review round 1):
 
@@ -364,7 +376,7 @@ def parse_adjudications(text: str, n_candidates: int) -> tuple[list[Adjudication
         rationale = str(entry.get("rationale", ""))[:300]
         out.append(Adjudication(index, str(relation), str(direction), confidence, rationale))
     problems += n_candidates - len(covered)
-    return out, problems
+    return ParsedResponse(out, problems, len(covered))
 
 
 def edge_endpoints(focus_id: str, candidate_id: str, adjudication: Adjudication) -> tuple[str, str]:
@@ -456,10 +468,10 @@ class EdgeInferenceEngine:
             return
         focus = view_of(doc)
         focus_sha = view_sha(focus)
-        if await self._stats_store.has_inferred_view(node_id, focus_sha, INFERENCE_VERSION):
-            # A new version that shows the model nothing new — e.g. Influx's
-            # repair sweep rewriting a note unchanged. Judging it again only
-            # re-rolls the model's borderline answers.
+        if await self._stats_store.latest_inferred_view(node_id, INFERENCE_VERSION) == focus_sha:
+            # A new version that shows the model nothing new since its latest
+            # judgement — e.g. Influx's repair sweep rewriting a note unchanged.
+            # Judging it again only re-rolls the model's borderline answers.
             self._skip("unchanged_view")
             return
         if self._calls_this_drain >= self._config.max_calls_per_drain:
@@ -529,7 +541,7 @@ class EdgeInferenceEngine:
                 node_id, version, payload, "parse_error", latency_ms, result=result
             )
             return
-        adjudications, problems = parsed
+        adjudications, problems = parsed.adjudications, parsed.problems
         if problems:
             logger.warning(
                 "LLM adjudication for %s violated the response contract "
@@ -552,15 +564,15 @@ class EdgeInferenceEngine:
         written, blocked, retracted = await self._reconcile_pairs(
             node_id, candidates, adjudications, complete=not problems
         )
-        # A response that judged no candidate validly doesn't settle the view.
-        settled = problems < len(candidates)
+        # A response that judged no candidate validly changed no edges, so it
+        # doesn't settle the view.
         await self._stats_store.record_edge_inference(
             node_id,
             version,
             INFERENCE_VERSION,
             model=self._config.model,
             edges_written=written,
-            view_sha=focus_sha if settled else None,
+            view_sha=focus_sha if parsed.covered else None,
         )
         self._count_call("partial" if problems else "ok", started)
         await self._log_call(

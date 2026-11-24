@@ -24,10 +24,10 @@ Permitted by the pre-1.0 compatibility policy in `SPECIFICATION.md §1.4`.
   and `score` appear on every non-error `lithos_cache_lookup` response.
 - **Typed-edge inference skips notes whose view is unchanged.** A new
   version of a note is adjudicated only when what the prompt shows of it
-  (title, date, source, summary head) changed. Rewrites that change nothing
-  shown — Influx's repair sweep did so daily, 26% of staging's calls — no
-  longer call the model. Existing ledger rows carry no view, so each note
-  re-runs once more, on its next change.
+  (title, date, source, summary head) changed since its latest adjudication.
+  Rewrites that change nothing shown — Influx's repair sweep did so daily,
+  26% of staging's calls — no longer call the model. Existing ledger rows
+  carry no view, so each note re-runs once more, on its next change.
 - **Re-adjudication retracts inferred edges the new judgement doesn't
   support.** For each pair it judges, the latest judgement wins: a `none`,
   a confidence below the floor, or another type or direction removes the

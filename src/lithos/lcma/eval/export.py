@@ -31,8 +31,8 @@ def case_from_call(
     judgements: list[dict[str, Any]] | None = None
     problems: int | None = None
     if parsed is not None:
-        adjudications, problems = parsed
-        judgements = [asdict(a) for a in adjudications]
+        problems = parsed.problems
+        judgements = [asdict(a) for a in parsed.adjudications]
     request_sha = str(row["request_sha"])
     return {
         "case_id": request_sha[:CASE_ID_CHARS],

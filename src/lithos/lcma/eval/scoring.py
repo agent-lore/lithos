@@ -63,8 +63,8 @@ def classify_completion(
     parsed = parse_adjudications(completion, case.n_candidates)
     if parsed is None:
         return "parse_error", case.n_candidates, None
-    adjudications, problems = parsed
-    judgements = [asdict(a) for a in adjudications]
+    problems = parsed.problems
+    judgements = [asdict(a) for a in parsed.adjudications]
     if not judgements and problems == case.n_candidates:
         return "empty", problems, judgements
     return ("partial" if problems else "ok"), problems, judgements

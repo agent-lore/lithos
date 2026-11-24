@@ -150,7 +150,7 @@
         "qualname": "lithos.search.TantivyIndex.search"
       }
     ],
-    "total_functions": 1011
+    "total_functions": 1018
   },
   "components": {
     "Codec": {
@@ -3400,6 +3400,15 @@
         "src/lithos/edge_store.py"
       ]
     },
+    "lithos.edge_store.EdgeStore.retract_inferred": {
+      "complexity": 4,
+      "length": 32,
+      "module": "lithos.edge_store",
+      "path": "src/lithos/edge_store.py",
+      "paths": [
+        "src/lithos/edge_store.py"
+      ]
+    },
     "lithos.edge_store.EdgeStore.update_conflict_resolution": {
       "complexity": 1,
       "length": 19,
@@ -4399,6 +4408,15 @@
         "src/lithos/intake.py"
       ]
     },
+    "lithos.intake.CorpusIntake.retract_inferred_edges": {
+      "complexity": 1,
+      "length": 28,
+      "module": "lithos.intake",
+      "path": "src/lithos/intake.py",
+      "paths": [
+        "src/lithos/intake.py"
+      ]
+    },
     "lithos.intake.CorpusIntake.write": {
       "complexity": 21,
       "length": 183,
@@ -4967,8 +4985,8 @@
       ]
     },
     "lithos.lcma.edge_inference.EdgeInferenceEngine._maybe_infer": {
-      "complexity": 23,
-      "length": 161,
+      "complexity": 20,
+      "length": 145,
       "module": "lithos.lcma.edge_inference",
       "path": "src/lithos/lcma/edge_inference.py",
       "paths": [
@@ -4978,6 +4996,15 @@
     "lithos.lcma.edge_inference.EdgeInferenceEngine._namespace_of": {
       "complexity": 2,
       "length": 3,
+      "module": "lithos.lcma.edge_inference",
+      "path": "src/lithos/lcma/edge_inference.py",
+      "paths": [
+        "src/lithos/lcma/edge_inference.py"
+      ]
+    },
+    "lithos.lcma.edge_inference.EdgeInferenceEngine._reconcile_pairs": {
+      "complexity": 8,
+      "length": 44,
       "module": "lithos.lcma.edge_inference",
       "path": "src/lithos/lcma/edge_inference.py",
       "paths": [
@@ -4996,6 +5023,15 @@
     "lithos.lcma.edge_inference.EdgeInferenceEngine._with_note": {
       "complexity": 2,
       "length": 7,
+      "module": "lithos.lcma.edge_inference",
+      "path": "src/lithos/lcma/edge_inference.py",
+      "paths": [
+        "src/lithos/lcma/edge_inference.py"
+      ]
+    },
+    "lithos.lcma.edge_inference.EdgeInferenceEngine._write_edge": {
+      "complexity": 4,
+      "length": 38,
       "module": "lithos.lcma.edge_inference",
       "path": "src/lithos/lcma/edge_inference.py",
       "paths": [
@@ -5076,7 +5112,7 @@
     },
     "lithos.lcma.edge_inference.parse_adjudications": {
       "complexity": 18,
-      "length": 77,
+      "length": 79,
       "module": "lithos.lcma.edge_inference",
       "path": "src/lithos/lcma/edge_inference.py",
       "paths": [
@@ -6694,6 +6730,15 @@
         "src/lithos/lcma/note_view.py"
       ]
     },
+    "lithos.lcma.note_view.view_sha": {
+      "complexity": 1,
+      "length": 12,
+      "module": "lithos.lcma.note_view",
+      "path": "src/lithos/lcma/note_view.py",
+      "paths": [
+        "src/lithos/lcma/note_view.py"
+      ]
+    },
     "lithos.lcma.retrieve._days_since": {
       "complexity": 5,
       "length": 17,
@@ -7036,6 +7081,15 @@
         "src/lithos/lcma/stats.py"
       ]
     },
+    "lithos.lcma.stats.StatsStore._migrate_add_edge_inference_view_sha": {
+      "complexity": 3,
+      "length": 11,
+      "module": "lithos.lcma.stats",
+      "path": "src/lithos/lcma/stats.py",
+      "paths": [
+        "src/lithos/lcma/stats.py"
+      ]
+    },
     "lithos.lcma.stats.StatsStore._migrate_add_enrich_queue_attempts": {
       "complexity": 3,
       "length": 9,
@@ -7056,7 +7110,7 @@
     },
     "lithos.lcma.stats.StatsStore._run_migrations": {
       "complexity": 1,
-      "length": 5,
+      "length": 6,
       "module": "lithos.lcma.stats",
       "path": "src/lithos/lcma/stats.py",
       "paths": [
@@ -7342,6 +7396,15 @@
         "src/lithos/lcma/stats.py"
       ]
     },
+    "lithos.lcma.stats.StatsStore.latest_inferred_view": {
+      "complexity": 2,
+      "length": 20,
+      "module": "lithos.lcma.stats",
+      "path": "src/lithos/lcma/stats.py",
+      "paths": [
+        "src/lithos/lcma/stats.py"
+      ]
+    },
     "lithos.lcma.stats.StatsStore.list_all_node_ids": {
       "complexity": 2,
       "length": 6,
@@ -7371,7 +7434,7 @@
     },
     "lithos.lcma.stats.StatsStore.purge_edge_inference_log": {
       "complexity": 2,
-      "length": 25,
+      "length": 21,
       "module": "lithos.lcma.stats",
       "path": "src/lithos/lcma/stats.py",
       "paths": [
@@ -7407,7 +7470,7 @@
     },
     "lithos.lcma.stats.StatsStore.record_edge_inference": {
       "complexity": 1,
-      "length": 17,
+      "length": 22,
       "module": "lithos.lcma.stats",
       "path": "src/lithos/lcma/stats.py",
       "paths": [
@@ -8694,7 +8757,7 @@
     },
     "lithos.telemetry._LithosMetrics.lcma_edge_inference_skips": {
       "complexity": 2,
-      "length": 8,
+      "length": 9,
       "module": "lithos.telemetry",
       "path": "src/lithos/telemetry.py",
       "paths": [
@@ -10784,7 +10847,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "a729caf7d246a554b8b560c985b42cbc8cdc13a74b8f34bb9ff69d7b8007433d",
+    "source_hash": "49647389c0dd889e5d8c73668e067387b56be749c9366605b71243d20a47f3fc",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -10873,11 +10936,11 @@
     },
     "lithos.edge_store": {
       "component": "Graph",
-      "functions": 11,
-      "lines": 430,
+      "functions": 12,
+      "lines": 463,
       "max_complexity": 7,
       "path": "src/lithos/edge_store.py",
-      "sloc": 394
+      "sloc": 425
     },
     "lithos.envelopes": {
       "component": "Errors",
@@ -10929,11 +10992,11 @@
     },
     "lithos.intake": {
       "component": "Intake",
-      "functions": 8,
-      "lines": 686,
+      "functions": 9,
+      "lines": 715,
       "max_complexity": 21,
       "path": "src/lithos/intake.py",
-      "sloc": 582
+      "sloc": 609
     },
     "lithos.knowledge": {
       "component": "Knowledge",
@@ -10961,11 +11024,11 @@
     },
     "lithos.lcma.edge_inference": {
       "component": "LCMA",
-      "functions": 20,
-      "lines": 707,
-      "max_complexity": 23,
+      "functions": 22,
+      "lines": 794,
+      "max_complexity": 20,
       "path": "src/lithos/lcma/edge_inference.py",
-      "sloc": 598
+      "sloc": 674
     },
     "lithos.lcma.edge_reinforce": {
       "component": "LCMA",
@@ -11113,11 +11176,11 @@
     },
     "lithos.lcma.note_view": {
       "component": "LCMA",
-      "functions": 16,
-      "lines": 258,
+      "functions": 17,
+      "lines": 273,
       "max_complexity": 15,
       "path": "src/lithos/lcma/note_view.py",
-      "sloc": 199
+      "sloc": 211
     },
     "lithos.lcma.retrieve": {
       "component": "LCMA",
@@ -11145,11 +11208,11 @@
     },
     "lithos.lcma.stats": {
       "component": "LCMA",
-      "functions": 58,
-      "lines": 1386,
+      "functions": 60,
+      "lines": 1424,
       "max_complexity": 11,
       "path": "src/lithos/lcma/stats.py",
-      "sloc": 1189
+      "sloc": 1222
     },
     "lithos.lcma.utils": {
       "component": "LCMA",
@@ -11210,10 +11273,10 @@
     "lithos.telemetry": {
       "component": "Telemetry",
       "functions": 79,
-      "lines": 1311,
+      "lines": 1312,
       "max_complexity": 19,
       "path": "src/lithos/telemetry.py",
-      "sloc": 1021
+      "sloc": 1022
     },
     "lithos.tools": {
       "component": "Entrypoints",
@@ -11477,13 +11540,13 @@
       },
       "Graph": {
         "classes": 8,
-        "functions": 47,
+        "functions": 48,
         "largest_module": "lithos.graph",
         "largest_module_lines": 877,
-        "lines": 1307,
+        "lines": 1340,
         "modules": 2,
         "public_symbols": 8,
-        "sloc": 1086
+        "sloc": 1117
       },
       "IdResolution": {
         "classes": 2,
@@ -11497,13 +11560,13 @@
       },
       "Intake": {
         "classes": 8,
-        "functions": 8,
+        "functions": 9,
         "largest_module": "lithos.intake",
-        "largest_module_lines": 686,
-        "lines": 686,
+        "largest_module_lines": 715,
+        "lines": 715,
         "modules": 1,
         "public_symbols": 8,
-        "sloc": 582
+        "sloc": 609
       },
       "Knowledge": {
         "classes": 9,
@@ -11516,14 +11579,14 @@
         "sloc": 1752
       },
       "LCMA": {
-        "classes": 31,
-        "functions": 307,
+        "classes": 32,
+        "functions": 312,
         "largest_module": "lithos.lcma.stats",
-        "largest_module_lines": 1386,
-        "lines": 8624,
+        "largest_module_lines": 1424,
+        "lines": 8764,
         "modules": 27,
-        "public_symbols": 125,
-        "sloc": 7087
+        "public_symbols": 127,
+        "sloc": 7208
       },
       "Logging": {
         "classes": 1,
@@ -11569,11 +11632,11 @@
         "classes": 9,
         "functions": 79,
         "largest_module": "lithos.telemetry",
-        "largest_module_lines": 1311,
-        "lines": 1311,
+        "largest_module_lines": 1312,
+        "lines": 1312,
         "modules": 1,
         "public_symbols": 13,
-        "sloc": 1021
+        "sloc": 1022
       }
     },
     "max_module": "lithos.coordination",
@@ -11592,13 +11655,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 30722,
+    "total_lines": 30925,
     "total_modules": 62,
-    "total_sloc": 25003
+    "total_sloc": 25183
   },
   "tests": {
     "ratio": 1.71,
-    "src_lines": 30722,
-    "test_lines": 52510
+    "src_lines": 30925,
+    "test_lines": 52949
   }
 }

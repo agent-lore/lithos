@@ -680,11 +680,11 @@ class TestEdgeInferenceViewShaMigration:
         try:
             assert await store.has_edge_inference("old", 3, 2)
             # Its view is unknown, so the note re-runs once on its next change.
-            assert not await store.has_inferred_view("old", "any", 2)
+            assert await store.latest_inferred_view("old", 2) is None
             await store.record_edge_inference(
                 "old", 4, 2, model="luna", edges_written=1, view_sha="any"
             )
-            assert await store.has_inferred_view("old", "any", 2)
+            assert await store.latest_inferred_view("old", 2) == "any"
         finally:
             await store.close()
 
@@ -1390,26 +1390,31 @@ class TestEdgeInferenceLog:
         assert row[1] == 3
         assert row[2] is not None
 
-    async def test_view_gate_matches_node_view_and_inference_version(
-        self, stats_store: StatsStore
-    ) -> None:
-        """6129a834: a later doc version with the same view counts as inferred."""
-        assert not await stats_store.has_inferred_view("n1", "sha-a", 1)
+    async def test_view_gate_reads_the_latest_settled_view(self, stats_store: StatsStore) -> None:
+        """6129a834: the gate compares with the view the note's latest run judged."""
+        assert await stats_store.latest_inferred_view("n1", 1) is None
         await stats_store.record_edge_inference(
             "n1", 1, 1, model="qwen3", edges_written=2, view_sha="sha-a"
         )
-        assert await stats_store.has_inferred_view("n1", "sha-a", 1)
-        assert not await stats_store.has_inferred_view("n1", "sha-b", 1)  # view changed
-        assert not await stats_store.has_inferred_view("n1", "sha-a", 2)  # policy bump
-        assert not await stats_store.has_inferred_view("n2", "sha-a", 1)
+        assert await stats_store.latest_inferred_view("n1", 1) == "sha-a"
+        await stats_store.record_edge_inference(
+            "n1", 2, 1, model="qwen3", edges_written=0, view_sha="sha-b"
+        )
+        # B's judgement replaced A's edges, so a return to A is a new view again.
+        assert await stats_store.latest_inferred_view("n1", 1) == "sha-b"
+        assert await stats_store.latest_inferred_view("n1", 2) is None  # policy bump
+        assert await stats_store.latest_inferred_view("n2", 1) is None
 
-    async def test_a_row_without_a_view_never_satisfies_the_gate(
-        self, stats_store: StatsStore
-    ) -> None:
-        """Failed calls, and rows from before the column existed, carry no view."""
+    async def test_a_row_without_a_view_is_passed_over(self, stats_store: StatsStore) -> None:
+        """Failed calls changed no edges; rows from before the column carry no view."""
         await stats_store.record_edge_inference("n1", 1, 1, model="qwen3", edges_written=0)
         assert await stats_store.has_edge_inference("n1", 1, 1)
-        assert not await stats_store.has_inferred_view("n1", "sha-a", 1)
+        assert await stats_store.latest_inferred_view("n1", 1) is None
+        await stats_store.record_edge_inference(
+            "n1", 2, 1, model="qwen3", edges_written=1, view_sha="sha-a"
+        )
+        await stats_store.record_edge_inference("n1", 3, 1, model="qwen3", edges_written=0)
+        assert await stats_store.latest_inferred_view("n1", 1) == "sha-a"
 
     async def test_purge_all_and_by_model(self, stats_store: StatsStore) -> None:
         """purge_edge_inference_log is the supported operator reset for
