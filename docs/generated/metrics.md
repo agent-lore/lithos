@@ -62,7 +62,7 @@
       "tests/test_quality.py"
     ]
   },
-  "source_hash": "49647389c0dd889e5d8c73668e067387b56be749c9366605b71243d20a47f3fc",
+  "source_hash": "f4576abfc213ca02cb8599e1920912d32839b89227c7b75dcb4999dbd7096d40",
   "tools": {
     "grimp": "3.14",
     "networkx": "3.6.1"
@@ -296,7 +296,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 | IdResolution | 1 | 127 | 100 | 2 | 0 | 0.00 | 4 (`lithos.id_resolution.PrefixIndex.match`) | 0 |
 | Intake | 1 | 715 | 609 | 3 | 8 | 0.73 | 21 (`lithos.intake.CorpusIntake.write`) | 1 |
 | Knowledge | 3 | 2169 | 1752 | 5 | 8 | 0.62 | 63 (`lithos.knowledge.KnowledgeManager.update`) | 7 |
-| LCMA | 27 | 8764 | 7208 | 1 | 12 | 0.92 | 43 (`lithos.lcma.retrieve._run_retrieve_impl`) | 26 |
+| LCMA | 27 | 8763 | 7207 | 1 | 12 | 0.92 | 43 (`lithos.lcma.retrieve._run_retrieve_impl`) | 26 |
 | Logging | 1 | 164 | 104 | 1 | 0 | 0.00 | 10 (`lithos.logging_config.setup_logging`) | 0 |
 | Provenance | 1 | 467 | 362 | 4 | 3 | 0.43 | 10 (`lithos.provenance.ProvenanceProjection._apply_reconcile`) | 0 |
 | Search | 1 | 2102 | 1717 | 5 | 4 | 0.44 | 33 (`lithos.search.SearchEngine.graph_search`) | 7 |
@@ -305,7 +305,7 @@ Instability I = fan-out / (fan-in + fan-out): 0 = stable (many dependents),
 
 ## Size
 
-- Modules: **62**, lines: **30925**, SLOC: **25183**
+- Modules: **62**, lines: **30924**, SLOC: **25182**
 - Largest module: `lithos.coordination` (2866 lines)
 - Modules over 800 lines: **12**
   - `lithos.cli`
@@ -403,4 +403,4 @@ Private-name reaches across module seams. Both counts can be pinned as
 
 - Domain models: **45** (26 associations, 0 without docstrings)
 - MCP tools: **39** (0 without docstrings)
-- Test-to-source line ratio: **1.71** (52949 test lines / 30925 source lines)
+- Test-to-source line ratio: **1.71** (52968 test lines / 30924 source lines)

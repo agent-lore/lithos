@@ -190,7 +190,7 @@ class ParsedResponse:
 
     adjudications: list[Adjudication]  # the valid judgements that name a relation
     problems: int  # response-contract violations, uncovered candidates included
-    covered: int  # candidates with a valid answer, ``none`` included
+    covered: frozenset[int]  # indexes of candidates with a valid answer, ``none`` included
 
 
 def prefilter_candidates(
@@ -307,9 +307,9 @@ def parse_adjudications(text: str, n_candidates: int) -> ParsedResponse | None:
     candidate exactly once, and a ``none`` answer covers its candidate without
     producing an edge. The caller reports ``problems > 0`` observably (a
     "partial" outcome) instead of silently treating malformed output as
-    success. *covered* counts the candidates with a valid answer, so it says
-    whether the response judged anything; *problems* can't, since an invalid
-    extra entry counts as one too.
+    success. *covered* holds the candidates with a valid answer, so it says
+    which pairs the response judged; *problems* can't, since an invalid extra
+    entry counts as one too.
 
     Strictness rules (review round 1):
 
@@ -376,7 +376,7 @@ def parse_adjudications(text: str, n_candidates: int) -> ParsedResponse | None:
         rationale = str(entry.get("rationale", ""))[:300]
         out.append(Adjudication(index, str(relation), str(direction), confidence, rationale))
     problems += n_candidates - len(covered)
-    return ParsedResponse(out, problems, len(covered))
+    return ParsedResponse(out, problems, frozenset(covered))
 
 
 def edge_endpoints(focus_id: str, candidate_id: str, adjudication: Adjudication) -> tuple[str, str]:
@@ -562,7 +562,7 @@ class EdgeInferenceEngine:
             return
 
         written, blocked, retracted = await self._reconcile_pairs(
-            node_id, candidates, adjudications, complete=not problems
+            node_id, candidates, adjudications, covered=parsed.covered
         )
         # A response that judged no candidate validly changed no edges, so it
         # doesn't settle the view.
@@ -601,26 +601,25 @@ class EdgeInferenceEngine:
         candidates: list[NeighbourInfo],
         adjudications: list[Adjudication],
         *,
-        complete: bool,
+        covered: frozenset[int],
     ) -> tuple[int, int, int]:
         """Make each judged pair's inferred edges match this judgement.
 
         The latest judgement of a pair wins: the edge it supports is written,
         and the pair's other inferred edges — from an earlier call on either
         note, of another type or direction — are retracted. ``none`` and a
-        confidence below the floor support no edge. A *complete* response
-        judged every candidate, so a candidate without an adjudication was
-        judged ``none``. A partial one doesn't say what it skipped, so only
-        the pairs it judged are reconciled. Returns ``(written, blocked,
-        retracted)``.
+        confidence below the floor support no edge. Only the *covered*
+        candidates, those with a valid answer, are reconciled: one the
+        response omitted or answered invalidly keeps its edges. Returns
+        ``(written, blocked, retracted)``.
         """
         namespace = self._namespace_of(node_id)
         by_index = {a.candidate_index: a for a in adjudications}
         written = blocked = retracted = 0
         for index, candidate in enumerate(candidates, start=1):
-            adjudication = by_index.get(index)
-            if adjudication is None and not complete:
+            if index not in covered:
                 continue
+            adjudication = by_index.get(index)  # None: a valid ``none``
             keep = None
             if (
                 adjudication is not None

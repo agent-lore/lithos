@@ -180,7 +180,7 @@ class TestParseAdjudications:
         )
         parsed = parse_adjudications(text, 1)
         assert parsed == ParsedResponse(
-            [Adjudication(1, "supports", "candidate_to_focus", 0.8, "because")], 0, 1
+            [Adjudication(1, "supports", "candidate_to_focus", 0.8, "because")], 0, frozenset({1})
         )
 
     def test_fenced_and_bare_list_accepted(self) -> None:
@@ -206,7 +206,7 @@ class TestParseAdjudications:
             {"candidate": 2, "relation": "supports", "direction": "sideways", "confidence": 0.8},
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 2)
-        assert parsed == ParsedResponse([], 4, 0)  # 2 dropped entries + 2 uncovered candidates
+        assert parsed == ParsedResponse([], 4, frozenset())  # 2 dropped + 2 uncovered
 
     def test_symmetric_relation_ignores_direction(self) -> None:
         entries = [{"candidate": 1, "relation": "contradicts", "confidence": 0.9}]
@@ -232,7 +232,7 @@ class TestParseAdjudications:
             },
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 2)
-        assert parsed == ParsedResponse([], 4, 0)  # 2 bad indexes + 2 uncovered candidates
+        assert parsed == ParsedResponse([], 4, frozenset())  # 2 bad indexes + 2 uncovered
 
     def test_duplicate_candidate_keeps_first_and_counts_problem(self) -> None:
         entries = [
@@ -249,7 +249,7 @@ class TestParseAdjudications:
         assert len(parsed.adjudications) == 1
         assert parsed.adjudications[0].relation == "supports"
         assert parsed.problems == 1
-        assert parsed.covered == 1  # the duplicate is a problem, not a lost answer
+        assert parsed.covered == {1}  # the duplicate is a problem, not a lost answer
 
     def test_missing_coverage_counts_problems(self) -> None:
         """The prompt demands every candidate exactly once; silence is a
@@ -258,7 +258,7 @@ class TestParseAdjudications:
             {"candidate": 1, "relation": "none", "confidence": 0.9},
         ]
         parsed = parse_adjudications(json.dumps({"judgements": entries}), 3)
-        assert parsed == ParsedResponse([], 2, 1)  # candidates 2 and 3 never covered
+        assert parsed == ParsedResponse([], 2, frozenset({1}))  # 2 and 3 never covered
 
     def test_invalid_entries_dropped_individually(self) -> None:
         entries = [
@@ -278,7 +278,7 @@ class TestParseAdjudications:
         assert len(parsed.adjudications) == 1
         assert parsed.adjudications[0].relation == "depends_on"
         assert parsed.problems == 4  # made_up + bad index + bad confidence + candidate 2 uncovered
-        assert parsed.covered == 2  # candidate 1's none and candidate 3
+        assert parsed.covered == {1, 3}  # candidate 1's none and candidate 3
 
     def test_garbage_returns_none(self) -> None:
         assert parse_adjudications("I think these notes are related!", 2) is None
@@ -1166,6 +1166,25 @@ class TestLatestJudgementWins:
         )
         await self._infer(harness)
         assert await self._types_between(edge_store, "focus", "c2") == {("focus", "c2", "supports")}
+
+    async def test_explicit_none_in_a_partial_response_retracts(
+        self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore
+    ) -> None:
+        """Review of #463: a partial response's valid ``none`` is still a judgement
+        of its pair. Candidate 2's edge goes; candidate 1, omitted, keeps its own."""
+        await self._seed(edge_store, "focus", "c1", "supports")
+        await self._seed(edge_store, "focus", "c2", "supports")
+        none_for_c2 = {"candidate": 2, "relation": "none", "confidence": 0.9}
+        harness = _EngineHarness(
+            test_config,
+            stats_store,
+            edge_store,
+            handler=_respond([none_for_c2]),
+            search_results=[_semantic_hit("c1", 0.7), _semantic_hit("c2", 0.6)],
+        )
+        await self._infer(harness)
+        assert await self._types_between(edge_store, "focus", "c2") == set()
+        assert await self._types_between(edge_store, "focus", "c1") == {("focus", "c1", "supports")}
 
     async def test_pairs_outside_the_candidate_set_are_untouched(
         self, test_config: LithosConfig, stats_store: StatsStore, edge_store: EdgeStore

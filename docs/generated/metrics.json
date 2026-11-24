@@ -5003,8 +5003,8 @@
       ]
     },
     "lithos.lcma.edge_inference.EdgeInferenceEngine._reconcile_pairs": {
-      "complexity": 8,
-      "length": 44,
+      "complexity": 7,
+      "length": 43,
       "module": "lithos.lcma.edge_inference",
       "path": "src/lithos/lcma/edge_inference.py",
       "paths": [
@@ -10847,7 +10847,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "49647389c0dd889e5d8c73668e067387b56be749c9366605b71243d20a47f3fc",
+    "source_hash": "f4576abfc213ca02cb8599e1920912d32839b89227c7b75dcb4999dbd7096d40",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -11025,10 +11025,10 @@
     "lithos.lcma.edge_inference": {
       "component": "LCMA",
       "functions": 22,
-      "lines": 794,
+      "lines": 793,
       "max_complexity": 20,
       "path": "src/lithos/lcma/edge_inference.py",
-      "sloc": 674
+      "sloc": 673
     },
     "lithos.lcma.edge_reinforce": {
       "component": "LCMA",
@@ -11583,10 +11583,10 @@
         "functions": 312,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1424,
-        "lines": 8764,
+        "lines": 8763,
         "modules": 27,
         "public_symbols": 127,
-        "sloc": 7208
+        "sloc": 7207
       },
       "Logging": {
         "classes": 1,
@@ -11655,13 +11655,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 30925,
+    "total_lines": 30924,
     "total_modules": 62,
-    "total_sloc": 25183
+    "total_sloc": 25182
   },
   "tests": {
     "ratio": 1.71,
-    "src_lines": 30925,
-    "test_lines": 52949
+    "src_lines": 30924,
+    "test_lines": 52968
   }
 }
