@@ -21,7 +21,10 @@ from pathlib import Path
 from typing import Any
 
 METHODS: tuple[str, ...] = ("hybrid", "semantic", "retrieve")
-GRADES: Mapping[str, int] = {"relevant": 2, "superseded": 1, "not": 0}
+#: ``relevant``: answers or directly bears on the query. ``related``: on the
+#: topic or sharing its terms without answering it (wrong week, a passing
+#: mention): partial gain in nDCG, a miss for precision and MRR. ``not``: the rest.
+GRADES: Mapping[str, int] = {"relevant": 2, "related": 1, "not": 0}
 RELEVANT = GRADES["relevant"]
 
 Slot = tuple[str, str]  # (case_id, note_id)

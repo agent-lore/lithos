@@ -3,7 +3,7 @@
 Pooled evaluation: a pair without a label counts as not relevant, and the
 share of such slots in each method's top-k is reported so a thin pool is
 visible rather than silently flattering. nDCG is graded (relevant 2,
-superseded 1, not 0); precision and reciprocal rank count ``relevant``
+related 1, not 0); precision and reciprocal rank count ``relevant``
 only. A query with no relevant note in its pool has no ideal ranking, so it
 is left out of the nDCG and MRR means and counted separately.
 """

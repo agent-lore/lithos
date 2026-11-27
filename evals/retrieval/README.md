@@ -12,7 +12,7 @@ that supply a note only when it is relevant. K7.1(b) of
 | File | What |
 |---|---|
 | `cases.jsonl` | The public slice: one query per line with its caller, slice and scope filters, each method's ranked ids and scores (retrieve also with its scouts and the vector scout's similarity), the per-call latency, a title/path/text head for every pooled note, and the snapshot it was pooled from. Only queries whose pooled notes are all in the `influx` namespace are committed here. |
-| `labels.jsonl` | Human labels on the public slice, one per (case, note): `relevant`, `superseded` or `not`, labeller, date, status. Only `status: reviewed` rows are scored. |
+| `labels.jsonl` | Human labels on the public slice, one per (case, note): `relevant`, `related` or `not`, labeller, date, status. Only `status: reviewed` rows are scored. |
 | `seed/` | A hand-computed synthetic set that `tests/test_eval_retrieval_smoke.py` pins the scorer on. |
 
 The personal slices (Dave's queries, garuda's planning queries, the robot
@@ -52,7 +52,7 @@ the public slice; nothing in them is duplicated here.
 
 Per method, overall and per slice:
 
-- **nDCG@10**, graded: `relevant` 2, `superseded` 1, `not` 0. A pair without
+- **nDCG@10**, graded: `relevant` 2, `related` 1, `not` 0. A pair without
   a label counts as `not`; the share of such slots in each method's top 10
   is reported as `unlabelled`, so a thin pool shows rather than flatters.
   Queries with no relevant note in their pool are left out of the mean
@@ -71,9 +71,12 @@ Per method, overall and per slice:
 ## Labelling standard
 
 `relevant`: the note answers the query or directly bears on it; the caller
-would be glad to have it. `superseded`: it did, but a newer note replaces
-it. `not`: everything else, including a shared topic, source or author
-without bearing on the query. Label the pair, not the method: a note is
+would be glad to have it. `related`: on the topic or sharing the query's
+terms, but it does not answer the query: the wrong week's plan, the
+previous month's review, a project mentioned in passing. It earns partial
+gain in nDCG and counts as a miss for precision and MRR. `not`: everything
+else. A newer copy of a relevant note does not demote the older one: label
+what the note says, not where it sits in the vault's history. Label the pair, not the method: a note is
 relevant or not regardless of who ranked it where.
 
 ## Status

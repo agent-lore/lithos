@@ -59,7 +59,7 @@ def test_import_rejects_bad_grammar(tmp_path: Path, capsys) -> None:
 
 def test_merge_keeps_other_pairs(tmp_path: Path) -> None:
     sheet = tmp_path / "review.md"
-    sheet.write_text("## case seed-002 · note seed-note-5\n\nlabel: superseded\n")
+    sheet.write_text("## case seed-002 · note seed-note-5\n\nlabel: related\n")
     out = tmp_path / "labels.jsonl"
     assert (
         eval_retrieval_labels.main(
@@ -78,7 +78,7 @@ def test_merge_keeps_other_pairs(tmp_path: Path) -> None:
     )
     rows = _rows(out)
     assert len(rows) == 8
-    assert next(r for r in rows if r["note_id"] == "seed-note-5")["grade"] == "superseded"
+    assert next(r for r in rows if r["note_id"] == "seed-note-5")["grade"] == "related"
 
 
 def test_proposed_blind_sample_and_exclusion(tmp_path: Path) -> None:
@@ -88,7 +88,7 @@ def test_proposed_blind_sample_and_exclusion(tmp_path: Path) -> None:
             {
                 "case_id": "seed-001",
                 "note_id": "seed-note-3",
-                "grade": "superseded",
+                "grade": "related",
                 "notes": "older run",
             }
         )
@@ -98,7 +98,7 @@ def test_proposed_blind_sample_and_exclusion(tmp_path: Path) -> None:
     eval_retrieval_labels.main(
         ["sheet", str(SEED / "cases.jsonl"), "--out", str(sheet), "--proposed", str(proposed)]
     )
-    assert "label: superseded  # older run" in sheet.read_text()
+    assert "label: related  # older run" in sheet.read_text()
 
     eval_retrieval_labels.main(
         [

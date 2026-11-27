@@ -1,6 +1,6 @@
 {"case_id": "seed-001", "grade": "relevant", "labelled_at": "2026-11-23", "labeller": "seed", "note_id": "seed-note-1", "notes": "the 2026 benchmark", "status": "reviewed"}
 {"case_id": "seed-001", "grade": "not", "labelled_at": "2026-11-23", "labeller": "seed", "note_id": "seed-note-2", "notes": "beta, not alpha", "status": "reviewed"}
-{"case_id": "seed-001", "grade": "superseded", "labelled_at": "2026-11-23", "labeller": "seed", "note_id": "seed-note-3", "notes": "older run, replaced by note 1", "status": "reviewed"}
+{"case_id": "seed-001", "grade": "related", "labelled_at": "2026-11-23", "labeller": "seed", "note_id": "seed-note-3", "notes": "older run, replaced by note 1", "status": "reviewed"}
 {"case_id": "seed-001", "grade": "not", "labelled_at": "2026-11-23", "labeller": "seed", "note_id": "seed-note-4", "notes": "", "status": "reviewed"}
 {"case_id": "seed-002", "grade": "not", "labelled_at": "2026-11-23", "labeller": "seed", "note_id": "seed-note-4", "notes": "", "status": "reviewed"}
 {"case_id": "seed-002", "grade": "relevant", "labelled_at": "2026-11-23", "labeller": "seed", "note_id": "seed-note-5", "notes": "the rollout dates", "status": "reviewed"}

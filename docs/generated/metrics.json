@@ -10784,7 +10784,7 @@
         "tests/test_quality.py"
       ]
     },
-    "source_hash": "a729caf7d246a554b8b560c985b42cbc8cdc13a74b8f34bb9ff69d7b8007433d",
+    "source_hash": "6417955dba43ba89a5d62a98fe007a33e9b3b041ec92c4b697da3def9a7883be",
     "tools": {
       "grimp": "3.14",
       "networkx": "3.6.1"
@@ -11050,7 +11050,7 @@
     "lithos.lcma.eval.retrieval.cases": {
       "component": "LCMA",
       "functions": 21,
-      "lines": 322,
+      "lines": 325,
       "max_complexity": 9,
       "path": "src/lithos/lcma/eval/retrieval/cases.py",
       "sloc": 270
@@ -11520,7 +11520,7 @@
         "functions": 307,
         "largest_module": "lithos.lcma.stats",
         "largest_module_lines": 1386,
-        "lines": 8624,
+        "lines": 8627,
         "modules": 27,
         "public_symbols": 125,
         "sloc": 7087
@@ -11592,13 +11592,13 @@
       "lithos.telemetry",
       "lithos.tools.tasks"
     ],
-    "total_lines": 30722,
+    "total_lines": 30725,
     "total_modules": 62,
     "total_sloc": 25003
   },
   "tests": {
     "ratio": 1.71,
-    "src_lines": 30722,
+    "src_lines": 30725,
     "test_lines": 52510
   }
 }

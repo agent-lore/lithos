@@ -21,12 +21,12 @@ the note.
 
 ``label:`` line grammar (one per pair; anything after ``#`` is a note)::
 
-    label: relevant | superseded | not | skip
+    label: relevant | related | not | skip
 
-``relevant``: the note answers or directly bears on the query. ``superseded``:
-it did, but a newer note in the vault replaces it. ``not``: anything else,
-including a shared topic without bearing on the query. ``skip`` leaves the
-pair unlabelled.
+``relevant``: the note answers or directly bears on the query. ``related``: it
+is on the topic or shares the query's terms but does not answer it (the
+wrong week's plan, a mention in passing). ``not``: anything else. ``skip``
+leaves the pair unlabelled.
 """
 
 from __future__ import annotations
@@ -89,13 +89,13 @@ def select_slots(
 
 
 _SHEET_HOW_TO = (
-    "Edit the `label:` line under each pair: `relevant`, `superseded`, `not`, or `skip`. "
+    "Edit the `label:` line under each pair: `relevant`, `related`, `not`, or `skip`. "
     "Anything after `#` is kept as a note."
 )
 _SHEET_GRADES = (
-    "`relevant`: the note answers or directly bears on the query. `superseded`: it did, "
-    "but a newer note replaces it. `not`: anything else, including a shared topic "
-    "without bearing on the query."
+    "`relevant`: the note answers or directly bears on the query; the caller would be glad "
+    "to have it. `related`: on the topic or sharing the query's terms, but it does not "
+    "answer the query (the wrong week's plan, a mention in passing). `not`: anything else."
 )
 
 
