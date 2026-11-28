@@ -23,9 +23,10 @@ the note.
 
     label: relevant | related | not | skip
 
-``relevant``: the note answers or directly bears on the query. ``related``: it
-is on the topic or shares the query's terms but does not answer it (the
-wrong week's plan, a mention in passing). ``not``: anything else. ``skip``
+``relevant``: the note answers or directly bears on the query. ``related``: same
+project or topic, the caller would see why it came back and might skim it,
+but it does not answer the query. ``not``: anything else, including notes
+that merely share the query's words. ``skip``
 leaves the pair unlabelled.
 """
 
@@ -94,8 +95,9 @@ _SHEET_HOW_TO = (
 )
 _SHEET_GRADES = (
     "`relevant`: the note answers or directly bears on the query; the caller would be glad "
-    "to have it. `related`: on the topic or sharing the query's terms, but it does not "
-    "answer the query (the wrong week's plan, a mention in passing). `not`: anything else."
+    "to have it. `related`: same project or topic, the caller would see why it came back "
+    "and might skim it, but it does not answer the query. `not`: anything else, including "
+    "notes that merely share the query's words."
 )
 
 

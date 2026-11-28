@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 METHODS: tuple[str, ...] = ("hybrid", "semantic", "retrieve")
-#: ``relevant``: answers or directly bears on the query. ``related``: on the
-#: topic or sharing its terms without answering it (wrong week, a passing
-#: mention): partial gain in nDCG, a miss for precision and MRR. ``not``: the rest.
+#: ``relevant``: the caller's next step is better for reading it. ``related``:
+#: same topic, the caller would see why it came back but it does not answer
+#: the query: partial gain in nDCG, a miss for precision and MRR. ``not``: the rest.
 GRADES: Mapping[str, int] = {"relevant": 2, "related": 1, "not": 0}
 RELEVANT = GRADES["relevant"]
 

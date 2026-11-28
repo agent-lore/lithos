@@ -71,11 +71,13 @@ Per method, overall and per slice:
 ## Labelling standard
 
 `relevant`: the note answers the query or directly bears on it; the caller
-would be glad to have it. `related`: on the topic or sharing the query's
-terms, but it does not answer the query: the wrong week's plan, the
-previous month's review, a project mentioned in passing. It earns partial
-gain in nDCG and counts as a miss for precision and MRR. `not`: everything
-else. A newer copy of a relevant note does not demote the older one: label
+would be glad to have it. `related`: same project or topic, and the caller would see why it came
+back and might skim it for the purpose behind the query, but it does not
+answer the query: the previous month's review when a month's roadmap was
+asked for, the project's design doc when its current status was asked for.
+It earns partial gain in nDCG and counts as a miss for precision and MRR.
+`not`: everything else, including the wrong week's plan when a week was
+named and notes that merely share the query's words. A newer copy of a relevant note does not demote the older one: label
 what the note says, not where it sits in the vault's history. Label the pair, not the method: a note is
 relevant or not regardless of who ranked it where.
 
@@ -83,9 +85,21 @@ relevant or not regardless of who ranked it where.
 
 First pooled set, 2026-11-23: 115 queries (Dave 27, garuda 16,
 codex-agent-foundations 20, ai-agents-briefing 6, hema-events-scout 6, robot
-40) pooled at depth 10 on copies of the production vault (7772 notes) and of
+40) pooled at depth 10 on copies of the production vault (7779 notes) and of
 staging (robot slice). Only one query (`codex-agent-foundations-019`) pooled
 nothing but `influx` notes, so the public `cases.jsonl` holds that one case
 and the other 114 are in the private repo: the vault is mixed enough that
 almost every top-10 touches a personal namespace. The queries that
 produced the public case are in `queries.jsonl` beside it.
+
+Labelled and scored, 2026-11-28: all 2252 pairs are `reviewed`. Every pair
+was first proposed blind by Claude passes (two grades); Dave then labelled
+100 random pairs blind (84% agreement, kappa 0.42, the proposals too
+strict) and adjudicated the 20 differing pairs (94/100 exact, 97/100 on
+relevant-versus-rest), which set the labelling standard above and replaced
+`superseded` with `related`; a second Claude pass then split `related` out
+of the proposed `not` pairs (146 of 1929). Dave's 100 labels carry
+labeller `dave`, the rest `claude-code-dns`. The decision run is
+`evals/runs/20261128-retrieve-vs-search.md`: hybrid search is the default,
+semantic search with a 0.35 floor for supply-only-if-relevant callers,
+retrieve re-measured after K0.1.
